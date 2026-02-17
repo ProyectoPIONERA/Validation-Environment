@@ -54,6 +54,6 @@ demo-registration-service-xxxxxxxxxx-xxxxx   1/1     Running   0          1m
 
 ---
 
-⬅️ [Nivel anterior: Nivel 5 – Post-configuración de Vault y Deployer](../nivel-5/README.md)  
-➡️ [Siguiente nivel: Nivel 7 – Creación lógica del Dataspace](../nivel-7/README.md)
+⬅️ [Nivel anterior: Nivel 5 – Creación lógica del Dataspace](../nivel-5/README.md)  
+➡️ [Siguiente nivel: Nivel 7 – Creación lógica del Conector](../nivel-7/README.md)
 🏠 [Volver al README principal](/README.md)

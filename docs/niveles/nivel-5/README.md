@@ -45,6 +45,6 @@ runtime/workdir/inesdata-deployment/dataspace/step-2/values-demo.yaml
 
 ---
 
-⬅️ [Nivel anterior: Nivel 4 – Post-configuración de Vault y Deployer](../nivel-4/README.md)  
-➡️ [Siguiente nivel: Nivel 6 – Creación lógica del Dataspace](../nivel-6/README.md)
+⬅️ [Nivel anterior: Nivel 4 – Preparación del entorno Deployer](../nivel-4/README.md)  
+➡️ [Siguiente nivel: Nivel 6 – Despliegue del Dataspace](../nivel-6/README.md)
 🏠 [Volver al README principal](/README.md)

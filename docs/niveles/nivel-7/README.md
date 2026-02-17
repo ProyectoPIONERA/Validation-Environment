@@ -54,6 +54,6 @@ runtime/workdir/inesdata-deployment/connector/values-conn-oeg-demo.yaml
 
 ---
 
-⬅️ [Nivel anterior: Nivel 6 – Post-configuración de Vault y Deployer](../nivel-6/README.md)  
-➡️ [Siguiente nivel: Nivel 8 – Creación lógica del Dataspace](../nivel-8/README.md)
+⬅️ [Nivel anterior: Nivel 6 – Despliegue del Dataspace](../nivel-6/README.md)  
+➡️ [Siguiente nivel: Nivel 8 – Despliegue del Connector](../nivel-8/README.md)
 🏠 [Volver al README principal](/README.md)

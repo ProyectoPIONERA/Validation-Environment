@@ -67,6 +67,6 @@ Todos los pods del namespace common-srvs se encuentran en estado Running.
 
 ---
 
-⬅️ [Nivel anterior: Nivel 1 – Post-configuración de Vault y Deployer](../nivel-1/README.md)  
-➡️ [Siguiente nivel: Nivel 3 – Creación lógica del Dataspace](../nivel-3/README.md)
+⬅️ [Nivel anterior: Nivel 1 – Creación del clúster Kubernetes local](../nivel-1/README.md)  
+➡️ [Siguiente nivel: Nivel 3 – Post-configuración de Vault y Deployer](../nivel-3/README.md)
 🏠 [Volver al README principal](/README.md)

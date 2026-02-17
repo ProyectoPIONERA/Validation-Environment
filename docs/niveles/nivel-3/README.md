@@ -86,6 +86,6 @@ runtime/workdir/inesdata-deployment/deployer.config
 
 ---
 
-⬅️ [Nivel anterior: Nivel 2 – Post-configuración de Vault y Deployer](../nivel-2/README.md)  
-➡️ [Siguiente nivel: Nivel 4 – Creación lógica del Dataspace](../nivel-4/README.md)
+⬅️ [Nivel anterior: Nivel 2 – Instalación base de INESData](../nivel-2/README.md)  
+➡️ [Siguiente nivel: Nivel 4 – Preparación del entorno Deployer](../nivel-4/README.md)
 🏠 [Volver al README principal](/README.md)

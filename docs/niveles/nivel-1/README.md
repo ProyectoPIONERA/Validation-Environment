@@ -43,6 +43,6 @@ El clúster Minikube se encuentra en estado Running y los pods del namespace ing
 
 ---
 
-⬅️ [Nivel anterior: Nivel 0 – Post-configuración de Vault y Deployer](../nivel-0/README.md)  
-➡️ [Siguiente nivel: Nivel 2 – Creación lógica del Dataspace](../nivel-2/README.md)
+⬅️ [Nivel anterior: Nivel 0 – Prerrequisitos del sistema](../nivel-0/README.md)  
+➡️ [Siguiente nivel: Nivel 2 – Instalación base de INESData](../nivel-2/README.md)
 🏠 [Volver al README principal](/README.md)
