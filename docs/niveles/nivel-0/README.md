@@ -2,6 +2,7 @@
 > **Precondiciones técnicas:** 
 > - La ejecución de este flujo se realiza desde una terminal WSL.
 > - El entorno de validación asume que Docker Desktop de Windows está configurado para utilizar el motor WSL 2. Otras opciones de configuración de Docker Desktop no son relevantes para la ejecución de este flujo.
+> - Antes de reproducir este flujo, eliminar la carpeta `runtime` de la raíz, si existe.
 
 ### Propósito
 Preparar el sistema anfitrión. No automatizado por diseño, ya que depende del entorno local.

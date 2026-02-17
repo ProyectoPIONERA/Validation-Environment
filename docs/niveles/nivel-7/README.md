@@ -31,7 +31,8 @@ python adapters/inesdata/connector/connector-create.py
 
 ```bash
 kubectl exec -n common-srvs common-srvs-postgresql-0 -- \
-  sh -c "PGPASSWORD=<postgres_password> psql -U postgres -d demo_rs -c \"SELECT participant_id FROM public.edc_participant;\""
+sh -c "PGPASSWORD=$(kubectl get secret common-srvs-postgresql -n common-srvs -o jsonpath='{.data.postgres-password}' | base64 -d) psql -U postgres -d demo_rs -c \"SELECT participant_id FROM public.edc_participant;\""
+
 
 ```
 **Ejemplo de salida esperada:**

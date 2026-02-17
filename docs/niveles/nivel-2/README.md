@@ -59,7 +59,7 @@ kubectl get pods -n common-srvs
 NAME                                   READY   STATUS    RESTARTS   AGE
 common-srvs-postgresql-0               1/1     Running   0          2m
 common-srvs-keycloak-0                 1/1     Running   0          2m
-common-srvs-vault-0                    1/1     Running   0          2m
+common-srvs-vault-0                    0/1     Running   0          2m
 common-srvs-minio-0                    1/1     Running   0          2m
 ```
 **Criterio de aceptación**
