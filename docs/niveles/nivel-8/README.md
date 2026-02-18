@@ -49,5 +49,6 @@ demo-registration-service-xxxxxxxxxx-xxxxx   1/1     Running   0          19h
 
 ---
 
-⬅️ [Nivel anterior: Nivel 7 – Creación del Connector (lógica)](../nivel-7/README.md)
+⬅️ [Nivel anterior: Nivel 7 - Creación del Connector (lógica)](../nivel-7/README.md) <br>
+➡️ [Siguiente nivel: Nivel 9 - Despliegue del Portal Público](../nivel-9/README.md) </br>
 🏠 [Volver al README principal](/README.md)

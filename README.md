@@ -219,13 +219,19 @@ Editar el fichero `C:\Windows\System32\drivers\etc\hosts`
 # Permite que el mismo contexto de Kubernetes funcione tanto desde el host como desde contenedores Docker:
 127.0.0.1 kubernetes.docker.internal
 
-# Fin de la sección
-127.0.0.1   keycloak.dev.ed.inesdata.upm
-127.0.0.1   keycloak-admin.dev.ed.inesdata.upm
-127.0.0.1   minio.dev.ed.inesdata.upm
-127.0.0.1   console.minio-s3.dev.ed.inesdata.upm
-127.0.0.1   registration-service-demo.dev.ds.inesdata.upm
-127.0.0.1   conn-oeg-demo.dev.ds.inesdata.upm
+# End of section
+
+# Servicios comunes
+127.0.0.1 keycloak.dev.ed.inesdata.upm
+127.0.0.1 keycloak-admin.dev.ed.inesdata.upm
+127.0.0.1 minio.dev.ed.inesdata.upm
+127.0.0.1 console.minio-s3.dev.ed.inesdata.upm
+
+# Dataspace (con tunnel activo: `minikube tunnel`)
+127.0.0.1 demo.dev.ds.inesdata.upm
+127.0.0.1 backend-demo.dev.ds.inesdata.upm
+127.0.0.1 registration-service-demo.dev.ds.inesdata.upm
+127.0.0.1 conn-oeg-demo-demo.dev.ds.inesdata.upm
 ```
 
 ## Uso y validación del entorno
