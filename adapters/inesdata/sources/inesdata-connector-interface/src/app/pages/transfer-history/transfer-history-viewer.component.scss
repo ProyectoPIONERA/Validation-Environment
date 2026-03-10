@@ -1,0 +1,65 @@
+table {
+  margin-top: 20px;
+}
+
+.transfer-history-table {
+  width: 100%;
+}
+
+.mat-table {
+  overflow-x: scroll;
+}
+
+.mat-cell,
+.mat-header-cell {
+  padding: 0px 10px;
+}
+
+.singleline-cell {
+  white-space: nowrap;
+}
+
+.info-box {
+  display: flex;
+  align-items: center;
+
+  .text {
+    padding-left: 10px;
+  }
+
+  .button {
+    margin-left: auto;
+  }
+}
+
+.action-button {
+  margin-right: 5px;
+}
+
+.table-header-container button {
+  align-self: center;
+}
+
+:host ::ng-deep thead {
+  background-color: var(--grey-400) !important;
+}
+
+:host ::ng-deep thead th {
+  color: var(--secondary-600) !important;
+  font-weight: normal !important;
+  font-size: 16px !important;
+  letter-spacing: 0.5px !important;
+}
+
+:host ::ng-deep tbody td {
+  color: var(--secondary-500) !important;
+}
+
+:host ::ng-deep table tr {
+  height: 56px !important;
+}
+
+:host ::ng-deep table button {
+  color: var(--secondary-500) !important;
+  border-color: var(--secondary-500) !important;
+}
