@@ -1,0 +1,125 @@
+import os
+import subprocess
+
+
+class NewmanExecutor:
+    """Runs Postman collections through Newman.
+
+    Encapsulates Newman command execution, environment variable injection,
+    and dynamic test script loading for validation collections.
+    """
+
+    def _load_file(self, path):
+        """Read a file and return its content as string."""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def load_test_scripts(self, collection_name):
+        scripts = []
+
+        scripts.append(self._load_file("validation/tests/common_tests.js"))
+
+        if "management" in collection_name:
+            scripts.append(self._load_file("validation/tests/management_tests.js"))
+
+        if "provider" in collection_name:
+            scripts.append(self._load_file("validation/tests/provider_tests.js"))
+
+        if "catalog" in collection_name:
+            scripts.append(self._load_file("validation/tests/catalog_tests.js"))
+
+        if "negotiation" in collection_name:
+            scripts.append(self._load_file("validation/tests/negotiation_tests.js"))
+
+        if "transfer" in collection_name:
+            scripts.append(self._load_file("validation/tests/transfer_tests.js"))
+
+        return "\n".join(scripts)
+
+    def run_newman(self, collection_path, env_vars, report_path=None):
+        """
+        Execute a Postman collection using Newman with dynamic environment variables,
+        injected test scripts, and optional JSON report export.
+        """
+        print(f"\nExecuting: newman run {collection_path}")
+
+        test_script = self.load_test_scripts(collection_path)
+
+        cmd = [
+            "newman",
+            "run",
+            collection_path,
+            "--reporters",
+            "cli,json",
+        ]
+
+        for key, value in env_vars.items():
+            cmd.extend([
+                "--env-var",
+                f"{key}={value}"
+            ])
+
+        cmd.extend([
+            "--env-var",
+            f"test_script={test_script}"
+        ])
+
+        if report_path:
+            os.makedirs(os.path.dirname(report_path), exist_ok=True)
+            cmd.extend([
+                "--reporter-json-export",
+                report_path,
+            ])
+
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=False,
+                text=True
+            )
+
+            if result.returncode != 0:
+                print(f"[WARNING] Newman returned exit code {result.returncode}")
+
+            return report_path
+
+        except FileNotFoundError:
+            print("ERROR: Newman is not installed or not in PATH")
+            print("Install with: npm install -g newman")
+            return None
+
+    def run_validation_collections(self, env_vars, report_dir=None):
+        """Run all validation collections in sequence and optionally export JSON reports."""
+        base = os.path.join("validation", "collections")
+
+        collections = [
+            "01_environment_health.json",
+            "02_connector_management_api.json",
+            "03_provider_setup.json",
+            "04_consumer_catalog.json",
+            "05_consumer_negotiation.json",
+            "06_consumer_transfer.json"
+        ]
+
+        total = len(collections)
+        exported_reports = []
+
+        for i, c in enumerate(collections, 1):
+            collection_path = os.path.join(base, c)
+            print(f"[{i}/{total}] Running collection: {c}")
+
+            report_path = None
+            if report_dir:
+                report_name = f"{os.path.splitext(c)[0]}.json"
+                report_path = os.path.join(report_dir, report_name)
+
+            exported_report = self.run_newman(collection_path, env_vars, report_path=report_path)
+            if exported_report:
+                exported_reports.append(exported_report)
+
+        return exported_reports
+
+    def describe(self) -> str:
+        return "NewmanExecutor runs Postman collections using Newman."
+

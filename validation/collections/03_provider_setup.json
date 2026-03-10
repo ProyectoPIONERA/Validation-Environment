@@ -1,0 +1,114 @@
+{
+  "info": {
+    "name": "03 Provider Setup",
+    "_postman_id": "provider-setup-03",
+    "description": "Verify that provider connector contains required entities",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "eval(pm.environment.get('test_script'));"
+        ]
+      }
+    }
+  ],
+
+  "item": [
+
+    {
+      "name": "Verify Asset Exists",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/assets/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "assets",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Verify Policy Exists",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/policydefinitions/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "policydefinitions",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Verify Contract Definition Exists",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/contractdefinitions/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "contractdefinitions",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+        }
+      }
+    }
+
+  ]
+}

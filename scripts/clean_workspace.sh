@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APPLY=0
+INCLUDE_RESULTS=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash scripts/clean_workspace.sh [--apply] [--include-results]
+
+Options:
+  --apply            Actually delete files/directories (default is dry-run)
+  --include-results  Also remove local experiment/newman outputs
+
+Default cleanup (safe):
+  - __pycache__ directories
+  - *.pyc files
+  - .pytest_cache, .mypy_cache, .ruff_cache
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apply)
+      APPLY=1
+      shift
+      ;;
+    --include-results)
+      INCLUDE_RESULTS=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+mapfile -t TARGETS < <(
+  {
+    find "$ROOT_DIR" \
+      \( -path "*/.venv/*" -o -path "*/venv/*" -o -path "*/node_modules/*" -o -path "*/.git/*" \) -prune -o \
+      -type d -name "__pycache__" -print
+    find "$ROOT_DIR" \
+      \( -path "*/.venv/*" -o -path "*/venv/*" -o -path "*/node_modules/*" -o -path "*/.git/*" \) -prune -o \
+      -type f -name "*.pyc" -print
+    find "$ROOT_DIR" \
+      \( -path "*/.venv/*" -o -path "*/venv/*" -o -path "*/node_modules/*" -o -path "*/.git/*" \) -prune -o \
+      -type d \( -name ".pytest_cache" -o -name ".mypy_cache" -o -name ".ruff_cache" \) -print
+    if [[ "$INCLUDE_RESULTS" -eq 1 ]]; then
+      [[ -d "$ROOT_DIR/experiments" ]] && echo "$ROOT_DIR/experiments"
+      [[ -d "$ROOT_DIR/newman" ]] && echo "$ROOT_DIR/newman"
+    fi
+  } | sort -u
+)
+
+if [[ "${#TARGETS[@]}" -eq 0 ]]; then
+  echo "No cleanup targets found."
+  exit 0
+fi
+
+echo "Cleanup mode: $([[ "$APPLY" -eq 1 ]] && echo "APPLY" || echo "DRY-RUN")"
+echo "Targets:"
+printf ' - %s\n' "${TARGETS[@]}"
+
+if [[ "$APPLY" -eq 0 ]]; then
+  echo
+  echo "Dry-run finished. Re-run with --apply to remove these targets."
+  exit 0
+fi
+
+for target in "${TARGETS[@]}"; do
+  rm -rf -- "$target"
+done
+
+echo
+echo "Cleanup complete."

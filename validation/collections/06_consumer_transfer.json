@@ -1,0 +1,154 @@
+{
+  "info": {
+    "name": "06 Consumer Transfer",
+    "_postman_id": "consumer-transfer-06",
+    "description": "Consumer starts transfer process and retrieves data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "eval(pm.environment.get('test_script'));"
+        ]
+      }
+    }
+  ],
+
+  "item": [
+
+    {
+      "name": "Start Transfer Process",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('contract_agreement_id')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses",
+          "host": [
+            "{{consumer}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "transferprocesses"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"contractId\": \"{{contract_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"HttpData-PULL\"\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Check Transfer Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses/request",
+          "host": [
+            "{{consumer}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "transferprocesses",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Retrieve Endpoint Data Reference",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/edrs/request",
+          "host": [
+            "{{consumer}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "edrs",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Download Data",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('endpoint')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{authorization_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{endpoint}}",
+          "host": [
+            "{{endpoint}}"
+          ]
+        }
+      }
+    }
+
+  ]
+}

@@ -1,0 +1,183 @@
+{
+  "info": {
+    "name": "02 Connector Management API",
+    "_postman_id": "connector-management-02",
+    "description": "Create basic entities in provider connector",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "eval(pm.environment.get('test_script'));"
+        ]
+      }
+    }
+  ],
+
+  "item": [
+
+    {
+      "name": "Create Asset",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/assets",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "assets"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\",\n    \"dct\": \"http://purl.org/dc/terms/\",\n    \"dcat\": \"http://www.w3.org/ns/dcat#\"\n  },\n  \"@id\": \"asset-test\",\n  \"@type\": \"Asset\",\n  \"properties\": {\n    \"name\": \"Test Asset\",\n    \"version\": \"1.0.0\",\n    \"shortDescription\": \"Asset created during automated validation\",\n    \"assetType\": \"dataset\",\n    \"dct:description\": \"Asset created during automated validation\",\n    \"dcat:keyword\": [\"validation\", \"test\"]\n  },\n  \"dataAddress\": {\n    \"type\": \"HttpData\",\n    \"baseUrl\": \"https://jsonplaceholder.typicode.com/todos\",\n    \"name\": \"todos\"\n  }\n}"
+        }
+      }
+    },
+
+    {
+      "name": "List Assets",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/assets/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "assets",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10,\n  \"filterExpression\": []\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Create Policy",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/policydefinitions",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "policydefinitions"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\",\n    \"odrl\": \"http://www.w3.org/ns/odrl/2/\"\n  },\n  \"@id\": \"policy-test\",\n  \"policy\": {\n    \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n    \"@type\": \"Set\",\n    \"permission\": [],\n    \"prohibition\": [],\n    \"obligation\": []\n  }\n}"
+        }
+      }
+    },
+
+    {
+      "name": "List Policies",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/policydefinitions/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "policydefinitions",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10,\n  \"filterExpression\": []\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Create Contract Definition",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/contractdefinitions",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "contractdefinitions"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@id\": \"contract-test\",\n  \"accessPolicyId\": \"policy-test\",\n  \"contractPolicyId\": \"policy-test\",\n  \"assetsSelector\": [\n    {\n      \"operandLeft\": \"https://w3id.org/edc/v0.0.1/ns/id\",\n      \"operator\": \"=\",\n      \"operandRight\": \"asset-test\"\n    }\n  ]\n}"
+        }
+      }
+    },
+
+    {
+      "name": "List Contract Definitions",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://{{provider}}.{{dsDomain}}/management/v3/contractdefinitions/request",
+          "host": [
+            "{{provider}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "contractdefinitions",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10,\n  \"filterExpression\": []\n}"
+        }
+      }
+    }
+
+  ]
+}

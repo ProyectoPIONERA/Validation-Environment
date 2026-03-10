@@ -1,0 +1,83 @@
+{
+  "info": {
+    "name": "05 Consumer Contract Negotiation",
+    "_postman_id": "consumer-negotiation-05",
+    "description": "Consumer negotiates contract with provider",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "eval(pm.environment.get('test_script'));"
+        ]
+      }
+    }
+  ],
+
+  "item": [
+
+    {
+      "name": "Start Contract Negotiation",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/contractnegotiations",
+          "host": [
+            "{{consumer}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "contractnegotiations"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"ContractRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"policy\": {\n    \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n    \"@type\": \"odrl:Offer\",\n    \"@id\": \"{{policyId}}\",\n    \"assigner\": \"{{providerParticipantId}}\",\n    \"target\": \"{{assetId}}\",\n    \"permission\": [],\n    \"prohibition\": [],\n    \"obligation\": []\n  }\n}"
+        }
+      }
+    },
+
+    {
+      "name": "Check Negotiation Status",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/contractnegotiations/request",
+          "host": [
+            "{{consumer}}",
+            "{{dsDomain}}"
+          ],
+          "path": [
+            "management",
+            "v3",
+            "contractnegotiations",
+            "request"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10\n}"
+        }
+      }
+    }
+
+  ]
+}

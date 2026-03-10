@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build/package artifacts
+build/
+dist/
+*.egg-info/
+
+# Local experiment outputs
+experiments/
+
+# Newman reports
+newman/
+
+# Sensitive local configuration
+/deployer.config
+!/deployer.config.example
+/inesdata-testing/deployer.config
+/inesdata-testing/common/init-keys-vault.json
+/inesdata-testing/deployments/
+inesdata-testing/
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+*.bakdeployer.config
+.venv/
