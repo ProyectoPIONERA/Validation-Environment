@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import types
@@ -140,6 +141,18 @@ class FakeStorage:
         return None
 
     @staticmethod
+    def save_newman_results_json(results, experiment_dir):
+        return None
+
+    @staticmethod
+    def save_test_results_json(results, experiment_dir):
+        return None
+
+    @staticmethod
+    def save_negotiation_metrics_json(results, experiment_dir):
+        return None
+
+    @staticmethod
     def save_newman_request_metrics(results, experiment_dir):
         return None
 
@@ -150,6 +163,33 @@ class FakeStorage:
     @staticmethod
     def save(results, experiment_dir=None, file_name="experiment_results.json"):
         return file_name
+
+    @staticmethod
+    def create_comparison_directory(experiment_a, experiment_b):
+        return tempfile.mkdtemp(prefix="cli-compare-")
+
+    @staticmethod
+    def save_comparison_json(results, comparison_dir, file_name="comparison_summary.json"):
+        return os.path.join(comparison_dir, file_name)
+
+    @staticmethod
+    def save_comparison_markdown(content, comparison_dir, file_name="comparison_report.md"):
+        return os.path.join(comparison_dir, file_name)
+
+
+class FakeReportGenerator:
+    def __init__(self, storage=None):
+        self.storage = storage
+
+    def generate(self, experiment_id):
+        return {"experiment_id": experiment_id, "summary": True}
+
+    def compare(self, experiment_a, experiment_b):
+        return {
+            "comparison_dir": "/tmp/comparison",
+            "experiment_a": {"experiment_id": experiment_a},
+            "experiment_b": {"experiment_id": experiment_b},
+        }
 
 
 class DryRunAwareAdapter(FakeAdapter):
@@ -279,6 +319,25 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
         self.assertIn("invalid choice", stderr.getvalue().lower())
 
+    def test_report_command_generates_summary_for_existing_experiment(self):
+        result = main.main(
+            ["report", "experiment_2026-03-10_12-00-00"],
+            adapter_registry=self.registry,
+            report_generator_cls=FakeReportGenerator,
+        )
+
+        self.assertEqual(result["summary"]["experiment_id"], "experiment_2026-03-10_12-00-00")
+
+    def test_compare_command_dispatches_to_report_generator(self):
+        result = main.main(
+            ["compare", "experiment_A", "experiment_B"],
+            adapter_registry=self.registry,
+            report_generator_cls=FakeReportGenerator,
+        )
+
+        self.assertEqual(result["experiment_a"]["experiment_id"], "experiment_A")
+        self.assertEqual(result["experiment_b"]["experiment_id"], "experiment_B")
+
     def test_resolve_adapter_class_fails_cleanly_for_missing_module(self):
         with self.assertRaises(ValueError) as exc:
             main.resolve_adapter_class(
@@ -395,3 +454,21 @@ class MainCliTests(unittest.TestCase):
         )
 
         self.assertEqual(result["iterations"], 3)
+
+    def test_run_command_passes_baseline_flag_to_runner(self):
+        class BaselineAwareRunner:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+            def run(self):
+                return {"baseline": self.kwargs["baseline"]}
+
+        result = main.main(
+            ["fake", "run", "--baseline"],
+            runner_cls=BaselineAwareRunner,
+            adapter_registry=self.registry,
+            validation_engine_cls=FakeValidationEngine,
+            metrics_collector_cls=FakeMetricsCollector,
+            experiment_storage=FakeStorage,
+        )
+
+        self.assertTrue(result["baseline"])

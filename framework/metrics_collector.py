@@ -11,6 +11,8 @@ import requests
 
 from .experiment_storage import ExperimentStorage
 from .kafka_metrics import KafkaMetricsCollector
+from .metrics.aggregator import MetricsAggregator
+from .metrics.collector import ExperimentMetricsCollector
 
 
 class MetricsCollector:
@@ -31,6 +33,7 @@ class MetricsCollector:
         kafka_config_loader=None,
         kafka_runtime_config=None,
         kafka_metrics_collector=None,
+        connector_log_fetcher=None,
     ):
         self.build_connector_url = build_connector_url
         self.is_kafka_available = is_kafka_available
@@ -44,6 +47,7 @@ class MetricsCollector:
             runtime_config=self.kafka_runtime_config,
             adapter_config_loader=self.kafka_config_loader,
         )
+        self.connector_log_fetcher = connector_log_fetcher
 
     def _require_dependency(self, dependency, name):
         if dependency is None:
@@ -158,78 +162,69 @@ class MetricsCollector:
 
     def parse_newman_report(self, report_path):
         """Parse a Newman JSON report and extract request latency metrics."""
-        with open(report_path, "r", encoding="utf-8") as f:
-            report = json.load(f)
-
-        collection_name = os.path.splitext(os.path.basename(report_path))[0]
-        collection = report.get("collection", {})
-        if isinstance(collection, dict):
-            info = collection.get("info", {})
-            collection_name = info.get("name") or collection_name
-
-        executions = report.get("run", {}).get("executions", [])
+        reports = [{"path": report_path, "report": ExperimentMetricsCollector._load_report(report_path)}]
         metrics = []
-        run_index = self._extract_run_index(report_path)
-
-        for execution in executions:
-            item = execution.get("item", {}) or {}
-            response = execution.get("response", {}) or {}
-            request = execution.get("request", {}) or {}
-            cursor = execution.get("cursor", {}) or {}
-            request_url = request.get("url", {}) or {}
-
-            endpoint = None
-            if isinstance(request_url, dict):
-                endpoint = request_url.get("raw")
-                if not endpoint:
-                    path_parts = request_url.get("path") or []
-                    host_parts = request_url.get("host") or []
-                    if path_parts:
-                        endpoint = "/" + "/".join(str(part) for part in path_parts)
-                    elif host_parts:
-                        endpoint = ".".join(str(part) for part in host_parts)
-            elif isinstance(request_url, str):
-                endpoint = request_url
-
-            metrics.append({
-                "run_index": run_index,
-                "run": run_index,
-                "request_name": item.get("name") or execution.get("id") or "unknown_request",
-                "request": item.get("name") or execution.get("id") or "unknown_request",
-                "collection": collection_name,
-                "status_code": response.get("code"),
-                "response_time_ms": response.get("responseTime"),
-                "latency_ms": response.get("responseTime"),
-                "timestamp": (
-                    cursor.get("started")
-                    or response.get("timestamp")
-                    or request.get("timestamp")
-                ),
-                "endpoint": endpoint,
-            })
-
+        for item in ExperimentMetricsCollector.extract_request_metrics(reports):
+            enriched = dict(item)
+            enriched["run"] = item.get("iteration")
+            enriched["request"] = item.get("request_name")
+            enriched["response_time_ms"] = item.get("latency_ms")
+            metrics.append(enriched)
         return metrics
+
+    def _load_experiment_metadata(self, experiment_dir):
+        metadata_path = os.path.join(experiment_dir, "metadata.json")
+        if not experiment_dir or not os.path.exists(metadata_path):
+            return {}
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _fetch_connector_logs(self, experiment_dir):
+        if not callable(self.connector_log_fetcher):
+            return {}
+
+        metadata = self._load_experiment_metadata(experiment_dir)
+        connectors = metadata.get("connectors") or []
+        try:
+            return self.connector_log_fetcher(connectors, metadata=metadata) or {}
+        except TypeError:
+            return self.connector_log_fetcher(connectors) or {}
+        except Exception as exc:
+            print(f"[WARNING] Connector log collection failed: {exc}")
+            return {}
 
     def collect_newman_request_metrics(self, report_dir, experiment_dir=None):
         """Aggregate request latency metrics from all Newman JSON reports in a directory."""
         if not report_dir or not os.path.isdir(report_dir):
             return []
 
-        all_metrics = []
+        experiment_id = None
+        connector_logs = None
+        if experiment_dir:
+            metadata = self._load_experiment_metadata(experiment_dir)
+            experiment_id = metadata.get("experiment_id") or os.path.basename(os.path.normpath(experiment_dir))
+            connector_logs = self._fetch_connector_logs(experiment_dir)
 
-        for root, _, files in os.walk(report_dir):
-            for file_name in sorted(files):
-                if not file_name.endswith(".json"):
-                    continue
-                report_path = os.path.join(root, file_name)
-                all_metrics.extend(self.parse_newman_report(report_path))
+        artifacts = ExperimentMetricsCollector.build_artifacts(
+            report_dir,
+            experiment_id=experiment_id,
+            connector_logs=connector_logs,
+        )
 
-        if all_metrics and experiment_dir:
-            aggregated_metrics = self.aggregate_newman_request_metrics(all_metrics)
-            self.experiment_storage.save_raw_request_metrics_jsonl(all_metrics, experiment_dir)
+        raw_requests = artifacts["raw_requests"]
+        if experiment_dir:
+            aggregated_metrics = {
+                "request_metrics": artifacts["aggregated_metrics"],
+                "negotiation_metrics": artifacts["aggregated_negotiation_metrics"],
+                "test_summary": MetricsAggregator.summarize_test_results(artifacts["test_results"]),
+            }
+            self.experiment_storage.save_newman_results_json(artifacts["newman_results"], experiment_dir)
+            self.experiment_storage.save_raw_request_metrics_jsonl(raw_requests, experiment_dir)
+            self.experiment_storage.save_test_results_json(artifacts["test_results"], experiment_dir)
+            self.experiment_storage.save_negotiation_metrics_json(artifacts["negotiation_metrics"], experiment_dir)
             self.experiment_storage.save_aggregated_metrics(aggregated_metrics, experiment_dir)
 
-        return all_metrics
+        return raw_requests
 
     @staticmethod
     def _percentile(values, percentile):
@@ -252,37 +247,7 @@ class MetricsCollector:
 
     def aggregate_newman_request_metrics(self, metrics):
         """Aggregate Newman request metrics by request name."""
-        grouped = {}
-
-        for metric in metrics or []:
-            request_name = metric.get("request_name") or metric.get("request")
-            latency = metric.get("latency_ms")
-
-            if request_name is None or latency is None:
-                continue
-
-            try:
-                latency_value = float(latency)
-            except (TypeError, ValueError):
-                continue
-
-            grouped.setdefault(request_name, []).append(latency_value)
-
-        aggregated = {}
-
-        for request_name in sorted(grouped):
-            values = grouped[request_name]
-            aggregated[request_name] = {
-                "count": len(values),
-                "average_latency_ms": round(statistics.mean(values), 2),
-                "min_latency_ms": round(min(values), 2),
-                "max_latency_ms": round(max(values), 2),
-                "p50_latency_ms": round(self._percentile(values, 0.50), 2),
-                "p95_latency_ms": round(self._percentile(values, 0.95), 2),
-                "p99_latency_ms": round(self._percentile(values, 0.99), 2),
-            }
-
-        return aggregated
+        return MetricsAggregator.aggregate_request_metrics(metrics)
 
     def measure_kafka_latency(self, provider, consumer, num_messages=10, topic="kafka-stream-topic"):
         """Measure streaming latency using Kafka between provider and consumer."""

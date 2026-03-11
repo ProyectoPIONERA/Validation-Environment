@@ -6,14 +6,18 @@
 (function() {
 const requestName = pm.info.requestName
 const body = requestName === "Download Data" ? null : parseJsonResponse()
-const agreementId = pm.collectionVariables.get("contract_agreement_id")
+if (requestName === "Consumer Login") {
+    handleLoginToken(body)
+    return
+}
+const agreementId = getStoredVar("e2e_agreement_id")
 if (requestName === "Start Transfer Process" && !agreementId) {
     pm.test("Transfer skipped because no contract agreement is available", function () {
         pm.expect(true).to.be.true
     })
     return
 }
-if (requestName !== "Download Data") {
+if (requestName !== "Download Data" && requestName !== "Start Transfer Process") {
     assertStatus200()
 }
 if (!body && requestName !== "Download Data") {
@@ -24,10 +28,12 @@ if (body) {
     assertNoEdcError(body)
 }
 if (requestName === "Start Transfer Process") {
-    extractAtId(body, "transfer_id")
+    assertCreated()
+    extractAtId(body, "e2e_transfer_id")
+    return
 }
 if (requestName === "Check Transfer Status") {
-    const transferId = pm.collectionVariables.get("transfer_id")
+    const transferId = getStoredVar("e2e_transfer_id")
     let transfer = body
     if (Array.isArray(body)) {
         if (body.length === 0) {
@@ -60,7 +66,7 @@ if (requestName === "Check Transfer Status") {
     })
 }
 if (requestName === "Retrieve Endpoint Data Reference") {
-    const transferId = pm.collectionVariables.get("transfer_id")
+    const transferId = getStoredVar("e2e_transfer_id")
     let edr = body
     if (Array.isArray(body)) {
         if (body.length === 0) {
@@ -94,15 +100,15 @@ if (requestName === "Retrieve Endpoint Data Reference") {
         })
         return
     }
-    saveCollectionVar("endpoint", endpoint)
-    saveCollectionVar("authorization_token", auth)
+    saveCollectionVar("e2e_endpoint", endpoint)
+    saveCollectionVar("e2e_authorization_token", auth)
     pm.test("EDR contains endpoint and authorization", function () {
         pm.expect(endpoint).to.not.equal("")
         pm.expect(auth).to.not.equal("")
     })
 }
 if (requestName === "Download Data") {
-    const endpoint = pm.collectionVariables.get("endpoint")
+    const endpoint = getStoredVar("e2e_endpoint")
     if (!endpoint) {
         pm.test("Download skipped because no endpoint is available", function () {
             pm.expect(true).to.be.true

@@ -3,6 +3,7 @@ import os
 import socket
 import subprocess
 import time
+import requests
 
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
@@ -25,9 +26,16 @@ class INESDataInfrastructureAdapter:
         self.auto_mode_getter = auto_mode_getter
         self.config = config_cls or InesdataConfig
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
+        self._last_registration_service_liquibase_issue = None
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
+
+    @staticmethod
+    def _fail(message, root_cause=None):
+        if root_cause:
+            raise RuntimeError(f"{message}. Root cause: {root_cause}")
+        raise RuntimeError(message)
 
     def ensure_unix_environment(self):
         if os.name == "nt":
@@ -221,6 +229,7 @@ class INESDataInfrastructureAdapter:
             for line in result.splitlines():
                 columns = line.split()
                 name = columns[0]
+                ready = columns[1] if len(columns) > 1 else ""
                 status = columns[2]
 
                 if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
@@ -228,7 +237,20 @@ class INESDataInfrastructureAdapter:
                     self.run(f"kubectl get pods -n {namespace}", check=False)
                     return False
 
+                if status == "Completed":
+                    continue
+
                 if status != "Running":
+                    all_ready = False
+                    continue
+
+                if "/" in ready:
+                    ready_current, ready_total = ready.split("/", 1)
+                    if ready_current != ready_total:
+                        all_ready = False
+                        continue
+
+                if not ready:
                     all_ready = False
 
             if all_ready:
@@ -252,7 +274,27 @@ class INESDataInfrastructureAdapter:
             result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
 
             if result:
-                all_ready = all(line.split()[2] == "Running" for line in result.splitlines())
+                all_ready = True
+                for line in result.splitlines():
+                    columns = line.split()
+                    if len(columns) < 3:
+                        continue
+                    ready = columns[1] if len(columns) > 1 else ""
+                    status = columns[2]
+
+                    if status == "Completed":
+                        continue
+
+                    if status != "Running":
+                        all_ready = False
+                        break
+
+                    if "/" in ready:
+                        ready_current, ready_total = ready.split("/", 1)
+                        if ready_current != ready_total:
+                            all_ready = False
+                            break
+
                 if all_ready:
                     print("\nPods ready:")
                     self.run(f"kubectl get pods -n {namespace}")
@@ -265,14 +307,15 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
-    def port_forward_service(self, namespace, pattern, local_port, remote_port):
+    def port_forward_service(self, namespace, pattern, local_port, remote_port, quiet=False):
         pod = self.get_pod_by_name(namespace, pattern)
 
         if not pod:
-            print(f"Pod with pattern '{pattern}' not found in {namespace}")
+            if not quiet:
+                print(f"Pod with pattern '{pattern}' not found in {namespace}")
             return False
 
-        self.run(f"pkill -f 'kubectl port-forward {pod}'", check=False)
+        self.run(f"pkill -f 'kubectl port-forward {pod}'", check=False, silent=quiet)
 
         subprocess.Popen(
             ["kubectl", "port-forward", pod, "-n", namespace, f"{local_port}:{remote_port}"],
@@ -282,6 +325,12 @@ class INESDataInfrastructureAdapter:
 
         time.sleep(3)
         return True
+
+    def stop_port_forward_service(self, namespace, pattern, quiet=False):
+        pod = self.get_pod_by_name(namespace, pattern)
+        if not pod:
+            return False
+        return self.run(f"pkill -f 'kubectl port-forward {pod}'", check=False, silent=quiet) is not None
 
     def wait_for_port(self, host, port, timeout=None):
         timeout = timeout or self.config.TIMEOUT_PORT
@@ -313,6 +362,88 @@ class INESDataInfrastructureAdapter:
 
             if time.time() - start > timeout:
                 print("Timeout waiting for Vault pod")
+                return False
+
+            time.sleep(1)
+
+    def wait_for_level2_service_pods(self, namespace=None, timeout=None):
+        namespace = namespace or self.config.NS_COMMON
+        timeout = timeout or self.config.TIMEOUT_POD_WAIT
+        print(f"\nWaiting for Level 2 core services in namespace '{namespace}'...")
+        start_time = time.time()
+        expected_prefixes = (
+            "common-srvs-keycloak-",
+            "common-srvs-minio-",
+            "common-srvs-postgresql-",
+            "common-srvs-vault-",
+        )
+
+        while True:
+            result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+
+            if result:
+                pods = {}
+                transient_error = None
+
+                for line in result.splitlines():
+                    columns = line.split()
+                    if len(columns) < 3:
+                        continue
+
+                    name = columns[0]
+                    ready = columns[1] if len(columns) > 1 else ""
+                    status = columns[2]
+
+                    if status in ["CrashLoopBackOff", "ImagePullBackOff"]:
+                        print(f"\nPod in error state: {name} ({status})")
+                        self.run(f"kubectl get pods -n {namespace}", check=False)
+                        return False
+
+                    if status == "Error" and "keycloak-config-cli" not in name:
+                        print(f"\nPod in error state: {name} ({status})")
+                        self.run(f"kubectl get pods -n {namespace}", check=False)
+                        return False
+
+                    if any(name.startswith(prefix) for prefix in expected_prefixes):
+                        pods[name] = {"ready": ready, "status": status}
+                    elif status == "Error":
+                        transient_error = transient_error or f"{name} ({status})"
+
+                expected = {
+                    "keycloak": None,
+                    "minio": None,
+                    "postgresql": None,
+                    "vault": None,
+                }
+                for name, pod in pods.items():
+                    if name.startswith("common-srvs-keycloak-"):
+                        expected["keycloak"] = pod
+                    elif name.startswith("common-srvs-minio-"):
+                        expected["minio"] = pod
+                    elif name.startswith("common-srvs-postgresql-"):
+                        expected["postgresql"] = pod
+                    elif name.startswith("common-srvs-vault-"):
+                        expected["vault"] = pod
+
+                all_present = all(expected.values())
+                all_ready = all(
+                    pod["status"] == "Running" and pod["ready"] == "1/1"
+                    for key, pod in expected.items()
+                    if key != "vault" and pod is not None
+                )
+                vault_running = expected["vault"] is not None and expected["vault"]["status"] == "Running"
+
+                if all_present and all_ready and vault_running:
+                    print("\nLevel 2 core services detected:")
+                    self.run(f"kubectl get pods -n {namespace}", check=False)
+                    return True
+
+                if transient_error:
+                    print(f"Waiting past transient hook state: {transient_error}")
+
+            if time.time() - start_time > timeout:
+                print("\nTimeout waiting for Level 2 core services\n")
+                self.run(f"kubectl get pods -n {namespace}", check=False)
                 return False
 
             time.sleep(1)
@@ -652,6 +783,77 @@ class INESDataInfrastructureAdapter:
         print("Local infrastructure OK\n")
         return True
 
+    def wait_for_registration_service_schema(self, timeout=None, poll_interval=3):
+        timeout = timeout or self.config.TIMEOUT_POD_WAIT
+        print("\nWaiting for registration-service schema to be ready...")
+        start = time.time()
+        pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
+        registration_db = self.config.registration_db_name()
+        sql = "SELECT to_regclass('public.edc_participant');"
+
+        while time.time() - start <= timeout:
+            result = self.run_silent(
+                f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
+                f"-d {registration_db} -t -A -c \"{sql}\""
+            )
+
+            if result and result.strip() == "edc_participant":
+                print("registration-service schema ready: public.edc_participant exists")
+                return True
+
+            time.sleep(poll_interval)
+
+        print("Timeout waiting for registration-service schema readiness")
+        self.run(
+            f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
+            f"-d {registration_db} -c \"\\dt public.*\"",
+            check=False,
+        )
+        return False
+
+    def wait_for_registration_service_liquibase(self, timeout=None, poll_interval=3):
+        timeout = timeout or self.config.TIMEOUT_POD_WAIT
+        local_port = self.config.PORT_REGISTRATION_SERVICE
+        namespace = self.config.namespace_demo()
+        created_port_forward = False
+        last_issue = None
+
+        try:
+            if not self.wait_for_port("127.0.0.1", local_port, timeout=2):
+                if self.port_forward_service(namespace, "registration-service", local_port, 8080, quiet=True):
+                    created_port_forward = True
+                else:
+                    last_issue = "temporary port-forward to registration-service actuator could not be established"
+
+            if not self.wait_for_port("127.0.0.1", local_port):
+                self._last_registration_service_liquibase_issue = last_issue or "registration-service actuator was not reachable locally"
+                return False
+
+            endpoint = f"http://127.0.0.1:{local_port}/api/actuator/liquibase"
+            start = time.time()
+
+            while time.time() - start <= timeout:
+                try:
+                    response = requests.get(endpoint, timeout=5)
+                    if response.status_code == 200:
+                        payload = response.json()
+                        if "liquibaseBeans" in payload:
+                            self._last_registration_service_liquibase_issue = None
+                            return True
+                        last_issue = "liquibaseBeans not present in actuator response"
+                    else:
+                        last_issue = f"registration-service actuator returned HTTP {response.status_code}"
+                except Exception:
+                    last_issue = "registration-service actuator did not respond in time"
+
+                time.sleep(poll_interval)
+
+            self._last_registration_service_liquibase_issue = last_issue or "registration-service actuator did not confirm Liquibase readiness"
+            return False
+        finally:
+            if created_port_forward:
+                self.stop_port_forward_service(namespace, "registration-service", quiet=True)
+
     def wait_for_kubernetes_ready(self, timeout=180):
         print("\nWaiting for Kubernetes cluster to become ready...\n")
         start = time.time()
@@ -668,6 +870,134 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(3)
 
+    def _pod_snapshot(self, namespace):
+        result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+        if not result:
+            return []
+
+        snapshot = []
+        for line in result.splitlines():
+            columns = line.split()
+            if len(columns) < 4:
+                continue
+            snapshot.append({
+                "name": columns[0],
+                "ready": columns[1],
+                "status": columns[2],
+                "restarts": columns[3],
+            })
+        return snapshot
+
+    def wait_for_namespace_stability(self, namespace, duration=15, poll_interval=3):
+        """Observe namespace health during a stability window."""
+        print(f"\nObserving namespace '{namespace}' stability for {duration}s...")
+        last_issue = None
+        stable_since = None
+        timeout = max(self.config.TIMEOUT_NAMESPACE, duration * 3)
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            snapshot = self._pod_snapshot(namespace)
+            if not snapshot:
+                last_issue = f"no pods found in namespace '{namespace}'"
+                stable_since = None
+                time.sleep(poll_interval)
+                continue
+
+            unhealthy = []
+            for pod in snapshot:
+                if pod["status"] not in ("Running", "Completed"):
+                    unhealthy.append(f"{pod['name']} ({pod['status']})")
+                    continue
+
+                if pod["status"] == "Running" and "/" in pod["ready"]:
+                    ready_current, ready_total = pod["ready"].split("/", 1)
+                    if ready_current != ready_total:
+                        unhealthy.append(f"{pod['name']} readiness {pod['ready']}")
+
+            if unhealthy:
+                last_issue = ", ".join(unhealthy)
+                stable_since = None
+                time.sleep(poll_interval)
+                continue
+
+            if stable_since is None:
+                stable_since = time.time()
+                last_issue = None
+
+            if time.time() - stable_since >= duration:
+                print(f"Namespace '{namespace}' is stable\n")
+                return True
+
+            time.sleep(poll_interval)
+
+        if last_issue:
+            print(f"Namespace '{namespace}' failed stability window: {last_issue}")
+            self.run(f"kubectl get pods -n {namespace}", check=False)
+            return False
+
+        print(f"Namespace '{namespace}' did not achieve a continuous {duration}s stability window in time")
+        self.run(f"kubectl get pods -n {namespace}", check=False)
+        return False
+
+    def verify_cluster_ready_for_level2(self):
+        """Ensure Level 1 leaves a cluster stable enough for Level 2."""
+        status = self.run_silent("minikube status --output=json")
+        if not status:
+            return False, "minikube status unavailable"
+
+        try:
+            status_data = json.loads(status)
+        except json.JSONDecodeError:
+            return False, "minikube status output is not valid JSON"
+
+        for key in ("Host", "Kubelet", "APIServer"):
+            value = str(status_data.get(key, "")).lower()
+            if value != "running":
+                return False, f"{key} is '{status_data.get(key)}'"
+
+        nodes = self.run_silent("kubectl get nodes --no-headers")
+        if not nodes or " Ready " not in f" {nodes} ":
+            return False, "kubectl does not report a Ready node"
+
+        if not self.wait_for_pods("ingress-nginx", timeout=180):
+            return False, "ingress-nginx pods did not become ready"
+
+        if not self.wait_for_namespace_stability("ingress-nginx", duration=15, poll_interval=3):
+            return False, "ingress-nginx namespace did not remain stable"
+
+        return True, None
+
+    def verify_common_services_ready_for_level3(self):
+        """Ensure Level 2 leaves common services stable enough for Level 3."""
+        if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=180):
+            return False, "common services pods did not become ready"
+
+        if not self.wait_for_namespace_stability(self.config.NS_COMMON, duration=20, poll_interval=3):
+            return False, "common services namespace did not remain stable"
+
+        if not self.ensure_vault_unsealed():
+            return False, "Vault is not initialized/unsealed"
+
+        return True, None
+
+    def verify_dataspace_ready_for_level4(self):
+        """Ensure Level 3 leaves dataspace services stable enough for Level 4."""
+        if not self.wait_for_namespace_stability(self.config.namespace_demo(), duration=20, poll_interval=3):
+            return False, "dataspace namespace did not remain stable"
+
+        self.wait_for_registration_service_liquibase(timeout=60, poll_interval=3)
+
+        if not self.wait_for_registration_service_schema(timeout=120, poll_interval=3):
+            if self._last_registration_service_liquibase_issue:
+                print(
+                    "Registration-service Liquibase check was inconclusive: "
+                    f"{self._last_registration_service_liquibase_issue}"
+                )
+            return False, "registration-service schema was not ready"
+
+        return True, None
+
     def setup_cluster(self):
         print("\n========================================")
         print("LEVEL 1 - CLUSTER SETUP")
@@ -675,8 +1005,7 @@ class INESDataInfrastructureAdapter:
 
         self.ensure_unix_environment()
         if not self.ensure_wsl_docker_config():
-            print("Could not adjust WSL Docker configuration safely")
-            return
+            self._fail("Could not adjust WSL Docker configuration safely")
 
         print("Checking Minikube installation...")
         if self.run("which minikube", capture=True) is None:
@@ -694,8 +1023,7 @@ class INESDataInfrastructureAdapter:
 
         print("\nChecking Docker...")
         if self.run("docker info", capture=True, check=False) is None:
-            print("Docker is not running. Start Docker and retry.")
-            return
+            self._fail("Docker is not running. Start Docker and retry")
 
         print("Docker is running")
         print("\nDeleting existing Minikube cluster (clean state)...\n")
@@ -708,12 +1036,14 @@ class INESDataInfrastructureAdapter:
         )
 
         if not self.wait_for_kubernetes_ready():
-            print("Cluster failed to initialize")
-            return
+            self._fail("Cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
 
         print("\nEnabling ingress addon...\n")
         self.run("minikube addons enable ingress", check=False)
         self.run("kubectl get pods -n ingress-nginx", check=False)
+        cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
+        if not cluster_ready:
+            self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         print("\nLEVEL 1 COMPLETE\n")
 
     def deploy_infrastructure(self):
@@ -722,8 +1052,7 @@ class INESDataInfrastructureAdapter:
         print("========================================\n")
 
         if not self.ensure_wsl_docker_config():
-            print("Could not adjust WSL Docker configuration safely")
-            return
+            self._fail("Could not adjust WSL Docker configuration safely")
 
         repo_dir = self.config.repo_dir()
         common_dir = self.config.common_dir()
@@ -752,23 +1081,26 @@ class INESDataInfrastructureAdapter:
 
         print("\nDeploying common services...")
         if not self.deploy_helm_release(self.config.helm_release_common(), self.config.NS_COMMON, values_path, cwd=common_dir):
-            print("Error deploying common services")
-            return
+            self._fail("Error deploying common services")
 
-        if not self.wait_for_pods(self.config.NS_COMMON):
-            print("Services did not reach ready state")
-            return
+        if not self.wait_for_level2_service_pods(self.config.NS_COMMON):
+            self._fail(
+                "Services did not reach the pre-Vault-ready state",
+                root_cause="Keycloak, MinIO and PostgreSQL must be 1/1 Running, and Vault must exist in Running state before setup",
+            )
 
         if not self.wait_for_vault_pod(self.config.NS_COMMON):
-            print("Vault pod not detected")
-            return
+            self._fail("Vault pod not detected")
 
         if not self.setup_vault(self.config.NS_COMMON):
-            print("Error configuring Vault")
-            return
+            self._fail("Error configuring Vault")
 
         if not self.sync_vault_token_to_deployer_config():
             print("Warning: Could not synchronize Vault token")
+
+        common_ready, root_cause = self.verify_common_services_ready_for_level3()
+        if not common_ready:
+            self._fail("Level 2 did not leave common services ready for Level 3", root_cause=root_cause)
 
         print("\nLEVEL 2 COMPLETE\n")
 

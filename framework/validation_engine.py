@@ -18,6 +18,7 @@ class ValidationEngine:
         load_connector_credentials=None,
         load_deployer_config=None,
         cleanup_test_entities=None,
+        validation_test_entities_absent=None,
         ds_domain_resolver=None,
         ds_name="demo",
     ):
@@ -25,6 +26,7 @@ class ValidationEngine:
         self.load_connector_credentials = load_connector_credentials
         self.load_deployer_config = load_deployer_config
         self.cleanup_test_entities = cleanup_test_entities
+        self.validation_test_entities_absent = validation_test_entities_absent
         self.ds_domain_resolver = ds_domain_resolver
         self.ds_name = ds_name
 
@@ -58,7 +60,7 @@ class ValidationEngine:
 
         ds_domain = ds_domain_resolver()
         dataspace = self.ds_name
-        keycloak_url = config.get("KC_URL")
+        keycloak_url = config.get("KC_INTERNAL_URL") or config.get("KC_URL")
 
         if not keycloak_url.startswith("http"):
             keycloak_url = f"http://{keycloak_url}"
@@ -73,6 +75,7 @@ class ValidationEngine:
             "dsDomain": ds_domain,
             "dataspace": dataspace,
             "keycloakUrl": keycloak_url,
+            "keycloakClientId": "dataspace-users",
             "providerProtocolAddress": f"http://{provider}:19194/protocol",
             "consumerProtocolAddress": f"http://{consumer}:19194/protocol"
         }
@@ -83,6 +86,10 @@ class ValidationEngine:
             self.cleanup_test_entities,
             "cleanup_test_entities"
         )
+        validation_test_entities_absent = self._require_dependency(
+            self.validation_test_entities_absent,
+            "validation_test_entities_absent"
+        )
 
         print(f"\n=== Testing pair ===")
         print(f"Provider : {provider}")
@@ -90,6 +97,15 @@ class ValidationEngine:
 
         cleanup_test_entities(provider)
         cleanup_test_entities(consumer)
+
+        for connector in (provider, consumer):
+            is_clean, lingering_entities = validation_test_entities_absent(connector)
+            if not is_clean:
+                lingering = ", ".join(lingering_entities)
+                print(
+                    f"Warning: legacy test entities still exist after cleanup in "
+                    f"{connector} ({lingering})"
+                )
 
         env_vars = self.build_newman_env(provider, consumer)
 

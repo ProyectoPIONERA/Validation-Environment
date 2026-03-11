@@ -61,17 +61,15 @@ class ExperimentSummaryTests(unittest.TestCase):
         self.assertEqual(summary["adapter"], "FakeAdapter")
         self.assertEqual(summary["iterations"], 3)
         self.assertTrue(summary["kafka_enabled"])
-        self.assertEqual(summary["broker_source"], "external")
-        self.assertIn("Create Asset", summary["control_plane_metrics"])
-        self.assertEqual(summary["kafka_metrics"]["throughput_messages_per_second"], 120.0)
+        self.assertTrue(summary["baseline"] is False)
+        self.assertIn("Create Asset", summary["endpoint_latency_table"])
+        self.assertEqual(summary["kafka_metrics"]["throughput_messages_per_sec"], 120.0)
         self.assertEqual(summary["generated_graphs"], ["kafka_throughput.png", "request_latency_avg.png"])
-        self.assertEqual(summary["control_plane_performance"][0]["collection"], "02_connector_management_api")
-        self.assertEqual(summary["slowest_operations"][0]["request_name"], "Create Asset")
-        self.assertIn("# Experiment Summary", markdown)
-        self.assertIn("## Control Plane Performance", markdown)
-        self.assertIn("## Slowest Operations", markdown)
-        self.assertIn("| Collection | Request | Average latency (ms) | p50 | p95 | p99 |", markdown)
-        self.assertIn("| 1 | 03_provider_setup | Create Asset | 42.0 |", markdown)
+        self.assertEqual(summary["raw_request_count"], 4)
+        self.assertIn("# Experiment Report:", markdown)
+        self.assertIn("## Endpoint Latency", markdown)
+        self.assertIn("## Kafka Benchmark", markdown)
+        self.assertIn("| Endpoint | Count | p50 | p95 | p99 | Error Rate |", markdown)
         self.assertIn("`kafka_throughput.png`", markdown)
 
     def test_summary_builder_handles_missing_optional_kafka(self):
@@ -101,9 +99,8 @@ class ExperimentSummaryTests(unittest.TestCase):
         self.assertFalse(summary["kafka_enabled"])
         self.assertIsNone(summary["kafka_metrics"])
         self.assertEqual(summary["generated_graphs"], [])
-        self.assertEqual(summary["control_plane_performance"][0]["collection"], "(aggregated)")
-        self.assertIn("## Control Plane Performance", markdown)
-        self.assertIn("(aggregated)", markdown)
+        self.assertIn("## Endpoint Latency", markdown)
+        self.assertIn("Health", markdown)
 
     def test_experiment_runner_generates_summary_files(self):
         class FakeAdapter:

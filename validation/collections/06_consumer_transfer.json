@@ -21,6 +21,42 @@
   "item": [
 
     {
+      "name": "Consumer Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{consumer_user}}", "type": "text" },
+            { "key": "password", "value": "{{consumer_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
       "name": "Start Transfer Process",
       "event": [
         {
@@ -28,7 +64,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "if (!pm.collectionVariables.get('contract_agreement_id')) { pm.execution.skipRequest(); }"
+              "if (!pm.collectionVariables.get('e2e_agreement_id')) { pm.execution.skipRequest(); }"
             ]
           }
         }
@@ -36,6 +72,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -55,7 +95,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"contractId\": \"{{contract_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"HttpData-PULL\"\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"HttpData-PULL\"\n}"
         }
       }
     },
@@ -65,6 +105,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -95,6 +139,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -128,7 +176,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "if (!pm.collectionVariables.get('endpoint')) { pm.execution.skipRequest(); }"
+              "if (!pm.collectionVariables.get('e2e_endpoint')) { pm.execution.skipRequest(); }"
             ]
           }
         }
@@ -138,13 +186,13 @@
         "header": [
           {
             "key": "Authorization",
-            "value": "{{authorization_token}}"
+            "value": "{{e2e_authorization_token}}"
           }
         ],
         "url": {
-          "raw": "{{endpoint}}",
+          "raw": "{{e2e_endpoint}}",
           "host": [
-            "{{endpoint}}"
+            "{{e2e_endpoint}}"
           ]
         }
       }

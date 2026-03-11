@@ -4,32 +4,40 @@
  * 05_consumer_negotiation.json
  */
 (function() {
-assertStatus200()
+const requestName = pm.info.requestName
+/**
+ * Consumer authentication
+ */
+if (requestName === "Consumer Login") {
+    const body = parseJsonResponse()
+    if (!body) {
+        return
+    }
+    assertFieldExists(body, "access_token")
+    saveCollectionVar("consumer_jwt", body.access_token)
+    return
+}
+
 const body = parseJsonResponse()
 if (!body) {
     console.log("No valid response body, skipping tests")
     return
 }
 assertNoEdcError(body)
-const requestName = pm.info.requestName
-/**
- * Consumer authentication
- */
-if (requestName === "Consumer Login") {
-    assertFieldExists(body, "access_token")
-    saveCollectionVar("consumer_jwt", body.access_token)
-}
 /**
  * Contract negotiation start
  */
 if (requestName === "Start Contract Negotiation") {
-    extractAtId(body, "contract_negotiation_id")
+    assertCreated()
+    extractAtId(body, "e2e_negotiation_id")
+    return
 }
 /**
  * Negotiation status check
  */
 if (requestName === "Check Negotiation Status") {
-    const negotiationId = pm.collectionVariables.get("contract_negotiation_id")
+    assertStatus200()
+    const negotiationId = getStoredVar("e2e_negotiation_id")
     let negotiation = body
     if (Array.isArray(body)) {
         pm.test("Negotiation list not empty", function () {
@@ -53,7 +61,7 @@ if (requestName === "Check Negotiation Status") {
     })
     const agreementId = negotiation.contractAgreementId
     if (agreementId) {
-        saveCollectionVar("contract_agreement_id", agreementId)
+        saveCollectionVar("e2e_agreement_id", agreementId)
         pm.test("Contract agreement generated", function () {
             pm.expect(agreementId).to.not.be.undefined
             pm.expect(agreementId).to.not.be.null

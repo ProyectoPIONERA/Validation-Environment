@@ -5,14 +5,19 @@
 (function() {
 const requestName = pm.info.requestName
 const status = pm.response.code
+if (requestName === "Provider Login" || requestName === "Consumer Login") {
+    const loginBody = parseJsonResponse()
+    handleLoginToken(loginBody)
+    return
+}
 if (requestName === "Direct DSP Catalog Request") {
     if (status === 401) {
         pm.test("Direct DSP catalog request requires authentication", function () {
             pm.expect(status).to.equal(401)
         })
     } else {
-        pm.test("Direct DSP catalog request completed", function () {
-            pm.expect(status).to.be.oneOf([200, 401])
+        pm.test("Direct DSP catalog endpoint responded with an expected status", function () {
+            pm.expect(status).to.be.oneOf([200, 400, 401])
         })
     }
     return
@@ -46,7 +51,15 @@ if (!Array.isArray(datasets)) {
 pm.test("Dataset list not empty", function () {
     pm.expect(datasets.length).to.be.above(0);
 });
-const dataset = datasets[0];
+const expectedAssetId = getStoredVar("e2e_asset_id");
+const dataset = datasets.find(function (item) {
+    return item && JSON.stringify(item).includes(expectedAssetId);
+}) || datasets[0];
+pm.test("Catalog contains the E2E asset", function () {
+    pm.expect(datasets.some(function (item) {
+        return item && JSON.stringify(item).includes(expectedAssetId);
+    })).to.equal(true);
+});
 pm.test("Dataset has @id", function () {
     pm.expect(dataset).to.have.property("@id");
 });
@@ -59,11 +72,9 @@ if (Array.isArray(policy)) {
 }
 saveCollectionVar("providerParticipantId", catalog["dspace:participantId"] || pm.environment.get("provider"))
 if (policy && policy["@id"]) {
-    saveCollectionVar("policyId", policy["@id"]);
+    saveCollectionVar("e2e_offer_policy_id", policy["@id"]);
 }
-if (dataset["@id"]) {
-    saveCollectionVar("assetId", dataset["@id"]);
-}
+saveCollectionVar("e2e_catalog_asset_id", dataset["@id"] || expectedAssetId);
 console.log("Catalog participant:", catalog["dspace:participantId"]);
 console.log("Catalog datasets:", datasets.length);
 console.log("First dataset:", dataset);

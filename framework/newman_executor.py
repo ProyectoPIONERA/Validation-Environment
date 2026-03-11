@@ -1,5 +1,8 @@
 import os
+import shutil
 import subprocess
+import json
+import tempfile
 
 
 class NewmanExecutor:
@@ -8,6 +11,41 @@ class NewmanExecutor:
     Encapsulates Newman command execution, environment variable injection,
     and dynamic test script loading for validation collections.
     """
+
+    def ensure_available(self):
+        newman_cmd = self.resolve_newman_command()
+        if newman_cmd is not None:
+            return newman_cmd
+
+        package_json = "package.json"
+        if os.path.exists(package_json):
+            print("[INFO] Newman not found. Installing local Node.js tooling with npm...")
+            result = subprocess.run(
+                ["npm", "install"],
+                check=False,
+                capture_output=False,
+                text=True,
+            )
+            if result.returncode == 0:
+                newman_cmd = self.resolve_newman_command()
+                if newman_cmd is not None:
+                    return newman_cmd
+
+        return None
+
+    def resolve_newman_command(self):
+        local_newman = os.path.join("node_modules", ".bin", "newman")
+        if os.path.exists(local_newman):
+            return [local_newman]
+
+        global_newman = shutil.which("newman")
+        if global_newman:
+            return [global_newman]
+
+        return None
+
+    def is_available(self):
+        return self.ensure_available() is not None
 
     def _load_file(self, path):
         """Read a file and return its content as string."""
@@ -36,7 +74,25 @@ class NewmanExecutor:
 
         return "\n".join(scripts)
 
-    def run_newman(self, collection_path, env_vars, report_path=None):
+    def _write_environment_file(self, env_vars, environment_path):
+        payload = {
+            "id": "validation-environment",
+            "name": "Validation Environment",
+            "values": [
+                {
+                    "key": key,
+                    "value": value,
+                    "type": "text",
+                    "enabled": True,
+                }
+                for key, value in env_vars.items()
+            ],
+            "_postman_variable_scope": "environment",
+        }
+        with open(environment_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+    def run_newman(self, collection_path, env_vars, report_path=None, environment_path=None):
         """
         Execute a Postman collection using Newman with dynamic environment variables,
         injected test scripts, and optional JSON report export.
@@ -44,20 +100,32 @@ class NewmanExecutor:
         print(f"\nExecuting: newman run {collection_path}")
 
         test_script = self.load_test_scripts(collection_path)
+        newman_cmd = self.ensure_available()
+        if newman_cmd is None:
+            print("ERROR: Newman is not installed or not available locally")
+            print("Install with: npm install or npm install -g newman")
+            return None
 
-        cmd = [
-            "newman",
+        cmd = newman_cmd + [
             "run",
             collection_path,
             "--reporters",
             "cli,json",
         ]
 
-        for key, value in env_vars.items():
+        if environment_path:
             cmd.extend([
-                "--env-var",
-                f"{key}={value}"
+                "--environment",
+                environment_path,
+                "--export-environment",
+                environment_path,
             ])
+        else:
+            for key, value in env_vars.items():
+                cmd.extend([
+                    "--env-var",
+                    f"{key}={value}"
+                ])
 
         cmd.extend([
             "--env-var",
@@ -85,8 +153,8 @@ class NewmanExecutor:
             return report_path
 
         except FileNotFoundError:
-            print("ERROR: Newman is not installed or not in PATH")
-            print("Install with: npm install -g newman")
+            print("ERROR: Newman is not installed or not available locally")
+            print("Install with: npm install or npm install -g newman")
             return None
 
     def run_validation_collections(self, env_vars, report_dir=None):
@@ -105,18 +173,27 @@ class NewmanExecutor:
         total = len(collections)
         exported_reports = []
 
-        for i, c in enumerate(collections, 1):
-            collection_path = os.path.join(base, c)
-            print(f"[{i}/{total}] Running collection: {c}")
+        with tempfile.TemporaryDirectory(prefix="validation-newman-env-") as tmpdir:
+            environment_path = os.path.join(tmpdir, "environment.json")
+            self._write_environment_file(env_vars, environment_path)
 
-            report_path = None
-            if report_dir:
-                report_name = f"{os.path.splitext(c)[0]}.json"
-                report_path = os.path.join(report_dir, report_name)
+            for i, c in enumerate(collections, 1):
+                collection_path = os.path.join(base, c)
+                print(f"[{i}/{total}] Running collection: {c}")
 
-            exported_report = self.run_newman(collection_path, env_vars, report_path=report_path)
-            if exported_report:
-                exported_reports.append(exported_report)
+                report_path = None
+                if report_dir:
+                    report_name = f"{os.path.splitext(c)[0]}.json"
+                    report_path = os.path.join(report_dir, report_name)
+
+                exported_report = self.run_newman(
+                    collection_path,
+                    env_vars,
+                    report_path=report_path,
+                    environment_path=environment_path,
+                )
+                if exported_report:
+                    exported_reports.append(exported_report)
 
         return exported_reports
 

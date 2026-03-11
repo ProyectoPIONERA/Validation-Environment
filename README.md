@@ -62,9 +62,9 @@ python inesdata.py
 
 - **Nivel 1 – Setup Cluster**: prepara el clúster base con Minikube, Helm e ingress.
 - **Nivel 2 – Deploy Common Services**: sincroniza configuración, prepara `hosts`, despliega servicios comunes y configura Vault.
-- **Nivel 3 – Deploy Dataspace**: despliega el dataspace y sus componentes principales sobre el clúster ya preparado.
-- **Nivel 4 – Deploy Connectors**: crea y despliega los conectores definidos en la configuración del entorno.
-- **Nivel 5 – Run Validation Tests**: ejecuta las validaciones funcionales sobre los conectores desplegados.
+- **Nivel 3 – Deploy Dataspace**: despliega el dataspace y sus componentes principales sobre el clúster ya preparado, y valida que `registration-service` deja listo su esquema antes de pasar a conectores.
+- **Nivel 4 – Deploy Connectors**: crea y despliega los conectores definidos en la configuración del entorno, comprueba su disponibilidad y muestra el resumen operativo de credenciales y endpoints.
+- **Nivel 5 – Run Validation Tests**: ejecuta las validaciones funcionales sobre los conectores desplegados, con un flujo Newman que distingue entre CRUD aislado y escenario end-to-end del dataspace.
 
 ### Notas operativas importantes
 
@@ -77,6 +77,7 @@ minikube tunnel
 - Cuando `minikube tunnel` empiece a mostrar logs, puede solicitar la contraseña del sistema aunque la consola no siempre muestre un indicador visible. Si parece que no se escribe nada, introduce la contraseña igualmente y pulsa **Enter**.
 - El flujo por niveles sigue siendo el más seguro para bootstrap y troubleshooting porque guía al usuario cuando hace falta intervención manual.
 - El archivo real `deployer.config` debe mantenerse en formato `KEY=VALUE` puro, sin comentarios ni líneas informativas.
+- El nivel 3 reinicia `registration-service` tras recrear la base de datos del dataspace para asegurar que vuelva a cargar sus credenciales y aplique Liquibase antes de dar el nivel por completado.
 
 ## Prerrequisitos
 
@@ -85,7 +86,7 @@ Conviene distinguir tres grupos de prerrequisitos:
 | Bloque | Cuándo aplica | Herramientas / requisitos principales | ¿Lo instala el framework? |
 | --- | --- | --- | --- |
 | Bootstrap base de INESData | Levantar el entorno con `python inesdata.py` | Python 3.10, Git, Docker, Minikube, Helm, `kubectl`, permisos para `hosts`, `minikube tunnel` | No |
-| Validación automatizada y experimentación | Ejecutar validación funcional y parte del workflow experimental | Node.js, `npm`, `newman` | No |
+| Validación automatizada y experimentación | Ejecutar validación funcional y parte del workflow experimental | Node.js, `npm` | Parcialmente |
 | Implementación actual del adapter | Ejecutar el adapter `inesdata` tal y como está implementado hoy | `psql` local | No |
 
 ### Verificación rápida de herramientas
@@ -100,7 +101,7 @@ kubectl version --client=true
 psql --version
 node --version
 npm --version
-newman -v
+npx newman -v
 ```
 
 ### Instalación recomendada en Ubuntu/WSL
@@ -185,6 +186,15 @@ npm --version
 #### Newman
 
 ```bash
+npm install
+npx newman -v
+```
+
+El framework prioriza `node_modules/.bin/newman` y, si no existe, intenta `npm install` automáticamente cuando una validación necesita Newman y el repositorio incluye `package.json`.
+
+Alternativa global:
+
+```bash
 npm install -g newman
 newman -v
 ```
@@ -201,6 +211,15 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+Antes de usar `main.py` o helpers del framework desde la raíz, conviene asegurar explícitamente que ese entorno tiene las dependencias instaladas:
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+El helper `scripts/run_kafka_benchmark.sh` ejecuta esta instalación automáticamente sobre el intérprete que vaya a usar antes de lanzar el benchmark.
+
 ### Automatización de tareas
 
 En el flujo de `inesdata.py` y del adapter `inesdata`, el framework automatiza tareas como:
@@ -209,7 +228,6 @@ En el flujo de `inesdata.py` y del adapter `inesdata`, el framework automatiza t
 - copia de `deployer.config` al repositorio operativo
 - creación de `inesdata-testing/.venv`
 - instalación de dependencias Python de `inesdata-testing/requirements.txt`
-- instalación auxiliar de librerías Python usadas por el flujo legacy
 - alta de repositorios Helm y `helm dependency build`
 - arranque de Minikube y habilitación de ingress
 - despliegue de servicios comunes, dataspace y conectores
@@ -230,6 +248,22 @@ No debe asumirse que el framework sea un instalador completo del sistema. Antes 
 Tampoco automatiza la intervención manual requerida para mantener `minikube tunnel` abierto ni la edición inicial del fichero `hosts` cuando el entorno lo requiere.
 
 > Algunas utilidades se ejecutan dentro de contenedores o pods mediante `docker exec` o `kubectl exec`. Por ello, herramientas como `vault`, `mc`, `kafka-topics` o determinados clientes internos del servicio no requieren instalación local independiente.
+
+### Dependencias en `requirements.txt`
+
+El framework separa sus dependencias por tipo de la siguiente manera:
+
+- `requirements.txt` de la raíz: librerías Python usadas por `main.py`, `inesdata.py`, adapters, tests core y helpers Python del framework. Aquí sí deben vivir dependencias como `requests`, `PyYAML`, `tabulate`, `ruamel.yaml`, `matplotlib`, `docker`, `testcontainers` o `kafka-python`.
+- `inesdata-testing/requirements.txt`: dependencias Python del repositorio operativo INESData que se ejecuta mediante `inesdata-testing/.venv`.
+- herramientas Node.js: `newman` no pertenece a `requirements.txt` porque no es un paquete Python. Se gestiona con `npm` y `package.json`, no con `pip`.
+- herramientas del sistema: `docker`, `minikube`, `helm`, `kubectl`, `psql` o `snap`/`apt` tampoco pertenecen a `requirements.txt`. Son prerrequisitos del sistema operativo o del entorno de contenedores.
+
+Estado actual del framework:
+
+- `main.py` e `inesdata.py` aseguran automáticamente las dependencias Python de la raíz antes de continuar.
+- el flujo legacy asegura también `inesdata-testing/requirements.txt` antes de invocar `deployer.py` dentro de `inesdata-testing/.venv`.
+- `newman` se puede instalar localmente con `npm install` en la raíz del repo; el framework prioriza `node_modules/.bin/newman` y, si no existe, usa un `newman` global en `PATH`.
+- cuando una validación necesita `newman` y no está disponible, el framework intenta `npm install` automáticamente si existe `package.json` en la raíz.
 
 ## Uso del framework
 
@@ -287,6 +321,7 @@ Smoke test corto:
 
 ```bash
 cd ~/Validation-Environment
+npm install
 source .venv/bin/activate
 bash scripts/run_kafka_benchmark.sh --messages 10
 ```
@@ -297,6 +332,16 @@ Con política explícita de reintentos:
 bash scripts/run_kafka_benchmark.sh --messages 10 --max-retries 3 --retry-backoff 15
 ```
 
+Modo más estable para entornos sensibles a cold starts o a timeouts de metadata:
+
+```bash
+bash scripts/run_kafka_benchmark.sh \
+  --messages 10 \
+  --topic-strategy STATIC_TOPIC \
+  --topic-name framework-kafka-benchmark \
+  --keep-broker
+```
+
 ### Resumen operativo del helper Kafka
 
 Script: `scripts/run_kafka_benchmark.sh`
@@ -305,13 +350,19 @@ Qué hace:
 - levanta un broker Kafka externo reproducible con `docker compose`
 - espera salud del broker y ventana de estabilización
 - reintenta fallos transitorios con reinicio limpio y backoff lineal
+- asegura dependencias Python de la raíz y `newman` local si el repositorio tiene `package.json`
 - ejecuta `python main.py inesdata metrics --kafka` o `run --kafka`
 - valida `kafka_metrics.json` y muestra artefactos recientes
+
+El `docker-compose.kafka.yml` está afinado para un broker KRaft de un solo nodo con márgenes de heartbeat y sesión menos agresivos que los valores por defecto, porque en entornos como WSL o Docker Desktop los timeouts cortos pueden provocar ciclos de `fencing/unfencing` durante la fase de estabilización.
 
 Parámetros útiles:
 - `--messages <n>`
 - `--max-retries <n>` (por defecto `3`)
 - `--retry-backoff <s>` (por defecto `15`)
+- `--topic-strategy <EXPERIMENT_TOPIC|STATIC_TOPIC>`
+- `--topic-name <name>` (obligatorio con `STATIC_TOPIC`)
+- `--no-reuse-broker-on-retry`
 - `--keep-broker`
 - `--prepare-only`
 - `--teardown-only`
@@ -321,6 +372,7 @@ Ejemplos:
 ```bash
 bash scripts/run_kafka_benchmark.sh --messages 10
 bash scripts/run_kafka_benchmark.sh --messages 10 --max-retries 3 --retry-backoff 15
+bash scripts/run_kafka_benchmark.sh --messages 10 --topic-strategy STATIC_TOPIC --topic-name framework-kafka-benchmark --keep-broker
 bash scripts/run_kafka_benchmark.sh --prepare-only
 bash scripts/run_kafka_benchmark.sh --teardown-only
 ```
@@ -344,6 +396,8 @@ bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --platform-dir
 
 Script: `scripts/clean_workspace.sh`
 
+Si el workspace acumula demasiados artefactos locales generados por el framework, este script es la forma recomendada de recuperar espacio y dejar el workspace limpio sin tocar el código fuente.
+
 Objetivo:
 - eliminar artefactos temporales locales para mantener el repositorio limpio
 - evitar que cachés de ejecución se mezclen con cambios reales del framework
@@ -352,6 +406,14 @@ Qué limpia por defecto:
 - directorios `__pycache__`
 - archivos `*.pyc`
 - cachés `.pytest_cache`, `.mypy_cache`, `.ruff_cache`
+
+Qué no limpia por defecto:
+- directorios `experiments/`
+- directorio `newman/`
+- entornos virtuales como `.venv` o `inesdata-testing/.venv`
+- `node_modules/`
+
+Para borrar también los resultados generados por experimentos y ejecuciones Newman, hay que añadir `--include-results`.
 
 Modo de uso:
 
@@ -365,6 +427,10 @@ bash scripts/clean_workspace.sh --apply
 # incluir además resultados locales (experiments/newman)
 bash scripts/clean_workspace.sh --apply --include-results
 ```
+
+Recomendación práctica:
+- si solo quieres limpiar cachés y basura temporal, usa `--apply`
+- si además quieres vaciar resultados experimentales acumulados porque el workspace ya está demasiado cargado, usa `--apply --include-results`
 
 Qué se espera de este script:
 - uso manual antes de commits, empaquetado o entregas
@@ -384,6 +450,17 @@ Un experimento puede incluir:
 - recogida de métricas de control plane
 - benchmark Kafka opcional
 - generación automática de artefactos del experimento
+
+En el flujo actual de validación funcional del adapter `inesdata`, las colecciones Newman se ejecutan en este orden:
+
+- `01_environment_health.json`: salud básica, reachability y autenticación
+- `02_connector_management_api.json`: CRUD aislado del Management API con IDs únicos por ejecución
+- `03_provider_setup.json`: preparación del escenario E2E del provider con recursos `e2e_*`
+- `04_consumer_catalog.json`: descubrimiento de catálogo sobre el escenario E2E
+- `05_consumer_negotiation.json`: negociación contractual usando el contexto E2E
+- `06_consumer_transfer.json`: transferencia y recuperación de datos usando el contexto E2E
+
+Las variables de entorno de Newman se preservan entre colecciones durante una misma validación para mantener el contexto compartido del escenario E2E.
 
 ### Métricas recogidas
 
@@ -442,9 +519,9 @@ Validation-Environment desacopla el núcleo experimental de la infraestructura e
 
 ## Relación con `inesdata-testing`
 
-El adapter `inesdata` utiliza `inesdata-testing/` para despliegue y configuración de la plataforma. Sus dependencias y scripts propios siguen viviendo ahí, pero su presencia puede venir de la propia automatización del entorno además de existir ya en un workspace de desarrollo.
+El adapter `inesdata` utiliza `inesdata-testing/` para despliegue y configuración de la plataforma. Sus dependencias y scripts propios siguen viviendo ahí, pero su presencia viene de la propia automatización del entorno además de existir ya en un el repositorio oficial de PIONERA con fines de desarrollo y pruebas.
 
-> En la automatización de INESData, `inesdata-testing/deployer.config` actúa como fuente de configuración para instanciar el entorno, incluyendo parámetros del dataspace y definiciones de conectores como `DS_1_CONNECTORS`.
+> En la automatización de INESData, `inesdata-testing/deployer.config` actúa como fuente de configuración para instanciar el entorno. Incluye parámetros del dataspace y definiciones de conectores como `DS_1_CONNECTORS`.
 >
 > La plantilla recomendada para usuarios del repositorio es `deployer.config.example` en la raíz. Debe copiarse a `deployer.config` y editarse localmente.
 >

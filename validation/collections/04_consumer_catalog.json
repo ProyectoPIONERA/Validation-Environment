@@ -21,10 +21,86 @@
   "item": [
 
     {
+      "name": "Provider Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{provider_user}}", "type": "text" },
+            { "key": "password", "value": "{{provider_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "Consumer Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{consumer_user}}", "type": "text" },
+            { "key": "password", "value": "{{consumer_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
       "name": "Request Federated Catalog (Management API)",
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -45,7 +121,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"CatalogRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"counterPartyId\": \"{{provider}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"querySpec\": {\n    \"offset\": 0,\n    \"limit\": 10,\n    \"filterExpression\": []\n  }\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"CatalogRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"counterPartyId\": \"{{provider}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"querySpec\": {\n    \"offset\": 0,\n    \"limit\": 100,\n    \"filterExpression\": []\n  }\n}"
         }
       }
     },
@@ -55,6 +131,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{provider_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -74,7 +154,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"CatalogRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"counterPartyId\": \"{{provider}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"querySpec\": {\n    \"offset\": 0,\n    \"limit\": 10,\n    \"filterExpression\": []\n  }\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"CatalogRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"counterPartyId\": \"{{provider}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"querySpec\": {\n    \"offset\": 0,\n    \"limit\": 100,\n    \"filterExpression\": []\n  }\n}"
         }
       }
     }

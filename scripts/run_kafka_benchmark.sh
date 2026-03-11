@@ -26,6 +26,8 @@ PREPARE_ONLY=0
 TEARDOWN_ONLY=0
 QUIET=0
 TOPIC_STRATEGY="EXPERIMENT_TOPIC"
+TOPIC_NAME=""
+REUSE_BROKER_ON_RETRY=1
 
 usage() {
   cat <<'EOF'
@@ -42,6 +44,9 @@ Options:
   --burn-in <seconds>          Seconds to observe broker stability before benchmark (default: 60)
   --max-retries <count>        Retry transient infrastructure failures (default: 3)
   --retry-backoff <seconds>    Base backoff between retries (default: 15)
+  --topic-strategy <name>      Kafka topic strategy: EXPERIMENT_TOPIC or STATIC_TOPIC (default: EXPERIMENT_TOPIC)
+  --topic-name <name>          Topic name when using STATIC_TOPIC
+  --no-reuse-broker-on-retry   Force a clean broker restart on each retry
   --keep-broker                Keep kafka-local running after the benchmark
   --prepare-only               Start broker and stop before running the framework
   --teardown-only              Stop and remove kafka-local, then exit
@@ -87,6 +92,12 @@ while [[ $# -gt 0 ]]; do
       MAX_RETRIES="$2"; shift 2 ;;
     --retry-backoff)
       RETRY_BACKOFF_SECONDS="$2"; shift 2 ;;
+    --topic-strategy)
+      TOPIC_STRATEGY="$2"; shift 2 ;;
+    --topic-name)
+      TOPIC_NAME="$2"; shift 2 ;;
+    --no-reuse-broker-on-retry)
+      REUSE_BROKER_ON_RETRY=0; shift ;;
     --keep-broker)
       KEEP_BROKER=1; shift ;;
     --prepare-only)
@@ -108,6 +119,10 @@ done
 [[ "$BURN_IN_SECONDS" =~ ^[0-9]+$ ]] || fail "--burn-in must be numeric"
 [[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || fail "--max-retries must be numeric"
 [[ "$RETRY_BACKOFF_SECONDS" =~ ^[0-9]+$ ]] || fail "--retry-backoff must be numeric"
+[[ "$TOPIC_STRATEGY" =~ ^(EXPERIMENT_TOPIC|STATIC_TOPIC)$ ]] || fail "--topic-strategy must be EXPERIMENT_TOPIC or STATIC_TOPIC"
+if [[ "$TOPIC_STRATEGY" == "STATIC_TOPIC" && -z "$TOPIC_NAME" ]]; then
+  fail "--topic-name is required when --topic-strategy STATIC_TOPIC is used"
+fi
 (( MAX_RETRIES >= 1 )) || fail "--max-retries must be >= 1"
 
 cd "$REPO_ROOT"
@@ -131,6 +146,41 @@ find_python() {
 }
 
 PYTHON_BIN="$(find_python)" || fail "No Python interpreter found. Activate a venv first."
+
+ensure_framework_requirements() {
+  local requirements_file="$REPO_ROOT/requirements.txt"
+  [[ -f "$requirements_file" ]] || fail "Missing framework requirements file: $requirements_file"
+
+  log "Ensuring framework Python dependencies are installed in: $PYTHON_BIN"
+  "$PYTHON_BIN" -m pip install -r "$requirements_file" >/dev/null
+}
+
+ensure_framework_requirements
+
+ensure_newman_available() {
+  local local_newman="$REPO_ROOT/node_modules/.bin/newman"
+
+  if [[ -x "$local_newman" ]]; then
+    return 0
+  fi
+
+  if command -v newman >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -f "$REPO_ROOT/package.json" ]]; then
+    log "Ensuring local Node.js tooling is installed with npm..."
+    npm install >/dev/null
+  fi
+
+  if [[ -x "$local_newman" ]] || command -v newman >/dev/null 2>&1; then
+    return 0
+  fi
+
+  fail "Newman is not available. Run 'npm install' in the repo root or install it globally with 'npm install -g newman'."
+}
+
+ensure_newman_available
 
 teardown_broker() {
   if have_docker_compose && [[ -f "$COMPOSE_FILE" ]]; then
@@ -266,6 +316,11 @@ run_framework_benchmark() {
 
   export KAFKA_BOOTSTRAP_SERVERS="$BOOTSTRAP_SERVERS"
   export KAFKA_TOPIC_STRATEGY="$TOPIC_STRATEGY"
+  if [[ -n "$TOPIC_NAME" ]]; then
+    export KAFKA_TOPIC_NAME="$TOPIC_NAME"
+  else
+    unset KAFKA_TOPIC_NAME
+  fi
   export KAFKA_MESSAGE_COUNT="$MESSAGE_COUNT"
   export KAFKA_POLL_TIMEOUT_SECONDS="$POLL_TIMEOUT"
 
@@ -300,19 +355,28 @@ retry_delay() {
 }
 
 attempt=1
+need_fresh_broker=1
 while (( attempt <= MAX_RETRIES )); do
   before_experiment="$(latest_experiment)"
-  log "Cleaning previous kafka-local container..."
-  teardown_broker
+  if (( need_fresh_broker == 1 )); then
+    log "Cleaning previous kafka-local container..."
+    teardown_broker
 
-  if ! start_broker; then
-    warn "Failed to start kafka-local on attempt ${attempt}."
-  elif ! wait_for_health; then
-    docker logs --tail 200 kafka-local || true
-    warn "Kafka container did not become healthy on attempt ${attempt}."
-  elif ! burn_in_check; then
-    docker logs --tail 300 kafka-local || true
-    warn "Kafka broker showed instability during burn-in on attempt ${attempt}."
+    if ! start_broker; then
+      warn "Failed to start kafka-local on attempt ${attempt}."
+    elif ! wait_for_health; then
+      docker logs --tail 200 kafka-local || true
+      warn "Kafka container did not become healthy on attempt ${attempt}."
+    elif ! burn_in_check; then
+      docker logs --tail 300 kafka-local || true
+      warn "Kafka broker showed instability during burn-in on attempt ${attempt}."
+    else
+      need_fresh_broker=0
+    fi
+  fi
+
+  if (( need_fresh_broker == 1 )); then
+    :
   elif [[ "$PREPARE_ONLY" -eq 1 ]]; then
     log "Broker ready. Stopping here because --prepare-only was requested."
     exit 0
@@ -332,7 +396,12 @@ while (( attempt <= MAX_RETRIES )); do
 
   delay="$(retry_delay "$attempt")"
   warn "Retrying benchmark after ${delay}s (attempt ${attempt}/${MAX_RETRIES} failed due to infrastructure or invalid result)."
-  teardown_broker
+  if (( REUSE_BROKER_ON_RETRY == 0 || need_fresh_broker == 1 )); then
+    teardown_broker
+    need_fresh_broker=1
+  else
+    log "Reusing current kafka-local broker for the next retry."
+  fi
   sleep "$delay"
   attempt=$((attempt + 1))
 done
