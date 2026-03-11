@@ -44,19 +44,33 @@ En la práctica:
 
 Para el despliegue inicial de INESData desde cero, el flujo recomendado es `inesdata.py` ejecutado por niveles.
 
-1. Prepara la configuración local:
+1. Clona el repositorio:
+
+```bash
+git clone https://github.com/ProyectoPIONERA/Validation-Environment.git
+cd Validation-Environment
+```
+
+Alternativa para clonar directamente la rama de trabajo `refactor/new-framework`:
+
+```bash
+git clone --branch refactor/new-framework --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
+cd Validation-Environment
+```
+
+2. Prepara la configuración local:
 
 ```bash
 cp deployer.config.example deployer.config
 ```
 
-2. Ejecuta el menú interactivo:
+3. Ejecuta el menú interactivo:
 
 ```bash
 python inesdata.py
 ```
 
-3. Usa preferentemente la opción `0` o ejecuta los niveles manualmente.
+4. Usa preferentemente la opción `0` o ejecuta los niveles manualmente.
 
 ### Definición de niveles de despliegue de `inesdata.py`
 
@@ -552,12 +566,12 @@ El flujo de validación y parte de las colecciones de este framework se han defi
 
 Referencias principales:
 
-- `InesData_Local_Environment.postman_collection.json` en `https://github.com/INESData/inesdata-local-env/blob/master/resources/operations/InesData_Local_Environment.postman_collection.json`
-- `InesData_Connector_Management_API.postman_collection.json` en `https://github.com/INESData/inesdata-local-env/blob/master/resources/operations/InesData_Connector_Management_API.postman_collection.json`
-- documentación pública de la `Management API` de Eclipse EDC: `https://eclipse-edc.github.io/Connector/openapi/management-api/#/`
-- sample de referencia para streaming Kafka en Eclipse EDC: `https://github.com/eclipse-edc/Samples/tree/main/transfer/transfer-06-kafka-broker`
-- guía de despliegue de INESData: `https://github.com/DataSpaceUnit/ds-local-deployment`
-- demo operativa de referencia: `https://github.com/DataSpaceUnit/ds-local-deployment/blob/master/DEMO.md`
+- [InesData_Local_Environment.postman_collection.json](https://github.com/INESData/inesdata-local-env/blob/master/resources/operations/InesData_Local_Environment.postman_collection.json)
+- [InesData_Connector_Management_API.postman_collection.json](https://github.com/INESData/inesdata-local-env/blob/master/resources/operations/InesData_Connector_Management_API.postman_collection.json)
+- [Documentación pública de la Management API de Eclipse EDC](https://eclipse-edc.github.io/Connector/openapi/management-api/#/)
+- [Sample de referencia para streaming Kafka en Eclipse EDC](https://github.com/eclipse-edc/Samples/tree/main/transfer/transfer-06-kafka-broker)
+- [Guía de despliegue de INESData](https://github.com/DataSpaceUnit/ds-local-deployment)
+- [Demo operativa de referencia](https://github.com/DataSpaceUnit/ds-local-deployment/blob/master/DEMO.md)
 
 ## Financiación
 
