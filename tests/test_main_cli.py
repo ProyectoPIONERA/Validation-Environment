@@ -42,6 +42,10 @@ class FakeConnectors:
     def cleanup_test_entities(connector):
         return None
 
+    @staticmethod
+    def validation_test_entities_absent(connector):
+        return True, []
+
 
 class FakeAdapter:
     def __init__(self):
@@ -220,6 +224,13 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result, ["fake"])
         self.assertIn("fake", stdout.getvalue())
+
+    def test_build_validation_engine_wires_validation_cleanup_dependency(self):
+        adapter = FakeAdapter()
+
+        validation_engine = main.build_validation_engine(adapter)
+
+        self.assertIsNotNone(validation_engine.validation_test_entities_absent)
 
     def test_list_command_rejects_extra_argument(self):
         stderr = io.StringIO()

@@ -94,6 +94,12 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         "config_adapter.load_deployer_config",
         "load_deployer_config",
     )
+    validation_test_entities_absent = _resolve_adapter_callable(
+        adapter,
+        "connectors.validation_test_entities_absent",
+        "validation_test_entities_absent",
+        default=lambda connector: (True, []),
+    )
     ds_domain_resolver = _resolve_adapter_callable(
         adapter,
         "config.ds_domain_base",
@@ -105,6 +111,7 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         load_connector_credentials=load_connector_credentials,
         load_deployer_config=load_deployer_config,
         cleanup_test_entities=cleanup_test_entities,
+        validation_test_entities_absent=validation_test_entities_absent,
         ds_domain_resolver=ds_domain_resolver,
         ds_name=ds_name,
     )

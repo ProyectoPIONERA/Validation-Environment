@@ -31,6 +31,49 @@ class INESDataConnectorsAdapter:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
 
+    def wait_for_keycloak_admin_ready(self, timeout=120, poll_interval=3):
+        print("Waiting for Keycloak admin authentication to become ready...")
+        deployer_config = self.config_adapter.load_deployer_config()
+        kc_url = deployer_config.get("KC_URL")
+        kc_user = deployer_config.get("KC_USER")
+        kc_password = deployer_config.get("KC_PASSWORD")
+
+        if not kc_url or not kc_user or not kc_password:
+            print("Keycloak admin readiness check skipped: KC_URL/KC_USER/KC_PASSWORD missing")
+            return False
+
+        token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
+        last_issue = None
+        start = time.time()
+
+        while time.time() - start <= timeout:
+            try:
+                response = requests.post(
+                    token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": "admin-cli",
+                        "username": kc_user,
+                        "password": kc_password,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=5,
+                )
+                if response.status_code == 200 and response.json().get("access_token"):
+                    print("Keycloak admin authentication is ready")
+                    return True
+                last_issue = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_issue = str(exc)
+
+            time.sleep(poll_interval)
+
+        if last_issue:
+            print(f"Keycloak admin authentication did not become ready: {last_issue}")
+        else:
+            print("Keycloak admin authentication did not become ready")
+        return False
+
     def validate_connector_name(self, name):
         if not isinstance(name, str) or not name:
             raise ValueError("Connector name must be a non-empty string")
@@ -143,6 +186,44 @@ class INESDataConnectorsAdapter:
                 return False
 
             time.sleep(3)
+
+    def wait_for_management_api_ready(self, connector_name, timeout=180, poll_interval=3):
+        print(f"Waiting for management API to be ready: {connector_name}")
+        start = time.time()
+        base_url = self.connector_base_url(connector_name)
+        url = f"{base_url}/management/v3/assets/request"
+        payload = {
+            "@context": {
+                "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+            },
+            "offset": 0,
+            "limit": 1,
+        }
+        last_issue = None
+
+        while time.time() - start <= timeout:
+            headers = self.get_management_api_headers(connector_name)
+            if not headers:
+                last_issue = "could not obtain management API token"
+                time.sleep(poll_interval)
+                continue
+
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=5)
+                if response.status_code == 200:
+                    print(f"Management API ready: {connector_name}")
+                    return True
+                last_issue = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_issue = str(exc)
+
+            time.sleep(poll_interval)
+
+        if last_issue:
+            print(f"Management API not ready for {connector_name}: {last_issue}")
+        else:
+            print(f"Management API not ready for {connector_name}")
+        return False
 
     def wait_for_all_connectors(self, connectors):
         print("\nWaiting for all connectors to become ready...\n")
@@ -499,7 +580,7 @@ class INESDataConnectorsAdapter:
 
         print("PostgreSQL cleanup complete\n")
 
-    def create_connector(self, connector_name):
+    def create_connector(self, connector_name, connector_hostnames=None):
         print("\n========================================")
         print("LEVEL 4 - CREATE CONNECTOR")
         print("========================================\n")
@@ -546,8 +627,26 @@ class INESDataConnectorsAdapter:
             check=False
         )
 
+        if not self.wait_for_keycloak_admin_ready():
+            print("Keycloak admin API not ready for connector provisioning")
+            return
+
         print(f"Creating connector {connector_name}...")
-        if self.run(f"{python_exec} deployer.py connector create {connector_name} {ds_name}", cwd=repo_dir) is None:
+        create_cmd = f"{python_exec} deployer.py connector create {connector_name} {ds_name}"
+        create_result = None
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            create_result = self.run(create_cmd, cwd=repo_dir, check=False)
+            if create_result is not None:
+                break
+            if attempt < max_attempts:
+                print(f"Connector creation failed on attempt {attempt}. Retrying after Keycloak readiness check...")
+                if not self.wait_for_keycloak_admin_ready():
+                    print("Keycloak admin API not ready for connector provisioning retry")
+                    return
+                time.sleep(5)
+
+        if create_result is None:
             print("Error: deployment failed")
             return
 
@@ -569,9 +668,8 @@ class INESDataConnectorsAdapter:
             print("Connector values file not found")
             return
 
-        minikube_ip = self.run("minikube ip", capture=True)
-        if minikube_ip and hasattr(self, "deployment_adapter"):
-            self.deployment_adapter.update_helm_values_with_host_aliases(values_file, minikube_ip)
+        connector_hostnames = connector_hostnames or [connector_name]
+        self.update_connector_host_aliases(values_file, connector_hostnames)
 
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
@@ -646,6 +744,11 @@ class INESDataConnectorsAdapter:
                 print(f"Connector not reachable: {connector}")
                 return False
 
+            print(f"Checking Management API availability: {connector}")
+            if not self.wait_for_management_api_ready(connector):
+                print(f"Management API not reachable: {connector}")
+                return False
+
         print("\nAll connectors reachable\n")
         return True
 
@@ -716,16 +819,17 @@ class INESDataConnectorsAdapter:
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)
-                self.create_connector(connector)
+                self.create_connector(connector, connectors)
 
                 if not os.path.exists(values_file):
                     print(f"Values file not found: {values_file}")
                     return []
 
-                self.update_connector_host_aliases(values_file, connectors)
-
         all_connectors = list(all_connectors)
         print("\nAll connectors deployed or already existing\n")
+        print("Configuring connector hosts...")
+        connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
+        self.infrastructure.manage_hosts_entries(connector_hosts)
         self.wait_for_all_connectors(all_connectors)
         return all_connectors
 

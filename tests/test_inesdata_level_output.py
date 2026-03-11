@@ -88,7 +88,11 @@ class LevelOutputConfigAdapter:
         return []
 
     def load_deployer_config(self):
-        return {"KC_URL": "http://keycloak.local"}
+        return {
+            "KC_URL": "http://keycloak.local",
+            "KC_USER": "admin",
+            "KC_PASSWORD": "secret",
+        }
 
 
 class FakeConnectorsAdapter:
@@ -167,6 +171,29 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertEqual(rendered.count("LEVEL 2 - DEPLOY COMMON SERVICES"), 1)
         self.assertNotIn("LEVEL 2 COMPLETE", rendered)
 
+    def test_deploy_infrastructure_continues_when_helm_fails_but_release_exists(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: False
+        infrastructure._common_services_release_exists = lambda: True
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure()
+
+        rendered = output.getvalue()
+        self.assertIn("Helm reported a post-install failure", rendered)
+        self.assertIn("LEVEL 2 COMPLETE", rendered)
+
     def test_deploy_dataspace_prints_complete_when_successful(self):
         infrastructure = self._make_infrastructure()
         deployment = INESDataDeploymentAdapter(
@@ -183,6 +210,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
         infrastructure.wait_for_namespace_pods = lambda *_args, **_kwargs: True
         infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
+        deployment.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
         deployment.restart_registration_service = lambda: None
         deployment.update_helm_values_with_host_aliases = lambda *_args, **_kwargs: None
 
@@ -201,6 +229,147 @@ class InesdataLevelOutputTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(rendered.count("LEVEL 3 - DATASPACE"), 1)
         self.assertEqual(rendered.count("LEVEL 3 COMPLETE"), 1)
+
+    def test_wait_for_keycloak_admin_ready_retries_until_token_is_available(self):
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=self._make_infrastructure(),
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        responses = iter([
+            mock.Mock(status_code=401, json=lambda: {}),
+            mock.Mock(status_code=200, json=lambda: {"access_token": "token"}),
+        ])
+
+        with mock.patch("adapters.inesdata.deployment.requests.post", side_effect=lambda *args, **kwargs: next(responses)):
+            result = deployment.wait_for_keycloak_admin_ready("http://keycloak.local", "admin", "secret", timeout=1, poll_interval=0)
+
+        self.assertTrue(result)
+
+    def test_wait_for_level2_service_pods_allows_pre_setup_vault_running_state(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
+
+        self.assertTrue(result)
+        self.assertIn("Level 2 core services detected", output.getvalue())
+
+    def test_wait_for_level2_service_pods_ignores_completed_hook_pods(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-minio-56c96fbbdf-abcde 1/1 Running 0 1m",
+                "common-srvs-minio-post-job-xyz 0/1 Completed 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
+
+        self.assertTrue(result)
+        self.assertIn("Level 2 core services detected", output.getvalue())
+
+    def test_wait_for_level2_service_pods_requires_vault_readiness_for_final_check(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=True)
+
+        self.assertFalse(result)
+        self.assertNotIn("Level 2 core services detected", output.getvalue())
+
+    def test_deploy_infrastructure_uses_short_timeout_for_first_common_services_install(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        seen = {}
+
+        def fake_deploy(*_args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        infrastructure.deploy_helm_release = fake_deploy
+
+        infrastructure.deploy_infrastructure()
+
+        self.assertEqual(seen.get("timeout_seconds"), 45)
+
+    def test_deploy_infrastructure_does_not_force_short_timeout_for_existing_common_release(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: True
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        seen = {}
+
+        def fake_deploy(*_args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        infrastructure.deploy_helm_release = fake_deploy
+
+        infrastructure.deploy_infrastructure()
+
+        self.assertIsNone(seen.get("timeout_seconds"))
 
 
 if __name__ == "__main__":

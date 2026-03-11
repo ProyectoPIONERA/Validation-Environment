@@ -2,6 +2,7 @@ import os
 
 import requests
 import yaml
+import time
 
 from .config import INESDataConfigAdapter, InesdataConfig
 from runtime_dependencies import ensure_python_requirements
@@ -51,6 +52,40 @@ class INESDataDeploymentAdapter:
                 continue
             print(line)
             previous = line
+
+    def wait_for_keycloak_admin_ready(self, kc_url, kc_user, kc_password, timeout=120, poll_interval=3):
+        print("Waiting for Keycloak admin authentication to become ready...")
+        token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
+        last_issue = None
+        start = time.time()
+
+        while time.time() - start <= timeout:
+            try:
+                response = requests.post(
+                    token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": "admin-cli",
+                        "username": kc_user,
+                        "password": kc_password,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=5,
+                )
+                if response.status_code == 200 and response.json().get("access_token"):
+                    print("Keycloak admin authentication is ready")
+                    return True
+                last_issue = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_issue = str(exc)
+
+            time.sleep(poll_interval)
+
+        if last_issue:
+            print(f"Keycloak admin authentication did not become ready: {last_issue}")
+        else:
+            print("Keycloak admin authentication did not become ready")
+        return False
 
     def restart_registration_service(self):
         deployment_name = f"{self.config.DS_NAME}-registration-service"
@@ -110,9 +145,13 @@ class INESDataDeploymentAdapter:
         print("Verifying Keycloak access...")
         deployer_config = self.config_adapter.load_deployer_config()
         kc_url = deployer_config.get("KC_URL")
+        kc_user = deployer_config.get("KC_USER")
+        kc_password = deployer_config.get("KC_PASSWORD")
 
         if not kc_url:
             self._fail("KC_URL not defined in deployer.config")
+        if not kc_user or not kc_password:
+            self._fail("KC_USER/KC_PASSWORD not defined in deployer.config")
 
         try:
             response = requests.get(f"{kc_url}/realms/master", timeout=5)
@@ -120,6 +159,9 @@ class INESDataDeploymentAdapter:
                 self._fail("Keycloak not ready", root_cause=f"unexpected HTTP status {response.status_code}")
         except Exception:
             self._fail("Keycloak not accessible. Verify minikube tunnel")
+
+        if not self.wait_for_keycloak_admin_ready(kc_url, kc_user, kc_password):
+            self._fail("Keycloak admin API not ready", root_cause="admin authentication did not succeed in time")
 
         if not os.path.exists(self.config.venv_path()):
             print("Creating Python environment...")

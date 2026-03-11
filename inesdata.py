@@ -1890,7 +1890,7 @@ def run_all_levels():
     print("FULL DEPLOYMENT SEQUENCE (LEVELS 1-5)")
     print("="*50)
     print("\nThis will execute all levels sequentially.")
-    print("Total duration: approximately 30+ minutes")
+    print("Total duration: approximately 15 minutes, depending on environment state")
     print("\n" + "="*50 + "\n")
     
     if AUTO_MODE:
@@ -1916,10 +1916,6 @@ def run_all_levels():
     failed = []
     
     for level_num, level_func, level_name in levels:
-        print(f"\n{'='*50}")
-        print(f"LEVEL {level_num}: {level_name}")
-        print(f"{'='*50}\n")
-        
         try:
             level_func()
             completed.append(f"Level {level_num}: {level_name}")

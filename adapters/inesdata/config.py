@@ -226,6 +226,17 @@ class INESDataConfigAdapter:
 
         return hosts
 
+    def generate_connector_hosts(self, connectors):
+        config = self.load_deployer_config()
+        ds_domain = config.get("DS_DOMAIN_BASE")
+        if not ds_domain:
+            return []
+
+        hosts = []
+        for connector in connectors or []:
+            hosts.append(f"127.0.0.1 {connector}.{ds_domain}")
+        return hosts
+
     def ds_domain_base(self):
         config = self.load_deployer_config()
         return config.get("DS_DOMAIN_BASE")

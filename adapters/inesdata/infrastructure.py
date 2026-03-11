@@ -171,7 +171,15 @@ class INESDataInfrastructureAdapter:
         except PermissionError:
             print("Permission denied writing to hosts file. Run with sudo.")
 
-    def deploy_helm_release(self, release_name, namespace, values_file="values.yaml", cwd=None):
+    def deploy_helm_release(
+        self,
+        release_name,
+        namespace,
+        values_file="values.yaml",
+        cwd=None,
+        wait=True,
+        timeout_seconds=None,
+    ):
         print("Executing helm upgrade --install...")
 
         cmd = (
@@ -180,6 +188,10 @@ class INESDataInfrastructureAdapter:
             f"--create-namespace "
             f"-f {values_file} "
         )
+        if not wait:
+            cmd += "--wait=false "
+        if timeout_seconds:
+            cmd += f"--timeout {int(timeout_seconds)}s "
 
         result = self.run(cmd, check=False, cwd=cwd)
 
@@ -382,7 +394,7 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
-    def wait_for_level2_service_pods(self, namespace=None, timeout=None):
+    def wait_for_level2_service_pods(self, namespace=None, timeout=None, require_vault_ready=False):
         namespace = namespace or self.config.NS_COMMON
         timeout = timeout or self.config.TIMEOUT_POD_WAIT
         print(f"\nWaiting for Level 2 core services in namespace '{namespace}'...")
@@ -409,6 +421,11 @@ class INESDataInfrastructureAdapter:
                     name = columns[0]
                     ready = columns[1] if len(columns) > 1 else ""
                     status = columns[2]
+
+                    # Ignore completed hook/job pods so they do not replace the
+                    # long-lived service pod we actually want to observe.
+                    if status == "Completed":
+                        continue
 
                     if status in ["CrashLoopBackOff", "ImagePullBackOff"]:
                         print(f"\nPod in error state: {name} ({status})")
@@ -441,13 +458,25 @@ class INESDataInfrastructureAdapter:
                     elif name.startswith("common-srvs-vault-"):
                         expected["vault"] = pod
 
+                def is_ready(pod):
+                    if pod is None or pod["status"] != "Running":
+                        return False
+                    ready = pod.get("ready", "")
+                    if "/" not in ready:
+                        return False
+                    ready_current, ready_total = ready.split("/", 1)
+                    return ready_current == ready_total
+
                 all_present = all(expected.values())
                 all_ready = all(
-                    pod["status"] == "Running" and pod["ready"] == "1/1"
+                    is_ready(pod)
                     for key, pod in expected.items()
                     if key != "vault" and pod is not None
                 )
-                vault_running = expected["vault"] is not None and expected["vault"]["status"] == "Running"
+                if require_vault_ready:
+                    vault_running = is_ready(expected["vault"])
+                else:
+                    vault_running = expected["vault"] is not None and expected["vault"]["status"] == "Running"
 
                 if all_present and all_ready and vault_running:
                     print("\nLevel 2 core services detected:")
@@ -792,6 +821,16 @@ class INESDataInfrastructureAdapter:
         )
         return result is not None
 
+    def _common_services_release_recoverable_after_helm_failure(self):
+        if not self._common_services_release_exists():
+            return False
+
+        print(
+            "Helm reported a post-install failure, but the common services release exists. "
+            "Continuing with framework-level checks."
+        )
+        return True
+
     def _common_services_config_drift(self):
         if not self._common_services_release_exists():
             return []
@@ -1046,17 +1085,17 @@ class INESDataInfrastructureAdapter:
         if not self.wait_for_pods("ingress-nginx", timeout=180):
             return False, "ingress-nginx pods did not become ready"
 
-        if not self.wait_for_namespace_stability("ingress-nginx", duration=15, poll_interval=3):
+        if not self.wait_for_namespace_stability("ingress-nginx", duration=10, poll_interval=3):
             return False, "ingress-nginx namespace did not remain stable"
 
         return True, None
 
     def verify_common_services_ready_for_level3(self):
         """Ensure Level 2 leaves common services stable enough for Level 3."""
-        if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=180):
+        if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=180, require_vault_ready=True):
             return False, "common services pods did not become ready"
 
-        if not self.wait_for_namespace_stability(self.config.NS_COMMON, duration=20, poll_interval=3):
+        if not self.wait_for_namespace_stability(self.config.NS_COMMON, duration=12, poll_interval=3):
             return False, "common services namespace did not remain stable"
 
         if not self.ensure_vault_unsealed():
@@ -1066,7 +1105,7 @@ class INESDataInfrastructureAdapter:
 
     def verify_dataspace_ready_for_level4(self):
         """Ensure Level 3 leaves dataspace services stable enough for Level 4."""
-        if not self.wait_for_namespace_stability(self.config.namespace_demo(), duration=20, poll_interval=3):
+        if not self.wait_for_namespace_stability(self.config.namespace_demo(), duration=12, poll_interval=3):
             return False, "dataspace namespace did not remain stable"
 
         self.wait_for_registration_service_liquibase(timeout=60, poll_interval=3)
@@ -1159,7 +1198,16 @@ class INESDataInfrastructureAdapter:
         self.run("helm dependency build", cwd=common_dir)
 
         print("\nDeploying common services...")
-        if not self.deploy_helm_release(self.config.helm_release_common(), self.config.NS_COMMON, values_path, cwd=common_dir):
+        common_release_exists = self._common_services_release_exists()
+        common_services_deployed = self.deploy_helm_release(
+            self.config.helm_release_common(),
+            self.config.NS_COMMON,
+            values_path,
+            cwd=common_dir,
+            wait=False,
+            timeout_seconds=None if common_release_exists else 45,
+        )
+        if not common_services_deployed and not self._common_services_release_recoverable_after_helm_failure():
             self._fail("Error deploying common services")
 
         if not self.wait_for_level2_service_pods(self.config.NS_COMMON):
