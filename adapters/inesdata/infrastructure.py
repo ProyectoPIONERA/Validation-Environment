@@ -759,6 +759,74 @@ class INESDataInfrastructureAdapter:
             print(host)
         print()
 
+    def _secret_value(self, namespace, secret_name, key):
+        value = self.run_silent(
+            f"kubectl get secret {secret_name} -n {namespace} "
+            f"-o jsonpath='{{.data.{key}}}'"
+        )
+        if not value:
+            return None
+
+        decoded = self.run_silent(f"printf '%s' '{value}' | base64 -d")
+        return decoded if decoded is not None else None
+
+    def _common_services_release_exists(self):
+        result = self.run_silent(
+            f"helm status {self.config.helm_release_common()} -n {self.config.NS_COMMON}"
+        )
+        return result is not None
+
+    def _common_services_config_drift(self):
+        if not self._common_services_release_exists():
+            return []
+
+        config = self.config_adapter.load_deployer_config()
+        expected_pg_password = config.get("PG_PASSWORD")
+        expected_kc_password = config.get("KC_PASSWORD")
+
+        drift = []
+
+        actual_pg_password = self._secret_value(
+            self.config.NS_COMMON, "common-srvs-postgresql", "postgres-password"
+        )
+        if actual_pg_password and expected_pg_password and actual_pg_password != expected_pg_password:
+            drift.append("PostgreSQL secret does not match PG_PASSWORD from deployer.config")
+
+        actual_kc_password = self._secret_value(
+            self.config.NS_COMMON, "common-srvs-keycloak", "admin-password"
+        )
+        if actual_kc_password and expected_kc_password and actual_kc_password != expected_kc_password:
+            drift.append("Keycloak secret does not match KC_PASSWORD from deployer.config")
+
+        return drift
+
+    def reconcile_common_services_source_of_truth(self):
+        drift = self._common_services_config_drift()
+        if not drift:
+            return
+
+        print("\nDetected configuration drift in deployed common services:")
+        for item in drift:
+            print(f"- {item}")
+
+        print("\nRecreating common services so deployer.config becomes the effective source of truth...")
+        self.stop_port_forward_service(self.config.NS_COMMON, "postgresql", quiet=True)
+        self.stop_port_forward_service(self.config.NS_COMMON, "vault", quiet=True)
+
+        self.run(
+            f"helm uninstall {self.config.helm_release_common()} -n {self.config.NS_COMMON}",
+            check=False,
+        )
+        self.run(
+            f"kubectl delete pvc --all -n {self.config.NS_COMMON}",
+            check=False,
+        )
+        self.run(
+            f"kubectl delete secret common-srvs-postgresql common-srvs-keycloak -n {self.config.NS_COMMON}",
+            check=False,
+        )
+        time.sleep(5)
+
     def ensure_local_infra_access(self):
         print("\nVerifying local access to PostgreSQL and Vault...")
 
@@ -1069,6 +1137,7 @@ class INESDataInfrastructureAdapter:
 
         print("\nSynchronizing configuration...\n")
         self.sync_common_values()
+        self.reconcile_common_services_source_of_truth()
 
         print("\nConfiguring hosts...")
         hosts_entries = self.config_adapter.generate_hosts(self.config.DS_NAME)
