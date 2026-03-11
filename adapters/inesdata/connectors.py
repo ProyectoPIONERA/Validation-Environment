@@ -7,6 +7,7 @@ import requests
 import yaml
 
 from .config import INESDataConfigAdapter, InesdataConfig
+from runtime_dependencies import ensure_python_requirements
 
 
 class INESDataConnectorsAdapter:
@@ -19,9 +20,16 @@ class INESDataConnectorsAdapter:
         self.infrastructure = infrastructure_adapter
         self.config = config_cls or InesdataConfig
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
+        self._management_token_cache = {}
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
+
+    @staticmethod
+    def _fail(message, root_cause=None):
+        if root_cause:
+            raise RuntimeError(f"{message}. Root cause: {root_cause}")
+        raise RuntimeError(message)
 
     def validate_connector_name(self, name):
         if not isinstance(name, str) or not name:
@@ -174,86 +182,137 @@ class INESDataConnectorsAdapter:
             creds["connector_user"]["passwd"]
         )
 
-    def asset_exists(self, connector, asset_id):
+    def _keycloak_token_url(self):
+        deployer_config = self.config_adapter.load_deployer_config()
+        keycloak_url = deployer_config.get("KC_INTERNAL_URL") or deployer_config.get("KC_URL")
+        if not keycloak_url:
+            return None
+        if not keycloak_url.startswith("http"):
+            keycloak_url = f"http://{keycloak_url}"
+        return f"{keycloak_url}/realms/{self.config.DS_NAME}/protocol/openid-connect/token"
+
+    def get_management_api_token(self, connector):
+        """Get a Bearer token for the connector management user."""
+        if connector in self._management_token_cache:
+            return self._management_token_cache[connector]
+
         auth = self.get_management_api_auth(connector)
-        if not auth:
+        token_url = self._keycloak_token_url()
+        if not auth or not token_url:
+            return None
+
+        try:
+            response = requests.post(
+                token_url,
+                data={
+                    "grant_type": "password",
+                    "client_id": "dataspace-users",
+                    "username": auth[0],
+                    "password": auth[1],
+                    "scope": "openid profile email",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=10,
+            )
+            if response.status_code != 200:
+                return None
+            token = response.json().get("access_token")
+            if token:
+                self._management_token_cache[connector] = token
+            return token
+        except Exception:
+            return None
+
+    def get_management_api_headers(self, connector):
+        """Build bearer-authenticated headers for the connector Management API."""
+        token = self.get_management_api_token(connector)
+        if not token:
+            return None
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+    def asset_exists(self, connector, asset_id):
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/assets/{asset_id}"
 
         try:
-            response = requests.get(url, auth=auth, timeout=5)
+            response = requests.get(url, headers=headers, timeout=5)
             return response.status_code == 200
         except Exception:
             return False
 
     def policy_exists(self, connector, policy_id):
-        auth = self.get_management_api_auth(connector)
-        if not auth:
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/policydefinitions/{policy_id}"
 
         try:
-            response = requests.get(url, auth=auth, timeout=5)
+            response = requests.get(url, headers=headers, timeout=5)
             return response.status_code == 200
         except Exception:
             return False
 
     def contract_definition_exists(self, connector, contract_id):
-        auth = self.get_management_api_auth(connector)
-        if not auth:
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/contractdefinitions/{contract_id}"
 
         try:
-            response = requests.get(url, auth=auth, timeout=5)
+            response = requests.get(url, headers=headers, timeout=5)
             return response.status_code == 200
         except Exception:
             return False
 
     def delete_asset(self, connector, asset_id):
-        auth = self.get_management_api_auth(connector)
-        if not auth:
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/assets/{asset_id}"
 
         try:
-            response = requests.delete(url, auth=auth, timeout=5)
+            response = requests.delete(url, headers=headers, timeout=5)
             return response.status_code in (200, 204, 404)
         except Exception:
             return False
 
     def delete_policy(self, connector, policy_id):
-        auth = self.get_management_api_auth(connector)
-        if not auth:
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/policydefinitions/{policy_id}"
 
         try:
-            response = requests.delete(url, auth=auth, timeout=5)
+            response = requests.delete(url, headers=headers, timeout=5)
             return response.status_code in (200, 204, 404)
         except Exception:
             return False
 
     def delete_contract_definition(self, connector, contract_id):
-        auth = self.get_management_api_auth(connector)
-        if not auth:
+        headers = self.get_management_api_headers(connector)
+        if not headers:
             return False
 
         base_url = self.connector_base_url(connector)
         url = f"{base_url}/management/v3/contractdefinitions/{contract_id}"
 
         try:
-            response = requests.delete(url, auth=auth, timeout=5)
+            response = requests.delete(url, headers=headers, timeout=5)
             return response.status_code in (200, 204, 404)
         except Exception:
             return False
@@ -289,37 +348,69 @@ class INESDataConnectorsAdapter:
 
         print(f"Cleaning up test entities from {connector}...")
 
+        headers = self.get_management_api_headers(connector)
+        if not headers:
+            print(f"  Unable to authenticate against Management API for {connector}")
+            print(f"Cleanup completed for {connector}\n")
+            return
+
         for contract_id in test_entities["contracts"]:
-            if self.contract_definition_exists(connector, contract_id):
-                if self.delete_contract_definition(connector, contract_id):
-                    print(f"  Deleted contract definition: {contract_id}")
+            if self.delete_contract_definition(connector, contract_id):
+                print(f"  Deleted contract definition: {contract_id}")
+            else:
+                print(f"  Could not delete contract definition: {contract_id}")
 
         for policy_id in test_entities["policies"]:
-            if self.policy_exists(connector, policy_id):
-                if self.delete_policy(connector, policy_id):
-                    print(f"  Deleted policy: {policy_id}")
+            if self.delete_policy(connector, policy_id):
+                print(f"  Deleted policy: {policy_id}")
+            else:
+                print(f"  Could not delete policy: {policy_id}")
 
         for asset_id in test_entities["assets"]:
-            if self.asset_exists(connector, asset_id):
-                if self.delete_asset(connector, asset_id):
-                    print(f"  Deleted asset: {asset_id}")
+            if self.delete_asset(connector, asset_id):
+                print(f"  Deleted asset: {asset_id}")
+            else:
+                print(f"  Could not delete asset: {asset_id}")
 
         print(f"Cleanup completed for {connector}\n")
+
+    def validation_test_entities_absent(self, connector):
+        """Return True only if the fixed validation entities are absent."""
+        lingering_entities = []
+
+        if self.asset_exists(connector, "asset-test"):
+            lingering_entities.append("asset-test")
+        if self.policy_exists(connector, "policy-test"):
+            lingering_entities.append("policy-test")
+        if self.contract_definition_exists(connector, "contract-test"):
+            lingering_entities.append("contract-test")
+
+        return len(lingering_entities) == 0, lingering_entities
 
     def display_connector_summary(self, connector_name):
         deployer_config = self.config_adapter.load_deployer_config()
         ds_domain = deployer_config.get("DS_DOMAIN_BASE")
+        domain_base = deployer_config.get("DOMAIN_BASE")
+        pg_host, _, _ = self.config_adapter.get_pg_credentials()
+        minio_hostname = deployer_config.get("MINIO_HOSTNAME")
 
         if not ds_domain:
             return
 
-        url = f"http://{connector_name}.{ds_domain}"
+        connector_root_url = f"http://{connector_name}.{ds_domain}"
+        connector_interface_url = self.build_connector_url(connector_name)
+        management_api_url = f"{connector_root_url}/management/v3"
+        protocol_api_url = f"{connector_root_url}/protocol"
         creds = self.load_connector_credentials(connector_name)
 
         print(f"\n{'='*60}")
         print(f"CONNECTOR: {connector_name}")
         print(f"{'='*60}")
-        print(f"\nURL: {url}")
+        print("\nURLs:")
+        print(f"  Connector: {connector_root_url}")
+        print(f"  Interface: {connector_interface_url}")
+        print(f"  Management API: {management_api_url}")
+        print(f"  Protocol API: {protocol_api_url}")
 
         if creds:
             print("\nConnector Credentials:")
@@ -332,6 +423,8 @@ class INESDataConnectorsAdapter:
             print(f"  Database: {db_creds.get('name', 'N/A')}")
             print(f"  User: {db_creds.get('user', 'N/A')}")
             print(f"  Password: {db_creds.get('passwd', 'N/A')}")
+            print(f"  Host: {pg_host}")
+            print(f"  DSN: postgresql://{pg_host}:5432/{db_creds.get('name', 'N/A')}")
 
             print("\nMinIO Credentials:")
             minio_creds = creds.get("minio", {})
@@ -339,6 +432,10 @@ class INESDataConnectorsAdapter:
             print(f"  Password: {minio_creds.get('passwd', 'N/A')}")
             print(f"  Access Key: {minio_creds.get('access_key', 'N/A')}")
             print(f"  Secret Key: {minio_creds.get('secret_key', 'N/A')}")
+            if minio_hostname:
+                print(f"  API URL: http://{minio_hostname}")
+            if domain_base:
+                print(f"  Console URL: http://console.minio-s3.{domain_base}")
 
         print(f"\n{'='*60}\n")
 
@@ -414,6 +511,17 @@ class INESDataConnectorsAdapter:
         if not os.path.exists(repo_dir):
             print("Repository not found. Run Level 2 first")
             return
+
+        if not os.path.exists(self.config.venv_path()):
+            print("Python environment not found. Run Level 3 first")
+            return
+
+        print("Ensuring INESData Python dependencies...")
+        ensure_python_requirements(
+            python_exec,
+            self.config.repo_requirements_path(),
+            label="INESData runtime",
+        )
 
         if not self.infrastructure.ensure_local_infra_access():
             return

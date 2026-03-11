@@ -4,6 +4,7 @@ import requests
 import yaml
 
 from .config import INESDataConfigAdapter, InesdataConfig
+from runtime_dependencies import ensure_python_requirements
 
 
 class INESDataDeploymentAdapter:
@@ -20,19 +21,11 @@ class INESDataDeploymentAdapter:
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
 
-    def install_dependencies(self):
-        import subprocess
-        import sys
-
-        libraries = ["tabulate", "ruamel.yaml"]
-        print("Installing dependencies...")
-
-        for lib in libraries:
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", lib])
-                print(f"{lib} installed successfully.")
-            except subprocess.CalledProcessError as e:
-                print(f"Error installing {lib}: {e}")
+    @staticmethod
+    def _fail(message, root_cause=None):
+        if root_cause:
+            raise RuntimeError(f"{message}. Root cause: {root_cause}")
+        raise RuntimeError(message)
 
     def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None):
         if minikube_ip is None:
@@ -49,6 +42,36 @@ class INESDataDeploymentAdapter:
         with open(values_file, "w") as f:
             yaml.dump(values, f, sort_keys=False)
 
+    @staticmethod
+    def _print_unique_lines(output):
+        previous = None
+        for line in output.splitlines():
+            line = line.rstrip()
+            if not line or line == previous:
+                continue
+            print(line)
+            previous = line
+
+    def restart_registration_service(self):
+        deployment_name = f"{self.config.DS_NAME}-registration-service"
+        namespace = self.config.namespace_demo()
+
+        print("\nRestarting registration-service deployment to pick up the recreated database credentials...")
+        if self.run(
+            f"kubectl rollout restart deployment/{deployment_name} -n {namespace}",
+            check=False,
+        ) is None:
+            self._fail("Could not restart registration-service deployment")
+
+        rollout_output = self.run(
+            f"kubectl rollout status deployment/{deployment_name} -n {namespace} --timeout=180s",
+            capture=True,
+            check=False,
+        )
+        if rollout_output is None:
+            self._fail("registration-service deployment did not finish rolling out")
+        self._print_unique_lines(rollout_output)
+
     def deploy_dataspace(self):
         print("\n========================================")
         print("LEVEL 3 - DATASPACE")
@@ -62,8 +85,10 @@ class INESDataDeploymentAdapter:
         print("minikube tunnel")
         print()
         print("The tunnel must remain active during the dataspace deployment.")
+        print("When logs start appearing in the tunnel terminal, Linux may require your password")
+        print("even if no explicit prompt is shown. Type your password there and press ENTER.")
         print()
-        print("Once the tunnel is running, return to this terminal and press ENTER to continue.")
+        print("Return to this terminal and press ENTER to continue after starting the tunnel.")
         print("-------------------------------------------------\n")
 
         if not self._auto_mode():
@@ -76,38 +101,38 @@ class INESDataDeploymentAdapter:
         python_exec = self.config.python_exec()
 
         if not os.path.exists(repo_dir):
-            print("Repository not found. Run Level 2 first")
-            return
+            self._fail("Repository not found. Run Level 2 first")
 
         if not self.infrastructure.ensure_local_infra_access():
-            return
+            self._fail("Local access to PostgreSQL/Vault is not available")
 
         if not self.infrastructure.ensure_vault_unsealed():
-            return
+            self._fail("Vault is not initialized or unsealed")
 
         print("Verifying Keycloak access...")
         deployer_config = self.config_adapter.load_deployer_config()
         kc_url = deployer_config.get("KC_URL")
 
         if not kc_url:
-            print("KC_URL not defined in deployer.config")
-            return
+            self._fail("KC_URL not defined in deployer.config")
 
         try:
             response = requests.get(f"{kc_url}/realms/master", timeout=5)
             if response.status_code not in (200, 302):
-                print("Keycloak not ready")
-                return
+                self._fail("Keycloak not ready", root_cause=f"unexpected HTTP status {response.status_code}")
         except Exception:
-            print("Keycloak not accessible. Verify minikube tunnel")
-            return
+            self._fail("Keycloak not accessible. Verify minikube tunnel")
 
         if not os.path.exists(self.config.venv_path()):
             print("Creating Python environment...")
             self.run("python3 -m venv .venv", cwd=repo_dir)
 
-        self.install_dependencies()
-        self.run(f"{python_exec} -m pip install -r requirements.txt", cwd=repo_dir)
+        print("Ensuring INESData Python dependencies...")
+        ensure_python_requirements(
+            python_exec,
+            self.config.repo_requirements_path(),
+            label="INESData runtime",
+        )
 
         print("Cleaning previous databases...")
         connectors = getattr(self, "connectors_adapter", None)
@@ -119,13 +144,11 @@ class INESDataDeploymentAdapter:
 
         print("Creating dataspace...")
         if self.run(f"{python_exec} deployer.py dataspace create {ds_name}", cwd=repo_dir) is None:
-            print("Error creating dataspace")
-            return
+            self._fail("Error creating dataspace")
 
         values_file = self.config.registration_values_file()
         if not os.path.exists(values_file):
-            print("Registration service values file not found")
-            return
+            self._fail("Registration service values file not found")
 
         minikube_ip = self.run("minikube ip", capture=True)
         if minikube_ip:
@@ -138,12 +161,16 @@ class INESDataDeploymentAdapter:
             os.path.basename(values_file),
             cwd=self.config.registration_service_dir()
         ):
-            print("Error deploying registration-service")
-            return
+            self._fail("Error deploying registration-service")
+
+        self.restart_registration_service()
 
         if not self.infrastructure.wait_for_namespace_pods(self.config.namespace_demo()):
-            print("Timeout waiting for pods")
-            return
+            self._fail("Timeout waiting for dataspace pods")
+
+        dataspace_ready, root_cause = self.infrastructure.verify_dataspace_ready_for_level4()
+        if not dataspace_ready:
+            self._fail("Level 3 did not leave the dataspace ready for Level 4", root_cause=root_cause)
 
         print("\nLEVEL 3 COMPLETE\n")
 

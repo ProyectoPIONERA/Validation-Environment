@@ -24,6 +24,7 @@ class ExperimentRunner:
         graph_builder=None,
         kafka_manager=None,
         summary_builder=None,
+        baseline=False,
     ):
         self.adapter = adapter
         self.validation_engine = validation_engine
@@ -34,6 +35,7 @@ class ExperimentRunner:
         self.graph_builder = graph_builder or GraphBuilder(storage=self.experiment_storage)
         self.kafka_manager = kafka_manager
         self.summary_builder = summary_builder or ExperimentSummaryBuilder(storage=self.experiment_storage)
+        self.baseline = baseline
 
     def _call_if_available(self, obj, method_name, *args, **kwargs):
         method = getattr(obj, method_name, None)
@@ -79,6 +81,24 @@ class ExperimentRunner:
             return fallback(connectors, **kwargs)
 
         raise RuntimeError("Validation engine does not expose a supported run method")
+
+    def _save_experiment_metadata(self, experiment_dir, connectors):
+        save_method = self.experiment_storage.save_experiment_metadata
+        try:
+            parameters = inspect.signature(save_method).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+
+        if len(parameters) <= 2:
+            return save_method(experiment_dir, connectors)
+
+        kwargs = {
+            "adapter": type(self.adapter).__name__ if self.adapter is not None else None,
+            "iterations": self.iterations,
+            "baseline": self.baseline,
+        }
+        filtered_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+        return save_method(experiment_dir, connectors, **filtered_kwargs)
 
     def _collect_metrics(self, connectors, experiment_dir, run_index=None):
         if self.metrics_collector is None:
@@ -249,7 +269,7 @@ class ExperimentRunner:
             connectors = self._require_connectors(connectors)
 
             experiment_dir = self.experiment_storage.create_experiment_directory()
-            self.experiment_storage.save_experiment_metadata(experiment_dir, connectors)
+            self._save_experiment_metadata(experiment_dir, connectors)
 
             iteration_results = []
 
@@ -288,6 +308,7 @@ class ExperimentRunner:
             bundle = {
                 "timestamp": timestamp,
                 "iterations": self.iterations,
+                "baseline": self.baseline,
                 "connectors": connectors,
                 "validation": validation_result,
                 "metrics": metrics,

@@ -21,10 +21,50 @@
   "item": [
 
     {
+      "name": "Consumer Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{consumer_user}}", "type": "text" },
+            { "key": "password", "value": "{{consumer_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
       "name": "Start Contract Negotiation",
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -44,7 +84,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"ContractRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"policy\": {\n    \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n    \"@type\": \"odrl:Offer\",\n    \"@id\": \"{{policyId}}\",\n    \"assigner\": \"{{providerParticipantId}}\",\n    \"target\": \"{{assetId}}\",\n    \"permission\": [],\n    \"prohibition\": [],\n    \"obligation\": []\n  }\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"ContractRequest\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"policy\": {\n    \"@context\": \"http://www.w3.org/ns/odrl.jsonld\",\n    \"@type\": \"odrl:Offer\",\n    \"@id\": \"{{e2e_offer_policy_id}}\",\n    \"assigner\": \"{{providerParticipantId}}\",\n    \"target\": \"{{e2e_catalog_asset_id}}\",\n    \"permission\": [],\n    \"prohibition\": [],\n    \"obligation\": []\n  }\n}"
         }
       }
     },
@@ -54,6 +94,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"

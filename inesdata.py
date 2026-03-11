@@ -9,16 +9,25 @@ import sys
 import time
 import os
 import json
-import yaml
 import socket
 import shutil
-import requests
 import statistics
 import re
-import main as framework_cli
 from itertools import combinations
 from itertools import permutations
 from datetime import datetime
+from runtime_dependencies import ensure_runtime_dependencies
+
+
+ensure_runtime_dependencies(
+    requirements_path=os.path.join(os.path.dirname(__file__), "requirements.txt"),
+    module_names=("yaml", "requests", "tabulate", "ruamel.yaml"),
+    label="legacy INESData entrypoint",
+)
+
+import yaml
+import requests
+import main as framework_cli
 from tabulate import tabulate
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
@@ -230,21 +239,6 @@ def run(cmd, capture=False, silent=False, check=True, cwd=None):
 def run_silent(cmd, cwd=None):
     """Execute command without displaying output."""
     return run(cmd, capture=True, silent=True, check=False, cwd=cwd)
-
-
-def install_dependencies():
-    """Install the tabulate and ruamel.yaml libraries using pip."""
-    libraries = ["tabulate", "ruamel.yaml"]
-    
-    print("Installing dependencies...")
-    
-    for lib in libraries:
-        try:
-            # Ejecuta: pip install <libreria>
-            subprocess.check_call([sys.executable, "-m", "pip", "install", lib])
-            print(f"✅ {lib} installed successfully.")
-        except subprocess.CalledProcessError as e:
-            print(f"Error installing {lib}: {e}")
 
 # =========================================================
 # ENVIRONMENT VALIDATION
@@ -1282,7 +1276,36 @@ show_connector_logs = INESDATA_ADAPTER.connectors.show_connector_logs
 lvl_1 = INESDATA_ADAPTER.setup_cluster
 lvl_2 = INESDATA_ADAPTER.deploy_infrastructure
 lvl_3 = INESDATA_ADAPTER.deploy_dataspace
-lvl_4 = INESDATA_ADAPTER.deploy_connectors
+
+
+def lvl_4():
+    """Deploy connectors and run post-deployment checks."""
+    all_connectors = INESDATA_ADAPTER.deploy_connectors()
+
+    if not all_connectors:
+        raise RuntimeError("Level 4 did not deploy any connectors")
+
+    if not validate_connectors_deployment(all_connectors):
+        print("\nConnector validation failed.")
+
+        if not AUTO_MODE:
+            inspect_logs = input("\nDo you want to inspect connector logs? (Y/N): ").strip().upper()
+            if inspect_logs == "Y":
+                print()
+                show_connector_logs()
+        else:
+            print("[AUTO_MODE] Skipping log inspection")
+
+        raise RuntimeError("Level 4 connectors were not stable enough for Level 5")
+
+    print("\nStarting latency measurements...\n")
+    METRICS_COLLECTOR.measure_all_connectors(all_connectors)
+
+    print("\nConnector information:\n")
+    for connector in all_connectors:
+        display_connector_summary(connector)
+
+    print("LEVEL 4 COMPLETE\n")
 
 # =========================================================
 # KAFKA LATENCY MEASUREMENTS
@@ -1804,6 +1827,7 @@ VALIDATION_ENGINE = ValidationEngine(
     load_connector_credentials=load_connector_credentials,
     load_deployer_config=load_deployer_config,
     cleanup_test_entities=cleanup_test_entities,
+    validation_test_entities_absent=INESDATA_ADAPTER.connectors.validation_test_entities_absent,
     ds_domain_resolver=Config.ds_domain_base,
     ds_name=Config.DS_NAME,
 )
@@ -1820,26 +1844,21 @@ def lvl_5():
     print("LEVEL 5 - VALIDATION TESTS")
     print("========================================\n")
     
-    if shutil.which("newman") is None:
-        print("Newman not installed")
-        print("Install with: npm install -g newman")
-        return
+    if not NEWMAN_EXECUTOR.is_available():
+        raise RuntimeError("Newman not installed. Install with: npm install or npm install -g newman")
     
     connectors = get_connectors_from_cluster()
     
     if not connectors:
-        print("No connectors running")
-        return
+        raise RuntimeError("No connectors running")
     
     if len(connectors) < 2:
-        print("At least 2 connectors required")
-        return
+        raise RuntimeError("At least 2 connectors required")
     
     print(f"Detected connectors: {connectors}\n")
     
     if not validate_connectors_deployment(connectors):
-        print("Connector deployment validation failed")
-        return
+        raise RuntimeError("Connector deployment validation failed")
     
     VALIDATION_ENGINE.run_all_dataspace_tests(connectors)
 
@@ -1911,14 +1930,15 @@ def run_all_levels():
         except Exception as e:
             print(f"\nError in Level {level_num}: {e}\n")
             failed.append(f"Level {level_num}: {level_name} (error: {str(e)[:50]})")
-            
+
             if AUTO_MODE:
-                print("[AUTO_MODE] Continuing to next level despite error...\n")
-            else:
-                retry = input("Continue with next level? (Y/N): ").strip().upper()
-                if retry != "Y":
-                    print("\nFull deployment stopped by user\n")
-                    break
+                print("[AUTO_MODE] Stopping automatic deployment after failure to avoid cascading errors.\n")
+                break
+
+            retry = input("Continue with next level? (Y/N): ").strip().upper()
+            if retry != "Y":
+                print("\nFull deployment stopped by user\n")
+                break
     
     elapsed = time.time() - start_time
     minutes = int(elapsed) // 60
@@ -2082,4 +2102,3 @@ def show_menu():
 
 if __name__ == "__main__":
     show_menu()
-

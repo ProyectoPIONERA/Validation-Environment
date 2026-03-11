@@ -4,76 +4,126 @@
  * 02_connector_management_api.json
  */
 (function() {
-assertStatus200()
-const body = parseJsonResponse()
-if (!body) {
+const requestName = pm.info.requestName
+const isDeleteRequest = requestName.indexOf("Delete ") === 0
+const body = isDeleteRequest ? null : parseJsonResponse()
+
+if (requestName === "Provider Login") {
+    assertStatus200()
+    if (!body) {
+        return
+    }
+    assertFieldExists(body, "access_token")
+    saveCollectionVar("provider_jwt", body.access_token)
+
+    const suffix = String(Date.now())
+    saveCollectionVar("crud_suffix", suffix)
+    saveCollectionVar("crud_asset_id", `asset-crud-${suffix}`)
+    saveCollectionVar("crud_policy_id", `policy-crud-${suffix}`)
+    saveCollectionVar("crud_contract_definition_id", `contract-crud-${suffix}`)
+    return
+}
+
+if (!body && !isDeleteRequest) {
     console.log("No valid response body, skipping tests")
     return
 }
+
 assertNoEdcError(body)
-/**
- * Detect which request is running
- */
-const requestName = pm.info.requestName
-/**
- * Provider Login
- */
-if (requestName === "Provider Login") {
-    assertFieldExists(body, "access_token")
-    saveCollectionVar("provider_jwt", body.access_token)
-}
-/**
- * Create Asset
- */
-if (requestName === "Create Asset") {
+
+if (requestName === "Create CRUD Asset") {
+    assertStatus200()
     assertCreated()
-    extractAtId(body, "asset_id")
+    extractAtId(body, "crud_asset_id")
+    return
 }
-/**
- * List Assets
- */
-if (requestName === "List Assets") {
-    const assetId = pm.collectionVariables.get("asset_id")
-    assertNotEmpty(assetId, "asset_id")
-    const text = responseText()
-    pm.test("Asset appears in asset list", function () {
-        pm.expect(text).to.include(assetId)
-    })
+
+if (requestName === "List CRUD Assets") {
+    assertStatus200()
+    const assetId = pm.collectionVariables.get("crud_asset_id")
+    assertNotEmpty(assetId, "crud_asset_id")
+    assertContains(responseText(), assetId, "CRUD asset appears in asset list")
+    return
 }
-/**
- * Create Policy
- */
-if (requestName === "Create Policy") {
+
+if (requestName === "Create CRUD Policy") {
+    assertStatus200()
     assertCreated()
-    extractAtId(body, "policy_id")
+    extractAtId(body, "crud_policy_id")
+    return
 }
-/**
- * List Policies
- */
-if (requestName === "List Policies") {
-    const policyId = pm.collectionVariables.get("policy_id")
-    assertNotEmpty(policyId, "policy_id")
-    const text = responseText()
-    pm.test("Policy appears in policy list", function () {
-        pm.expect(text).to.include(policyId)
-    })
+
+if (requestName === "List CRUD Policies") {
+    assertStatus200()
+    const policyId = pm.collectionVariables.get("crud_policy_id")
+    assertNotEmpty(policyId, "crud_policy_id")
+    assertContains(responseText(), policyId, "CRUD policy appears in policy list")
+    return
 }
-/**
- * Create Contract Definition
- */
-if (requestName === "Create Contract Definition") {
+
+if (requestName === "Create CRUD Contract Definition") {
+    assertStatus200()
     assertCreated()
-    extractAtId(body, "contract_definition_id")
+    extractAtId(body, "crud_contract_definition_id")
+    return
 }
-/**
- * List Contract Definitions
- */
-if (requestName === "List Contract Definitions") {
-    const contractId = pm.collectionVariables.get("contract_definition_id")
-    assertNotEmpty(contractId, "contract_definition_id")
-    const text = responseText()
-    pm.test("Contract definition appears in list", function () {
-        pm.expect(text).to.include(contractId)
+
+if (requestName === "List CRUD Contract Definitions") {
+    assertStatus200()
+    const contractId = pm.collectionVariables.get("crud_contract_definition_id")
+    assertNotEmpty(contractId, "crud_contract_definition_id")
+    assertContains(responseText(), contractId, "CRUD contract definition appears in list")
+    return
+}
+
+if (requestName === "Delete CRUD Contract Definition") {
+    pm.test("CRUD contract definition deletion completed", function () {
+        pm.expect(pm.response.code).to.be.oneOf([200, 204])
     })
+    return
+}
+
+if (requestName === "Verify CRUD Contract Definition Deleted") {
+    assertStatus200()
+    const contractId = pm.collectionVariables.get("crud_contract_definition_id")
+    assertNotEmpty(contractId, "crud_contract_definition_id")
+    pm.test("CRUD contract definition no longer appears in list", function () {
+        pm.expect(responseText()).to.not.include(contractId)
+    })
+    return
+}
+
+if (requestName === "Delete CRUD Policy") {
+    pm.test("CRUD policy deletion completed", function () {
+        pm.expect(pm.response.code).to.be.oneOf([200, 204])
+    })
+    return
+}
+
+if (requestName === "Verify CRUD Policy Deleted") {
+    assertStatus200()
+    const policyId = pm.collectionVariables.get("crud_policy_id")
+    assertNotEmpty(policyId, "crud_policy_id")
+    pm.test("CRUD policy no longer appears in list", function () {
+        pm.expect(responseText()).to.not.include(policyId)
+    })
+    return
+}
+
+if (requestName === "Delete CRUD Asset") {
+    pm.test("CRUD asset deletion completed", function () {
+        pm.expect(pm.response.code).to.be.oneOf([200, 204])
+    })
+    return
+}
+
+if (requestName === "Verify CRUD Asset Deleted") {
+    assertStatus200()
+    const assetId = pm.collectionVariables.get("crud_asset_id")
+    assertNotEmpty(assetId, "crud_asset_id")
+    pm.test("CRUD asset no longer appears in list", function () {
+        pm.expect(responseText()).to.not.include(assetId)
+    })
+    return
 }
 })(); // End of IIFE

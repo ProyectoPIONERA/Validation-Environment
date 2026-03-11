@@ -26,6 +26,7 @@ class InesdataConfig:
     PORT_POSTGRES = 5432
     PORT_VAULT = 8200
     PORT_MINIO = 9000
+    PORT_REGISTRATION_SERVICE = 18080
 
     TIMEOUT_POD_WAIT = 120
     TIMEOUT_PORT = 30
@@ -65,6 +66,10 @@ class InesdataConfig:
     @classmethod
     def python_exec(cls):
         return os.path.join(cls.venv_path(), "bin", "python")
+
+    @classmethod
+    def repo_requirements_path(cls):
+        return os.path.join(cls.repo_dir(), cls.PATH_REQUIREMENTS)
 
     @classmethod
     def helm_release_common(cls):

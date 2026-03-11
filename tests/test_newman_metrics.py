@@ -124,28 +124,34 @@ class NewmanMetricsTests(unittest.TestCase):
 
         self.assertEqual(metrics, [
             {
+                "timestamp": "2026-03-07T10:00:00.000Z",
+                "endpoint": "http://example.test/management/v3/assets",
+                "method": None,
+                "status_code": 200,
+                "latency_ms": 42,
+                "iteration": 3,
                 "run_index": 3,
                 "run": 3,
                 "request_name": "Create Asset",
                 "request": "Create Asset",
                 "collection": "03_provider_setup",
-                "status_code": 200,
                 "response_time_ms": 42,
-                "latency_ms": 42,
-                "timestamp": "2026-03-07T10:00:00.000Z",
-                "endpoint": "http://example.test/management/v3/assets",
+                "experiment_id": None,
             },
             {
+                "timestamp": "2026-03-07T10:00:01.000Z",
+                "endpoint": "/management/v3/assets/request",
+                "method": None,
+                "status_code": 400,
+                "latency_ms": 17,
+                "iteration": 3,
                 "run_index": 3,
                 "run": 3,
                 "request_name": "List Assets",
                 "request": "List Assets",
                 "collection": "03_provider_setup",
-                "status_code": 400,
                 "response_time_ms": 17,
-                "latency_ms": 17,
-                "timestamp": "2026-03-07T10:00:01.000Z",
-                "endpoint": "/management/v3/assets/request",
+                "experiment_id": None,
             }
         ])
 
@@ -191,8 +197,9 @@ class NewmanMetricsTests(unittest.TestCase):
         self.assertEqual(metrics[0]["run_index"], 1)
         self.assertEqual(len(raw_lines), 1)
         self.assertEqual(json.loads(raw_lines[0])["request_name"], "Health")
-        self.assertIn("Health", aggregated)
-        self.assertEqual(aggregated["Health"]["count"], 1)
+        self.assertIn("request_metrics", aggregated)
+        self.assertIn("http://example.test/health", aggregated["request_metrics"])
+        self.assertEqual(aggregated["request_metrics"]["http://example.test/health"]["count"], 1)
 
     def test_graph_builder_generates_expected_graph_files(self):
         builder = GraphBuilder()
@@ -220,17 +227,17 @@ class NewmanMetricsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             ExperimentStorage.save_aggregated_metrics(aggregated_metrics, tmpdir)
             ExperimentStorage.save_raw_request_metrics_jsonl([
-                {"request_name": "Create Asset", "latency_ms": 42},
-                {"request_name": "Create Asset", "latency_ms": 38},
-                {"request_name": "List Assets", "latency_ms": 12},
+                {"request_name": "Create Asset", "endpoint": "/management/v3/assets", "latency_ms": 42, "iteration": 1},
+                {"request_name": "Create Asset", "endpoint": "/management/v3/assets", "latency_ms": 38, "iteration": 1},
+                {"request_name": "List Assets", "endpoint": "/management/v3/assets/request", "latency_ms": 12, "iteration": 2},
             ], tmpdir)
-            with mock.patch.object(GraphBuilder, "_load_plot_backend", return_value=_FakePlotBackend):
-                graph_paths = builder.build(tmpdir)
+            graph_paths = builder.build(tmpdir)
 
             self.assertEqual(set(graph_paths.keys()), {
-                "request_latency_avg",
-                "request_latency_percentiles",
-                "request_latency_histogram",
+                "latency_boxplot",
+                "latency_histogram",
+                "endpoint_latency_bar",
+                "latency_over_iterations",
             })
             for path in graph_paths.values():
                 self.assertTrue(os.path.exists(path))
@@ -261,15 +268,14 @@ class NewmanMetricsTests(unittest.TestCase):
                 ]
             }, tmpdir)
 
-            with mock.patch.object(GraphBuilder, "_load_plot_backend", return_value=_FakePlotBackend):
-                graph_paths = builder.build(tmpdir)
+            graph_paths = builder.build(tmpdir)
 
+            self.assertIn("kafka_latency_histogram", graph_paths)
+            self.assertIn("kafka_throughput_bar", graph_paths)
             self.assertIn("kafka_latency_percentiles", graph_paths)
-            self.assertIn("kafka_throughput", graph_paths)
-            self.assertIn("kafka_latency_per_run", graph_paths)
+            self.assertTrue(os.path.exists(graph_paths["kafka_latency_histogram"]))
+            self.assertTrue(os.path.exists(graph_paths["kafka_throughput_bar"]))
             self.assertTrue(os.path.exists(graph_paths["kafka_latency_percentiles"]))
-            self.assertTrue(os.path.exists(graph_paths["kafka_throughput"]))
-            self.assertTrue(os.path.exists(graph_paths["kafka_latency_per_run"]))
 
     def test_graph_builder_skips_when_aggregated_metrics_missing(self):
         builder = GraphBuilder()
@@ -418,12 +424,19 @@ class NewmanMetricsTests(unittest.TestCase):
         self.assertEqual(aggregated, {
             "Create Asset": {
                 "count": 1,
+                "request_count": 1,
+                "error_rate": 0.0,
+                "mean_latency": 42.0,
                 "average_latency_ms": 42.0,
                 "min_latency_ms": 42.0,
                 "max_latency_ms": 42.0,
+                "p50": 42.0,
+                "p95": 42.0,
+                "p99": 42.0,
                 "p50_latency_ms": 42.0,
                 "p95_latency_ms": 42.0,
                 "p99_latency_ms": 42.0,
+                "methods": [],
             }
         })
 
@@ -445,7 +458,10 @@ class NewmanMetricsTests(unittest.TestCase):
         engine = ValidationEngine(
             newman_executor=fake_executor,
             load_connector_credentials=lambda name: {"connector_user": {"user": name, "passwd": "secret"}},
-            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak-admin.local",
+                "KC_INTERNAL_URL": "http://keycloak.local",
+            },
             cleanup_test_entities=lambda connector: None,
             ds_domain_resolver=lambda: "example.local",
             ds_name="demo",
@@ -456,6 +472,9 @@ class NewmanMetricsTests(unittest.TestCase):
 
         self.assertEqual(reports, ["report.json", "report.json"])
         self.assertEqual(fake_executor.run_validation_collections.call_count, 2)
+        env_vars = fake_executor.run_validation_collections.call_args.args[0]
+        self.assertEqual(env_vars["keycloakUrl"], "http://keycloak.local")
+        self.assertEqual(env_vars["keycloakClientId"], "dataspace-users")
         report_dir = fake_executor.run_validation_collections.call_args.kwargs["report_dir"]
         self.assertIn("newman_reports", report_dir)
 

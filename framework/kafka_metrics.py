@@ -24,6 +24,11 @@ class KafkaMetricsCollector:
         "message_size_bytes": "KAFKA_MESSAGE_SIZE_BYTES",
         "poll_timeout_seconds": "KAFKA_POLL_TIMEOUT_SECONDS",
         "consumer_group_prefix": "KAFKA_CONSUMER_GROUP_PREFIX",
+        "request_timeout_ms": "KAFKA_REQUEST_TIMEOUT_MS",
+        "api_timeout_ms": "KAFKA_API_TIMEOUT_MS",
+        "max_block_ms": "KAFKA_MAX_BLOCK_MS",
+        "consumer_request_timeout_ms": "KAFKA_CONSUMER_REQUEST_TIMEOUT_MS",
+        "topic_ready_timeout_seconds": "KAFKA_TOPIC_READY_TIMEOUT_SECONDS",
     }
 
     def __init__(
@@ -68,7 +73,16 @@ class KafkaMetricsCollector:
 
     def _coerce_types(self, config):
         coerced = dict(config)
-        for integer_key in ("message_count", "message_size_bytes", "poll_timeout_seconds"):
+        for integer_key in (
+            "message_count",
+            "message_size_bytes",
+            "poll_timeout_seconds",
+            "request_timeout_ms",
+            "api_timeout_ms",
+            "max_block_ms",
+            "consumer_request_timeout_ms",
+            "topic_ready_timeout_seconds",
+        ):
             if integer_key in coerced and coerced[integer_key] not in (None, ""):
                 try:
                     coerced[integer_key] = int(coerced[integer_key])
@@ -92,6 +106,11 @@ class KafkaMetricsCollector:
         config.setdefault("message_size_bytes", 0)
         config.setdefault("poll_timeout_seconds", 30)
         config.setdefault("consumer_group_prefix", "framework-kafka-benchmark")
+        config.setdefault("request_timeout_ms", 60000)
+        config.setdefault("api_timeout_ms", 60000)
+        config.setdefault("max_block_ms", 60000)
+        config.setdefault("consumer_request_timeout_ms", 60000)
+        config.setdefault("topic_ready_timeout_seconds", 15)
         return config
 
     def _load_kafka_classes(self):
@@ -133,6 +152,8 @@ class KafkaMetricsCollector:
         kwargs = {
             "bootstrap_servers": config.get("bootstrap_servers"),
             "security_protocol": config.get("security_protocol", "PLAINTEXT"),
+            "request_timeout_ms": config.get("request_timeout_ms", 60000),
+            "api_version_auto_timeout_ms": config.get("api_timeout_ms", 60000),
         }
         if config.get("sasl_mechanism"):
             kwargs["sasl_mechanism"] = config.get("sasl_mechanism")
@@ -158,6 +179,17 @@ class KafkaMetricsCollector:
             if "TopicAlreadyExists" in type(exc).__name__:
                 return
             raise
+
+    def _wait_for_topic_ready(self, admin_client, topic_name, timeout_seconds=15):
+        deadline = time.time() + max(int(timeout_seconds), 1)
+        while time.time() < deadline:
+            try:
+                if topic_name in admin_client.list_topics():
+                    return True
+            except Exception:
+                pass
+            time.sleep(1)
+        return False
 
     def _build_message_payload(self, experiment_id, run_index, message_size_bytes):
         payload = {
@@ -274,8 +306,18 @@ class KafkaMetricsCollector:
 
             admin_client = admin_client_class(**client_kwargs)
             self._ensure_topic(admin_client, topic_name, new_topic_class)
+            if not self._wait_for_topic_ready(
+                admin_client,
+                topic_name,
+                timeout_seconds=config.get("topic_ready_timeout_seconds", 15),
+            ):
+                raise RuntimeError(f"Kafka topic '{topic_name}' did not become ready in time")
 
-            producer = producer_class(**client_kwargs)
+            producer_kwargs = dict(client_kwargs)
+            producer_kwargs.setdefault("acks", "all")
+            producer_kwargs.setdefault("retries", 5)
+            producer_kwargs.setdefault("max_block_ms", config.get("max_block_ms", 60000))
+            producer = producer_class(**producer_kwargs)
             start_timestamp = self.time_provider()
 
             produced_count = int(config.get("message_count", 100))
@@ -293,6 +335,7 @@ class KafkaMetricsCollector:
                 group_id=consumer_group,
                 auto_offset_reset="earliest",
                 enable_auto_commit=False,
+                consumer_timeout_ms=config.get("consumer_request_timeout_ms", 60000),
                 **client_kwargs,
             )
 

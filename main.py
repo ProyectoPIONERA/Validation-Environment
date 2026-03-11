@@ -1,11 +1,23 @@
 import argparse
 import importlib
 import inspect
+import os
+
+from runtime_dependencies import ensure_runtime_dependencies
+
+
+ensure_runtime_dependencies(
+    requirements_path=os.path.join(os.path.dirname(__file__), "requirements.txt"),
+    module_names=("requests", "matplotlib", "kafka", "docker", "testcontainers", "yaml"),
+    label="framework root",
+)
 
 from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
 from framework.kafka_manager import KafkaManager
 from framework.metrics_collector import MetricsCollector
+from framework.reporting.experiment_loader import ExperimentLoader
+from framework.reporting.report_generator import ExperimentReportGenerator
 from framework.validation_engine import ValidationEngine
 
 
@@ -142,6 +154,7 @@ def build_metrics_collector(
         "get_kafka_config",
         default=lambda: {},
     )
+    connector_log_fetcher = _resolve_connector_log_fetcher(adapter)
 
     return collector_cls(
         build_connector_url=build_connector_url,
@@ -152,6 +165,7 @@ def build_metrics_collector(
         kafka_enabled=kafka_enabled,
         kafka_config_loader=kafka_config_loader,
         kafka_runtime_config=kafka_runtime_config or {},
+        connector_log_fetcher=connector_log_fetcher,
     )
 
 
@@ -167,6 +181,7 @@ def build_runner(
     kafka_enabled=False,
     kafka_runtime_config=None,
     kafka_manager_cls=KafkaManager,
+    baseline=False,
 ):
     """Create the experiment runner with the selected adapter."""
     adapter = build_adapter(adapter_name, adapter_registry=adapter_registry, dry_run=dry_run)
@@ -192,6 +207,7 @@ def build_runner(
         experiment_storage=experiment_storage,
         iterations=iterations,
         kafka_manager=kafka_manager,
+        baseline=baseline,
     )
 
 
@@ -204,6 +220,7 @@ def build_dry_run_preview(
     experiment_storage=ExperimentStorage,
     iterations=1,
     kafka_enabled=False,
+    baseline=False,
 ):
     """Build a safe preview of what a command would execute."""
     adapter = build_adapter(adapter_name, adapter_registry=adapter_registry, dry_run=True)
@@ -215,6 +232,7 @@ def build_dry_run_preview(
         "dry_run": getattr(adapter, "dry_run", True),
         "iterations": iterations,
         "kafka_enabled": kafka_enabled,
+        "baseline": baseline,
         "actions": [],
     }
 
@@ -286,6 +304,40 @@ def _resolve_connectors(adapter):
     raise RuntimeError("Unable to resolve connectors from the selected adapter")
 
 
+def _resolve_connector_log_fetcher(adapter):
+    run_silent = getattr(adapter, "run_silent", None)
+    config = getattr(adapter, "config", None)
+    namespace = getattr(config, "NS_DS", None) if config is not None else None
+
+    if not callable(run_silent) or not namespace:
+        return None
+
+    def fetch_connector_logs(connectors, metadata=None):
+        logs = {}
+        for connector in connectors or []:
+            pod_name = f"{connector}-controlplane"
+            output = run_silent(f"kubectl logs {pod_name} -n {namespace} --tail=500")
+            if output:
+                logs[connector] = output
+        return logs
+
+    return fetch_connector_logs
+
+
+def _save_experiment_metadata(storage, experiment_dir, connectors, **kwargs):
+    save_method = storage.save_experiment_metadata
+    try:
+        parameters = inspect.signature(save_method).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    if len(parameters) <= 2:
+        return save_method(experiment_dir, connectors)
+
+    filtered_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
+    return save_method(experiment_dir, connectors, **filtered_kwargs)
+
+
 def run_deploy(adapter):
     """Deploy infrastructure and connectors using the selected adapter."""
     deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
@@ -303,11 +355,22 @@ def run_deploy(adapter):
     return deploy_connectors()
 
 
-def run_validate(adapter, validation_engine_cls=ValidationEngine, experiment_storage=ExperimentStorage):
+def run_validate(
+    adapter,
+    validation_engine_cls=ValidationEngine,
+    experiment_storage=ExperimentStorage,
+    baseline=False,
+):
     """Run validation collections with the selected adapter."""
     connectors = _resolve_connectors(adapter)
     experiment_dir = experiment_storage.create_experiment_directory()
-    experiment_storage.save_experiment_metadata(experiment_dir, connectors)
+    _save_experiment_metadata(
+        experiment_storage,
+        experiment_dir,
+        connectors,
+        adapter=type(adapter).__name__,
+        baseline=baseline,
+    )
 
     validation_engine = build_validation_engine(adapter, engine_cls=validation_engine_cls)
     run_method = validation_engine.run
@@ -346,6 +409,7 @@ def run_metrics(
     kafka_enabled=False,
     kafka_runtime_config=None,
     kafka_manager_cls=KafkaManager,
+    baseline=False,
 ):
     """Run metrics collection with the selected adapter."""
     connectors = _resolve_connectors(adapter)
@@ -364,7 +428,13 @@ def run_metrics(
             kafka_runtime_config=kafka_runtime_config,
         )
     experiment_dir = experiment_storage.create_experiment_directory()
-    experiment_storage.save_experiment_metadata(experiment_dir, connectors)
+    _save_experiment_metadata(
+        experiment_storage,
+        experiment_dir,
+        connectors,
+        adapter=type(adapter).__name__,
+        baseline=baseline,
+    )
     metrics = metrics_collector.collect(connectors, experiment_dir=experiment_dir)
 
     kafka_metrics = None
@@ -431,7 +501,7 @@ def create_parser(adapter_registry=None):
     parser = argparse.ArgumentParser(
         prog="python main.py",
         description="Dataspace Experimentation Framework CLI",
-        usage="python main.py list | python main.py <adapter> [command] [--dry-run] [--iterations N] [--kafka]",
+        usage="python main.py list | python main.py <adapter> [command] [--dry-run] [--iterations N] [--kafka] [--baseline] | python main.py report <experiment_id> | python main.py compare <experiment_a> <experiment_b>",
         epilog=(
             "Examples:\n"
             "  python main.py inesdata deploy\n"
@@ -440,7 +510,10 @@ def create_parser(adapter_registry=None):
             "  python main.py inesdata metrics --kafka\n"
             "  python main.py inesdata run\n"
             "  python main.py inesdata run --iterations 50\n"
+            "  python main.py inesdata run --baseline\n"
             "  python main.py inesdata run --dry-run\n"
+            "  python main.py report experiment_2026-03-10_12-00-00\n"
+            "  python main.py compare experiment_A experiment_B\n"
             "  python main.py list"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -453,9 +526,9 @@ def create_parser(adapter_registry=None):
     parser.add_argument(
         "command",
         nargs="?",
-        choices=SUPPORTED_COMMANDS,
         help="Command to execute. Defaults to 'run'.",
     )
+    parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -472,6 +545,11 @@ def create_parser(adapter_registry=None):
         action="store_true",
         help="Enable the optional Kafka broker benchmark during the metrics phase.",
     )
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help="Mark the generated experiment as a baseline run.",
+    )
     return parser
 
 
@@ -483,6 +561,7 @@ def main(
     metrics_collector_cls=MetricsCollector,
     experiment_storage=ExperimentStorage,
     kafka_manager_cls=KafkaManager,
+    report_generator_cls=ExperimentReportGenerator,
 ):
     """Main entry point for the Dataspace Experimentation Framework."""
     parser = create_parser(adapter_registry=adapter_registry)
@@ -501,12 +580,37 @@ def main(
             parser.error("'list' does not accept an additional command")
         return print_available_adapters(adapter_registry=registry)
 
+    if args.adapter == "report":
+        experiment_id = args.command
+        if not experiment_id or args.extra:
+            parser.error("'report' expects exactly one experiment identifier")
+        generator = report_generator_cls(storage=experiment_storage)
+        summary = generator.generate(experiment_id)
+        return {
+            "experiment_dir": ExperimentLoader.experiment_dir(experiment_id),
+            "summary": summary,
+        }
+
+    if args.adapter == "compare":
+        experiment_a = args.command
+        experiment_b = args.extra[0] if args.extra else None
+        if not experiment_a or not experiment_b or len(args.extra) != 1:
+            parser.error("'compare' expects exactly two experiment identifiers")
+        generator = report_generator_cls(storage=experiment_storage)
+        return generator.compare(experiment_a, experiment_b)
+
     if args.adapter not in registry:
         parser.error(
             f"Unsupported adapter '{args.adapter}'. Available adapters: {', '.join(sorted(registry))}"
         )
 
     command = args.command or "run"
+    if command not in SUPPORTED_COMMANDS:
+        parser.error(
+            f"argument command: invalid choice: '{command}' (choose from {', '.join(SUPPORTED_COMMANDS)})"
+        )
+    if args.extra:
+        parser.error(f"unrecognized arguments: {' '.join(args.extra)}")
 
     if args.dry_run:
         return build_dry_run_preview(
@@ -518,6 +622,7 @@ def main(
             experiment_storage=experiment_storage,
             iterations=args.iterations,
             kafka_enabled=args.kafka,
+            baseline=args.baseline,
         )
 
     try:
@@ -533,6 +638,7 @@ def main(
             adapter,
             validation_engine_cls=validation_engine_cls,
             experiment_storage=experiment_storage,
+            baseline=args.baseline,
         )
 
     if command == "metrics":
@@ -542,6 +648,7 @@ def main(
             experiment_storage=experiment_storage,
             kafka_enabled=args.kafka,
             kafka_manager_cls=kafka_manager_cls,
+            baseline=args.baseline,
         )
 
     runner = build_runner(
@@ -555,6 +662,7 @@ def main(
         iterations=args.iterations,
         kafka_enabled=args.kafka,
         kafka_manager_cls=kafka_manager_cls,
+        baseline=args.baseline,
     )
     return runner.run()
 

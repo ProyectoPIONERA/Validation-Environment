@@ -21,10 +21,86 @@
   "item": [
 
     {
+      "name": "Provider Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{provider_user}}", "type": "text" },
+            { "key": "password", "value": "{{provider_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "Consumer Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "url": {
+          "raw": "{{keycloakUrl}}/realms/{{dataspace}}/protocol/openid-connect/token",
+          "host": [
+            "{{keycloakUrl}}"
+          ],
+          "path": [
+            "realms",
+            "{{dataspace}}",
+            "protocol",
+            "openid-connect",
+            "token"
+          ]
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "grant_type", "value": "password", "type": "text" },
+            { "key": "client_id", "value": "{{keycloakClientId}}", "type": "text" },
+            { "key": "username", "value": "{{consumer_user}}", "type": "text" },
+            { "key": "password", "value": "{{consumer_password}}", "type": "text" },
+            { "key": "scope", "value": "openid profile email", "type": "text" }
+          ]
+        }
+      }
+    },
+
+    {
       "name": "Provider Management API Health",
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{provider_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
@@ -56,6 +132,10 @@
         "method": "POST",
         "header": [
           {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
+          {
             "key": "Content-Type",
             "value": "application/json"
           }
@@ -86,6 +166,10 @@
         "method": "POST",
         "header": [
           {
+            "key": "Authorization",
+            "value": "Bearer {{provider_jwt}}"
+          },
+          {
             "key": "Content-Type",
             "value": "application/json"
           }
@@ -114,6 +198,10 @@
       "request": {
         "method": "POST",
         "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{consumer_jwt}}"
+          },
           {
             "key": "Content-Type",
             "value": "application/json"
