@@ -73,9 +73,7 @@ class INESDataDeploymentAdapter:
         self._print_unique_lines(rollout_output)
 
     def deploy_dataspace(self):
-        print("\n========================================")
-        print("LEVEL 3 - DATASPACE")
-        print("========================================\n")
+        self.infrastructure.announce_level(3, "DATASPACE")
 
         print("-------------------------------------------------")
         print("MINIKUBE TUNNEL REQUIRED")
@@ -172,7 +170,7 @@ class INESDataDeploymentAdapter:
         if not dataspace_ready:
             self._fail("Level 3 did not leave the dataspace ready for Level 4", root_cause=root_cause)
 
-        print("\nLEVEL 3 COMPLETE\n")
+        self.infrastructure.complete_level(3)
 
     def describe(self) -> str:
         return "INESDataDeploymentAdapter contains deployment logic for INESData."

@@ -27,6 +27,8 @@ class INESDataInfrastructureAdapter:
         self.config = config_cls or InesdataConfig
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
         self._last_registration_service_liquibase_issue = None
+        self._announced_levels = set()
+        self._completed_levels = set()
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
@@ -36,6 +38,20 @@ class INESDataInfrastructureAdapter:
         if root_cause:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
+
+    def announce_level(self, level, title):
+        if level in self._announced_levels:
+            return
+        print("\n========================================")
+        print(f"LEVEL {level} - {title}")
+        print("========================================\n")
+        self._announced_levels.add(level)
+
+    def complete_level(self, level):
+        if level in self._completed_levels:
+            return
+        print(f"\nLEVEL {level} COMPLETE\n")
+        self._completed_levels.add(level)
 
     def ensure_unix_environment(self):
         if os.name == "nt":
@@ -690,7 +706,7 @@ class INESDataInfrastructureAdapter:
             if item["name"] == "KEYCLOAK_PASSWORD":
                 add_row("KC_PASSWORD", "keycloakConfigCli.KEYCLOAK_PASSWORD", "KC_PASSWORD", item["value"])
 
-        print("\nConfiguration synchronization: deployer.config <-> common/values.yaml\n")
+        print("\nConfiguration synchronization: deployer.config -> common/values.yaml\n")
         print(tabulate(rows, headers=["DEPLOYER.CONFIG", "COMMON/VALUES.YAML", "EXPECTED", "FOUND", "STATUS"], tablefmt="grid"))
         print()
         return any(row[4] == "DIFF" for row in rows)
@@ -937,7 +953,6 @@ class INESDataInfrastructureAdapter:
                 return False
 
             time.sleep(3)
-
     def _pod_snapshot(self, namespace):
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not result:
@@ -1067,10 +1082,7 @@ class INESDataInfrastructureAdapter:
         return True, None
 
     def setup_cluster(self):
-        print("\n========================================")
-        print("LEVEL 1 - CLUSTER SETUP")
-        print("========================================\n")
-
+        self.announce_level(1, "CLUSTER SETUP")
         self.ensure_unix_environment()
         if not self.ensure_wsl_docker_config():
             self._fail("Could not adjust WSL Docker configuration safely")
@@ -1112,12 +1124,10 @@ class INESDataInfrastructureAdapter:
         cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
         if not cluster_ready:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
-        print("\nLEVEL 1 COMPLETE\n")
+        self.complete_level(1)
 
     def deploy_infrastructure(self):
-        print("\n========================================")
-        print("LEVEL 2 - DEPLOY COMMON SERVICES")
-        print("========================================\n")
+        self.announce_level(2, "DEPLOY COMMON SERVICES")
 
         if not self.ensure_wsl_docker_config():
             self._fail("Could not adjust WSL Docker configuration safely")
@@ -1171,7 +1181,7 @@ class INESDataInfrastructureAdapter:
         if not common_ready:
             self._fail("Level 2 did not leave common services ready for Level 3", root_cause=root_cause)
 
-        print("\nLEVEL 2 COMPLETE\n")
+        self.complete_level(2)
 
     def describe(self) -> str:
         return "INESDataInfrastructureAdapter contains infrastructure logic for INESData."

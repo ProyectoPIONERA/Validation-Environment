@@ -1201,7 +1201,7 @@ def show_correspondence_table(values, config):
                 item["value"]
             )
 
-    print("\nConfiguration synchronization: deployer.config <-> common/values.yaml\n")
+    print("\nConfiguration synchronization: deployer.config -> common/values.yaml\n")
 
     print(tabulate(
         rows,
