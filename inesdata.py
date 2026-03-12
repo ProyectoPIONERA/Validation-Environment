@@ -47,8 +47,8 @@ class Config:
     """Centralized technical configuration."""
 
     # Deployment
-    REPO_URL = "https://github.com/ProyectoPIONERA/inesdata-testing.git"
-    REPO_DIR = "inesdata-testing"
+    REPO_URL = "https://github.com/ProyectoPIONERA/inesdata-deployment.git"
+    REPO_DIR = "inesdata-deployment"
     DS_NAME = "demo"
     NS_COMMON = "common-srvs"
 

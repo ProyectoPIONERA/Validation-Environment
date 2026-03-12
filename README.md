@@ -219,7 +219,7 @@ newman -v
 
 ### Entorno virtual del framework en la raíz
 
-El entorno Python operativo del despliegue de INESData es `inesdata-testing/.venv`. El entorno virtual de la raíz es opcional y está orientado al desarrollo del framework, al uso del CLI moderno desde la raíz y a los tests del core.
+El entorno Python operativo del despliegue de INESData es `inesdata-deployment/.venv`. El entorno virtual de la raíz es opcional y está orientado al desarrollo del framework, al uso del CLI moderno desde la raíz y a los tests del core.
 
 ```bash
 cd ~/Validation-Environment
@@ -242,10 +242,10 @@ El helper `scripts/run_kafka_benchmark.sh` ejecuta esta instalación automática
 
 En el flujo de `inesdata.py` y del adapter `inesdata`, el framework automatiza tareas como:
 
-- clonado de `inesdata-testing/` cuando no existe
+- clonado de `inesdata-deployment/` cuando no existe
 - copia de `deployer.config` al repositorio operativo
-- creación de `inesdata-testing/.venv`
-- instalación de dependencias Python de `inesdata-testing/requirements.txt`
+- creación de `inesdata-deployment/.venv`
+- instalación de dependencias Python de `inesdata-deployment/requirements.txt`
 - alta de repositorios Helm y `helm dependency build`
 - arranque de Minikube y habilitación de ingress
 - despliegue de servicios comunes, dataspace y conectores
@@ -272,14 +272,14 @@ Tampoco automatiza la intervención manual requerida para mantener `minikube tun
 El framework separa sus dependencias por tipo de la siguiente manera:
 
 - `requirements.txt` de la raíz: librerías Python usadas por `main.py`, `inesdata.py`, adapters, tests core y helpers Python del framework. Aquí sí deben vivir dependencias como `requests`, `PyYAML`, `tabulate`, `ruamel.yaml`, `matplotlib`, `docker`, `testcontainers` o `kafka-python`.
-- `inesdata-testing/requirements.txt`: dependencias Python del repositorio operativo INESData que se ejecuta mediante `inesdata-testing/.venv`.
+- `inesdata-deployment/requirements.txt`: dependencias Python del repositorio operativo INESData que se ejecuta mediante `inesdata-deployment/.venv`.
 - herramientas Node.js: `newman` no pertenece a `requirements.txt` porque no es un paquete Python. Se gestiona con `npm` y `package.json`, no con `pip`.
 - herramientas del sistema: `docker`, `minikube`, `helm`, `kubectl`, `psql` o `snap`/`apt` tampoco pertenecen a `requirements.txt`. Son prerrequisitos del sistema operativo o del entorno de contenedores.
 
 Estado actual del framework:
 
 - `main.py` e `inesdata.py` aseguran automáticamente las dependencias Python de la raíz antes de continuar.
-- el flujo legacy asegura también `inesdata-testing/requirements.txt` antes de invocar `deployer.py` dentro de `inesdata-testing/.venv`.
+- el flujo legacy asegura también `inesdata-deployment/requirements.txt` antes de invocar `deployer.py` dentro de `inesdata-deployment/.venv`.
 - `newman` se puede instalar localmente con `npm install` en la raíz del repo; el framework prioriza `node_modules/.bin/newman` y, si no existe, usa un `newman` global en `PATH`.
 - cuando una validación necesita `newman` y no está disponible, el framework intenta `npm install` automáticamente si existe `package.json` en la raíz.
 
@@ -333,7 +333,7 @@ python main.py inesdata run --dry-run
 
 El repositorio incluye un helper reproducible que levanta un broker externo, comprueba su estabilidad y ejecuta el benchmark vía CLI.
 
-> Este helper puede ejecutarse con un entorno virtual de la raíz si existe, pero también puede reutilizar `inesdata-testing/.venv` cuando ese es el entorno activo o el único disponible.
+> Este helper puede ejecutarse con un entorno virtual de la raíz si existe, pero también puede reutilizar `inesdata-deployment/.venv` cuando ese es el entorno activo o el único disponible.
 
 Smoke test corto:
 
@@ -407,7 +407,7 @@ Scripts disponibles en `adapters/inesdata/scripts/`:
 Tras tener el entorno ya levantado (niveles 1-4, y `minikube tunnel` activo si aplica), para probar cambios hechos en `adapters/inesdata/sources`:
 
 ```bash
-bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --platform-dir inesdata-testing --namespace demo
+bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --platform-dir inesdata-deployment --namespace demo
 ```
 
 ## Limpieza del workspace
@@ -428,7 +428,7 @@ Qué limpia por defecto:
 Qué no limpia por defecto:
 - directorios `experiments/`
 - directorio `newman/`
-- entornos virtuales como `.venv` o `inesdata-testing/.venv`
+- entornos virtuales como `.venv` o `inesdata-deployment/.venv`
 - `node_modules/`
 
 Para borrar también los resultados generados por experimentos y ejecuciones Newman, hay que añadir `--include-results`.
@@ -533,13 +533,13 @@ Validation-Environment desacopla el núcleo experimental de la infraestructura e
 | `adapters/inesdata/` | Integración específica con INESData                                                              |
 | `validation/` | Colecciones Newman/Postman y scripts de test                                                     |
 | `experiments/` | Artefactos generados por los experimentos                                                        |
-| `inesdata-testing/` | Repositorio operativo utilizado por el adapter `inesdata` (clonado automáticamente si no existe) |
+| `inesdata-deployment/` | Repositorio operativo utilizado por el adapter `inesdata` (clonado automáticamente si no existe) |
 
-## Relación con `inesdata-testing`
+## Relación con `inesdata-deployment`
 
-El adapter `inesdata` utiliza `inesdata-testing/` para despliegue y configuración de la plataforma. Sus dependencias y scripts propios siguen viviendo ahí, pero su presencia viene de la propia automatización del entorno además de existir ya en un el repositorio oficial de PIONERA con fines de desarrollo y pruebas.
+El adapter `inesdata` utiliza `inesdata-deployment/` para despliegue y configuración de la plataforma. Sus dependencias y scripts propios siguen viviendo ahí, pero su presencia viene de la propia automatización del entorno además de existir ya en un el repositorio oficial de PIONERA con fines de desarrollo y pruebas.
 
-> En la automatización de INESData, `inesdata-testing/deployer.config` actúa como fuente de configuración para instanciar el entorno. Incluye parámetros del dataspace y definiciones de conectores como `DS_1_CONNECTORS`.
+> En la automatización de INESData, `inesdata-deployment/deployer.config` actúa como fuente de configuración para instanciar el entorno. Incluye parámetros del dataspace y definiciones de conectores como `DS_1_CONNECTORS`.
 >
 > La plantilla recomendada para usuarios del repositorio es `deployer.config.example` en la raíz. Debe copiarse a `deployer.config` y editarse localmente.
 >

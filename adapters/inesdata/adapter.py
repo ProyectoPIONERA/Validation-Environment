@@ -144,7 +144,7 @@ class InesdataAdapter:
     def describe(self) -> str:
         return (
             "InesdataAdapter encapsulates Kubernetes, Helm, Vault, MinIO, "
-            "connector and inesdata-testing logic for INESData."
+            "connector and inesdata-deployment logic for INESData."
         )
 
 

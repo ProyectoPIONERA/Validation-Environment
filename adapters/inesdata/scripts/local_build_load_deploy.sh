@@ -9,7 +9,7 @@ BUILD_SCRIPT="$SCRIPT_DIR/build_images.sh"
 MANIFESTS_DIR="${MANIFESTS_DIR:-/tmp/inesdata-manifests}"
 OVERRIDES_DIR="$ADAPTER_DIR/build/local-overrides"
 
-PLATFORM_DIR="${PLATFORM_DIR:-$ROOT_DIR/inesdata-testing}"
+PLATFORM_DIR="${PLATFORM_DIR:-$ROOT_DIR/inesdata-deployment}"
 K8S_NAMESPACE="${K8S_NAMESPACE:-demo}"
 MINIKUBE_PROFILE="${MINIKUBE_PROFILE:-minikube}"
 LOCAL_REGISTRY_HOST="${LOCAL_REGISTRY_HOST:-local}"
@@ -28,7 +28,7 @@ Usage: local_build_load_deploy.sh [--apply] [--manifest <path>] [--platform-dir 
 Options:
   --apply                     Execute build/load/deploy actions (default is dry-run).
   --manifest <path>           Use an existing build manifest TSV.
-  --platform-dir <path>       Path to local platform repo (default: ./inesdata-testing).
+  --platform-dir <path>       Path to local platform repo (default: ./inesdata-deployment).
   --namespace <name>          Kubernetes namespace and dataspace name (default: demo).
   --minikube-profile <name>   Minikube profile name (default: minikube).
   --skip-build                Skip image build, use provided/latest manifest.
