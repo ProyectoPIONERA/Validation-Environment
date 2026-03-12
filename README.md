@@ -6,13 +6,11 @@ Permite desplegar automáticamente una infraestructura basada en INESData, ejecu
 
 Actualmente el adapter disponible es `inesdata`.
 
-<<<<<<< HEAD
 El framework ofrece la opción de guardar en `hosts` los dominios necesarios de forma dinámica. En wsl este fichero se encuentra en `C:\Windows\System32\drivers\etc` y en Linux en `/etc/hosts`. Para el demo local, se utilizan los siguientes dominios:
-=======
+
 ## Demo
 
 Para arrancar el demo, se recomienda agregar el siguiente bloque de dominios en el fichero `hosts`. En wsl se encuentra en `C:\Windows\System32\drivers\etc` y en Linux en `/etc/hosts`:
->>>>>>> e8aaab1 (Demo and PIONERA context)
 
 ```text
 127.0.0.1 keycloak.dev.ed.dataspaceunit.upm
@@ -597,4 +595,5 @@ This work has received funding from the **PIONERA project** (Enhancing interoper
 ## Licencia
 
 Validation-Environment is available under the **[Apache License 2.0](https://github.com/ProyectoPIONERA/pionera_env/blob/main/LICENSE)**.
+
 
