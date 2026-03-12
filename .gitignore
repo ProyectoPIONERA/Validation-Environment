@@ -32,6 +32,7 @@ newman/
 /inesdata-deployment/common/init-keys-vault.json
 /inesdata-deployment/deployments/
 inesdata-deployment/
+inesdata-testing/
 
 # IDE / editor
 .idea/
