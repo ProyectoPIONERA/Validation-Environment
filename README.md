@@ -1,10 +1,18 @@
 # Validation-Environment
 
-Este framework proporciona un entorno reproducible para la validación de componentes desarrollados en el proyecto **PIONERA**. Permite desplegar infraestructuras de espacios de datos, ejecutar pruebas funcionales y recopilar métricas experimentales.
+Validation-Environment es un framework para crear entornos reproducibles de validación de espacios de datos. Se utiliza como infraestructura de validación para evaluar componentes del ecosistema PIONERA mediante pruebas funcionales, de interoperabilidad y de rendimiento.
+
+Permite desplegar automáticamente una infraestructura basada en INESData, ejecutar escenarios de intercambio de datos entre conectores y recopilar métricas experimentales sobre el comportamiento del sistema.
 
 Actualmente el adapter disponible es `inesdata`.
 
+<<<<<<< HEAD
 El framework ofrece la opción de guardar en `hosts` los dominios necesarios de forma dinámica. En wsl este fichero se encuentra en `C:\Windows\System32\drivers\etc` y en Linux en `/etc/hosts`. Para el demo local, se utilizan los siguientes dominios:
+=======
+## Demo
+
+Para arrancar el demo, se recomienda agregar el siguiente bloque de dominios en el fichero `hosts`. En wsl se encuentra en `C:\Windows\System32\drivers\etc` y en Linux en `/etc/hosts`:
+>>>>>>> e8aaab1 (Demo and PIONERA context)
 
 ```text
 127.0.0.1 keycloak.dev.ed.dataspaceunit.upm
