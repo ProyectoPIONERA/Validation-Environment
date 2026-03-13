@@ -7,16 +7,18 @@ SOURCES_DIR="$ADAPTER_DIR/sources"
 MANIFESTS_DIR="${MANIFESTS_DIR:-/tmp/inesdata-manifests}"
 DRY_RUN=1
 ONLY_COMPONENT=""
+SKIP_PREBUILD=0
 REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
 REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-inesdata}"
 
 usage() {
   cat <<'EOF'
-Usage: build_images.sh [--apply] [--component <name>] [--registry-host <host>] [--namespace <name>]
+Usage: build_images.sh [--apply] [--component <name>] [--skip-prebuild] [--registry-host <host>] [--namespace <name>]
 
 Options:
   --apply             Execute docker build (default is dry-run).
   --component <name>  Restrict to one component key.
+  --skip-prebuild     Skip pre-build commands configured per component.
   --registry-host     Registry hostname. Default: ghcr.io
   --namespace         Registry namespace/org/user. Default: inesdata
 
@@ -43,6 +45,10 @@ while [[ $# -gt 0 ]]; do
     --component)
       ONLY_COMPONENT="${2:-}"
       shift 2
+      ;;
+    --skip-prebuild)
+      SKIP_PREBUILD=1
+      shift
       ;;
     --registry-host)
       REGISTRY_HOST="${2:-}"
@@ -103,6 +109,14 @@ declare -A EXTRA_ARGS=(
   ["public-portal-frontend"]=""
 )
 
+declare -A PRE_BUILD_CMD=(
+  ["connector"]="./gradlew :launchers:connector:shadowJar"
+  ["connector-interface"]=""
+  ["registration-service"]="./gradlew bootJar"
+  ["public-portal-backend"]=""
+  ["public-portal-frontend"]=""
+)
+
 run_cmd() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[DRY-RUN] $*"
@@ -126,22 +140,35 @@ for component in connector connector-interface registration-service public-porta
   image="$REGISTRY_HOST/$REGISTRY_NAMESPACE/${IMAGE_NAME[$component]}"
   dockerfile="${DOCKERFILE[$component]}"
   extra_args="${EXTRA_ARGS[$component]}"
+  pre_build_cmd="${PRE_BUILD_CMD[$component]}"
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    echo "Skipping $component: missing repository at $repo_dir"
+  if [[ ! -d "$repo_dir" ]]; then
+    echo "Skipping $component: missing source directory at $repo_dir"
     continue
   fi
 
-  shortsha="$(git -C "$repo_dir" rev-parse --short HEAD)"
   date_tag="$(date -u +%Y%m%d)"
-  tag="$date_tag-$shortsha"
+  time_tag="$(date -u +%H%M%S)"
+
+  if [[ -d "$repo_dir/.git" ]]; then
+    shortsha="$(git -C "$repo_dir" rev-parse --short HEAD)"
+    tag="$date_tag-$shortsha"
+  else
+    tag="$date_tag-$time_tag-local"
+  fi
+
   full_image="$image:$tag"
+
+  echo
+  echo "== $component =="
+  if [[ -n "$pre_build_cmd" && "$SKIP_PREBUILD" -eq 0 ]]; then
+    echo "Running pre-build for $component: $pre_build_cmd"
+    run_cmd "cd $repo_dir && $pre_build_cmd"
+  fi
 
   build_cmd="docker build -f $dockerfile -t $full_image $extra_args ."
   echo -e "$component\t$repo_dir\t$image\t$tag\t$full_image\t$build_cmd" >> "$MANIFEST_FILE"
 
-  echo
-  echo "== $component =="
   run_cmd "cd $repo_dir && $build_cmd"
 done
 
