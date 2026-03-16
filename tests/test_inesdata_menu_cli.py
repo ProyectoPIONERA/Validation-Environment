@@ -1,5 +1,6 @@
 import unittest
 from unittest import mock
+import os
 
 import inesdata
 
@@ -46,6 +47,27 @@ class InesdataMenuCliTests(unittest.TestCase):
             inesdata.show_menu()
 
         mock_run_local_workflow.assert_called_once()
+
+    @mock.patch.object(inesdata, "run_workspace_cleanup_interactive")
+    def test_show_menu_routes_option_c_to_workspace_cleanup(self, mock_cleanup):
+        with mock.patch("builtins.input", side_effect=["C", "Q"]):
+            inesdata.show_menu()
+
+        mock_cleanup.assert_called_once()
+
+    @mock.patch.object(inesdata.os.path, "isfile", return_value=True)
+    @mock.patch.object(inesdata.subprocess, "run")
+    def test_run_workspace_cleanup_interactive_runs_include_results_mode(self, mock_run, _mock_isfile):
+        mock_run.return_value = mock.Mock(returncode=0)
+
+        with mock.patch("builtins.input", side_effect=["2", "Y"]):
+            inesdata.run_workspace_cleanup_interactive()
+
+        script_path = os.path.join(inesdata.Config.script_dir(), "scripts", "clean_workspace.sh")
+        mock_run.assert_called_once_with(
+            ["bash", script_path, "--apply", "--include-results"],
+            cwd=inesdata.Config.script_dir(),
+        )
 
 
 if __name__ == "__main__":

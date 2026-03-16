@@ -1973,6 +1973,7 @@ LEVELS = {
 LOCAL_WORKFLOW_SCRIPT_REL_PATH = os.path.join(
     "adapters", "inesdata", "scripts", "local_build_load_deploy.sh"
 )
+CLEAN_WORKSPACE_SCRIPT_REL_PATH = os.path.join("scripts", "clean_workspace.sh")
 
 
 
@@ -2079,6 +2080,62 @@ def run_local_images_workflow_interactive():
     ])
 
 
+def run_workspace_cleanup_interactive():
+    """Run workspace cleanup script in apply mode."""
+    script_path = os.path.join(Config.script_dir(), CLEAN_WORKSPACE_SCRIPT_REL_PATH)
+    if not os.path.isfile(script_path):
+        print(f"\nCleanup script not found: {script_path}\n")
+        return None
+
+    while True:
+        print("\n" + "="*50)
+        print("WORKSPACE CLEANUP")
+        print("="*50)
+        print("1 - Apply cleanup")
+        print("    Removes __pycache__, *.pyc and tool caches")
+        print("2 - Apply cleanup + include results")
+        print("    Also removes experiments/ and newman/")
+        print("B - Back")
+
+        try:
+            choice = input("\nSelection: ").strip().upper()
+        except EOFError:
+            print("\nNo input. Returning to main menu.\n")
+            return None
+
+        if choice == "B":
+            return None
+
+        if choice not in {"1", "2"}:
+            print("\nInvalid selection. Please try again.\n")
+            continue
+
+        command = ["bash", script_path, "--apply"]
+        mode_label = "cleanup"
+        if choice == "2":
+            command.append("--include-results")
+            mode_label = "cleanup + include results"
+
+        try:
+            confirm = input(f"\nRun {mode_label}? (Y/N, default: N): ").strip().upper()
+        except EOFError:
+            confirm = "N"
+
+        if confirm != "Y":
+            print("\nCleanup cancelled.\n")
+            return None
+
+        print(f"\nLaunching cleanup: {' '.join(command)}\n")
+        result = subprocess.run(command, cwd=Config.script_dir())
+
+        if result.returncode == 0:
+            print("\nCleanup completed successfully.\n")
+        else:
+            print("\nCleanup failed. Check logs above.\n")
+
+        return None
+
+
 def run_new_cli_interactive():
     """Launch the new framework CLI from the legacy interactive menu."""
     print("\n" + "="*50)
@@ -2148,6 +2205,7 @@ def show_menu():
     - 0: Run all levels (1-5) sequentially
     - 1-5: Run individual levels
     - N: Launch new framework CLI
+    - C: Run workspace cleanup script
     - L: Build and deploy local images
     - Q: Exit application
     """
@@ -2166,6 +2224,7 @@ def show_menu():
         print("\n[Modern CLI]")
         print("N - Use new framework CLI")
         print("\n[Developer]")
+        print("C - Cleanup Workspace")
         print("L - Build and Deploy Local Images")
         print("\n[Control]")
         print("Q - Exit")
@@ -2192,6 +2251,11 @@ def show_menu():
                 run_new_cli_interactive()
             except KeyboardInterrupt:
                 print("\n\nCLI execution cancelled by user\n")
+        elif choice == "C":
+            try:
+                run_workspace_cleanup_interactive()
+            except KeyboardInterrupt:
+                print("\n\nWorkspace cleanup cancelled by user\n")
         elif choice == "L":
             try:
                 run_local_images_workflow_interactive()

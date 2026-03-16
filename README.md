@@ -399,20 +399,48 @@ bash scripts/run_kafka_benchmark.sh --teardown-only
 
 Scripts disponibles en `adapters/inesdata/scripts/`:
 
-- `sync_sources.sh`: clona/actualiza los 5 repos fuente de INESData.
-- `build_images.sh`: construye imágenes y genera un manifest `images-*.tsv` en `/tmp/inesdata-manifests` (por defecto).
-- `push_images.sh`: publica imágenes del manifest (si usas registro remoto).
-- `local_build_load_deploy.sh`: flujo local completo sin GHCR (build + `minikube image load` + `helm upgrade` con overrides).
+- `build_images.sh`: construye imágenes, ejecuta pre-build por componente cuando está configurado (por ejemplo `connector`) y genera un manifest `images-*.tsv` en `/tmp/inesdata-manifests` (por defecto).
+- `local_build_load_deploy.sh`: flujo local sin GHCR (build + `minikube image load` + `helm upgrade` con overrides).
 
 Tras tener el entorno ya levantado (niveles 1-4, y `minikube tunnel` activo si aplica), para probar cambios hechos en `adapters/inesdata/sources`:
 
+Flujo completo (todos los componentes):
+
 ```bash
-bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --platform-dir inesdata-deployment --namespace demo
+bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --platform-dir inesdata-deployment
+```
+
+Flujo parcial para iterar rápido en un componente (build + load, sin deploy Helm):
+
+```bash
+bash adapters/inesdata/scripts/local_build_load_deploy.sh --apply --component connector-interface --skip-deploy --platform-dir inesdata-deployment
+```
+
+Por defecto, `local_build_load_deploy.sh` despliega en todos los namespaces `DS_*_NAMESPACE` definidos en `deployer.config`.
+Si quieres forzar un único namespace, usa `--namespace <name>`.
+
+En el menú legacy (`python inesdata.py`), la opción `L` ejecuta este flujo en modo Full (sin selección por componente), con confirmación directa.
+
+Si solo quieres construir imágenes desde el script de build:
+
+```bash
+bash adapters/inesdata/scripts/build_images.sh --apply --component connector-interface
+```
+
+Para omitir pre-build en componentes que lo tengan configurado:
+
+```bash
+bash adapters/inesdata/scripts/build_images.sh --apply --component connector --skip-prebuild
 ```
 
 ## Limpieza del workspace
 
 Script: `scripts/clean_workspace.sh`
+
+También está disponible desde el menú legacy (`python inesdata.py`):
+- `C - Cleanup Workspace`
+- `1 - Apply cleanup` (equivale a `bash scripts/clean_workspace.sh --apply`)
+- `2 - Apply cleanup + include results` (equivale a `bash scripts/clean_workspace.sh --apply --include-results`)
 
 Si el workspace acumula demasiados artefactos locales generados por el framework, este script es la forma recomendada de recuperar espacio y dejar el workspace limpio sin tocar el código fuente.
 
