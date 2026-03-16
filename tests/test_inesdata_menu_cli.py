@@ -40,6 +40,13 @@ class InesdataMenuCliTests(unittest.TestCase):
 
         mock_run_new_cli.assert_called_once()
 
+    @mock.patch.object(inesdata, "run_local_images_workflow_interactive")
+    def test_show_menu_routes_option_l_to_local_workflow(self, mock_run_local_workflow):
+        with mock.patch("builtins.input", side_effect=["L", "Q"]):
+            inesdata.show_menu()
+
+        mock_run_local_workflow.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

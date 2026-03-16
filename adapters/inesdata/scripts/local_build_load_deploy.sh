@@ -10,7 +10,7 @@ MANIFESTS_DIR="${MANIFESTS_DIR:-/tmp/inesdata-manifests}"
 OVERRIDES_DIR="$ADAPTER_DIR/build/local-overrides"
 
 PLATFORM_DIR="${PLATFORM_DIR:-$ROOT_DIR/inesdata-deployment}"
-K8S_NAMESPACE="${K8S_NAMESPACE:-demo}"
+K8S_NAMESPACE="${K8S_NAMESPACE:-}"
 MINIKUBE_PROFILE="${MINIKUBE_PROFILE:-minikube}"
 LOCAL_REGISTRY_HOST="${LOCAL_REGISTRY_HOST:-local}"
 LOCAL_NAMESPACE="${LOCAL_NAMESPACE:-inesdata}"
@@ -22,6 +22,8 @@ MANIFEST_FILE=""
 ONLY_COMPONENT=""
 SKIP_PREBUILD=0
 CONNECTOR_HEALTH_TIMEOUT_SECONDS="${CONNECTOR_HEALTH_TIMEOUT_SECONDS:-300}"
+CONNECTOR_AUTO_RESTART_RETRIES="${CONNECTOR_AUTO_RESTART_RETRIES:-1}"
+ROLLOUT_RECOVERY_COUNT=0
 
 usage() {
   cat <<'EOF'
@@ -33,9 +35,9 @@ Options:
   --apply                     Execute build/load/deploy actions (default is dry-run).
   --manifest <path>           Use an existing build manifest TSV.
   --platform-dir <path>       Path to local platform repo (default: ./inesdata-deployment).
-  --namespace <name>          Kubernetes namespace and dataspace name (default: demo).
+  --namespace <name>          Override target namespace (default: all namespaces from deployer.config).
   --minikube-profile <name>   Minikube profile name (default: minikube).
-  --component <name>          Restrict build/load to one component key.
+  --component <name>          Restrict workflow to one component key.
   --skip-prebuild             Skip component pre-build commands in build_images.sh.
   --skip-build                Skip image build, use provided/latest manifest.
   --skip-deploy               Build and load images, but do not run helm upgrade.
@@ -47,6 +49,8 @@ Environment variables:
   MINIKUBE_PROFILE
   LOCAL_REGISTRY_HOST
   LOCAL_NAMESPACE
+  CONNECTOR_HEALTH_TIMEOUT_SECONDS
+  CONNECTOR_AUTO_RESTART_RETRIES
 
 Component keys:
   connector
@@ -109,6 +113,9 @@ done
 
 COMPONENTS=(connector connector-interface registration-service public-portal-backend public-portal-frontend)
 ACTIVE_COMPONENTS=("${COMPONENTS[@]}")
+DEPLOY_CONNECTORS=1
+DEPLOY_REGISTRATION=1
+DEPLOY_PUBLIC_PORTAL=1
 
 if [[ -n "$ONLY_COMPONENT" ]]; then
   valid_component=0
@@ -126,6 +133,21 @@ if [[ -n "$ONLY_COMPONENT" ]]; then
   fi
 
   ACTIVE_COMPONENTS=("$ONLY_COMPONENT")
+
+  DEPLOY_CONNECTORS=0
+  DEPLOY_REGISTRATION=0
+  DEPLOY_PUBLIC_PORTAL=0
+  case "$ONLY_COMPONENT" in
+    connector|connector-interface)
+      DEPLOY_CONNECTORS=1
+      ;;
+    registration-service)
+      DEPLOY_REGISTRATION=1
+      ;;
+    public-portal-backend|public-portal-frontend)
+      DEPLOY_PUBLIC_PORTAL=1
+      ;;
+  esac
 fi
 
 run_cmd() {
@@ -133,6 +155,55 @@ run_cmd() {
     echo "[DRY-RUN] $*"
   else
     eval "$@"
+  fi
+}
+
+TARGET_NAMESPACES=()
+
+append_unique_namespace() {
+  local candidate="$1"
+  local existing
+
+  if [[ -z "$candidate" ]]; then
+    return
+  fi
+
+  for existing in "${TARGET_NAMESPACES[@]}"; do
+    if [[ "$existing" == "$candidate" ]]; then
+      return
+    fi
+  done
+
+  TARGET_NAMESPACES+=("$candidate")
+}
+
+resolve_target_namespaces() {
+  TARGET_NAMESPACES=()
+
+  if [[ -n "$K8S_NAMESPACE" ]]; then
+    append_unique_namespace "$K8S_NAMESPACE"
+    return
+  fi
+
+  local config_path key value namespace_value
+  for config_path in "$PLATFORM_DIR/deployer.config" "$ROOT_DIR/deployer.config"; do
+    [[ -f "$config_path" ]] || continue
+
+    while IFS='=' read -r key value; do
+      key="${key//[[:space:]]/}"
+      [[ "$key" =~ ^DS_[0-9]+_NAMESPACE$ ]] || continue
+
+      namespace_value="$(printf '%s' "$value" | tr -d '[:space:]')"
+      append_unique_namespace "$namespace_value"
+    done < "$config_path"
+
+    if [[ "${#TARGET_NAMESPACES[@]}" -gt 0 ]]; then
+      break
+    fi
+  done
+
+  if [[ "${#TARGET_NAMESPACES[@]}" -eq 0 ]]; then
+    append_unique_namespace "demo"
   fi
 }
 
@@ -234,8 +305,37 @@ ensure_vault_unsealed() {
 }
 
 wait_for_connector_rollout() {
-  local deployment_name="$1"
-  run_cmd "kubectl -n \"$K8S_NAMESPACE\" rollout status deployment/\"$deployment_name\" --timeout=\"${CONNECTOR_HEALTH_TIMEOUT_SECONDS}s\""
+  local namespace="$1"
+  local deployment_name="$2"
+  run_cmd "kubectl -n \"$namespace\" rollout status deployment/\"$deployment_name\" --timeout=\"${CONNECTOR_HEALTH_TIMEOUT_SECONDS}s\""
+}
+
+wait_for_connector_rollout_with_recovery() {
+  local namespace="$1"
+  local deployment_name="$2"
+  local max_retries="$CONNECTOR_AUTO_RESTART_RETRIES"
+  local restart_attempts=0
+
+  while true; do
+    if wait_for_connector_rollout "$namespace" "$deployment_name"; then
+      return 0
+    fi
+
+    if (( restart_attempts >= max_retries )); then
+      echo "Deployment $deployment_name in namespace $namespace did not become ready after restart retries." >&2
+      return 1
+    fi
+
+    restart_attempts=$((restart_attempts + 1))
+    ROLLOUT_RECOVERY_COUNT=$((ROLLOUT_RECOVERY_COUNT + 1))
+    echo "Deployment $deployment_name in namespace $namespace did not become ready within ${CONNECTOR_HEALTH_TIMEOUT_SECONDS}s." >&2
+    echo "Attempting rollout restart (${restart_attempts}/${max_retries})..." >&2
+
+    if ! kubectl -n "$namespace" rollout restart deployment/"$deployment_name" >/dev/null; then
+      echo "Failed to restart deployment $deployment_name in namespace $namespace." >&2
+      return 1
+    fi
+  done
 }
 
 check_connector_health() {
@@ -244,6 +344,8 @@ check_connector_health() {
     return 0
   fi
 
+  local namespace="$1"
+  shift
   local -a connector_names=("$@")
   local connector_name
 
@@ -253,17 +355,23 @@ check_connector_health() {
   fi
 
   for connector_name in "${connector_names[@]}"; do
-    if ! kubectl -n "$K8S_NAMESPACE" get deployment "$connector_name" >/dev/null 2>&1; then
+    if ! kubectl -n "$namespace" get deployment "$connector_name" >/dev/null 2>&1; then
       echo "Connector deployment not found: $connector_name" >&2
       return 1
     fi
 
-    wait_for_connector_rollout "$connector_name"
+    if ! wait_for_connector_rollout_with_recovery "$namespace" "$connector_name"; then
+      return 1
+    fi
 
-    if kubectl -n "$K8S_NAMESPACE" get deployment "$connector_name-inteface" >/dev/null 2>&1; then
-      wait_for_connector_rollout "$connector_name-inteface"
-    elif kubectl -n "$K8S_NAMESPACE" get deployment "$connector_name-interface" >/dev/null 2>&1; then
-      wait_for_connector_rollout "$connector_name-interface"
+    if kubectl -n "$namespace" get deployment "$connector_name-inteface" >/dev/null 2>&1; then
+      if ! wait_for_connector_rollout_with_recovery "$namespace" "$connector_name-inteface"; then
+        return 1
+      fi
+    elif kubectl -n "$namespace" get deployment "$connector_name-interface" >/dev/null 2>&1; then
+      if ! wait_for_connector_rollout_with_recovery "$namespace" "$connector_name-interface"; then
+        return 1
+      fi
     else
       echo "Connector interface deployment not found for $connector_name (expected -inteface or -interface suffix)." >&2
       return 1
@@ -271,19 +379,55 @@ check_connector_health() {
   done
 
   local unhealthy
-  unhealthy="$(kubectl -n "$K8S_NAMESPACE" get pods --no-headers 2>/dev/null | awk '$3=="CrashLoopBackOff" || $3=="Error" || $3=="ImagePullBackOff" || $3=="ErrImagePull" || $3=="CreateContainerConfigError" || $3=="RunContainerError" {print}')"
+  unhealthy="$(kubectl -n "$namespace" get pods --no-headers 2>/dev/null | awk '$3 ~ /^Init:/ || $3=="CrashLoopBackOff" || $3=="Error" || $3=="ImagePullBackOff" || $3=="ErrImagePull" || $3=="CreateContainerConfigError" || $3=="RunContainerError" {print}')"
   if [[ -n "$unhealthy" ]]; then
-    echo "Detected unhealthy pods after deploy:" >&2
+    echo "Detected unhealthy pods after deploy in namespace $namespace:" >&2
     echo "$unhealthy" >&2
     return 1
   fi
+}
+
+print_target_namespace_pods() {
+  local namespace
+
+  echo
+  echo "== Pod status snapshot =="
+  for namespace in "${TARGET_NAMESPACES[@]}"; do
+    echo
+    echo "-- kubectl get pods -n $namespace --"
+    if ! kubectl get pods -n "$namespace"; then
+      echo "Could not retrieve pods for namespace $namespace" >&2
+    fi
+  done
 }
 
 resolve_manifest() {
   if [[ -n "$MANIFEST_FILE" ]]; then
     return
   fi
-  MANIFEST_FILE="$(ls -1t "$MANIFESTS_DIR"/images-*.tsv 2>/dev/null | head -n 1 || true)"
+
+  local candidate
+  while IFS= read -r candidate; do
+    [[ -f "$candidate" ]] || continue
+
+    if manifest_supports_active_components "$candidate"; then
+      MANIFEST_FILE="$candidate"
+      return
+    fi
+  done < <(ls -1t "$MANIFESTS_DIR"/images-*.tsv 2>/dev/null || true)
+}
+
+manifest_supports_active_components() {
+  local manifest="$1"
+  local component
+
+  for component in "${ACTIVE_COMPONENTS[@]}"; do
+    if ! awk -F $'\t' -v target="$component" 'NR > 1 && $1 == target {found=1; exit} END {exit(found ? 0 : 1)}' "$manifest"; then
+      return 1
+    fi
+  done
+
+  return 0
 }
 
 require_file() {
@@ -294,13 +438,17 @@ require_file() {
   fi
 }
 
+resolve_target_namespaces
+
 echo "Mode: $([[ "$DRY_RUN" -eq 1 ]] && echo "dry-run" || echo "apply")"
 echo "Platform dir: $PLATFORM_DIR"
-echo "K8s namespace: $K8S_NAMESPACE"
+echo "Target namespaces: ${TARGET_NAMESPACES[*]}"
 echo "Minikube profile: $MINIKUBE_PROFILE"
 echo "Local image prefix: $LOCAL_REGISTRY_HOST/$LOCAL_NAMESPACE"
 echo "Component filter: ${ONLY_COMPONENT:-all}"
 echo "Skip pre-build: $([[ "$SKIP_PREBUILD" -eq 1 ]] && echo "yes" || echo "no")"
+echo "Connector health timeout (s): $CONNECTOR_HEALTH_TIMEOUT_SECONDS"
+echo "Connector auto-restart retries: $CONNECTOR_AUTO_RESTART_RETRIES"
 
 if [[ "$RUN_BUILD" -eq 1 ]]; then
   echo
@@ -321,7 +469,8 @@ fi
 
 resolve_manifest
 if [[ -z "$MANIFEST_FILE" ]]; then
-  echo "No manifest found. Run build_images.sh first or pass --manifest." >&2
+  echo "No compatible manifest found for components: ${ACTIVE_COMPONENTS[*]}" >&2
+  echo "Run build_images.sh first or pass --manifest with all required components." >&2
   exit 1
 fi
 require_file "$MANIFEST_FILE"
@@ -350,12 +499,6 @@ for key in "${ACTIVE_COMPONENTS[@]}"; do
   run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$full_image\""
 done
 
-if [[ -n "$ONLY_COMPONENT" && "$RUN_DEPLOY" -eq 1 ]]; then
-  echo "Deploy for a single component is not supported yet." >&2
-  echo "Use --skip-deploy with --component, or run without --component for full deploy." >&2
-  exit 1
-fi
-
 if [[ "$RUN_DEPLOY" -eq 0 ]]; then
   echo
   echo "Deploy step skipped (--skip-deploy)."
@@ -373,34 +516,53 @@ CONNECTOR_OVERRIDE="$OVERRIDES_DIR/connector-local-overrides.yaml"
 RS_OVERRIDE="$OVERRIDES_DIR/registration-local-overrides.yaml"
 PP_OVERRIDE="$OVERRIDES_DIR/public-portal-local-overrides.yaml"
 
-cat > "$CONNECTOR_OVERRIDE" <<EOF
+: > "$CONNECTOR_OVERRIDE"
+if [[ -n "${IMAGE_BY_COMPONENT[connector]:-}" ]]; then
+  cat >> "$CONNECTOR_OVERRIDE" <<EOF
 connector:
   image:
     name: ${IMAGE_BY_COMPONENT[connector]%:*}
     tag: ${IMAGE_BY_COMPONENT[connector]##*:}
+EOF
+fi
+if [[ -n "${IMAGE_BY_COMPONENT[connector-interface]:-}" ]]; then
+  [[ -s "$CONNECTOR_OVERRIDE" ]] && printf '\n' >> "$CONNECTOR_OVERRIDE"
+  cat >> "$CONNECTOR_OVERRIDE" <<EOF
 connectorInterface:
   image:
     name: ${IMAGE_BY_COMPONENT[connector-interface]%:*}
     tag: ${IMAGE_BY_COMPONENT[connector-interface]##*:}
 EOF
+fi
 
-cat > "$RS_OVERRIDE" <<EOF
+: > "$RS_OVERRIDE"
+if [[ -n "${IMAGE_BY_COMPONENT[registration-service]:-}" ]]; then
+  cat >> "$RS_OVERRIDE" <<EOF
 registration:
   image:
     name: ${IMAGE_BY_COMPONENT[registration-service]%:*}
     tag: ${IMAGE_BY_COMPONENT[registration-service]##*:}
 EOF
+fi
 
-cat > "$PP_OVERRIDE" <<EOF
+: > "$PP_OVERRIDE"
+if [[ -n "${IMAGE_BY_COMPONENT[public-portal-backend]:-}" ]]; then
+  cat >> "$PP_OVERRIDE" <<EOF
 backend:
   image:
     name: ${IMAGE_BY_COMPONENT[public-portal-backend]%:*}
     tag: ${IMAGE_BY_COMPONENT[public-portal-backend]##*:}
+EOF
+fi
+if [[ -n "${IMAGE_BY_COMPONENT[public-portal-frontend]:-}" ]]; then
+  [[ -s "$PP_OVERRIDE" ]] && printf '\n' >> "$PP_OVERRIDE"
+  cat >> "$PP_OVERRIDE" <<EOF
 frontend:
   image:
     name: ${IMAGE_BY_COMPONENT[public-portal-frontend]%:*}
     tag: ${IMAGE_BY_COMPONENT[public-portal-frontend]##*:}
 EOF
+fi
 
 echo
 echo "== Helm upgrade (local images) =="
@@ -411,41 +573,53 @@ if ! ensure_vault_unsealed; then
   exit 1
 fi
 
-RS_BASE_VALUES="$PLATFORM_DIR/dataspace/registration-service/values-$K8S_NAMESPACE.yaml"
-PP_BASE_VALUES="$PLATFORM_DIR/dataspace/public-portal/values-$K8S_NAMESPACE.yaml"
 CONNECTOR_DIR="$PLATFORM_DIR/connector"
 
-require_file "$RS_BASE_VALUES"
-require_file "$PP_BASE_VALUES"
-
-run_cmd "helm upgrade --install \"$K8S_NAMESPACE-dataspace-rs\" \"$PLATFORM_DIR/dataspace/registration-service\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$RS_BASE_VALUES\" -f \"$RS_OVERRIDE\""
-run_cmd "helm upgrade --install \"$K8S_NAMESPACE-dataspace-pp\" \"$PLATFORM_DIR/dataspace/public-portal\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$PP_BASE_VALUES\" -f \"$PP_OVERRIDE\""
-
-connector_values=()
-while IFS= read -r file; do
-  connector_values+=("$file")
-done < <(find "$CONNECTOR_DIR" -maxdepth 1 -type f -name "values-*.yaml" ! -name "values.yaml" ! -name "values.yaml.tpl" | sort)
-
-if [[ "${#connector_values[@]}" -eq 0 ]]; then
-  echo "No connector values files found in $CONNECTOR_DIR"
-else
-  connector_names=()
-  for values_file in "${connector_values[@]}"; do
-    connector_name="$(basename "$values_file")"
-    connector_name="${connector_name#values-}"
-    connector_name="${connector_name%.yaml}"
-    connector_names+=("$connector_name")
-    release_name="${connector_name}-${K8S_NAMESPACE}"
-    run_cmd "helm upgrade --install \"$release_name\" \"$CONNECTOR_DIR\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$values_file\" -f \"$CONNECTOR_OVERRIDE\""
-  done
-
+for target_namespace in "${TARGET_NAMESPACES[@]}"; do
   echo
-  echo "Checking connector rollout health..."
-  if ! check_connector_health "${connector_names[@]}"; then
-    echo "Connector health check failed." >&2
-    exit 1
+  echo "-- Namespace: $target_namespace --"
+
+  RS_BASE_VALUES="$PLATFORM_DIR/dataspace/registration-service/values-$target_namespace.yaml"
+  PP_BASE_VALUES="$PLATFORM_DIR/dataspace/public-portal/values-$target_namespace.yaml"
+
+  if [[ "$DEPLOY_REGISTRATION" -eq 1 ]]; then
+    require_file "$RS_BASE_VALUES"
+    run_cmd "helm upgrade --install \"$target_namespace-dataspace-rs\" \"$PLATFORM_DIR/dataspace/registration-service\" -n \"$target_namespace\" --create-namespace -f \"$RS_BASE_VALUES\" -f \"$RS_OVERRIDE\""
   fi
-fi
+
+  if [[ "$DEPLOY_PUBLIC_PORTAL" -eq 1 ]]; then
+    require_file "$PP_BASE_VALUES"
+    run_cmd "helm upgrade --install \"$target_namespace-dataspace-pp\" \"$PLATFORM_DIR/dataspace/public-portal\" -n \"$target_namespace\" --create-namespace -f \"$PP_BASE_VALUES\" -f \"$PP_OVERRIDE\""
+  fi
+
+  if [[ "$DEPLOY_CONNECTORS" -eq 1 ]]; then
+    connector_values=()
+    while IFS= read -r file; do
+      connector_values+=("$file")
+    done < <(find "$CONNECTOR_DIR" -maxdepth 1 -type f -name "values-*-$target_namespace.yaml" ! -name "values.yaml" ! -name "values.yaml.tpl" | sort)
+
+    if [[ "${#connector_values[@]}" -eq 0 ]]; then
+      echo "No connector values files found in $CONNECTOR_DIR for namespace $target_namespace"
+    else
+      connector_names=()
+      for values_file in "${connector_values[@]}"; do
+        connector_name="$(basename "$values_file")"
+        connector_name="${connector_name#values-}"
+        connector_name="${connector_name%.yaml}"
+        connector_names+=("$connector_name")
+        release_name="${connector_name}-${target_namespace}"
+        run_cmd "helm upgrade --install \"$release_name\" \"$CONNECTOR_DIR\" -n \"$target_namespace\" --create-namespace -f \"$values_file\" -f \"$CONNECTOR_OVERRIDE\""
+      done
+
+      echo
+      echo "Checking connector rollout health in namespace $target_namespace..."
+      if ! check_connector_health "$target_namespace" "${connector_names[@]}"; then
+        echo "Connector health check failed in namespace $target_namespace." >&2
+        exit 1
+      fi
+    fi
+  fi
+done
 
 echo
 echo "Ensuring Vault is still unsealed after Helm upgrade..."
@@ -455,4 +629,10 @@ if ! ensure_vault_unsealed; then
 fi
 
 echo
-echo "Local build/load/deploy workflow complete."
+if [[ "$ROLLOUT_RECOVERY_COUNT" -gt 0 ]]; then
+  echo "Local build/load/deploy workflow complete with auto-recoveries: $ROLLOUT_RECOVERY_COUNT rollout restart(s)."
+else
+  echo "Local build/load/deploy workflow complete."
+fi
+
+print_target_namespace_pods

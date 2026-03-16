@@ -314,7 +314,7 @@ def manage_hosts_entries(desired_entries):
         choice = "Y"
         print("\n[AUTO_MODE] Automatically adding entries to hosts file")
     else:
-        choice = input("\nAdd missing entries to hosts file? (Y/N): ").strip().upper()
+        choice = input("\nAdd missing entries to hosts file? (Y/N, default: Y): ").strip().upper() or "Y"
     
     if choice != "Y":
         print("No changes made to hosts file")
@@ -1289,7 +1289,7 @@ def lvl_4():
         print("\nConnector validation failed.")
 
         if not AUTO_MODE:
-            inspect_logs = input("\nDo you want to inspect connector logs? (Y/N): ").strip().upper()
+            inspect_logs = input("\nDo you want to inspect connector logs? (Y/N, default: Y): ").strip().upper() or "Y"
             if inspect_logs == "Y":
                 print()
                 show_connector_logs()
@@ -1897,7 +1897,7 @@ def run_all_levels():
         print("[AUTO_MODE] Starting automatic deployment...\n")
         confirm = "Y"
     else:
-        confirm = input("Continue with full deployment? (Y/N): ").strip().upper()
+        confirm = input("Continue with full deployment? (Y/N, default: Y): ").strip().upper() or "Y"
 
     if confirm != "Y":
         print("\nFull deployment cancelled\n")
@@ -1931,7 +1931,7 @@ def run_all_levels():
                 print("[AUTO_MODE] Stopping automatic deployment after failure to avoid cascading errors.\n")
                 break
 
-            retry = input("Continue with next level? (Y/N): ").strip().upper()
+            retry = input("Continue with next level? (Y/N, default: Y): ").strip().upper() or "Y"
             if retry != "Y":
                 print("\nFull deployment stopped by user\n")
                 break
@@ -1969,6 +1969,114 @@ LEVELS = {
     "4": lvl_4,
     "5": lvl_5
 }
+
+LOCAL_WORKFLOW_SCRIPT_REL_PATH = os.path.join(
+    "adapters", "inesdata", "scripts", "local_build_load_deploy.sh"
+)
+
+
+
+def _extract_repo_dir_from_adapter_config(config_path):
+    """Read REPO_DIR constant from adapter config.py without importing the module."""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return None
+
+    match = re.search(
+        r'^\s*REPO_DIR\s*=\s*["\']([^"\']+)["\']',
+        content,
+        re.MULTILINE,
+    )
+    if not match:
+        return None
+
+    repo_dir = match.group(1).strip()
+    return repo_dir or None
+
+
+def _detect_platform_dirs_from_adapter_configs():
+    """Detect platform directories from adapter REPO_DIR values and validate they exist."""
+    adapters_dir = os.path.join(Config.script_dir(), "adapters")
+    platform_dirs = []
+    seen = set()
+
+    if os.path.isdir(adapters_dir):
+        for adapter_name in sorted(os.listdir(adapters_dir)):
+            config_path = os.path.join(adapters_dir, adapter_name, "config.py")
+            if not os.path.isfile(config_path):
+                continue
+
+            repo_dir = _extract_repo_dir_from_adapter_config(config_path)
+            if not repo_dir or repo_dir in seen:
+                continue
+
+            repo_abs_path = os.path.join(Config.script_dir(), repo_dir)
+            if os.path.isdir(repo_abs_path):
+                platform_dirs.append(repo_dir)
+                seen.add(repo_dir)
+
+    default_repo_dir = getattr(InesdataConfig, "REPO_DIR", None)
+    if default_repo_dir and os.path.isdir(os.path.join(Config.script_dir(), default_repo_dir)):
+        if default_repo_dir in platform_dirs:
+            platform_dirs.remove(default_repo_dir)
+        platform_dirs.insert(0, default_repo_dir)
+
+    return platform_dirs
+
+
+def _confirm_local_workflow():
+    """Ask for confirmation before execution."""
+    while True:
+        try:
+            confirm = input("\nConfirm execution? (Y/N, default: Y): ").strip().upper() or "Y"
+        except EOFError:
+            return False
+
+        if confirm in ("Y", "N"):
+            return confirm == "Y"
+
+        print("Please answer Y or N.")
+
+
+def _execute_local_images_workflow(extra_args):
+    """Execute local build/load/deploy script with --apply and provided args."""
+    script_path = os.path.join(Config.script_dir(), LOCAL_WORKFLOW_SCRIPT_REL_PATH)
+    if not os.path.isfile(script_path):
+        print(f"\nLocal workflow script not found: {script_path}\n")
+        return False
+
+    command = ["bash", script_path, "--apply", *extra_args]
+
+    print(f"\nLaunching local workflow: {' '.join(command)}\n")
+    result = subprocess.run(command, cwd=Config.script_dir())
+
+    if result.returncode == 0:
+        print("\nWorkflow completed successfully.\n")
+        return True
+
+    print("\nWorkflow failed. Check logs above.\n")
+    return False
+
+
+def run_local_images_workflow_interactive():
+    """Build and deploy local images (Full mode)."""
+    platform_dirs = _detect_platform_dirs_from_adapter_configs()
+
+    if not platform_dirs:
+        print("\nNo platform dir detected from adapter REPO_DIR values.\n")
+        return None
+
+    platform_dir = platform_dirs[0]
+
+    if not _confirm_local_workflow():
+        print("\nExecution cancelled.\n")
+        return None
+
+    _execute_local_images_workflow([
+        "--platform-dir", platform_dir,
+    ])
 
 
 def run_new_cli_interactive():
@@ -2040,6 +2148,7 @@ def show_menu():
     - 0: Run all levels (1-5) sequentially
     - 1-5: Run individual levels
     - N: Launch new framework CLI
+    - L: Build and deploy local images
     - Q: Exit application
     """
     while True:
@@ -2056,6 +2165,8 @@ def show_menu():
         print("5 - Level 5: Run Validation Tests")
         print("\n[Modern CLI]")
         print("N - Use new framework CLI")
+        print("\n[Developer]")
+        print("L - Build and Deploy Local Images")
         print("\n[Control]")
         print("Q - Exit")
         print("="*50)
@@ -2081,6 +2192,11 @@ def show_menu():
                 run_new_cli_interactive()
             except KeyboardInterrupt:
                 print("\n\nCLI execution cancelled by user\n")
+        elif choice == "L":
+            try:
+                run_local_images_workflow_interactive()
+            except KeyboardInterrupt:
+                print("\n\nBuild and deploy local images cancelled by user\n")
         elif choice in LEVELS:
             try:
                 LEVELS[choice]()
