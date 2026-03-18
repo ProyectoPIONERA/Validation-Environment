@@ -378,6 +378,18 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
+    def _is_ignored_transient_hook_pod(self, namespace, pod_name):
+        if "keycloak-config-cli" in pod_name:
+            return True
+
+        if namespace != "ingress-nginx":
+            return False
+
+        return (
+            pod_name.startswith("ingress-nginx-admission-create-")
+            or pod_name.startswith("ingress-nginx-admission-patch-")
+        )
+
     def wait_for_pods(self, namespace, timeout=None):
         timeout = timeout or self.config.TIMEOUT_POD_WAIT
         print(f"\nWaiting for pods in namespace '{namespace}' to be ready...")
@@ -391,12 +403,16 @@ class INESDataInfrastructureAdapter:
                 continue
 
             all_ready = True
+            observed_relevant_pod = False
 
             for line in result.splitlines():
                 columns = line.split()
                 name = columns[0]
                 ready = columns[1] if len(columns) > 1 else ""
                 status = columns[2]
+
+                if self._is_ignored_transient_hook_pod(namespace, name):
+                    continue
 
                 if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
                     print(f"\nPod in error state: {name} ({status})")
@@ -405,6 +421,8 @@ class INESDataInfrastructureAdapter:
 
                 if status == "Completed":
                     continue
+
+                observed_relevant_pod = True
 
                 if status != "Running":
                     all_ready = False
@@ -419,7 +437,7 @@ class INESDataInfrastructureAdapter:
                 if not ready:
                     all_ready = False
 
-            if all_ready:
+            if all_ready and observed_relevant_pod:
                 print("\nAll pods are running and ready\n")
                 self.run(f"kubectl get pods -n {namespace}", check=False)
                 return True
@@ -445,8 +463,12 @@ class INESDataInfrastructureAdapter:
                     columns = line.split()
                     if len(columns) < 3:
                         continue
+                    name = columns[0]
                     ready = columns[1] if len(columns) > 1 else ""
                     status = columns[2]
+
+                    if self._is_ignored_transient_hook_pod(namespace, name):
+                        continue
 
                     if status == "Completed":
                         continue
@@ -560,6 +582,9 @@ class INESDataInfrastructureAdapter:
                     ready = columns[1] if len(columns) > 1 else ""
                     status = columns[2]
 
+                    if self._is_ignored_transient_hook_pod(namespace, name):
+                        continue
+
                     # Ignore completed hook/job pods so they do not replace the
                     # long-lived service pod we actually want to observe.
                     if status == "Completed":
@@ -570,7 +595,7 @@ class INESDataInfrastructureAdapter:
                         self.run(f"kubectl get pods -n {namespace}", check=False)
                         return False
 
-                    if status == "Error" and "keycloak-config-cli" not in name:
+                    if status == "Error" and not self._is_ignored_transient_hook_pod(namespace, name):
                         print(f"\nPod in error state: {name} ({status})")
                         self.run(f"kubectl get pods -n {namespace}", check=False)
                         return False
@@ -617,7 +642,7 @@ class INESDataInfrastructureAdapter:
                     vault_running = expected["vault"] is not None and expected["vault"]["status"] == "Running"
 
                 if all_present and all_ready and vault_running:
-                    print("\nLevel 2 core services detected:")
+                    print("\nCore services detected:")
                     self.run(f"kubectl get pods -n {namespace}", check=False)
                     return True
 
@@ -625,7 +650,7 @@ class INESDataInfrastructureAdapter:
                     print(f"Waiting past transient hook state: {transient_error}")
 
             if time.time() - start_time > timeout:
-                print("\nTimeout waiting for Level 2 core services\n")
+                print("\nTimeout waiting for core services\n")
                 self.run(f"kubectl get pods -n {namespace}", check=False)
                 return False
 
@@ -1165,13 +1190,22 @@ class INESDataInfrastructureAdapter:
                 continue
 
             unhealthy = []
+            relevant_pods = []
             for pod in snapshot:
-                # Ignore transient Keycloak config CLI jobs. Level 2 already
-                # tolerates their intermediate Error state while the chart
-                # retries the hook, so the stability window must do the same.
-                if "keycloak-config-cli" in pod["name"]:
+                # Ignore known transient hook jobs so the stability window
+                # tracks the long-lived service pods instead.
+                if self._is_ignored_transient_hook_pod(namespace, pod["name"]):
                     continue
 
+                relevant_pods.append(pod)
+
+            if not relevant_pods:
+                last_issue = f"no relevant pods found in namespace '{namespace}'"
+                stable_since = None
+                time.sleep(poll_interval)
+                continue
+
+            for pod in relevant_pods:
                 if pod["status"] not in ("Running", "Completed"):
                     unhealthy.append(f"{pod['name']} ({pod['status']})")
                     continue
@@ -1354,7 +1388,11 @@ class INESDataInfrastructureAdapter:
         if not common_services_deployed and not self._common_services_release_recoverable_after_helm_failure():
             self._fail("Error deploying common services")
 
-        if not self.wait_for_level2_service_pods(self.config.NS_COMMON):
+        # Keycloak can take noticeably longer than PostgreSQL/MinIO on fresh
+        # installs, so give the pre-Vault readiness check the same minimum
+        # budget we already use for the final Level 2 verification.
+        pre_vault_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+        if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=pre_vault_timeout):
             self._fail(
                 "Services did not reach the pre-Vault-ready state",
                 root_cause="Keycloak, MinIO and PostgreSQL must be 1/1 Running, and Vault must exist in Running state before setup",

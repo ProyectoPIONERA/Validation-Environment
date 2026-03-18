@@ -68,7 +68,7 @@ class NewmanMetricsTests(unittest.TestCase):
 
         with mock.patch.object(executor, "load_test_scripts", return_value="pm.test('ok')"):
             report_path = executor.run_newman(
-                "validation/collections/01_environment_health.json",
+                "validation/core/collections/01_environment_health.json",
                 {"provider": "conn-a"},
                 report_path="experiments/exp-1/newman_reports/report.json",
             )
@@ -84,7 +84,11 @@ class NewmanMetricsTests(unittest.TestCase):
         executor = NewmanExecutor()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch.object(executor, "run_newman", side_effect=lambda path, env, report_path=None: report_path):
+            with mock.patch.object(
+                executor,
+                "run_newman",
+                side_effect=lambda path, env, report_path=None, environment_path=None: report_path,
+            ):
                 reports = executor.run_validation_collections({"provider": "conn-a"}, report_dir=tmpdir)
 
         self.assertEqual(len(reports), 6)
@@ -463,6 +467,7 @@ class NewmanMetricsTests(unittest.TestCase):
                 "KC_INTERNAL_URL": "http://keycloak.local",
             },
             cleanup_test_entities=lambda connector: None,
+            validation_test_entities_absent=lambda connector: (True, []),
             ds_domain_resolver=lambda: "example.local",
             ds_name="demo",
         )

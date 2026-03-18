@@ -1,6 +1,8 @@
 import json
 import os
 
+from ..experiment_storage import ExperimentStorage
+
 
 class ExperimentLoader:
     """Load persisted experiment artifacts."""
@@ -20,7 +22,7 @@ class ExperimentLoader:
     def experiment_dir(experiment_id):
         if os.path.isdir(experiment_id):
             return experiment_id
-        return os.path.join("experiments", experiment_id)
+        return os.path.join(ExperimentStorage.experiments_base_dir(), experiment_id)
 
     @classmethod
     def load(cls, experiment_id):

@@ -194,6 +194,36 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Helm reported a post-install failure", rendered)
         self.assertIn("LEVEL 2 COMPLETE", rendered)
 
+    def test_deploy_infrastructure_uses_extended_pre_vault_timeout_for_service_readiness(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure.config.TIMEOUT_POD_WAIT = 120
+
+        seen = {}
+
+        def fake_wait_for_level2_service_pods(*args, **kwargs):
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+            return True
+
+        infrastructure.wait_for_level2_service_pods = fake_wait_for_level2_service_pods
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure()
+
+        self.assertEqual(seen["args"][0], infrastructure.config.NS_COMMON)
+        self.assertEqual(seen["kwargs"]["timeout"], 180)
+
     def test_deploy_dataspace_prints_complete_when_successful(self):
         infrastructure = self._make_infrastructure()
         deployment = INESDataDeploymentAdapter(
@@ -268,7 +298,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
             result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
 
         self.assertTrue(result)
-        self.assertIn("Level 2 core services detected", output.getvalue())
+        self.assertIn("Core services detected", output.getvalue())
 
     def test_wait_for_level2_service_pods_ignores_completed_hook_pods(self):
         infrastructure = self._make_infrastructure()
@@ -290,7 +320,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
             result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
 
         self.assertTrue(result)
-        self.assertIn("Level 2 core services detected", output.getvalue())
+        self.assertIn("Core services detected", output.getvalue())
 
     def test_wait_for_level2_service_pods_requires_vault_readiness_for_final_check(self):
         infrastructure = self._make_infrastructure()
@@ -318,6 +348,28 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertNotIn("Level 2 core services detected", output.getvalue())
+
+    def test_wait_for_level2_service_pods_ignores_keycloak_config_cli_error(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-keycloak-config-cli-abcde 0/1 Error 1 10s",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
+
+        self.assertTrue(result)
+        self.assertIn("Core services detected", output.getvalue())
 
     def test_deploy_infrastructure_uses_short_timeout_for_first_common_services_install(self):
         infrastructure = self._make_infrastructure()
@@ -370,6 +422,93 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.deploy_infrastructure()
 
         self.assertIsNone(seen.get("timeout_seconds"))
+
+    def test_wait_for_pods_ignores_ingress_nginx_admission_hook_jobs(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "ingress-nginx-admission-create-sbjn6 0/1 Completed 0 1m",
+                "ingress-nginx-admission-patch-8jwl2 0/1 Error 3 1m",
+                "ingress-nginx-controller-596f8778bc-62hpq 0/1 Running 0 1m",
+            ]),
+            "\n".join([
+                "ingress-nginx-admission-create-sbjn6 0/1 Completed 0 1m",
+                "ingress-nginx-admission-patch-8jwl2 0/1 Error 3 1m",
+                "ingress-nginx-controller-596f8778bc-62hpq 1/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+            return_value=None,
+        ):
+            result = infrastructure.wait_for_pods("ingress-nginx", timeout=1)
+
+        self.assertTrue(result)
+        self.assertIn("All pods are running and ready", output.getvalue())
+
+    def test_wait_for_namespace_stability_ignores_ingress_nginx_admission_hook_jobs(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.TIMEOUT_NAMESPACE = 1
+        infrastructure._pod_snapshot = lambda *_args, **_kwargs: [
+            {
+                "name": "ingress-nginx-admission-create-sbjn6",
+                "ready": "0/1",
+                "status": "Completed",
+                "restarts": "0",
+            },
+            {
+                "name": "ingress-nginx-admission-patch-8jwl2",
+                "ready": "0/1",
+                "status": "Error",
+                "restarts": "3",
+            },
+            {
+                "name": "ingress-nginx-controller-596f8778bc-62hpq",
+                "ready": "1/1",
+                "status": "Running",
+                "restarts": "0",
+            },
+        ]
+
+        clock = iter([0.0, 0.0, 0.01, 0.02, 0.03])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.infrastructure.time.time",
+            side_effect=lambda: next(clock),
+        ), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+            return_value=None,
+        ):
+            result = infrastructure.wait_for_namespace_stability(
+                "ingress-nginx",
+                duration=0.01,
+                poll_interval=0,
+            )
+
+        self.assertTrue(result)
+        self.assertIn("Namespace 'ingress-nginx' is stable", output.getvalue())
+
+    def test_wait_for_namespace_pods_ignores_keycloak_config_cli_error(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.TIMEOUT_NAMESPACE = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-config-cli-abcde 0/1 Error 1 10s",
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_namespace_pods("common", timeout=1)
+
+        self.assertTrue(result)
+        self.assertIn("Pods ready:", output.getvalue())
 
 
 if __name__ == "__main__":

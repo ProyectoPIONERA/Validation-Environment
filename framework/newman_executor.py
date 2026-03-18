@@ -55,22 +55,22 @@ class NewmanExecutor:
     def load_test_scripts(self, collection_name):
         scripts = []
 
-        scripts.append(self._load_file("validation/tests/common_tests.js"))
+        scripts.append(self._load_file("validation/shared/api/common_tests.js"))
 
         if "management" in collection_name:
-            scripts.append(self._load_file("validation/tests/management_tests.js"))
+            scripts.append(self._load_file("validation/core/tests/management_tests.js"))
 
         if "provider" in collection_name:
-            scripts.append(self._load_file("validation/tests/provider_tests.js"))
+            scripts.append(self._load_file("validation/core/tests/provider_tests.js"))
 
         if "catalog" in collection_name:
-            scripts.append(self._load_file("validation/tests/catalog_tests.js"))
+            scripts.append(self._load_file("validation/core/tests/catalog_tests.js"))
 
         if "negotiation" in collection_name:
-            scripts.append(self._load_file("validation/tests/negotiation_tests.js"))
+            scripts.append(self._load_file("validation/core/tests/negotiation_tests.js"))
 
         if "transfer" in collection_name:
-            scripts.append(self._load_file("validation/tests/transfer_tests.js"))
+            scripts.append(self._load_file("validation/core/tests/transfer_tests.js"))
 
         return "\n".join(scripts)
 
@@ -159,7 +159,7 @@ class NewmanExecutor:
 
     def run_validation_collections(self, env_vars, report_dir=None):
         """Run all validation collections in sequence and optionally export JSON reports."""
-        base = os.path.join("validation", "collections")
+        base = os.path.join("validation", "core", "collections")
 
         collections = [
             "01_environment_health.json",

@@ -7,9 +7,17 @@ class ExperimentStorage:
     """Persist experiment artifacts under experiments/<experiment_id>/."""
 
     @staticmethod
+    def project_root():
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    @classmethod
+    def experiments_base_dir(cls):
+        return os.path.join(cls.project_root(), "experiments")
+
+    @staticmethod
     def create_experiment_directory():
         """Create a unique timestamped directory for experiment results."""
-        base_dir = "experiments"
+        base_dir = ExperimentStorage.experiments_base_dir()
         os.makedirs(base_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -182,7 +190,7 @@ class ExperimentStorage:
     @staticmethod
     def create_comparison_directory(experiment_a, experiment_b):
         """Create a unique directory for experiment comparisons."""
-        base_dir = os.path.join("experiments", "comparisons")
+        base_dir = os.path.join(ExperimentStorage.experiments_base_dir(), "comparisons")
         os.makedirs(base_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         safe_a = os.path.basename(os.path.normpath(str(experiment_a)))
