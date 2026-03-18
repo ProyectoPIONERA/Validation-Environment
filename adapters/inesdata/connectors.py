@@ -213,6 +213,11 @@ class INESDataConnectorsAdapter:
                 if response.status_code == 200:
                     print(f"Management API ready: {connector_name}")
                     return True
+                if response.status_code == 401:
+                    last_issue = "HTTP 401"
+                    self.invalidate_management_api_token(connector_name)
+                    time.sleep(poll_interval)
+                    continue
                 last_issue = f"HTTP {response.status_code}"
             except Exception as exc:
                 last_issue = str(exc)
@@ -303,6 +308,9 @@ class INESDataConnectorsAdapter:
             return token
         except Exception:
             return None
+
+    def invalidate_management_api_token(self, connector):
+        self._management_token_cache.pop(connector, None)
 
     def get_management_api_headers(self, connector):
         """Build bearer-authenticated headers for the connector Management API."""
@@ -597,13 +605,6 @@ class INESDataConnectorsAdapter:
             print("Python environment not found. Run Level 3 first")
             return
 
-        print("Ensuring INESData Python dependencies...")
-        ensure_python_requirements(
-            python_exec,
-            self.config.repo_requirements_path(),
-            label="INESData runtime",
-        )
-
         if not self.infrastructure.ensure_local_infra_access():
             return
 
@@ -651,6 +652,7 @@ class INESDataConnectorsAdapter:
             return
 
         creds_path = self.config.connector_credentials_path(connector_name)
+        self.invalidate_management_api_token(connector_name)
         if not self.setup_minio_bucket(self.config.NS_COMMON, ds_name, connector_name, creds_path):
             print("Warning: MinIO configuration incomplete")
 
@@ -706,6 +708,36 @@ class INESDataConnectorsAdapter:
                 print(f"Connector pod unhealthy: {pod_name} ({status})")
                 return False
 
+        return False
+
+    def connector_database_credentials_valid(self, connector_name):
+        creds = self.load_connector_credentials(connector_name)
+        if not creds:
+            print(f"Connector credentials not found: {connector_name}")
+            return False
+
+        db_creds = creds.get("database", {})
+        db_name = db_creds.get("name")
+        db_user = db_creds.get("user")
+        db_password = db_creds.get("passwd")
+        pg_host, _, _ = self.config_adapter.get_pg_credentials()
+
+        if not db_name or not db_user or not db_password:
+            print(f"Incomplete database credentials for connector: {connector_name}")
+            return False
+
+        result = self.run_silent(
+            f"PGPASSWORD={db_password} "
+            f"psql -h {pg_host} -U {db_user} -d {db_name} -t -A -c \"SELECT 1;\""
+        )
+
+        if result and result.strip() == "1":
+            return True
+
+        print(
+            f"Connector database credentials are stale or invalid: {connector_name} "
+            f"(database={db_name}, user={db_user})"
+        )
         return False
 
     def validate_connectors_deployment(self, connectors):
@@ -791,6 +823,24 @@ class INESDataConnectorsAdapter:
         print("DEPLOY CONNECTORS FROM CONFIG")
         print("========================================\n")
 
+        repo_dir = self.config.repo_dir()
+        python_exec = self.config.python_exec()
+
+        if not os.path.exists(repo_dir):
+            print("Repository not found. Run Level 2 first")
+            return []
+
+        if not os.path.exists(self.config.venv_path()):
+            print("Python environment not found. Run Level 3 first")
+            return []
+
+        print("Ensuring INESData Python dependencies...")
+        ensure_python_requirements(
+            python_exec,
+            self.config.repo_requirements_path(),
+            label="INESData runtime",
+        )
+
         dataspaces = self.load_dataspace_connectors()
         if not dataspaces:
             print("No dataspaces defined in deployer.config")
@@ -811,11 +861,14 @@ class INESDataConnectorsAdapter:
                 all_connectors.add(connector)
 
                 if self.connector_already_exists(connector, namespace):
-                    if self.connector_is_healthy(connector, namespace):
+                    if (
+                        self.connector_is_healthy(connector, namespace)
+                        and self.connector_database_credentials_valid(connector)
+                    ):
                         print(f"Connector already running: {connector}")
                         print("Skipping deployment\n")
                         continue
-                    print(f"Connector exists but unhealthy. Redeploying: {connector}")
+                    print(f"Connector exists but is unhealthy or stale. Redeploying: {connector}")
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)

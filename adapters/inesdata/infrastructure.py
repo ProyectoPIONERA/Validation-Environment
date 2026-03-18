@@ -535,7 +535,7 @@ class INESDataInfrastructureAdapter:
     def wait_for_level2_service_pods(self, namespace=None, timeout=None, require_vault_ready=False):
         namespace = namespace or self.config.NS_COMMON
         timeout = timeout or self.config.TIMEOUT_POD_WAIT
-        print(f"\nWaiting for Level 2 core services in namespace '{namespace}'...")
+        print(f"\nWaiting for core services in namespace '{namespace}'...")
         start_time = time.time()
         expected_prefixes = (
             "common-srvs-keycloak-",
@@ -1166,6 +1166,12 @@ class INESDataInfrastructureAdapter:
 
             unhealthy = []
             for pod in snapshot:
+                # Ignore transient Keycloak config CLI jobs. Level 2 already
+                # tolerates their intermediate Error state while the chart
+                # retries the hook, so the stability window must do the same.
+                if "keycloak-config-cli" in pod["name"]:
+                    continue
+
                 if pod["status"] not in ("Running", "Completed"):
                     unhealthy.append(f"{pod['name']} ({pod['status']})")
                     continue
