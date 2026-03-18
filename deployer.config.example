@@ -19,3 +19,11 @@ MINIO_PASSWORD=CHANGE_ME
 DS_1_NAME=demo
 DS_1_NAMESPACE=demo
 DS_1_CONNECTORS=citycouncil,company
+
+# Optional (Level 5): deploy extra components via Helm charts in inesdata-deployment/components/*
+#COMPONENTS=ontology-hub
+
+# Optional (Level 5): advanced overrides (normally NOT required)
+#ONTOLOGY_HUB_SOURCE_DIR=../Ontology-Hub
+#LEVEL5_AUTO_BUILD_LOCAL_IMAGES=true
+#MINIKUBE_PROFILE=minikube

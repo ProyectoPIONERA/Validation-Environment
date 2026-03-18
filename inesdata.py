@@ -1296,7 +1296,7 @@ def lvl_4():
         else:
             print("[AUTO_MODE] Skipping log inspection")
 
-        raise RuntimeError("Level 4 connectors were not stable enough for Level 5")
+        raise RuntimeError("Level 4 connectors were not stable enough for Level 6")
 
     print("\nStarting latency measurements...\n")
     METRICS_COLLECTOR.measure_all_connectors(all_connectors)
@@ -1838,10 +1838,10 @@ VALIDATION_ENGINE = ValidationEngine(
 # LEVEL 6 - VALIDATION TESTS
 # =========================================================
 
-def lvl_5():
-    """Level 5 - Run validation tests on deployed connectors."""
+def lvl_6():
+    """Level 6 - Run validation tests on deployed connectors."""
     print("\n========================================")
-    print("LEVEL 5 - VALIDATION TESTS")
+    print("LEVEL 6 - VALIDATION TESTS")
     print("========================================\n")
     
     if not NEWMAN_EXECUTOR.is_available():
@@ -1873,24 +1873,103 @@ def lvl_5():
     print("========================================\n")
 
 
+# =========================================================
+# LEVEL 5 - DEPLOY COMPONENTS
+# =========================================================
+
+def lvl_5():
+    """Level 5 - Deploy optional component services via Helm charts.
+
+    Uses Helm charts discovered in the platform repo (inesdata-deployment) under:
+    - components/<component>/
+
+    The default selection can be provided via deployer.config:
+    - COMPONENTS=ontology-hub,ai-model-hub,semantic-virtualization
+    """
+    from adapters.inesdata.components import INESDataComponentsAdapter
+
+    print("\n========================================")
+    print("LEVEL 5 - DEPLOY COMPONENTS")
+    print("========================================\n")
+
+    # Keep platform repo deployer.config in sync with the local one.
+    try:
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            copy_local_deployer_config()
+    except Exception:
+        pass
+
+    components_adapter = INESDataComponentsAdapter(
+        run=run,
+        run_silent=run_silent,
+        auto_mode_getter=lambda: AUTO_MODE,
+        infrastructure_adapter=INESDATA_ADAPTER.infrastructure,
+        config_adapter=INESDATA_ADAPTER.config_adapter,
+        config_cls=InesdataConfig,
+    )
+
+    available = []
+    try:
+        available = components_adapter.list_deployable_components()
+    except Exception:
+        available = []
+
+    deployer_config = load_deployer_config() or {}
+    raw = (deployer_config.get("COMPONENTS") or "").strip()
+    components = [token.strip() for token in (raw or "").split(",") if token.strip()]
+    if not components:
+        print("COMPONENTS not set; skipping component deployment\n")
+        return []
+
+    if not available:
+        raise RuntimeError(
+            "COMPONENTS is set but no component charts were discovered in inesdata-deployment. "
+            "Update the platform repo (git pull) or re-run Level 2."
+        )
+
+    print("Components to deploy:")
+    print("- " + "\n- ".join(components))
+    print()
+
+    result = components_adapter.deploy_components(components)
+    deployed = result.get("deployed") or []
+    urls = result.get("urls") or {}
+
+    if deployed:
+        print("\nComponents deployed:")
+        for component in deployed:
+            url = urls.get(component)
+            if url:
+                print(f"- {component}: {url}")
+            else:
+                print(f"- {component}")
+        print()
+
+    return deployed
+
+
 def run_all_levels():
-    """Execute all deployment levels (1-5) sequentially without interruption.
+    """Execute all deployment levels (1-6) sequentially without interruption.
     
     This function runs the complete deployment pipeline:
     1. Cluster setup
     2. Common services deployment
     3. Dataspace deployment
     4. Connector deployment
-    5. Validation tests
+    5. Component services deployment
+    6. Validation tests
     
     Returns:
         None
     """
     print("\n" + "="*50)
-    print("FULL DEPLOYMENT SEQUENCE (LEVELS 1-5)")
+    print("FULL DEPLOYMENT SEQUENCE (LEVELS 1-6)")
     print("="*50)
     print("\nThis will execute all levels sequentially.")
-    print("Total duration: approximately 15 minutes, depending on environment state")
+    print("Total duration: environment-dependent; may take 15+ minutes")
     print("\n" + "="*50 + "\n")
     
     if AUTO_MODE:
@@ -1908,7 +1987,8 @@ def run_all_levels():
         ("2", lvl_2, "Common Services"),
         ("3", lvl_3, "Dataspace"),
         ("4", lvl_4, "Connectors"),
-        ("5", lvl_5, "Validation Tests")
+        ("5", lvl_5, "Components"),
+        ("6", lvl_6, "Validation Tests"),
     ]
     
     start_time = time.time()
@@ -1967,7 +2047,8 @@ LEVELS = {
     "2": lvl_2,
     "3": lvl_3,
     "4": lvl_4,
-    "5": lvl_5
+    "5": lvl_5,
+    "6": lvl_6,
 }
 
 LOCAL_WORKFLOW_SCRIPT_REL_PATH = os.path.join(
@@ -2202,8 +2283,8 @@ def show_menu():
     """Display interactive menu and execute selected operations.
     
     Menu options:
-    - 0: Run all levels (1-5) sequentially
-    - 1-5: Run individual levels
+    - 0: Run all levels (1-6) sequentially
+    - 1-6: Run individual levels
     - N: Launch new framework CLI
     - C: Run workspace cleanup script
     - L: Build and deploy local images
@@ -2214,13 +2295,14 @@ def show_menu():
         print("CLUSTER AUTOMATION TOOL")
         print("="*50)
         print("\n[Full Deployment]")
-        print("0 - Run All Levels (1-5) sequentially")
+        print("0 - Run All Levels (1-6) sequentially")
         print("\n[Individual Levels]")
         print("1 - Level 1: Setup Cluster")
         print("2 - Level 2: Deploy Common Services")
         print("3 - Level 3: Deploy Dataspace")
         print("4 - Level 4: Deploy Connectors")
-        print("5 - Level 5: Run Validation Tests")
+        print("5 - Level 5: Deploy Components")
+        print("6 - Level 6: Run Validation Tests")
         print("\n[Modern CLI]")
         print("N - Use new framework CLI")
         print("\n[Developer]")

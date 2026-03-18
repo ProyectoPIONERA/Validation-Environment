@@ -82,7 +82,8 @@ python inesdata.py
 - **Nivel 2 – Deploy Common Services**: sincroniza configuración, prepara `hosts`, despliega servicios comunes y configura Vault.
 - **Nivel 3 – Deploy Dataspace**: despliega el dataspace y sus componentes principales sobre el clúster ya preparado, y valida que `registration-service` deja listo su esquema antes de pasar a conectores.
 - **Nivel 4 – Deploy Connectors**: crea y despliega los conectores definidos en la configuración del entorno, comprueba su disponibilidad y muestra el resumen operativo de credenciales y endpoints.
-- **Nivel 5 – Run Validation Tests**: ejecuta las validaciones funcionales sobre los conectores desplegados, con un flujo Newman que distingue entre CRUD aislado y escenario end-to-end del dataspace.
+- **Nivel 5 – Deploy Components (opcional)**: despliega servicios adicionales vía Helm charts en `inesdata-deployment/components/*`. La selección por defecto puede definirse en `deployer.config` con `COMPONENTS`.
+- **Nivel 6 – Run Validation Tests**: ejecuta las validaciones funcionales sobre los conectores desplegados, con un flujo Newman que distingue entre CRUD aislado y escenario end-to-end del dataspace.
 
 ### Notas operativas importantes
 

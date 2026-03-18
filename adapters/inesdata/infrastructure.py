@@ -119,8 +119,13 @@ class INESDataInfrastructureAdapter:
             return "/private/etc/hosts"
         return None
 
-    def manage_hosts_entries(self, desired_entries):
+    def manage_hosts_entries(self, desired_entries, header_comment="# Dataspace Local Deployment", auto_confirm=None):
         hosts_path = self.get_hosts_path()
+
+        default_header = "# Dataspace Local Deployment"
+        header_comment = (header_comment or default_header).strip() or default_header
+        if not header_comment.startswith("#"):
+            header_comment = f"# {header_comment}"
 
         if not hosts_path:
             print("OS not supported for automatic hosts modification")
@@ -135,8 +140,39 @@ class INESDataInfrastructureAdapter:
             print("Permission denied reading hosts file")
             return
 
-        existing = [entry for entry in desired_entries if entry in content]
-        missing = [entry for entry in desired_entries if entry not in content]
+        lines = content.splitlines()
+
+        def line_matches_entry(line: str, entry: str) -> bool:
+            stripped = line.strip()
+            if not stripped.startswith(entry):
+                return False
+            if len(stripped) == len(entry):
+                return True
+            next_char = stripped[len(entry)]
+            return next_char.isspace() or next_char == "#"
+
+        def entry_present(entry: str) -> bool:
+            return any(line_matches_entry(line, entry) for line in lines)
+
+        def entry_present_under_header(entry: str, header: str) -> bool:
+            current_header = None
+            for line in lines:
+                if line.lstrip().startswith("#"):
+                    current_header = line.strip()
+                    continue
+                if line_matches_entry(line, entry) and current_header == header:
+                    return True
+            return False
+
+        existing = [entry for entry in desired_entries if entry_present(entry)]
+        missing = [entry for entry in desired_entries if not entry_present(entry)]
+
+        needs_section_migration = False
+        if header_comment != default_header:
+            for entry in desired_entries:
+                if entry_present(entry) and not entry_present_under_header(entry, header_comment):
+                    needs_section_migration = True
+                    break
 
         print("\nExisting entries:")
         for entry in existing or ["None"]:
@@ -148,28 +184,130 @@ class INESDataInfrastructureAdapter:
             if entry:
                 print(f"  {entry}")
 
-        if not missing:
+        if not missing and not needs_section_migration:
             print("\nNo modifications needed to hosts file")
             return
 
-        if self._auto_mode():
+        effective_auto = self._auto_mode() if auto_confirm is None else bool(auto_confirm)
+
+        if effective_auto:
             choice = "Y"
-            print("\n[AUTO_MODE] Automatically adding entries to hosts file")
+            if self._auto_mode() and auto_confirm is None:
+                print("\n[AUTO_MODE] Automatically adding entries to hosts file")
+            else:
+                print("\nAutomatically adding entries to hosts file")
         else:
-            choice = input("\nAdd missing entries to hosts file? (Y/N): ").strip().upper()
+            prompt = (
+                "\nAdd missing entries to hosts file? (Y/N, default: Y): "
+                if missing
+                else "\nUpdate hosts section header? (Y/N, default: Y): "
+            )
+            try:
+                choice = (input(prompt).strip().upper() or "Y")
+            except EOFError:
+                choice = "Y"
+
+        if choice == "S":
+            choice = "Y"
 
         if choice != "Y":
             print("No changes made to hosts file")
             return
 
         try:
-            with open(hosts_path, "a") as f:
-                f.write("\n# Dataspace Local Deployment\n")
-                for line in missing:
-                    f.write(line + "\n")
-            print("Entries added successfully")
+            if needs_section_migration:
+                desired_unique = list(dict.fromkeys(desired_entries))
+                desired_set = set(desired_unique)
+
+                updated = lines[:]
+                i = 0
+                while i < len(updated):
+                    if updated[i].strip() == default_header:
+                        j = i + 1
+                        block_entries = []
+                        while j < len(updated) and not updated[j].lstrip().startswith("#"):
+                            candidate = updated[j].strip()
+                            if candidate:
+                                block_entries.append(candidate)
+                            j += 1
+
+                        if block_entries and all(entry in desired_set for entry in block_entries):
+                            updated[i] = header_comment
+
+                        i = j
+                        continue
+
+                    i += 1
+
+                cleaned = []
+                current_header = None
+                for line in updated:
+                    if line.lstrip().startswith("#"):
+                        current_header = line.strip()
+                        cleaned.append(line)
+                        continue
+
+                    matched = next(
+                        (entry for entry in desired_unique if line_matches_entry(line, entry)),
+                        None,
+                    )
+                    if matched and current_header != header_comment:
+                        continue
+
+                    cleaned.append(line)
+
+                present_under_target = set()
+                current_header = None
+                for line in cleaned:
+                    if line.lstrip().startswith("#"):
+                        current_header = line.strip()
+                        continue
+                    if current_header == header_comment:
+                        for entry in desired_unique:
+                            if line_matches_entry(line, entry):
+                                present_under_target.add(entry)
+
+                entries_to_add = [e for e in desired_unique if e not in present_under_target]
+                if entries_to_add:
+                    header_idx = None
+                    for idx in range(len(cleaned) - 1, -1, -1):
+                        if cleaned[idx].strip() == header_comment:
+                            header_idx = idx
+                            break
+
+                    if header_idx is None:
+                        if cleaned and cleaned[-1].strip() != "":
+                            cleaned.append("")
+                        cleaned.append(header_comment)
+                        header_idx = len(cleaned) - 1
+
+                    insert_at = len(cleaned)
+                    for idx in range(header_idx + 1, len(cleaned)):
+                        if cleaned[idx].lstrip().startswith("#"):
+                            insert_at = idx
+                            break
+
+                    cleaned[insert_at:insert_at] = entries_to_add
+
+                with open(hosts_path, "w") as f:
+                    f.write("\n".join(cleaned).rstrip("\n") + "\n")
+
+                print("Hosts file updated successfully")
+            else:
+                with open(hosts_path, "a") as f:
+                    f.write(f"\n{header_comment}\n")
+                    for line in missing:
+                        f.write(line + "\n")
+                print("Entries added successfully")
         except PermissionError:
-            print("Permission denied writing to hosts file. Run with sudo.")
+            print("Permission denied writing to hosts file.")
+            if self.is_wsl() and hosts_path.startswith("/mnt/"):
+                print("On WSL, the Windows hosts file may require Administrator privileges.")
+                print("Edit it from Windows as admin: C:\\Windows\\System32\\drivers\\etc\\hosts")
+            else:
+                print("Try re-running with sudo.")
+        except OSError as exc:
+            print(f"Could not write to hosts file: {exc}")
 
     def deploy_helm_release(
         self,
