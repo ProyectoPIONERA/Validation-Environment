@@ -18,17 +18,6 @@ La idea principal es simple:
 - `validation/` contiene las colecciones y scripts de prueba.
 - `inesdata-deployment/` contiene los charts y values Helm del entorno.
 
-## Por dónde empezar
-
-Lee estos documentos en este orden:
-
-1. [00_overview.md](./00_overview.md)
-2. [01_framework_architecture.md](./01_framework_architecture.md)
-3. [05_repository_structure.md](./05_repository_structure.md)
-4. [03_integration_guide.md](./03_integration_guide.md)
-5. [02_validation_architecture.md](./02_validation_architecture.md)
-6. [04_execution_flow.md](./04_execution_flow.md)
-
 ## Documentación principal
 
 - [00_overview.md](./00_overview.md): visión general del framework y del problema que resuelve.
