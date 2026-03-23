@@ -12,20 +12,30 @@ if (requestName === "Provider Login" || requestName === "Consumer Login") {
 }
 if (requestName === "Direct DSP Catalog Request") {
     if (status === 401) {
-        pm.test("Direct DSP catalog request requires authentication", function () {
+        pm.test("Direct DSP catalog endpoint requires authentication (tolerated response)", function () {
             pm.expect(status).to.equal(401)
         })
+    } else if (status === 200) {
+        pm.test("Direct DSP catalog endpoint responded functionally", function () {
+            pm.expect(status).to.equal(200)
+        })
     } else {
-        pm.test("Direct DSP catalog endpoint responded with an expected status", function () {
-            pm.expect(status).to.be.oneOf([200, 400, 401])
+        pm.test("Direct DSP catalog endpoint returned a tolerated non-functional environment response", function () {
+            pm.expect(status).to.equal(400)
         })
     }
     return
 }
 if (status !== 200) {
-    pm.test("Federated catalog request skipped due to connector environment response", function () {
-        pm.expect([200, 400, 502]).to.include(status)
-    })
+    if (status === 401) {
+        pm.test("Federated catalog request should authenticate successfully", function () {
+            pm.expect.fail("Federated catalog request returned 401 Unauthorized")
+        })
+    } else {
+        pm.test("Federated catalog request returned a tolerated non-functional environment response", function () {
+            pm.expect([400, 502]).to.include(status)
+        })
+    }
     console.log("Federated catalog raw response:", pm.response.text())
     return
 }

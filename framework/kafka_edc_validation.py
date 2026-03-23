@@ -25,6 +25,10 @@ class KafkaEdcValidationSuite:
     DEFAULT_PRE_RUN_SETTLE_SECONDS = 10
     DEFAULT_LOGIN_ATTEMPTS = 3
     DEFAULT_LOGIN_RETRY_SECONDS = 2
+    DEFAULT_REQUEST_ATTEMPTS = 3
+    DEFAULT_REQUEST_RETRY_SECONDS = 2
+    DEFAULT_PAIR_ATTEMPTS = 2
+    DEFAULT_PAIR_RETRY_SECONDS = 5
 
     def __init__(
         self,
@@ -166,7 +170,7 @@ class KafkaEdcValidationSuite:
             host, port = cls._split_host_port(candidate)
             normalized_host = host.strip().lower()
             if normalized_host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
-                for alias in ("host.docker.internal", "host.minikube.internal"):
+                for alias in ("host.minikube.internal", "host.docker.internal"):
                     value = f"{alias}:{port}" if port else alias
                     if value not in derived:
                         derived.append(value)
@@ -261,6 +265,46 @@ class KafkaEdcValidationSuite:
                 f"{label} failed with HTTP {response.status_code}: {response.text[:500]}"
             )
 
+    @staticmethod
+    def _is_transient_http_response(response):
+        return getattr(response, "status_code", None) in {502, 503, 504}
+
+    def _request_with_retry(self, method, url, *, label, accepted_statuses=None, headers=None, json_payload=None, data=None):
+        attempts = max(int(self.DEFAULT_REQUEST_ATTEMPTS), 1)
+        retry_seconds = max(int(self.DEFAULT_REQUEST_RETRY_SECONDS), 1)
+        session = self._session()
+        last_exc = None
+
+        for attempt in range(1, attempts + 1):
+            try:
+                request_fn = getattr(session, method)
+                kwargs = {
+                    "headers": headers,
+                    "timeout": 30,
+                }
+                if json_payload is not None:
+                    kwargs["json"] = json_payload
+                if data is not None:
+                    kwargs["data"] = data
+                response = request_fn(url, **kwargs)
+            except requests.exceptions.RequestException as exc:
+                last_exc = exc
+                if attempt >= attempts:
+                    raise
+                time.sleep(retry_seconds)
+                continue
+
+            if accepted_statuses and response.status_code in set(accepted_statuses):
+                return response
+            if self._is_transient_http_response(response) and attempt < attempts:
+                time.sleep(retry_seconds)
+                continue
+            return response
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError(f"{label} did not produce a response")
+
     def _management_url(self, connector, path):
         return f"http://{connector}.{self._ds_domain()}{path}"
 
@@ -268,14 +312,16 @@ class KafkaEdcValidationSuite:
         return f"http://{connector}:19194/protocol"
 
     def _post_json(self, url, token, payload, label):
-        response = self._session().post(
+        response = self._request_with_retry(
+            "post",
             url,
+            label=label,
+            accepted_statuses={200, 201},
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            json=payload,
-            timeout=30,
+            json_payload=payload,
         )
         self._assert_status(response, {200, 201}, label)
         try:
@@ -284,14 +330,16 @@ class KafkaEdcValidationSuite:
             raise RuntimeError(f"{label} did not return valid JSON") from exc
 
     def _post_json_optional_body(self, url, token, payload, label, accepted_statuses=None):
-        response = self._session().post(
+        response = self._request_with_retry(
+            "post",
             url,
+            label=label,
+            accepted_statuses=set(accepted_statuses or {200, 201, 204}),
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            json=payload,
-            timeout=30,
+            json_payload=payload,
         )
         self._assert_status(response, set(accepted_statuses or {200, 201, 204}), label)
         if response.status_code == 204:
@@ -305,14 +353,16 @@ class KafkaEdcValidationSuite:
             raise RuntimeError(f"{label} did not return valid JSON") from exc
 
     def _get_json(self, url, token, label, accepted_statuses=None):
-        response = self._session().get(
+        accepted_statuses = set(accepted_statuses or {200})
+        response = self._request_with_retry(
+            "get",
             url,
+            label=label,
+            accepted_statuses=accepted_statuses,
             headers={
                 "Authorization": f"Bearer {token}",
             },
-            timeout=30,
         )
-        accepted_statuses = set(accepted_statuses or {200})
         self._assert_status(response, accepted_statuses, label)
         if response.status_code == 204:
             return None, response.status_code
@@ -322,15 +372,18 @@ class KafkaEdcValidationSuite:
             raise RuntimeError(f"{label} did not return valid JSON") from exc
 
     def _delete(self, url, token, label, accepted_statuses=None):
-        response = self._session().delete(
+        accepted_statuses = set(accepted_statuses or {200, 204, 404, 409})
+        response = self._request_with_retry(
+            "delete",
             url,
+            label=label,
+            accepted_statuses=accepted_statuses,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            timeout=30,
         )
-        self._assert_status(response, set(accepted_statuses or {200, 204, 404, 409}), label)
+        self._assert_status(response, accepted_statuses, label)
         return response.status_code
 
     def _ensure_kafka_runtime(self, runtime):
@@ -1276,6 +1329,42 @@ class KafkaEdcValidationSuite:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
         return path
 
+    def _reset_framework_managed_kafka(self):
+        kafka_manager = self.kafka_manager
+        stop_method = getattr(kafka_manager, "stop_kafka", None) if kafka_manager is not None else None
+        if callable(stop_method):
+            stop_method()
+
+    @staticmethod
+    def _pair_error_message(payload):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or "")
+        if error is None:
+            return ""
+        return str(error)
+
+    def _is_transient_pair_failure(self, payload):
+        if not isinstance(payload, dict) or payload.get("status") == "passed":
+            return False
+
+        error_message = self._pair_error_message(payload)
+        transient_fragments = (
+            "NoBrokersAvailable",
+            "failed with HTTP 502",
+            "failed with HTTP 503",
+            "failed with HTTP 504",
+            "Unable to obtain credentials",
+            "Kafka transfer path did not relay a probe message in time",
+        )
+        if any(fragment in error_message for fragment in transient_fragments):
+            return True
+
+        for step in payload.get("steps", []):
+            if step.get("name") == "wait_for_transfer_runtime_stabilization" and step.get("strategy") == "timeout_without_ready_group":
+                return True
+        return False
+
     def run_pair(self, provider, consumer, experiment_dir=None):
         runtime = self._ensure_kafka_runtime(self._load_kafka_runtime())
         source_topic = self._topic_name(runtime)
@@ -1493,5 +1582,36 @@ class KafkaEdcValidationSuite:
         connectors = list(connectors or [])
         results = []
         for provider, consumer in permutations(connectors, 2):
-            results.append(self.run_pair(provider, consumer, experiment_dir=experiment_dir))
+            result = None
+            attempts = 0
+            retry_reason = None
+            max_attempts = self.DEFAULT_PAIR_ATTEMPTS
+
+            while attempts < max_attempts:
+                attempts += 1
+                try:
+                    result = self.run_pair(provider, consumer, experiment_dir=experiment_dir)
+                finally:
+                    # Keep bidirectional runs isolated from any broker or port-forward state
+                    # created by the previous pair execution.
+                    self._reset_framework_managed_kafka()
+
+                if result.get("status") == "passed":
+                    break
+                if not self._is_transient_pair_failure(result) or attempts >= max_attempts:
+                    break
+
+                retry_reason = self._pair_error_message(result)
+                time.sleep(self.DEFAULT_PAIR_RETRY_SECONDS)
+
+            if result is None:
+                continue
+            result["attempt_count"] = attempts
+            result["retry_attempted"] = attempts > 1
+            if retry_reason:
+                result["retry_reason"] = retry_reason
+                artifact_path = self._save_pair_artifact(experiment_dir, provider, consumer, result)
+                if artifact_path:
+                    result["artifact_path"] = artifact_path
+            results.append(result)
         return results

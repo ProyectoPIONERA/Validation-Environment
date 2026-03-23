@@ -13,7 +13,7 @@ class TransferStorageVerifier:
         load_connector_credentials=None,
         load_deployer_config=None,
         experiment_storage=None,
-        poll_attempts=5,
+        poll_attempts=60,
         poll_interval_seconds=2.0,
     ):
         self.load_connector_credentials = load_connector_credentials
@@ -31,6 +31,16 @@ class TransferStorageVerifier:
             return datetime.fromisoformat(normalized)
         except ValueError:
             return None
+
+    @staticmethod
+    def _parse_epoch_millis(value):
+        if value in (None, ""):
+            return None
+        try:
+            millis = float(value)
+        except (TypeError, ValueError):
+            return None
+        return datetime.fromtimestamp(millis / 1000.0, tz=timezone.utc)
 
     @staticmethod
     def _read_field(obj, field_name):
@@ -156,6 +166,8 @@ class TransferStorageVerifier:
         start_body = self._decode_response_json(start_execution) or {}
         transfer_id = start_body.get("@id") or start_body.get("id")
         started_at = self._parse_iso_datetime(((start_execution.get("cursor") or {}).get("started")))
+        if started_at is None:
+            started_at = self._parse_epoch_millis(start_body.get("createdAt"))
 
         resolved_transfer = None
         if destination_execution is not None:

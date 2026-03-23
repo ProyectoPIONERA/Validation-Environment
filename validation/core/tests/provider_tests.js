@@ -28,7 +28,6 @@ if (!body) {
     return
 }
 
-assertStatus200()
 assertNoEdcError(body)
 
 if (requestName === "Create E2E Asset") {
@@ -38,6 +37,7 @@ if (requestName === "Create E2E Asset") {
 }
 
 if (requestName === "List E2E Assets") {
+    assertStatus200()
     const assetId = pm.collectionVariables.get("e2e_asset_id")
     assertNotEmpty(assetId, "e2e_asset_id")
     assertContains(responseText(), assetId, "E2E asset appears in asset list")
@@ -51,6 +51,7 @@ if (requestName === "Create E2E Policy") {
 }
 
 if (requestName === "List E2E Policies") {
+    assertStatus200()
     const policyId = pm.collectionVariables.get("e2e_policy_id")
     assertNotEmpty(policyId, "e2e_policy_id")
     assertContains(responseText(), policyId, "E2E policy appears in policy list")
@@ -64,6 +65,7 @@ if (requestName === "Create E2E Contract Definition") {
 }
 
 if (requestName === "List E2E Contract Definitions") {
+    assertStatus200()
     const contractId = pm.collectionVariables.get("e2e_contract_definition_id")
     assertNotEmpty(contractId, "e2e_contract_definition_id")
     assertContains(responseText(), contractId, "E2E contract definition appears in list")

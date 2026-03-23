@@ -5,6 +5,57 @@
  */
 (function() {
 const requestName = pm.info.requestName
+const DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS = 5
+
+function clearLocalVar(key) {
+    pm.collectionVariables.unset(key)
+    pm.environment.unset(key)
+}
+
+function readPositiveInt(key, fallbackValue) {
+    const raw = getStoredVar(key)
+    const parsed = parseInt(raw, 10)
+    return Number.isNaN(parsed) || parsed < 1 ? fallbackValue : parsed
+}
+
+function setNextRequestName(name) {
+    if (pm.execution && typeof pm.execution.setNextRequest === "function") {
+        pm.execution.setNextRequest(name)
+        return
+    }
+    if (typeof postman !== "undefined" && typeof postman.setNextRequest === "function") {
+        postman.setNextRequest(name)
+    }
+}
+
+function scheduleRetryOrFail(requestToRepeat, attemptVar, pendingTestName, failureTestName, failureReason, detail) {
+    const maxAttempts = readPositiveInt("e2e_negotiation_status_max_attempts", DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS)
+    const attempt = readPositiveInt(attemptVar, 0) + 1
+
+    if (attempt < maxAttempts) {
+        saveCollectionVar(attemptVar, String(attempt))
+        pm.test(`${pendingTestName} (attempt ${attempt}/${maxAttempts})`, function () {
+            pm.expect(true).to.be.true
+        })
+        if (detail) {
+            console.log(detail)
+        }
+        console.log(`Retrying ${requestToRepeat}. Next attempt ${attempt + 1}/${maxAttempts}`)
+        setNextRequestName(requestToRepeat)
+        return true
+    }
+
+    clearLocalVar(attemptVar)
+    pm.test(failureTestName, function () {
+        pm.expect.fail(failureReason)
+    })
+    if (detail) {
+        console.log(detail)
+    }
+    console.log(`Retry budget exhausted for ${requestToRepeat}: ${maxAttempts}/${maxAttempts}`)
+    setNextRequestName(null)
+    return false
+}
 /**
  * Consumer authentication
  */
@@ -28,6 +79,8 @@ assertNoEdcError(body)
  * Contract negotiation start
  */
 if (requestName === "Start Contract Negotiation") {
+    clearLocalVar("e2e_agreement_id")
+    clearLocalVar("e2e_negotiation_status_attempt")
     assertCreated()
     extractAtId(body, "e2e_negotiation_id")
     return
@@ -40,36 +93,83 @@ if (requestName === "Check Negotiation Status") {
     const negotiationId = getStoredVar("e2e_negotiation_id")
     let negotiation = body
     if (Array.isArray(body)) {
-        pm.test("Negotiation list not empty", function () {
-            pm.expect(body.length).to.be.above(0)
-        })
+        if (body.length === 0) {
+            scheduleRetryOrFail(
+                "Check Negotiation Status",
+                "e2e_negotiation_status_attempt",
+                "Current negotiation status is still pending because no negotiation entries are visible yet",
+                "Negotiation status did not become visible after repeated checks",
+                `Negotiation ${negotiationId || "<unknown>"} did not become visible in the status list before the retry budget was exhausted`,
+                "Negotiation status list is empty"
+            )
+            return
+        }
         negotiation = body.find(function (item) {
             return item && (item["@id"] === negotiationId || item.id === negotiationId)
-        }) || body[0]
+        })
+    }
+    if (!negotiation) {
+        scheduleRetryOrFail(
+            "Check Negotiation Status",
+            "e2e_negotiation_status_attempt",
+            "Current negotiation status is still pending because the negotiation is not visible yet",
+            "Negotiation status did not become visible after repeated checks",
+            `Negotiation ${negotiationId || "<unknown>"} did not become visible in the status list before the retry budget was exhausted`,
+            `Current negotiation status is pending for negotiation id: ${negotiationId || "<unknown>"}. Visible negotiation entries returned: ${Array.isArray(body) ? body.length : 1}`
+        )
+        return
     }
     assertFieldExists(negotiation, "state")
     const state = negotiation.state
-    pm.test("Negotiation state is valid", function () {
+    pm.test("Negotiation state is recognized by the framework", function () {
         pm.expect(state).to.be.oneOf([
             "INITIAL",
             "REQUESTED",
             "REQUESTING",
             "IN_PROGRESS",
+            "AGREED",
+            "VERIFIED",
             "FINALIZED",
             "TERMINATED"
         ])
     })
+    if (state === "TERMINATED") {
+        clearLocalVar("e2e_negotiation_status_attempt")
+        pm.test("Negotiation did not end in a terminated state", function () {
+            pm.expect.fail("Negotiation reached TERMINATED state")
+        })
+        if (negotiation.errorDetail) {
+            console.log("Negotiation error detail:", negotiation.errorDetail)
+        }
+        setNextRequestName(null)
+        return
+    }
     const agreementId = negotiation.contractAgreementId
     if (agreementId) {
+        clearLocalVar("e2e_negotiation_status_attempt")
         saveCollectionVar("e2e_agreement_id", agreementId)
         pm.test("Contract agreement generated", function () {
             pm.expect(agreementId).to.not.be.undefined
             pm.expect(agreementId).to.not.be.null
         })
+    } else if (state === "FINALIZED") {
+        scheduleRetryOrFail(
+            "Check Negotiation Status",
+            "e2e_negotiation_status_attempt",
+            "Negotiation is finalized but the contract agreement is not visible yet",
+            "Finalized negotiation did not expose a contract agreement after repeated checks",
+            `Negotiation ${negotiationId || "<unknown>"} stayed FINALIZED without contractAgreementId before the retry budget was exhausted`,
+            "Negotiation reached FINALIZED without contractAgreementId"
+        )
     } else {
-        pm.test("Negotiation has not produced a contract agreement yet", function () {
-            pm.expect(true).to.be.true
-        })
+        scheduleRetryOrFail(
+            "Check Negotiation Status",
+            "e2e_negotiation_status_attempt",
+            "Negotiation is still progressing and may not have produced a contract agreement yet",
+            "Negotiation did not produce a contract agreement before the retry budget was exhausted",
+            `Negotiation ${negotiationId || "<unknown>"} remained in state ${state || "unknown"} before the retry budget was exhausted`,
+            `Negotiation is still progressing in state ${state || "unknown"}`
+        )
         if (negotiation.errorDetail) {
             console.log("Negotiation error detail:", negotiation.errorDetail)
         }

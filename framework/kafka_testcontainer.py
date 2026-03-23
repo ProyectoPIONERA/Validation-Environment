@@ -15,7 +15,7 @@ class FrameworkKafkaContainer(KafkaContainer):
         image: str = "confluentinc/cp-kafka:7.6.0",
         port: int = 9093,
         cluster_port: int = 19093,
-        cluster_advertised_host: str = "host.docker.internal",
+        cluster_advertised_host: str = "host.minikube.internal",
         **kwargs,
     ) -> None:
         super().__init__(image=image, port=port, **kwargs)

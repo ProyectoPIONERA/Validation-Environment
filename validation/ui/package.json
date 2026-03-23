@@ -1,4 +1,18 @@
 {
   "name": "validation-ui",
-  "private": true
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:ops": "playwright test --config=playwright.ops.config.ts",
+    "test:e2e:headed": "playwright test --headed",
+    "test:ops:headed": "playwright test --config=playwright.ops.config.ts --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "@types/node": "^25.5.0",
+    "dotenv": "^16.4.5"
+  }
 }

@@ -2,7 +2,7 @@
   "info": {
     "name": "06 Consumer Transfer",
     "_postman_id": "consumer-transfer-06",
-    "description": "Consumer starts transfer process and retrieves data",
+    "description": "Consumer starts the INESData transfer process and validates the resolved storage destination",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
 
@@ -64,7 +64,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "if (!pm.collectionVariables.get('e2e_agreement_id')) { pm.execution.skipRequest(); }"
+              "if (!(pm.collectionVariables.get('e2e_agreement_id') || pm.environment.get('e2e_agreement_id'))) { pm.execution.skipRequest(); }"
             ]
           }
         }
@@ -82,7 +82,7 @@
           }
         ],
         "url": {
-          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses",
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/inesdatatransferprocesses",
           "host": [
             "{{consumer}}",
             "{{dsDomain}}"
@@ -90,12 +90,12 @@
           "path": [
             "management",
             "v3",
-            "transferprocesses"
+            "inesdatatransferprocesses"
           ]
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"HttpData-PULL\"\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"assetId\": \"{{e2e_asset_id}}\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"AmazonS3-PUSH\",\n  \"dataDestination\": {\n    \"type\": \"InesDataStore\"\n  }\n}"
         }
       }
     },
@@ -103,19 +103,15 @@
     {
       "name": "Check Transfer Status",
       "request": {
-        "method": "POST",
+        "method": "GET",
         "header": [
           {
             "key": "Authorization",
             "value": "Bearer {{consumer_jwt}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
           }
         ],
         "url": {
-          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses/request",
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses/{{e2e_transfer_id}}",
           "host": [
             "{{consumer}}",
             "{{dsDomain}}"
@@ -124,32 +120,24 @@
             "management",
             "v3",
             "transferprocesses",
-            "request"
+            "{{e2e_transfer_id}}"
           ]
-        },
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10\n}"
         }
       }
     },
 
     {
-      "name": "Retrieve Endpoint Data Reference",
+      "name": "Resolve Current Transfer Destination",
       "request": {
-        "method": "POST",
+        "method": "GET",
         "header": [
           {
             "key": "Authorization",
             "value": "Bearer {{consumer_jwt}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
           }
         ],
         "url": {
-          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/edrs/request",
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/transferprocesses/{{e2e_transfer_id}}",
           "host": [
             "{{consumer}}",
             "{{dsDomain}}"
@@ -157,42 +145,8 @@
           "path": [
             "management",
             "v3",
-            "edrs",
-            "request"
-          ]
-        },
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 10\n}"
-        }
-      }
-    },
-
-    {
-      "name": "Download Data",
-      "event": [
-        {
-          "listen": "prerequest",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "if (!pm.collectionVariables.get('e2e_endpoint')) { pm.execution.skipRequest(); }"
-            ]
-          }
-        }
-      ],
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "{{e2e_authorization_token}}"
-          }
-        ],
-        "url": {
-          "raw": "{{e2e_endpoint}}",
-          "host": [
-            "{{e2e_endpoint}}"
+            "transferprocesses",
+            "{{e2e_transfer_id}}"
           ]
         }
       }

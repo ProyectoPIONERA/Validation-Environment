@@ -18,6 +18,7 @@ class LevelOutputConfig:
     MINIKUBE_MEMORY = "4096"
     NS_COMMON = "common"
     DS_NAME = "demo"
+    PORT_KEYCLOAK = 18081
 
     def __init__(self, root):
         self.root = root
@@ -171,6 +172,49 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertEqual(rendered.count("LEVEL 2 - DEPLOY COMMON SERVICES"), 1)
         self.assertNotIn("LEVEL 2 COMPLETE", rendered)
 
+    def test_setup_vault_reuses_existing_keys_when_status_is_temporarily_unavailable(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"
+        infrastructure.wait_for_pod_running = lambda *_args, **_kwargs: True
+
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"unseal_keys_hex":["abc"],"root_token":"root"}')
+
+        infrastructure._read_vault_status = mock.Mock(
+            side_effect=[
+                (None, "vault status unavailable"),
+                ({"initialized": True, "sealed": False}, None),
+            ]
+        )
+        infrastructure.run_silent = mock.Mock(side_effect=[
+            "unsealed",
+            '{"secret/": {}}',
+        ])
+
+        self.assertTrue(infrastructure.setup_vault())
+        called_commands = [call.args[0] for call in infrastructure.run_silent.call_args_list]
+        self.assertFalse(any("vault operator init" in cmd for cmd in called_commands))
+        self.assertTrue(any("vault operator unseal" in cmd for cmd in called_commands))
+
+    def test_ensure_vault_unsealed_recovers_with_existing_keys_when_status_is_temporarily_unavailable(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"
+
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"unseal_keys_hex":["abc"],"root_token":"root"}')
+
+        infrastructure._read_vault_status = mock.Mock(
+            side_effect=[
+                (None, "vault status unavailable"),
+                ({"initialized": True, "sealed": False}, None),
+            ]
+        )
+        infrastructure.run = mock.Mock(return_value=object())
+
+        self.assertTrue(infrastructure.ensure_vault_unsealed(timeout=2, poll_interval=1))
+        infrastructure.run.assert_called_once()
+        self.assertIn("vault operator unseal abc", infrastructure.run.call_args.args[0])
+
     def test_deploy_infrastructure_continues_when_helm_fails_but_release_exists(self):
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_wsl_docker_config = lambda: True
@@ -278,6 +322,41 @@ class InesdataLevelOutputTests(unittest.TestCase):
             result = deployment.wait_for_keycloak_admin_ready("http://keycloak.local", "admin", "secret", timeout=1, poll_interval=0)
 
         self.assertTrue(result)
+
+    def test_wait_for_keycloak_admin_ready_falls_back_to_local_port_forward(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.port_forward_service = mock.Mock(return_value=True)
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+
+        responses = iter([
+            Exception("connection refused"),
+            mock.Mock(status_code=200, json=lambda: {"access_token": "token"}),
+        ])
+
+        def fake_post(*_args, **_kwargs):
+            item = next(responses)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with mock.patch("adapters.inesdata.deployment.requests.post", side_effect=fake_post):
+            result = deployment.wait_for_keycloak_admin_ready(
+                "http://keycloak-admin.local",
+                "admin",
+                "secret",
+                timeout=5,
+                poll_interval=0,
+            )
+
+        self.assertTrue(result)
+        infrastructure.port_forward_service.assert_called_once_with("common", "keycloak", 18081, 8080, quiet=True)
 
     def test_wait_for_level2_service_pods_allows_pre_setup_vault_running_state(self):
         infrastructure = self._make_infrastructure()

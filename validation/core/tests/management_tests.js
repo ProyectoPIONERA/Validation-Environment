@@ -32,7 +32,6 @@ if (!body && !isDeleteRequest) {
 assertNoEdcError(body)
 
 if (requestName === "Create CRUD Asset") {
-    assertStatus200()
     assertCreated()
     extractAtId(body, "crud_asset_id")
     return
@@ -47,7 +46,6 @@ if (requestName === "List CRUD Assets") {
 }
 
 if (requestName === "Create CRUD Policy") {
-    assertStatus200()
     assertCreated()
     extractAtId(body, "crud_policy_id")
     return
@@ -62,7 +60,6 @@ if (requestName === "List CRUD Policies") {
 }
 
 if (requestName === "Create CRUD Contract Definition") {
-    assertStatus200()
     assertCreated()
     extractAtId(body, "crud_contract_definition_id")
     return

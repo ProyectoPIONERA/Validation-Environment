@@ -1,6 +1,6 @@
-# Validacion UI Core
+# Validación UI Core
 
-En la secuencia de evolución descrita desde [07_experiment_system.md](./07_experiment_system.md), la Fase 4 incorpora una capa de validacion UI con Playwright alineada con los flujos ya cubiertos por Newman. La suite UI no introduce logica de negocio nueva: refleja lo que el `connector-interface` ya expone para un usuario real.
+La Fase 4 incorpora una capa de validacion UI con Playwright alineada con los flujos ya cubiertos por Newman. La suite UI no introduce logica de negocio nueva: refleja lo que el `connector-interface` ya expone para un usuario real.
 
 ## Alcance
 

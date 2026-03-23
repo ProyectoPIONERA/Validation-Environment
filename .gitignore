@@ -1,60 +1,96 @@
-# Python
+# =========================
+# PYTHON
+# =========================
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
 .coverage
 htmlcov/
 
-# Virtual environments
+# =========================
+# VIRTUAL ENVS
+# =========================
 .venv/
 venv/
 env/
 
-# Build/package artifacts
+# =========================
+# BUILD / ARTIFACTS
+# =========================
 build/
 dist/
 *.egg-info/
 
-# Local experiment outputs
-experiments/
+# =========================
+# NODE / PLAYWRIGHT
+# =========================
+node_modules/
+validation/ui/node_modules/
 
-# Newman reports
+# Playwright outputs (standard)
+playwright-report/
+test-results/
+blob-report/
+
+# Playwright outputs
+validation/ui/ops-test-results/
+validation/ui/ops-playwright-report/
+validation/ui/ops-blob-report/
+validation/ui/manual-runs/
+
+# =========================
+# EXPERIMENTS / METRICS
+# =========================
+experiments/
 newman/
 
-# Sensitive local configuration
-/deployer.config
-!/deployer.config.example
-/inesdata-deployment/deployer.config
-/inesdata-deployment/common/init-keys-vault.json
-/inesdata-deployment/deployments/
+# =========================
+# SENSITIVE CONFIGURATION
+# =========================
+deployer.config
+!deployer.config.example
 inesdata-deployment/
-inesdata-testing/
 
-# IDE / editor
+# =========================
+# VARIABLES DE ENTORNO
+# =========================
+.env
+validation/ui/.env
+
+# =========================
+# IDE / EDITOR
+# =========================
 .idea/
 .vscode/
 *.iml
 
-# OS files
+# =========================
+# OS FILES
+# =========================
 .DS_Store
 Thumbs.db
 
-# Logs / temp
+# =========================
+# LOGS / TEMP
+# =========================
 *.log
 *.tmp
-*.bakdeployer.config
-.venv/
-logs
-docs_
-bugs
+*.bak
 
-# Playwright local artifacts
-/validation/ui/node_modules/
-/validation/ui/playwright-report/
-/validation/ui/test-results/
-/validation/ui/.env
-/validation/components/ontology_hub/tools
+# Heavy files generated during experiments
+*.zip
+*.webm
+*.png
+
+# =========================
+# PROJECT
+# =========================
+logs/
+docs_/
+bugs/

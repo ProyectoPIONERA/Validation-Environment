@@ -1,0 +1,102 @@
+import { expect, Page } from "@playwright/test";
+
+import { materialInput, snackBar } from "../../shared/utils/selectors";
+
+export class PolicyCreatePage {
+  constructor(private readonly page: Page) {}
+
+  async goto(baseUrl: string): Promise<void> {
+    await this.page.goto(`${baseUrl.replace(/\/$/, "")}/policies/create`, {
+      waitUntil: "networkidle",
+    });
+  }
+
+  async gotoList(baseUrl: string): Promise<void> {
+    await this.page.goto(`${baseUrl.replace(/\/$/, "")}/policies`, {
+      waitUntil: "networkidle",
+    });
+  }
+
+  async expectReady(): Promise<void> {
+    await expect(
+      this.page.locator("mat-card-title", { hasText: /Create a new policy/i }),
+    ).toBeVisible({ timeout: 30_000 });
+  }
+
+  async fillPolicyId(policyId: string): Promise<void> {
+    await materialInput(this.page, /^ID$/).fill(policyId);
+  }
+
+  async addParticipantIdConstraint(participantId: string): Promise<void> {
+    await this.page.locator("policy-form-add-menu button[mat-icon-button]").first().click();
+    await this.page.getByRole("menuitem").filter({ hasText: /^Participant ID$/i }).click();
+
+    const input = this.page.locator("participant-id-select input").first();
+    await expect(input).toBeVisible({ timeout: 15_000 });
+    await input.fill(participantId);
+    await input.press("Enter");
+
+    await expect(this.page.locator("participant-id-select mat-chip").filter({ hasText: participantId })).toBeVisible({
+      timeout: 15_000,
+    });
+  }
+
+  async submit(): Promise<void> {
+    await this.page.getByRole("button", { name: /^Create$/i }).click();
+  }
+
+  async waitForCreationSuccess(timeoutMs = 30_000): Promise<string> {
+    const notification = snackBar(this.page);
+    await expect(notification).toContainText(/successfully created/i, {
+      timeout: timeoutMs,
+    });
+    return ((await notification.textContent()) ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  async expectPolicyListed(policyId: string, timeoutMs = 45_000): Promise<void> {
+    await expect(async () => {
+      const found = await this.findPolicy(policyId);
+      expect(found, `Policy ${policyId} is not visible in the policies list`).toBeTruthy();
+    }).toPass({
+      timeout: timeoutMs,
+      intervals: [1_000, 2_000, 5_000],
+    });
+  }
+
+  private async findPolicy(policyId: string): Promise<boolean> {
+    if ((await this.policyCard(policyId).count()) > 0) {
+      return true;
+    }
+
+    while (await this.goToNextPage()) {
+      if ((await this.policyCard(policyId).count()) > 0) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async goToNextPage(): Promise<boolean> {
+    const nextButton = this.page.locator(
+      "button.mat-paginator-navigation-next, button[aria-label*='Next page']",
+    ).first();
+
+    if ((await nextButton.count()) === 0) {
+      return false;
+    }
+
+    if (!(await nextButton.isEnabled().catch(() => false))) {
+      return false;
+    }
+
+    await nextButton.click();
+    await this.page.waitForLoadState("networkidle");
+    await this.page.waitForTimeout(500);
+    return true;
+  }
+
+  private policyCard(policyId: string) {
+    return this.page.locator(".card mat-card").filter({ hasText: policyId }).first();
+  }
+}

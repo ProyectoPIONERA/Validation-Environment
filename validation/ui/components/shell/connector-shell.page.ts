@@ -1,0 +1,39 @@
+import { expect, Page } from "@playwright/test";
+
+import { errorBanner } from "../../shared/utils/selectors";
+
+export class ConnectorShellPage {
+  constructor(private readonly page: Page) {}
+
+  async expectReady(): Promise<void> {
+    await expect(this.page.locator("text=Log out").first()).toBeVisible({
+      timeout: 60_000,
+    });
+  }
+
+  async navigateToSection(sectionRegex: RegExp, fallbackHashUrl: string): Promise<void> {
+    const navTarget = this.page.locator("a, button").filter({ hasText: sectionRegex }).first();
+
+    if ((await navTarget.count()) > 0) {
+      await navTarget.click();
+      await this.page.waitForLoadState("networkidle");
+      return;
+    }
+
+    await this.page.goto(fallbackHashUrl, { waitUntil: "networkidle" });
+  }
+
+  async assertNoGateway403(context: string): Promise<void> {
+    expect(
+      await this.page.locator("h1").filter({ hasText: /403 Forbidden/i }).count(),
+      `${context} loaded a gateway 403 page`,
+    ).toBe(0);
+  }
+
+  async assertNoServerErrorBanner(context: string): Promise<void> {
+    await expect(
+      errorBanner(this.page).first(),
+      `${context} shows a server error banner`,
+    ).not.toBeVisible({ timeout: 2_000 });
+  }
+}
