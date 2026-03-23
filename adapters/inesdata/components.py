@@ -232,10 +232,28 @@ class INESDataComponentsAdapter:
         if override:
             return os.path.abspath(override)
 
-        # Default workspace layouts:
-        # - <workspace>/Validation-Environment (Ontology-Hub is a sibling)
-        # - <workspace>/NIVEL_6/Validation-Environment (Ontology-Hub is a sibling of NIVEL_6)
-        # We search parent directories for a sibling Ontology-Hub with a Dockerfile.
+        sources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources")
+        ontology_hub_dir = os.path.join(sources_dir, "Ontology-Hub")
+        dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
+        if os.path.isfile(dockerfile_path):
+            return ontology_hub_dir
+
+        if not os.path.isdir(ontology_hub_dir):
+            os.makedirs(sources_dir, exist_ok=True)
+            print(f"Cloning Ontology-Hub into {ontology_hub_dir} ...")
+            import subprocess
+            repo_url = "https://github.com/ProyectoPIONERA/Ontology-Hub.git"
+            try:
+                subprocess.run(["git", "clone", repo_url, ontology_hub_dir], check=True)
+            except Exception as exc:
+                self._fail(
+                    "Could not clone Ontology-Hub repository",
+                    root_cause=str(exc),
+                )
+
+        if os.path.isfile(dockerfile_path):
+            return ontology_hub_dir
+
         probe_dir = os.path.abspath(self.config.script_dir())
         for _ in range(6):
             parent = os.path.abspath(os.path.join(probe_dir, ".."))
@@ -246,8 +264,6 @@ class INESDataComponentsAdapter:
                 break
             probe_dir = parent
 
-        # Fall back to the most common sibling path even if it doesn't exist, so
-        # the error message points to a reasonable default.
         return os.path.join(os.path.abspath(os.path.join(self.config.script_dir(), "..")), "Ontology-Hub")
 
     def _ontology_hub_build_args(self, ontology_hub_dir: str) -> dict:
