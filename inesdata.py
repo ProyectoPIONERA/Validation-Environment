@@ -3330,7 +3330,7 @@ def run_framework_bootstrap_interactive():
 
 
 def run_local_images_workflow_interactive():
-    """Build and deploy local images (Full mode)."""
+    """Build and deploy local images (with developer sub-options)."""
     platform_dirs = _detect_platform_dirs_from_adapter_configs()
 
     if not platform_dirs:
@@ -3339,13 +3339,39 @@ def run_local_images_workflow_interactive():
 
     platform_dir = platform_dirs[0]
 
-    if not _confirm_local_workflow():
-        print("\nExecution cancelled.\n")
-        return None
+    while True:
+        print("\n" + "="*50)
+        print("BUILD & DEPLOY LOCAL IMAGES")
+        print("="*50)
+        print("1 - Build and deploy ALL local images")
+        print("2 - Build and deploy ONLY connectors")
+        print("3 - Build and deploy ONLY inesdata-connector-interface")
+        print("B - Back")
 
-    _execute_local_images_workflow([
-        "--platform-dir", platform_dir,
-    ])
+        try:
+            sub_choice = input("\nSelection: ").strip().upper()
+        except EOFError:
+            print("\nNo input. Returning to main menu.\n")
+            return None
+
+        if sub_choice == "B":
+            return None
+        elif sub_choice not in {"1", "2", "3"}:
+            print("\nInvalid selection. Please try again.\n")
+            continue
+
+        if not _confirm_local_workflow():
+            print("\nExecution cancelled.\n")
+            return None
+
+        extra_args = ["--platform-dir", platform_dir]
+        if sub_choice == "2":
+            extra_args += ["--component", "connector"]
+        elif sub_choice == "3":
+            extra_args += ["--component", "connector-interface"]
+
+        _execute_local_images_workflow(extra_args)
+        return None
 
 
 def run_workspace_cleanup_interactive():
