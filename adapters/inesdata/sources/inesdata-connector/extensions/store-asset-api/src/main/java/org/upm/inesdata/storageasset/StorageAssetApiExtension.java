@@ -3,7 +3,6 @@ package org.upm.inesdata.storageasset;
 import jakarta.json.Json;
 import org.eclipse.edc.api.auth.spi.AuthenticationRequestFilter;
 import org.eclipse.edc.api.auth.spi.registry.ApiAuthenticationRegistry;
-import org.eclipse.edc.api.validation.DataAddressValidator;
 import org.eclipse.edc.connector.controlplane.api.management.asset.validation.AssetValidator;
 import org.eclipse.edc.connector.controlplane.services.spi.asset.AssetService;
 import org.eclipse.edc.connector.controlplane.transform.edc.from.JsonObjectFromAssetTransformer;
@@ -22,6 +21,7 @@ import org.eclipse.edc.web.spi.WebService;
 import org.eclipse.edc.web.spi.configuration.ApiContext;
 import org.upm.inesdata.storageasset.controller.StorageAssetApiController;
 import org.upm.inesdata.storageasset.service.S3Service;
+import org.upm.inesdata.storageasset.validation.InesdataDataAddressValidator;
 import software.amazon.awssdk.regions.Region;
 
 import java.util.Map;
@@ -90,7 +90,7 @@ public class StorageAssetApiExtension implements ServiceExtension {
         managementApiTransformerRegistry.register(new JsonObjectToAssetTransformer());
 
         validator.register(EDC_ASSET_TYPE, AssetValidator.instance());
-        validator.register(EDC_DATA_ADDRESS_TYPE, DataAddressValidator.instance());
+        validator.register(EDC_DATA_ADDRESS_TYPE, InesdataDataAddressValidator.instance());
 
         // Leer las variables de entorno
         var accessKey = vault.resolveSecret(context.getSetting(AWS_ACCESS_KEY, DEFAULT_VALUE));

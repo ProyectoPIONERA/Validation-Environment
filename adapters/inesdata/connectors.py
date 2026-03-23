@@ -1,7 +1,10 @@
+import base64
 import json
 import os
 import re
+import socket
 import time
+from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -26,10 +29,25 @@ class INESDataConnectorsAdapter:
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
 
     @staticmethod
+    def _is_connector_interface_pod(pod_name):
+        """Support both historical '-inteface' and corrected '-interface' suffixes."""
+        return "interface" in pod_name or "inteface" in pod_name
+
+    @classmethod
+    def _is_connector_runtime_pod(cls, pod_name):
+        return pod_name.startswith("conn-") and not cls._is_connector_interface_pod(pod_name)
+
+    @staticmethod
     def _fail(message, root_cause=None):
         if root_cause:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
+
+    def _dataspace_name(self):
+        getter = getattr(self.config, "dataspace_name", None)
+        if callable(getter):
+            return getter()
+        return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
     def wait_for_keycloak_admin_ready(self, timeout=120, poll_interval=3):
         print("Waiting for Keycloak admin authentication to become ready...")
@@ -150,7 +168,7 @@ class INESDataConnectorsAdapter:
         connectors = []
         for line in result.splitlines():
             pod_name = line.split()[0]
-            if pod_name.startswith("conn-") and "interface" not in pod_name:
+            if self._is_connector_runtime_pod(pod_name):
                 connector = pod_name.rsplit("-", 2)[0]
                 if connector not in connectors:
                     connectors.append(connector)
@@ -170,7 +188,15 @@ class INESDataConnectorsAdapter:
     def wait_for_connector_ready(self, connector_name, timeout=300):
         print(f"Waiting for connector to be ready: {connector_name}")
         url = self.build_connector_url(connector_name)
+        host = urlparse(url).hostname
+        if host:
+            try:
+                socket.gethostbyname(host)
+            except OSError as exc:
+                print(f"Connector host does not resolve locally: {host} ({exc})")
+                return False
         start = time.time()
+        last_issue = None
 
         while True:
             try:
@@ -178,11 +204,15 @@ class INESDataConnectorsAdapter:
                 if response.status_code in [200, 302]:
                     print(f"Connector ready: {connector_name}")
                     return True
-            except Exception:
-                pass
+                last_issue = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_issue = str(exc)
 
             if time.time() - start > timeout:
-                print(f"Timeout waiting for connector: {connector_name}")
+                if last_issue:
+                    print(f"Timeout waiting for connector: {connector_name} ({last_issue})")
+                else:
+                    print(f"Timeout waiting for connector: {connector_name}")
                 return False
 
             time.sleep(3)
@@ -275,7 +305,7 @@ class INESDataConnectorsAdapter:
             return None
         if not keycloak_url.startswith("http"):
             keycloak_url = f"http://{keycloak_url}"
-        return f"{keycloak_url}/realms/{self.config.DS_NAME}/protocol/openid-connect/token"
+        return f"{keycloak_url}/realms/{self._dataspace_name()}/protocol/openid-connect/token"
 
     def get_management_api_token(self, connector):
         """Get a Bearer token for the connector management user."""
@@ -560,8 +590,132 @@ class INESDataConnectorsAdapter:
             silent=True
         )
 
+        # Attach S3 policy to connector user (required for upload permissions) - FIX for BUG-001
+        policy_name = f"policy-{ds_name}-{connector_name}"
+        policy_file_path = os.path.join(
+            self.config.repo_dir(),
+            "deployments",
+            "DEV",
+            ds_name,
+            f"{policy_name}.json"
+        )
+
+        if os.path.exists(policy_file_path):
+            try:
+                with open(policy_file_path) as f:
+                    policy_content = json.load(f)
+
+                policy_path_pod = f"/tmp/{policy_name}.json"
+
+                # Encode policy as base64 and decode in the pod to avoid shell
+                # quoting issues and kubectl cp dependency on `tar`.
+                policy_b64 = base64.b64encode(json.dumps(policy_content).encode("utf-8")).decode("ascii")
+                self.run(
+                    f"{mc} sh -c \"echo '{policy_b64}' | base64 -d > {policy_path_pod}\"",
+                    silent=True,
+                )
+
+                # Create policy in MinIO (idempotent: ignore already-exists error)
+                self.run(
+                    f"{mc} mc admin policy create minio {policy_name} {policy_path_pod}",
+                    check=False,
+                    silent=True,
+                )
+
+                # Attach policy to user
+                self.run(
+                    f"{mc} mc admin policy attach minio {policy_name} --user {connector_name}",
+                    check=False,
+                    silent=True,
+                )
+
+                # Verify
+                result = self.run_silent(
+                    f"kubectl exec -n {namespace} {minio_pod} -- mc admin user info minio {connector_name}"
+                )
+                if result and policy_name in result:
+                    print(f"MinIO policy '{policy_name}' attached to '{connector_name}'")
+                else:
+                    print(f"Warning: policy attach may have failed for '{connector_name}'. Check MinIO user info.")
+            except (IOError, json.JSONDecodeError) as e:
+                print(f"Warning: Could not attach MinIO policy: {e}")
+        else:
+            print(f"Warning: Policy file not found at {policy_file_path} — skipping policy attach")
+
         print("MinIO configured")
         return True
+
+    def ensure_minio_policy_attached(self, connector_name, ds_name=None):
+        """Idempotently ensure the S3 policy is attached to a connector MinIO user.
+
+        Safe to call at any level; checks current state before taking action.
+        """
+        ds_name = ds_name or self._dataspace_name()
+        namespace = self.config.NS_COMMON
+        policy_name = f"policy-{ds_name}-{connector_name}"
+
+        deployer_config = self.config_adapter.load_deployer_config()
+        minio_endpoint = deployer_config.get("MINIO_ENDPOINT", "http://127.0.0.1:9000")
+        minio_admin_user = deployer_config.get("MINIO_ADMIN_USER", "admin")
+        minio_admin_pass = deployer_config.get("MINIO_ADMIN_PASS", "aPassword1234")
+
+        minio_pod = self.infrastructure.get_pod_by_name(namespace, self.config.service_minio())
+        if not minio_pod:
+            print(f"  MinIO pod not found — skipping policy ensure for {connector_name}")
+            return False
+
+        mc = f"kubectl exec -n {namespace} {minio_pod} --"
+        self.run(f"{mc} mc alias set minio {minio_endpoint} {minio_admin_user} {minio_admin_pass}", silent=True)
+
+        user_info = self.run_silent(f"{mc} mc admin user info minio {connector_name}")
+        if user_info and policy_name in user_info:
+            print(f"  MinIO policy '{policy_name}' already present on '{connector_name}'")
+            return True
+
+        policy_file_path = os.path.join(
+            self.config.repo_dir(),
+            "deployments",
+            "DEV",
+            ds_name,
+            f"{policy_name}.json",
+        )
+        if not os.path.exists(policy_file_path):
+            print(f"  Warning: policy file not found: {policy_file_path}")
+            return False
+
+        try:
+            with open(policy_file_path) as f:
+                policy_content = json.load(f)
+            if not policy_content:
+                print(f"  Warning: policy file {policy_file_path} is empty")
+                return False
+
+            policy_path_pod = f"/tmp/{policy_name}.json"
+            policy_b64 = base64.b64encode(json.dumps(policy_content).encode("utf-8")).decode("ascii")
+            self.run(f"{mc} sh -c \"echo '{policy_b64}' | base64 -d > {policy_path_pod}\"", silent=True)
+            self.run(f"{mc} mc admin policy create minio {policy_name} {policy_path_pod}", check=False, silent=True)
+            self.run(f"{mc} mc admin policy attach minio {policy_name} --user {connector_name}", check=False, silent=True)
+
+            user_info = self.run_silent(f"{mc} mc admin user info minio {connector_name}")
+            if user_info and policy_name in user_info:
+                print(f"  MinIO policy '{policy_name}' re-attached to '{connector_name}'")
+                return True
+
+            print(f"  Warning: policy attach could not be verified for '{connector_name}'")
+            return False
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"  Warning: could not attach MinIO policy: {e}")
+            return False
+
+    def ensure_all_minio_policies(self, connectors):
+        """Ensure MinIO S3 policies are attached for every connector in the list."""
+        print("\nEnsuring MinIO policies...")
+        all_ok = all(self.ensure_minio_policy_attached(c) for c in connectors)
+        if all_ok:
+            print("All MinIO policies confirmed\n")
+        else:
+            print("Warning: one or more MinIO policies could not be confirmed\n")
+        return all_ok
 
     def force_clean_postgres_db(self, db_name, db_user):
         print(f"\nCleaning PostgreSQL database '{db_name}'...")
@@ -594,7 +748,7 @@ class INESDataConnectorsAdapter:
         print("========================================\n")
 
         repo_dir = self.config.repo_dir()
-        ds_name = self.config.DS_NAME
+        ds_name = self._dataspace_name()
         python_exec = self.config.python_exec()
 
         if not os.path.exists(repo_dir):
@@ -759,7 +913,7 @@ class INESDataConnectorsAdapter:
                 continue
             pod_name = parts[0]
             status = parts[2]
-            if "conn-" in pod_name and "interface" not in pod_name and status != "Running":
+            if self._is_connector_runtime_pod(pod_name) and status != "Running":
                 print(f"Connector pod not running: {pod_name} ({status})")
                 failed = True
 
@@ -785,7 +939,7 @@ class INESDataConnectorsAdapter:
         return True
 
     def show_connector_logs(self):
-        namespace = self.config.DS_NAME
+        namespace = self.config.namespace_demo()
         pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not pods:
             print("No pods found in namespace")
@@ -794,7 +948,7 @@ class INESDataConnectorsAdapter:
         connector_pods = []
         for line in pods.splitlines():
             pod_name = line.split()[0]
-            if "conn-" in pod_name and "interface" not in pod_name:
+            if self._is_connector_runtime_pod(pod_name):
                 connector_pods.append(pod_name)
 
         if not connector_pods:
@@ -898,11 +1052,10 @@ class INESDataConnectorsAdapter:
             if not parts:
                 continue
             name = parts[0]
-            if name.startswith("conn-") and "interface" not in name:
+            if self._is_connector_runtime_pod(name):
                 connectors.add("-".join(name.split("-")[:3]))
 
         return sorted(connectors)
 
     def describe(self) -> str:
         return "INESDataConnectorsAdapter contains connector logic for INESData."
-

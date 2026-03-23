@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import socket
 import subprocess
 import time
@@ -38,6 +39,12 @@ class INESDataInfrastructureAdapter:
         if root_cause:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
+
+    def _dataspace_name(self):
+        getter = getattr(self.config, "dataspace_name", None)
+        if callable(getter):
+            return getter()
+        return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
     def announce_level(self, level, title):
         if level in self._announced_levels:
@@ -320,11 +327,24 @@ class INESDataInfrastructureAdapter:
     ):
         print("Executing helm upgrade --install...")
 
+        if isinstance(values_file, (list, tuple)):
+            values_files = [str(path) for path in values_file if str(path).strip()]
+        else:
+            values_files = [str(values_file)]
+
+        if not values_files:
+            values_files = ["values.yaml"]
+
+        values_args = " ".join(
+            f"-f {shlex.quote(path)}"
+            for path in values_files
+        )
+
         cmd = (
-            f"helm upgrade --install {release_name} . "
-            f"-n {namespace} "
+            f"helm upgrade --install {shlex.quote(str(release_name))} . "
+            f"-n {shlex.quote(str(namespace))} "
             f"--create-namespace "
-            f"-f {values_file} "
+            f"{values_args} "
         )
         if not wait:
             cmd += "--wait=false "
@@ -380,6 +400,9 @@ class INESDataInfrastructureAdapter:
 
     def _is_ignored_transient_hook_pod(self, namespace, pod_name):
         if "keycloak-config-cli" in pod_name:
+            return True
+
+        if "minio-post-job" in pod_name:
             return True
 
         if namespace != "ingress-nginx":
@@ -779,7 +802,7 @@ class INESDataInfrastructureAdapter:
             print(f"Error parsing final Vault status: {e}")
             return False
 
-    def ensure_vault_unsealed(self):
+    def ensure_vault_unsealed(self, timeout=30, poll_interval=2):
         print("Checking Vault state...")
         pod = self.get_pod_by_name(self.config.NS_COMMON, "vault")
 
@@ -802,12 +825,33 @@ class INESDataInfrastructureAdapter:
             with open(self.config.vault_keys_path()) as f:
                 keys = json.load(f)
             unseal_key = keys["unseal_keys_hex"][0]
-            self.run(f"kubectl exec {pod} -n {self.config.NS_COMMON} -- vault operator unseal {unseal_key}")
-            print("Vault unsealed")
+            unseal_result = self.run(
+                f"kubectl exec {pod} -n {self.config.NS_COMMON} -- vault operator unseal {unseal_key}",
+                check=False,
+            )
+            if unseal_result is None:
+                print("Vault unseal command failed")
+                return False
         else:
             print("Vault already unsealed")
 
-        return True
+        deadline = time.time() + max(int(timeout), 1)
+        while time.time() <= deadline:
+            final_status = self.run_silent(
+                f"kubectl exec {pod} -n {self.config.NS_COMMON} -- vault status -format=json"
+            )
+            if final_status:
+                try:
+                    final_data = json.loads(final_status)
+                except json.JSONDecodeError:
+                    final_data = None
+                if final_data and final_data.get("initialized") and not final_data.get("sealed"):
+                    print("Vault ready and unsealed")
+                    return True
+            time.sleep(max(poll_interval, 1))
+
+        print("Vault did not become ready and unsealed in time")
+        return False
 
     def sync_vault_token_to_deployer_config(self):
         vault_json_path = self.config.vault_keys_path()
@@ -925,7 +969,7 @@ class INESDataInfrastructureAdapter:
     def sync_common_values(self):
         values_path = self.config.values_path()
         config_path = self.config.deployer_config_path()
-        ds_name = self.config.DS_NAME
+        ds_name = self._dataspace_name()
 
         if not os.path.exists(values_path):
             print("File not found: common/values.yaml")
@@ -1367,7 +1411,7 @@ class INESDataInfrastructureAdapter:
         self.reconcile_common_services_source_of_truth()
 
         print("\nConfiguring hosts...")
-        hosts_entries = self.config_adapter.generate_hosts(self.config.DS_NAME)
+        hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
         self.manage_hosts_entries(hosts_entries)
 
         self.add_helm_repos()

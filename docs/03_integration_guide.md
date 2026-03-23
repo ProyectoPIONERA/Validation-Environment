@@ -15,8 +15,6 @@ Para integrar un componente en este proyecto, los cambios deben concentrarse en 
 - `validation/`
 - `framework/`
 
-Si una integración te pide tocar `validation/` o `framework/`, no lo tomes como flujo normal de trabajo del componente.
-
 ## Dos formas de integrar un componente
 
 ### 1. Integración vía API
@@ -97,10 +95,3 @@ Eso significa:
 
 - el desarrollador entrega el componente integrado
 - el framework decide cómo y cuándo se añaden pruebas en `validation/core/` o `validation/components/`
-
-## Señales de que vas por buen camino
-
-- has trabajado en `inesdata-deployment/components/` o en `adapters/inesdata/sources/`
-- no has tenido que tocar `framework/`
-- no has tenido que tocar `validation/`
-- el despliegue sigue funcionando desde `inesdata.py`

@@ -8,7 +8,7 @@ from runtime_dependencies import ensure_runtime_dependencies
 
 ensure_runtime_dependencies(
     requirements_path=os.path.join(os.path.dirname(__file__), "requirements.txt"),
-    module_names=("requests", "matplotlib", "kafka", "docker", "testcontainers", "yaml"),
+    module_names=("requests", "matplotlib", "kafka", "docker", "testcontainers", "yaml", "minio"),
     label="framework root",
 )
 
@@ -18,6 +18,7 @@ from framework.kafka_manager import KafkaManager
 from framework.metrics_collector import MetricsCollector
 from framework.reporting.experiment_loader import ExperimentLoader
 from framework.reporting.report_generator import ExperimentReportGenerator
+from framework.transfer_storage_verifier import TransferStorageVerifier
 from framework.validation_engine import ValidationEngine
 
 
@@ -106,6 +107,11 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         "ds_domain_base",
     )
     ds_name = getattr(getattr(adapter, "config", None), "DS_NAME", "demo")
+    transfer_storage_verifier = TransferStorageVerifier(
+        load_connector_credentials=load_connector_credentials,
+        load_deployer_config=load_deployer_config,
+        experiment_storage=ExperimentStorage,
+    )
 
     return engine_cls(
         load_connector_credentials=load_connector_credentials,
@@ -114,6 +120,7 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         validation_test_entities_absent=validation_test_entities_absent,
         ds_domain_resolver=ds_domain_resolver,
         ds_name=ds_name,
+        transfer_storage_verifier=transfer_storage_verifier,
     )
 
 
@@ -378,6 +385,7 @@ def run_validate(
         adapter=type(adapter).__name__,
         baseline=baseline,
     )
+    experiment_storage.newman_reports_dir(experiment_dir)
 
     validation_engine = build_validation_engine(adapter, engine_cls=validation_engine_cls)
     run_method = validation_engine.run
@@ -387,25 +395,46 @@ def run_validate(
     except (TypeError, ValueError):
         parameters = {}
 
-    if "experiment_dir" in parameters:
-        validation_result = run_method(connectors, experiment_dir=experiment_dir)
-    else:
-        validation_result = run_method(connectors)
-
     metrics_collector = build_metrics_collector(
         adapter,
         collector_cls=MetricsCollector,
         experiment_storage=experiment_storage,
     )
-    newman_request_metrics = metrics_collector.collect_newman_request_metrics(
-        experiment_storage.newman_reports_dir(experiment_dir),
-        experiment_dir=experiment_dir,
-    )
+    validation_result = None
+    validation_error = None
+
+    try:
+        if "experiment_dir" in parameters:
+            validation_result = run_method(connectors, experiment_dir=experiment_dir)
+        else:
+            validation_result = run_method(connectors)
+    except Exception as exc:
+        validation_error = exc
+
+    newman_request_metrics = None
+    try:
+        collect_newman_metrics = getattr(metrics_collector, "collect_experiment_newman_metrics", None)
+        if callable(collect_newman_metrics):
+            newman_request_metrics = collect_newman_metrics(experiment_dir)
+        else:
+            newman_request_metrics = metrics_collector.collect_newman_request_metrics(
+                experiment_storage.newman_reports_dir(experiment_dir),
+                experiment_dir=experiment_dir,
+            )
+    except Exception:
+        if validation_error is None:
+            raise
+        print("[WARNING] Newman metrics collection failed after validation error")
+        newman_request_metrics = []
+
+    if validation_error is not None:
+        raise validation_error
 
     return {
         "experiment_dir": experiment_dir,
         "validation": validation_result,
         "newman_request_metrics": newman_request_metrics,
+        "storage_checks": list(getattr(validation_engine, "last_storage_checks", []) or []),
     }
 
 
@@ -447,41 +476,50 @@ def run_metrics(
     kafka_metrics = None
     if kafka_enabled:
         try:
-            kafka_runtime_overrides = None
-            broker_source = None
-            bootstrap_servers = kafka_manager.ensure_kafka_running() if kafka_manager is not None else None
-            if kafka_manager is not None:
-                broker_source = "auto-provisioned" if getattr(kafka_manager, "started_by_framework", False) else "external"
-            if bootstrap_servers:
-                kafka_runtime_overrides = {"bootstrap_servers": bootstrap_servers}
-                collect_kafka = metrics_collector.collect_kafka_benchmark
-                try:
-                    parameters = inspect.signature(collect_kafka).parameters
-                except (TypeError, ValueError):
-                    parameters = {}
-
-                kwargs = {"run_index": 1}
-                if "kafka_runtime_overrides" in parameters:
-                    kwargs["kafka_runtime_overrides"] = kafka_runtime_overrides
-                kafka_metrics = collect_kafka(experiment_dir, **kwargs)
-                if isinstance(kafka_metrics, dict):
-                    if broker_source is not None:
-                        kafka_metrics.setdefault("broker_source", broker_source)
-                    if bootstrap_servers is not None:
-                        kafka_metrics.setdefault("bootstrap_servers", bootstrap_servers)
+            helper = getattr(metrics_collector, "run_kafka_benchmark_experiment", None)
+            if callable(helper):
+                kafka_metrics = helper(
+                    experiment_dir,
+                    iterations=1,
+                    kafka_manager=kafka_manager,
+                )
             else:
-                reason = getattr(kafka_manager, "last_error", None) or "Kafka broker unavailable and auto-provisioning failed"
-                kafka_metrics = {
-                    "kafka_benchmark": {
-                        "status": "skipped",
-                        "reason": reason,
+                kafka_runtime_overrides = None
+                broker_source = None
+                bootstrap_servers = kafka_manager.ensure_kafka_running() if kafka_manager is not None else None
+                if kafka_manager is not None:
+                    broker_source = "auto-provisioned" if getattr(kafka_manager, "started_by_framework", False) else "external"
+                if bootstrap_servers:
+                    kafka_runtime_overrides = {"bootstrap_servers": bootstrap_servers}
+                    collect_kafka = metrics_collector.collect_kafka_benchmark
+                    try:
+                        parameters = inspect.signature(collect_kafka).parameters
+                    except (TypeError, ValueError):
+                        parameters = {}
+
+                    kwargs = {"run_index": 1}
+                    if "kafka_runtime_overrides" in parameters:
+                        kwargs["kafka_runtime_overrides"] = kafka_runtime_overrides
+                    kafka_metrics = collect_kafka(experiment_dir, **kwargs)
+                    if isinstance(kafka_metrics, dict):
+                        if broker_source is not None:
+                            kafka_metrics.setdefault("broker_source", broker_source)
+                        if bootstrap_servers is not None:
+                            kafka_metrics.setdefault("bootstrap_servers", bootstrap_servers)
+                        experiment_storage.save_kafka_metrics_json(kafka_metrics, experiment_dir)
+                else:
+                    reason = getattr(kafka_manager, "last_error", None) or "Kafka broker unavailable and auto-provisioning failed"
+                    kafka_metrics = {
+                        "kafka_benchmark": {
+                            "status": "skipped",
+                            "reason": reason,
+                        }
                     }
-                }
-                if broker_source is not None:
-                    kafka_metrics["broker_source"] = broker_source
+                    if broker_source is not None:
+                        kafka_metrics["broker_source"] = broker_source
+                    experiment_storage.save_kafka_metrics_json(kafka_metrics, experiment_dir)
 
             if kafka_metrics is not None:
-                experiment_storage.save_kafka_metrics_json(kafka_metrics, experiment_dir)
                 return {
                     "experiment_dir": experiment_dir,
                     "metrics": metrics,

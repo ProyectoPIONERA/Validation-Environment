@@ -2,6 +2,9 @@ import os
 import socket
 import time
 
+from .kafka_container_factory import KafkaContainerFactory
+from .kafka_testcontainer import FrameworkKafkaContainer
+
 
 class KafkaManager:
     """Ensures a Kafka broker is available for optional benchmarks."""
@@ -12,6 +15,7 @@ class KafkaManager:
         runtime_config=None,
         adapter_config_loader=None,
         container_class=None,
+        container_factory=None,
         image="confluentinc/cp-kafka:latest",
         wait_timeout_seconds=60,
         poll_interval_seconds=1,
@@ -20,12 +24,14 @@ class KafkaManager:
         self.runtime_config = runtime_config or {}
         self.adapter_config_loader = adapter_config_loader
         self.container_class = container_class
+        self.container_factory = container_factory or KafkaContainerFactory()
         self.image = image
         self.wait_timeout_seconds = wait_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.container = None
         self.started_by_framework = False
         self.last_error = None
+        self.cluster_bootstrap_servers = None
 
     def _load_adapter_config(self):
         if callable(self.adapter_config_loader):
@@ -45,6 +51,13 @@ class KafkaManager:
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
         return candidates
+
+    def _load_manager_config(self):
+        config = {}
+        config.update(self._load_adapter_config())
+        config.update(self.runtime_config)
+        config.setdefault("cluster_advertised_host", config.get("cluster_advertised_host") or "host.docker.internal")
+        return config
 
     @staticmethod
     def _normalize_bootstrap_servers(bootstrap_servers):
@@ -86,8 +99,7 @@ class KafkaManager:
             return self.container_class
 
         try:
-            from testcontainers.kafka import KafkaContainer
-            return KafkaContainer
+            return FrameworkKafkaContainer
         except Exception as exc:
             raise RuntimeError(
                 f"testcontainers Kafka support is not available: {exc}"
@@ -96,15 +108,23 @@ class KafkaManager:
     def start_kafka(self):
         """Start a Kafka container and wait until the broker becomes available."""
         container_class = self._load_container_class()
-        container = container_class(self.image)
+        container = self.container_factory.create_container(
+            container_class,
+            self.image,
+            config=self._load_manager_config(),
+        )
         container.start()
 
         bootstrap_servers = None
         get_bootstrap_server = getattr(container, "get_bootstrap_server", None)
+        get_cluster_bootstrap_server = getattr(container, "get_cluster_bootstrap_server", None)
         if callable(get_bootstrap_server):
             bootstrap_servers = get_bootstrap_server()
         else:
             bootstrap_servers = getattr(container, "bootstrap_servers", None)
+        cluster_bootstrap_servers = None
+        if callable(get_cluster_bootstrap_server):
+            cluster_bootstrap_servers = get_cluster_bootstrap_server()
 
         deadline = time.time() + self.wait_timeout_seconds
         while time.time() < deadline:
@@ -112,6 +132,7 @@ class KafkaManager:
                 self.container = container
                 self.started_by_framework = True
                 self.bootstrap_servers = bootstrap_servers
+                self.cluster_bootstrap_servers = cluster_bootstrap_servers
                 self.last_error = None
                 return bootstrap_servers
             time.sleep(self.poll_interval_seconds)
@@ -123,10 +144,22 @@ class KafkaManager:
 
     def ensure_kafka_running(self):
         """Return reachable bootstrap servers or try to auto-start Kafka."""
+        previous_bootstrap_servers = self.bootstrap_servers
+        previous_cluster_bootstrap_servers = self.cluster_bootstrap_servers
+        previous_started_by_framework = self.started_by_framework
         for candidate in self._candidate_bootstrap_servers():
             if self.is_kafka_available(candidate):
                 self.bootstrap_servers = candidate
-                self.started_by_framework = False
+                explicit_cluster_bootstrap_servers = self._load_manager_config().get("cluster_bootstrap_servers")
+                if explicit_cluster_bootstrap_servers:
+                    self.cluster_bootstrap_servers = explicit_cluster_bootstrap_servers
+                elif candidate == previous_bootstrap_servers and previous_cluster_bootstrap_servers:
+                    self.cluster_bootstrap_servers = previous_cluster_bootstrap_servers
+                else:
+                    self.cluster_bootstrap_servers = None
+                self.started_by_framework = (
+                    previous_started_by_framework and candidate == previous_bootstrap_servers and self.container is not None
+                )
                 self.last_error = None
                 return candidate
 
@@ -151,6 +184,7 @@ class KafkaManager:
         finally:
             self.container = None
             self.started_by_framework = False
+            self.cluster_bootstrap_servers = None
 
     def describe(self) -> str:
         return "KafkaManager ensures a Kafka broker is available for benchmarks."

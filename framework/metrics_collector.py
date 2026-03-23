@@ -57,6 +57,26 @@ class MetricsCollector:
     def _is_auto_mode(self):
         return self.auto_mode() if callable(self.auto_mode) else self.auto_mode
 
+    @staticmethod
+    def _build_kafka_skip_payload(reason, broker_source=None, bootstrap_servers=None):
+        payload = {
+            "kafka_benchmark": {
+                "status": "skipped",
+                "reason": reason,
+            }
+        }
+        if broker_source is not None:
+            payload["broker_source"] = broker_source
+        if bootstrap_servers is not None:
+            payload["bootstrap_servers"] = bootstrap_servers
+        return payload
+
+    @staticmethod
+    def _broker_source_from_manager(kafka_manager):
+        if kafka_manager is None:
+            return None
+        return "auto-provisioned" if getattr(kafka_manager, "started_by_framework", False) else "external"
+
     def measure_connector_latency(self, source_connector, target_connector, repetitions=10):
         """Measure latency (round-trip time) between two connectors."""
         build_connector_url = self._require_dependency(
@@ -225,6 +245,57 @@ class MetricsCollector:
             self.experiment_storage.save_aggregated_metrics(aggregated_metrics, experiment_dir)
 
         return raw_requests
+
+    def collect_experiment_newman_metrics(self, experiment_dir):
+        """Collect Newman-derived metrics for a persisted experiment directory."""
+        if not experiment_dir:
+            return []
+
+        report_dir = self.experiment_storage.newman_reports_dir(experiment_dir)
+        return self.collect_newman_request_metrics(report_dir, experiment_dir=experiment_dir)
+
+    def run_kafka_benchmark_experiment(self, experiment_dir, iterations=1, kafka_manager=None):
+        """Run Kafka benchmark iterations and persist kafka_metrics.json."""
+        if not self.kafka_enabled:
+            return None
+
+        bootstrap_servers = None
+        broker_source = None
+        kafka_runtime_overrides = None
+        if kafka_manager is not None:
+            bootstrap_servers = kafka_manager.ensure_kafka_running()
+            broker_source = self._broker_source_from_manager(kafka_manager)
+            if not bootstrap_servers:
+                payload = self._build_kafka_skip_payload(
+                    getattr(kafka_manager, "last_error", None) or "Kafka broker unavailable and auto-provisioning failed",
+                    broker_source=broker_source,
+                    bootstrap_servers=bootstrap_servers,
+                )
+                self.experiment_storage.save_kafka_metrics_json(payload, experiment_dir)
+                return payload
+            kafka_runtime_overrides = {"bootstrap_servers": bootstrap_servers}
+
+        results = []
+        for run_index in range(1, max(int(iterations), 1) + 1):
+            result = self.collect_kafka_benchmark(
+                experiment_dir,
+                run_index=run_index,
+                kafka_runtime_overrides=kafka_runtime_overrides,
+            )
+            if result is not None:
+                results.append(result)
+
+        if not results:
+            return None
+
+        persisted_payload = dict(results[0]) if len(results) == 1 else {"runs": results}
+        if broker_source is not None:
+            persisted_payload["broker_source"] = broker_source
+        if bootstrap_servers is not None:
+            persisted_payload["bootstrap_servers"] = bootstrap_servers
+
+        self.experiment_storage.save_kafka_metrics_json(persisted_payload, experiment_dir)
+        return persisted_payload
 
     @staticmethod
     def _percentile(values, percentile):

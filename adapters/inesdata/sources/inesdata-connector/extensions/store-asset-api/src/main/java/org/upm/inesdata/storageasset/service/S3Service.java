@@ -22,7 +22,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -63,20 +62,26 @@ public class S3Service {
                 .contentLength(contentLength)
                 .build();
 
-        CompletableFuture<UploadPartResponse> uploadFuture = s3AsyncClient.uploadPart(uploadPartRequest, AsyncRequestBody.fromBytes(buffer));
-        uploadFuture.thenAccept(uploadPartResponse -> {
+        try {
+            UploadPartResponse uploadPartResponse = s3AsyncClient
+                    .uploadPart(uploadPartRequest, AsyncRequestBody.fromBytes(buffer))
+                    .join();
             uploadState.completedParts.add(CompletedPart.builder().partNumber(chunkIndex + 1).eTag(uploadPartResponse.eTag()).build());
 
             if (chunkIndex == totalChunks - 1) {
                 completeMultipartUpload(key, uploadState);
                 multipartUploadStates.remove(key);
             }
-        }).exceptionally(e -> {
-            abortMultipartUpload(key, uploadState);
+        } catch (Exception e) {
+            try {
+                abortMultipartUpload(key, uploadState);
+            } catch (Exception abortException) {
+                monitor.warning("Error aborting multipart upload for file " + key, abortException);
+            }
             multipartUploadStates.remove(key);
             monitor.warning("Error uploading chunk " + chunkIndex + " for file " + key, e);
             throw new RuntimeException("Error uploading chunk " + chunkIndex + " for file " + key, e);
-        });
+        }
     }
 
     private MultipartUploadState initMultipartUpload(String key) {

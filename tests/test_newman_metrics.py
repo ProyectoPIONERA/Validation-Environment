@@ -88,12 +88,104 @@ class NewmanMetricsTests(unittest.TestCase):
                 executor,
                 "run_newman",
                 side_effect=lambda path, env, report_path=None, environment_path=None: report_path,
+            ), mock.patch.object(
+                executor,
+                "_should_wait_for_contract_agreement",
+                return_value=False,
             ):
                 reports = executor.run_validation_collections({"provider": "conn-a"}, report_dir=tmpdir)
 
         self.assertEqual(len(reports), 6)
         self.assertTrue(reports[0].endswith("01_environment_health.json"))
         self.assertTrue(reports[-1].endswith("06_consumer_transfer.json"))
+
+    def test_run_validation_collections_waits_for_contract_agreement_after_collection_05(self):
+        executor = NewmanExecutor()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.object(
+                executor,
+                "run_newman",
+                side_effect=lambda path, env, report_path=None, environment_path=None: report_path,
+            ) as mock_run, mock.patch.object(
+                executor,
+                "_should_wait_for_contract_agreement",
+                return_value=True,
+            ), mock.patch.object(
+                executor,
+                "wait_for_contract_agreement",
+                return_value="agreement-123",
+            ) as mock_wait:
+                reports = executor.run_validation_collections({"provider": "conn-a"}, report_dir=tmpdir)
+
+        self.assertEqual(len(reports), 6)
+        self.assertTrue(mock_run.call_args_list[4].args[0].endswith("05_consumer_negotiation.json"))
+        mock_wait.assert_called_once()
+        self.assertTrue(mock_wait.call_args.args[0].endswith("environment.json"))
+
+    @mock.patch("framework.newman_executor.time.sleep", return_value=None)
+    @mock.patch("framework.newman_executor.requests.post")
+    def test_wait_for_contract_agreement_updates_environment_when_available(self, mock_post, _mock_sleep):
+        executor = NewmanExecutor()
+        pending_response = mock.Mock(status_code=200)
+        pending_response.json.return_value = [
+            {"@id": "neg-1", "state": "IN_PROGRESS"}
+        ]
+        ready_response = mock.Mock(status_code=200)
+        ready_response.json.return_value = [
+            {"@id": "neg-1", "state": "FINALIZED", "contractAgreementId": "agreement-123"}
+        ]
+        mock_post.side_effect = [pending_response, ready_response]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            environment_path = os.path.join(tmpdir, "environment.json")
+            executor._write_environment_file(
+                {
+                    "consumer": "conn-b",
+                    "dsDomain": "example.local",
+                    "consumer_jwt": "token-123",
+                    "e2e_negotiation_id": "neg-1",
+                },
+                environment_path,
+            )
+
+            agreement_id = executor.wait_for_contract_agreement(
+                environment_path,
+                timeout=1,
+                poll_interval=0,
+            )
+            _, env_values = executor._read_environment_values(environment_path)
+
+        self.assertEqual(agreement_id, "agreement-123")
+        self.assertEqual(env_values["e2e_agreement_id"], "agreement-123")
+
+    @mock.patch("framework.newman_executor.requests.post")
+    def test_wait_for_contract_agreement_raises_when_timeout_expires(self, mock_post):
+        executor = NewmanExecutor()
+        pending_response = mock.Mock(status_code=200)
+        pending_response.json.return_value = [
+            {"@id": "neg-1", "state": "IN_PROGRESS"}
+        ]
+        mock_post.return_value = pending_response
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            environment_path = os.path.join(tmpdir, "environment.json")
+            executor._write_environment_file(
+                {
+                    "consumer": "conn-b",
+                    "dsDomain": "example.local",
+                    "consumer_jwt": "token-123",
+                    "e2e_negotiation_id": "neg-1",
+                },
+                environment_path,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Timed out waiting for contractAgreementId"):
+                executor.wait_for_contract_agreement(
+                    environment_path,
+                    timeout=0,
+                    poll_interval=0,
+                )
 
     def test_parse_newman_report_extracts_request_metrics(self):
         collector = MetricsCollector()
@@ -482,6 +574,38 @@ class NewmanMetricsTests(unittest.TestCase):
         self.assertEqual(env_vars["keycloakClientId"], "dataspace-users")
         report_dir = fake_executor.run_validation_collections.call_args.kwargs["report_dir"]
         self.assertIn("newman_reports", report_dir)
+
+    def test_validation_engine_collects_transfer_storage_checks(self):
+        fake_executor = mock.Mock()
+        fake_executor.run_validation_collections.return_value = ["report.json"]
+        fake_verifier = mock.Mock()
+        fake_verifier.capture_consumer_bucket_snapshot.return_value = {}
+        fake_verifier.verify_consumer_transfer_persistence.return_value = {
+            "status": "passed",
+            "bucket_name": "demo-conn-b",
+        }
+        engine = ValidationEngine(
+            newman_executor=fake_executor,
+            load_connector_credentials=lambda name: {"connector_user": {"user": name, "passwd": "secret"}},
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak-admin.local",
+                "KC_INTERNAL_URL": "http://keycloak.local",
+            },
+            cleanup_test_entities=lambda connector: None,
+            validation_test_entities_absent=lambda connector: (True, []),
+            ds_domain_resolver=lambda: "example.local",
+            ds_name="demo",
+            transfer_storage_verifier=fake_verifier,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = engine.run(["conn-a", "conn-b"], experiment_dir=tmpdir)
+
+        self.assertEqual(reports, ["report.json", "report.json"])
+        self.assertEqual(len(engine.last_storage_checks), 2)
+        fake_verifier.capture_consumer_bucket_snapshot.assert_any_call("conn-b", "demo-conn-b")
+        fake_verifier.capture_consumer_bucket_snapshot.assert_any_call("conn-a", "demo-conn-a")
+        self.assertEqual(fake_verifier.verify_consumer_transfer_persistence.call_count, 2)
 
     def test_experiment_runner_bundles_newman_request_metrics(self):
         class FakeAdapter:

@@ -50,3 +50,11 @@ Thumbs.db
 .venv/
 logs
 docs_
+bugs
+
+# Playwright local artifacts
+/validation/ui/node_modules/
+/validation/ui/playwright-report/
+/validation/ui/test-results/
+/validation/ui/.env
+/validation/components/ontology_hub/tools

@@ -213,6 +213,32 @@ class KafkaMetricsTests(unittest.TestCase):
         self.assertEqual(result["kafka_benchmark"]["run_index"], 4)
         self.assertEqual(result["kafka_benchmark"]["experiment_id"], "experiment_001")
 
+    def test_metrics_collector_run_kafka_benchmark_experiment_persists_skipped_status(self):
+        class FakeKafkaManager:
+            started_by_framework = True
+            last_error = "docker unavailable"
+
+            def ensure_kafka_running(self):
+                return None
+
+        collector = MetricsCollector(
+            experiment_storage=ExperimentStorage,
+            kafka_enabled=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            payload = collector.run_kafka_benchmark_experiment(
+                tmpdir,
+                iterations=1,
+                kafka_manager=FakeKafkaManager(),
+            )
+            with open(os.path.join(tmpdir, "kafka_metrics.json"), "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+
+        self.assertEqual(payload["kafka_benchmark"]["status"], "skipped")
+        self.assertEqual(stored["broker_source"], "auto-provisioned")
+        self.assertIn("docker unavailable", stored["kafka_benchmark"]["reason"])
+
     def test_experiment_runner_persists_kafka_metrics_json(self):
         class FakeAdapter:
             def deploy_infrastructure(self):

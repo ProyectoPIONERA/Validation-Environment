@@ -77,6 +77,34 @@ class ConnectorManagementReadinessTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("All connectors reachable", output.getvalue())
 
+    def test_validate_connectors_deployment_ignores_interface_rollout_pods(self):
+        def run_silent_with_interface_rollout(_cmd, cwd=None):
+            del cwd
+            return (
+                "conn-a-demo-111 1/1 Running 0 1m\n"
+                "conn-b-demo-222 1/1 Running 0 1m\n"
+                "conn-a-demo-interface-aaa 1/1 Terminating 0 10s\n"
+                "conn-b-demo-inteface-bbb 1/1 Terminating 0 10s"
+            )
+
+        adapter = INESDataConnectorsAdapter(
+            run=self._run,
+            run_silent=run_silent_with_interface_rollout,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=None,
+            config_adapter=ConnectorReadinessConfigAdapter(),
+            config_cls=ConnectorReadinessConfig,
+        )
+        adapter.wait_for_connector_ready = lambda connector: True
+        adapter.wait_for_management_api_ready = lambda connector: True
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = adapter.validate_connectors_deployment(["conn-a", "conn-b"])
+
+        self.assertTrue(result)
+        self.assertNotIn("Connector pod not running", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

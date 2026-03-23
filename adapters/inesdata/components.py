@@ -1,5 +1,6 @@
 import os
 import shlex
+import tempfile
 import time
 
 import yaml
@@ -45,6 +46,12 @@ class INESDataComponentsAdapter:
         if root_cause:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
+
+    def _dataspace_name(self):
+        getter = getattr(self.config, "dataspace_name", None)
+        if callable(getter):
+            return getter()
+        return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
     @staticmethod
     def _normalize_component_key(component: str) -> str:
@@ -156,7 +163,7 @@ class INESDataComponentsAdapter:
         )
 
     def _resolve_component_release_name(self, normalized_component: str) -> str:
-        ds_name = self.config.DS_NAME
+        ds_name = self._dataspace_name()
         if normalized_component == "registration-service":
             return self.config.helm_release_rs()
         if normalized_component == "public-portal":
@@ -175,6 +182,15 @@ class INESDataComponentsAdapter:
         if raw in ("0", "false", "no", "n", "off"):
             return False
         return default
+
+    @staticmethod
+    def _strip_url_scheme(host_or_url: str) -> str:
+        value = (host_or_url or "").strip().rstrip("/")
+        if value.startswith("http://"):
+            return value[len("http://"):]
+        if value.startswith("https://"):
+            return value[len("https://"):]
+        return value
 
     @staticmethod
     def _safe_load_yaml_file(path: str) -> dict:
@@ -330,6 +346,10 @@ class INESDataComponentsAdapter:
 
     def _infer_component_hostname(self, normalized_component: str, values_file: str, deployer_config: dict):
         """Infer component hostname (ingress host) from Helm values."""
+        configured_host = self._configured_component_host(normalized_component, deployer_config)
+        if configured_host:
+            return configured_host
+
         try:
             values = self._safe_load_yaml_file(values_file)
         except Exception:
@@ -350,6 +370,84 @@ class INESDataComponentsAdapter:
             return f"{normalized_component}-{ds_name}.{ds_domain}"
 
         return None
+
+    def _configured_component_host(self, normalized_component: str, deployer_config: dict) -> str:
+        normalized = self._normalize_component_key(normalized_component)
+
+        env_key = normalized.upper().replace("-", "_")
+        explicit = (
+            deployer_config.get(f"{env_key}_HOST")
+            or deployer_config.get(f"{env_key}_HOSTNAME")
+            or deployer_config.get(f"{env_key}_URL")
+        )
+        explicit_host = self._strip_url_scheme(explicit)
+        if explicit_host:
+            return explicit_host
+
+        if normalized == "ontology-hub":
+            ds_domain = (deployer_config.get("DS_DOMAIN_BASE") or "").strip()
+            ds_name = (getattr(self.config, "DS_NAME", "") or "").strip()
+            if ds_domain and ds_name:
+                return f"ontology-hub-{ds_name}.{ds_domain}"
+
+        return ""
+
+    def _component_values_override_payload(self, normalized_component: str, deployer_config: dict) -> dict:
+        normalized = self._normalize_component_key(normalized_component)
+        overrides = {}
+
+        if normalized == "ontology-hub":
+            host = self._configured_component_host(normalized, deployer_config)
+            if host:
+                base_url = self._to_http_url(host)
+                overrides["ingress"] = {
+                    "enabled": True,
+                    "host": host,
+                }
+                overrides["env"] = {
+                    "SELF_HOST_URL": base_url,
+                    "BASE_URL": base_url,
+                }
+
+            if "ONTOLOGY_HUB_SAMPLE_DATA_ENABLED" in deployer_config:
+                overrides.setdefault("sampleData", {})["enabled"] = self._parse_bool(
+                    deployer_config.get("ONTOLOGY_HUB_SAMPLE_DATA_ENABLED"),
+                    default=True,
+                )
+
+            image_repository = (deployer_config.get("ONTOLOGY_HUB_IMAGE_REPOSITORY") or "").strip()
+            image_tag = (deployer_config.get("ONTOLOGY_HUB_IMAGE_TAG") or "").strip()
+            image_pull_policy = (deployer_config.get("ONTOLOGY_HUB_IMAGE_PULL_POLICY") or "").strip()
+            if image_repository or image_tag or image_pull_policy:
+                image_overrides = {}
+                if image_repository:
+                    image_overrides["repository"] = image_repository
+                if image_tag:
+                    image_overrides["tag"] = image_tag
+                if image_pull_policy:
+                    image_overrides["pullPolicy"] = image_pull_policy
+                overrides["image"] = image_overrides
+
+        return overrides
+
+    def _write_component_values_override_file(self, chart_dir: str, normalized_component: str, deployer_config: dict):
+        payload = self._component_values_override_payload(normalized_component, deployer_config)
+        if not payload:
+            return None
+
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f"{self._normalize_component_key(normalized_component)}-override-",
+            suffix=".yaml",
+            dir=chart_dir,
+            delete=False,
+        )
+        try:
+            yaml.safe_dump(payload, handle, sort_keys=False)
+        finally:
+            handle.close()
+        return handle.name
 
     def _wait_for_pods_ready_by_selector(self, namespace: str, selector: str, timeout_seconds: int, label: str = "component") -> bool:
         namespace = (namespace or "").strip()
@@ -421,6 +519,31 @@ class INESDataComponentsAdapter:
     def deploy_components(self, components):
         return self.COMPONENTS(components)
 
+    def infer_component_urls(self, components):
+        if not components:
+            return {}
+
+        ds_name = self._dataspace_name()
+        namespace = self.config.namespace_demo()
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+
+        inferred_hosts = {}
+        for component in components:
+            normalized = self._normalize_component_key(component)
+            if normalized in self._LEVEL6_EXCLUDED_KEYS:
+                continue
+            try:
+                chart_dir = self._resolve_component_chart_dir(normalized)
+                values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
+                host = self._infer_component_hostname(normalized, values_file, deployer_config)
+            except Exception:
+                host = None
+
+            if host:
+                inferred_hosts[normalized] = host
+
+        return {k: self._to_http_url(v) for k, v in inferred_hosts.items() if v}
+
     def COMPONENTS(self, components):
         if not components:
             print("No components selected for deployment")
@@ -436,7 +559,7 @@ class INESDataComponentsAdapter:
         if not self.infrastructure.ensure_vault_unsealed():
             self._fail("Vault is not initialized or unsealed")
 
-        ds_name = self.config.DS_NAME
+        ds_name = self._dataspace_name()
         namespace = self.config.namespace_demo()
 
         deployer_config = self.config_adapter.load_deployer_config() or {}
@@ -482,6 +605,7 @@ class INESDataComponentsAdapter:
             chart_dir = self._resolve_component_chart_dir(normalized)
             values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
             release_name = self._resolve_component_release_name(normalized)
+            override_values_file = None
 
             built_local_image = False
             try:
@@ -497,14 +621,27 @@ class INESDataComponentsAdapter:
             print(f"  Values: {os.path.basename(values_file)}")
             print(f"  Release: {release_name}")
             print(f"  Namespace: {namespace}")
+            try:
+                override_values_file = self._write_component_values_override_file(
+                    chart_dir,
+                    normalized,
+                    deployer_config,
+                )
+                values_files = [os.path.basename(values_file)]
+                if override_values_file:
+                    values_files.append(override_values_file)
+                    print(f"  Override values: {os.path.basename(override_values_file)}")
 
-            if not self.infrastructure.deploy_helm_release(
-                release_name,
-                namespace,
-                os.path.basename(values_file),
-                cwd=chart_dir,
-            ):
-                self._fail(f"Error deploying component '{normalized}'")
+                if not self.infrastructure.deploy_helm_release(
+                    release_name,
+                    namespace,
+                    values_files,
+                    cwd=chart_dir,
+                ):
+                    self._fail(f"Error deploying component '{normalized}'")
+            finally:
+                if override_values_file and os.path.exists(override_values_file):
+                    os.unlink(override_values_file)
 
             if built_local_image:
                 print(f"Restarting deployment/{release_name} to pick up local image...\n")

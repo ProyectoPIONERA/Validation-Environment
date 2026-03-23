@@ -53,6 +53,8 @@ public class InesdataAssetValidator {
     public static final String PROPERTY_AMAZONS3_ENDPOINT_OVERRIDE = EDC_NAMESPACE + "endpointOverride";
     public static final String PROPERTY_HTTP_DATA_BASE_URL = EDC_NAMESPACE + "baseUrl";
     public static final String PROPERTY_ASSET_DATA = EDC_NAMESPACE + "assetData";
+    public static final String PROPERTY_KAFKA_TOPIC = EDC_NAMESPACE + "topic";
+    public static final String PROPERTY_KAFKA_BOOTSTRAP_SERVERS = EDC_NAMESPACE + "kafka.bootstrap.servers";
 
     public static Validator<JsonObject> instance(VocabularySharedService vocabularySharedService, String participantId) {
 
@@ -170,6 +172,7 @@ public class InesdataAssetValidator {
             return switch (type) {
                 case "AmazonS3" -> validateAmazonS3(dataAddress);
                 case "HttpData" -> validateHttpData(dataAddress);
+                case "Kafka" -> validateKafka(dataAddress);
                 case "InesDataStore" -> ValidationResult.success();
                 default -> ValidationResult.failure(violation(
                         "The value for 'https://w3id.org/edc/v0.0.1/ns/type' field is not valid",
@@ -239,6 +242,26 @@ public class InesdataAssetValidator {
             return violations.isEmpty() ? ValidationResult.success() : ValidationResult.failure(violations);
         }
 
+        private ValidationResult validateKafka(JsonObject dataAddress) {
+            var violations = new ArrayList<Violation>();
+
+            if (extractValueFromJsonArray(dataAddress, PROPERTY_KAFKA_TOPIC) == null) {
+                violations.add(violation(
+                        "Field 'https://w3id.org/edc/v0.0.1/ns/topic' is required for Kafka DataAddress type",
+                        PROPERTY_KAFKA_TOPIC
+                ));
+            }
+
+            if (extractValueFromJsonArray(dataAddress, PROPERTY_KAFKA_BOOTSTRAP_SERVERS) == null) {
+                violations.add(violation(
+                        "Field 'https://w3id.org/edc/v0.0.1/ns/kafka.bootstrap.servers' is required for Kafka DataAddress type",
+                        PROPERTY_KAFKA_BOOTSTRAP_SERVERS
+                ));
+            }
+
+            return violations.isEmpty() ? ValidationResult.success() : ValidationResult.failure(violations);
+        }
+
         private String extractValueFromJsonArray(JsonObject jsonObject, String key) {
             return Optional.ofNullable(jsonObject.getJsonArray(key))
                     .filter(array -> !array.isEmpty())
@@ -249,4 +272,3 @@ public class InesdataAssetValidator {
         }
     }
 }
-

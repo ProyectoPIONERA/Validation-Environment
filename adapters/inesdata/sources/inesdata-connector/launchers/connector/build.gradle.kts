@@ -39,6 +39,7 @@ dependencies {
     implementation(libs.edc.data.plane.http) {
         exclude("com.google.protobuf", "protobuf-java")
     }
+    implementation(libs.edc.data.plane.kafka)
     implementation(libs.edc.data.plane.iam)
     
     // Audit

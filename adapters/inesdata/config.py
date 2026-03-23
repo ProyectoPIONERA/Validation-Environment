@@ -76,12 +76,22 @@ class InesdataConfig:
         return "common-srvs"
 
     @classmethod
+    def dataspace_name(cls):
+        adapter = INESDataConfigAdapter(cls)
+        return adapter.primary_dataspace_name()
+
+    @classmethod
+    def dataspace_namespace(cls):
+        adapter = INESDataConfigAdapter(cls)
+        return adapter.primary_dataspace_namespace()
+
+    @classmethod
     def helm_release_rs(cls):
-        return f"{cls.DS_NAME}-dataspace-rs"
+        return f"{cls.dataspace_name()}-dataspace-rs"
 
     @classmethod
     def namespace_demo(cls):
-        return cls.DS_NAME
+        return cls.dataspace_namespace()
 
     @classmethod
     def registration_service_dir(cls):
@@ -89,23 +99,23 @@ class InesdataConfig:
 
     @classmethod
     def registration_values_file(cls):
-        return os.path.join(cls.registration_service_dir(), f"values-{cls.DS_NAME}.yaml")
+        return os.path.join(cls.registration_service_dir(), f"values-{cls.dataspace_name()}.yaml")
 
     @classmethod
     def registration_db_name(cls):
-        return f"{cls.DS_NAME}_rs"
+        return f"{cls.dataspace_name()}_rs"
 
     @classmethod
     def registration_db_user(cls):
-        return f"{cls.DS_NAME}_rsusr"
+        return f"{cls.dataspace_name()}_rsusr"
 
     @classmethod
     def webportal_db_name(cls):
-        return f"{cls.DS_NAME}_wp"
+        return f"{cls.dataspace_name()}_wp"
 
     @classmethod
     def webportal_db_user(cls):
-        return f"{cls.DS_NAME}_wpusr"
+        return f"{cls.dataspace_name()}_wpusr"
 
     @classmethod
     def connector_dir(cls):
@@ -121,7 +131,7 @@ class InesdataConfig:
             cls.repo_dir(),
             "deployments",
             "DEV",
-            cls.DS_NAME,
+            cls.dataspace_name(),
             f"credentials-connector-{connector_name}.json"
         )
 
@@ -139,12 +149,14 @@ class InesdataConfig:
 
     @classmethod
     def host_alias_domains(cls):
+        ds_name = cls.dataspace_name()
+        ds_domain = cls.ds_domain_base() or "dev.ds.dataspaceunit.upm"
         return [
             "keycloak.dev.ed.dataspaceunit.upm",
             "keycloak-admin.dev.ed.dataspaceunit.upm",
             "minio.dev.ed.dataspaceunit.upm",
             "console.minio-s3.dev.ed.dataspaceunit.upm",
-            f"registration-service-{cls.DS_NAME}.dev.ds.dataspaceunit.upm"
+            f"registration-service-{ds_name}.{ds_domain}"
         ]
 
     @classmethod
@@ -195,6 +207,61 @@ class INESDataConfigAdapter:
 
         return values
 
+    @staticmethod
+    def _resolve_optional_path(base_dir, raw_path):
+        if not raw_path:
+            return None
+
+        candidate = str(raw_path).strip()
+        if not candidate:
+            return None
+
+        if os.path.isabs(candidate):
+            return candidate
+
+        return os.path.abspath(os.path.join(base_dir, candidate))
+
+    def kafka_runtime_config(self):
+        """Return centralized Kafka runtime settings sourced from deployer.config."""
+        config = self.load_deployer_config()
+        base_dir = self.config.script_dir()
+
+        runtime = {
+            "bootstrap_servers": config.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+            "topic_name": config.get("KAFKA_TOPIC_NAME", "kafka-stream-topic"),
+            "topic_strategy": config.get("KAFKA_TOPIC_STRATEGY", "STATIC_TOPIC"),
+            "security_protocol": config.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+            "container_name": config.get("KAFKA_CONTAINER_NAME", "kafka-local"),
+            "container_image": config.get("KAFKA_CONTAINER_IMAGE", "confluentinc/cp-kafka:7.5.2"),
+        }
+
+        optional_mapping = {
+            "sasl_mechanism": "KAFKA_SASL_MECHANISM",
+            "username": "KAFKA_USERNAME",
+            "password": "KAFKA_PASSWORD",
+            "cluster_bootstrap_servers": "KAFKA_CLUSTER_BOOTSTRAP_SERVERS",
+            "cluster_advertised_host": "KAFKA_CLUSTER_ADVERTISED_HOST",
+            "message_count": "KAFKA_MESSAGE_COUNT",
+            "message_size_bytes": "KAFKA_MESSAGE_SIZE_BYTES",
+            "poll_timeout_seconds": "KAFKA_POLL_TIMEOUT_SECONDS",
+            "consumer_group_prefix": "KAFKA_CONSUMER_GROUP_PREFIX",
+            "request_timeout_ms": "KAFKA_REQUEST_TIMEOUT_MS",
+            "api_timeout_ms": "KAFKA_API_TIMEOUT_MS",
+            "max_block_ms": "KAFKA_MAX_BLOCK_MS",
+            "consumer_request_timeout_ms": "KAFKA_CONSUMER_REQUEST_TIMEOUT_MS",
+            "topic_ready_timeout_seconds": "KAFKA_TOPIC_READY_TIMEOUT_SECONDS",
+        }
+        for key, config_key in optional_mapping.items():
+            value = config.get(config_key)
+            if value not in (None, ""):
+                runtime[key] = value
+
+        container_env_file = self._resolve_optional_path(base_dir, config.get("KAFKA_CONTAINER_ENV_FILE"))
+        if container_env_file:
+            runtime["container_env_file"] = container_env_file
+
+        return runtime
+
     def get_pg_credentials(self):
         config = self.load_deployer_config()
         return (
@@ -203,9 +270,24 @@ class INESDataConfigAdapter:
             config.get("PG_PASSWORD")
         )
 
+    def primary_dataspace_name(self):
+        config = self.load_deployer_config()
+        configured = (config.get("DS_1_NAME") or "").strip()
+        if configured:
+            return configured
+        fallback = getattr(self.config, "DS_NAME", "demo")
+        return (fallback or "demo").strip() or "demo"
+
+    def primary_dataspace_namespace(self):
+        config = self.load_deployer_config()
+        configured = (config.get("DS_1_NAMESPACE") or "").strip()
+        if configured:
+            return configured
+        return self.primary_dataspace_name()
+
     def generate_hosts(self, ds_name=None):
         config = self.load_deployer_config()
-        ds_name = ds_name or self.config.DS_NAME
+        ds_name = ds_name or self.primary_dataspace_name()
         hosts = []
 
         if config.get("KEYCLOAK_HOSTNAME"):

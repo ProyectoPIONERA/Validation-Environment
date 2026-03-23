@@ -12,7 +12,7 @@ Usage:
 
 Options:
   --apply            Actually delete files/directories (default is dry-run)
-  --include-results  Also remove local experiment/newman outputs
+  --include-results  Also remove local experiment/newman outputs and Playwright results
 
 Default cleanup (safe):
   - __pycache__ directories
@@ -57,6 +57,9 @@ mapfile -t TARGETS < <(
     if [[ "$INCLUDE_RESULTS" -eq 1 ]]; then
       [[ -d "$ROOT_DIR/experiments" ]] && echo "$ROOT_DIR/experiments"
       [[ -d "$ROOT_DIR/newman" ]] && echo "$ROOT_DIR/newman"
+      [[ -d "$ROOT_DIR/validation/ui/test-results" ]] && echo "$ROOT_DIR/validation/ui/test-results"
+      [[ -d "$ROOT_DIR/validation/ui/playwright-report" ]] && echo "$ROOT_DIR/validation/ui/playwright-report"
+      [[ -d "$ROOT_DIR/validation/ui/blob-report" ]] && echo "$ROOT_DIR/validation/ui/blob-report"
     fi
   } | sort -u
 )

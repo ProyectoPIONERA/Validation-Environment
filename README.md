@@ -62,19 +62,32 @@ git clone --branch refactor/new-framework --single-branch https://github.com/Pro
 cd Validation-Environment
 ```
 
-2. Prepara la configuración local:
+2. Prepara el framework localmente con el bootstrap reproducible:
+
+```bash
+bash scripts/bootstrap_framework.sh
+```
+
+3. Revisa o ajusta la configuración local:
 
 ```bash
 cp deployer.config.example deployer.config
 ```
 
-3. Ejecuta el menú interactivo:
+El bootstrap ya crea `deployer.config` automáticamente si no existe, así que el `cp` anterior solo es necesario si quieres recrearlo manualmente.
+
+4. Abre el menú interactivo y usa el doctor local para revisar si la máquina está lista:
 
 ```bash
-python inesdata.py
+python3 inesdata.py
 ```
 
-4. Usa preferentemente la opción `0` o ejecuta los niveles manualmente.
+Dentro del menú:
+
+- `B` ejecuta el bootstrap local del framework
+- `D` ejecuta el doctor/preflight del entorno local
+
+5. Usa preferentemente la opción `0` o ejecuta los niveles manualmente.
 
 ### Definición de niveles de despliegue de `inesdata.py`
 
@@ -105,7 +118,7 @@ Conviene distinguir tres grupos de prerrequisitos:
 | Bloque | Cuándo aplica | Herramientas / requisitos principales | ¿Lo instala el framework? |
 | --- | --- | --- | --- |
 | Bootstrap base de INESData | Levantar el entorno con `python inesdata.py` | Python 3.10, Git, Docker, Minikube, Helm, `kubectl`, permisos para `hosts`, `minikube tunnel` | No |
-| Validación automatizada y experimentación | Ejecutar validación funcional y parte del workflow experimental | Node.js, `npm` | Parcialmente |
+| Validación automatizada y experimentación | Ejecutar validación funcional, UI y parte del workflow experimental | Node.js, `npm`, `newman`, Playwright | Parcialmente |
 | Implementación actual del adapter | Ejecutar el adapter `inesdata` tal y como está implementado hoy | `psql` local | No |
 
 ### Verificación rápida de herramientas
@@ -220,7 +233,7 @@ newman -v
 
 ### Entorno virtual del framework en la raíz
 
-El entorno Python operativo del despliegue de INESData es `inesdata-deployment/.venv`. El entorno virtual de la raíz es opcional y está orientado al desarrollo del framework, al uso del CLI moderno desde la raíz y a los tests del core.
+El entorno Python operativo del despliegue de INESData es `inesdata-deployment/.venv`. Para una ejecución reproducible del framework desde la raíz en una máquina nueva, el entorno virtual de la raíz debe considerarse el camino recomendado, porque evita instalar dependencias Python en el intérprete global.
 
 ```bash
 cd ~/Validation-Environment
@@ -229,6 +242,66 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+### Preparación reproducible en una máquina nueva
+
+Si el objetivo es ejecutar el framework con una preparación mínima pero reproducible desde cero, el bloque recomendado hoy es:
+
+```bash
+bash scripts/bootstrap_framework.sh
+```
+
+Qué cubre este bloque:
+
+- crea `.venv` en la raíz si no existe
+- instala `requirements.txt` en ese entorno
+- ejecuta `npm install` en la raíz para `newman`
+- ejecuta `npm install` en `validation/ui`
+- ejecuta `npx playwright install`
+- crea `deployer.config` desde `deployer.config.example` si falta
+
+Notas:
+
+- si prefieres ver los pasos manuales, el bootstrap equivale aproximadamente a:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+npm install
+cd validation/ui
+npm install
+npx playwright install
+cd ../..
+```
+
+- Si solo vas a usar despliegue y validación API, el bloque de `validation/ui` puede omitirse, pero entonces las suites UI quedarán en `skipped`.
+- En Linux o WSL, si Playwright necesita dependencias del sistema, puede ser necesario usar `npx playwright install --with-deps`.
+- `inesdata.py` y `main.py` pueden intentar instalar dependencias Python que falten en el intérprete actual, pero para una máquina nueva no conviene depender de ese comportamiento sobre el Python del sistema.
+
+### Doctor / preflight local
+
+El menú interactivo de `inesdata.py` ahora incluye un doctor local que revisa:
+
+- comandos del sistema (`docker`, `minikube`, `helm`, `kubectl`, `psql`, `node`, `npm`)
+- entorno `.venv` de la raíz
+- disponibilidad de `newman`
+- disponibilidad de Playwright y sus navegadores
+- existencia de `deployer.config`
+- estado básico del fichero `hosts`
+- presencia de `minikube tunnel`
+
+Uso:
+
+```bash
+python3 inesdata.py
+```
+
+Y dentro del menú:
+
+- `B` para bootstrap local del framework
+- `D` para ejecutar el doctor/preflight
 
 Antes de usar `main.py` o helpers del framework desde la raíz, conviene asegurar explícitamente que ese entorno tiene las dependencias instaladas:
 
@@ -263,6 +336,7 @@ No debe asumirse que el framework sea un instalador completo del sistema. Antes 
 - `psql`
 - Node.js / `npm`
 - `newman`
+- Playwright si se quiere ejecutar `Level 6` con cobertura UI completa
 
 Tampoco automatiza la intervención manual requerida para mantener `minikube tunnel` abierto ni la edición inicial del fichero `hosts` cuando el entorno lo requiere.
 
@@ -279,10 +353,11 @@ El framework separa sus dependencias por tipo de la siguiente manera:
 
 Estado actual del framework:
 
-- `main.py` e `inesdata.py` aseguran automáticamente las dependencias Python de la raíz antes de continuar.
+- `main.py` e `inesdata.py` aseguran automáticamente las dependencias Python de la raíz antes de continuar si el intérprete actual permite instalar paquetes.
 - el flujo legacy asegura también `inesdata-deployment/requirements.txt` antes de invocar `deployer.py` dentro de `inesdata-deployment/.venv`.
 - `newman` se puede instalar localmente con `npm install` en la raíz del repo; el framework prioriza `node_modules/.bin/newman` y, si no existe, usa un `newman` global en `PATH`.
 - cuando una validación necesita `newman` y no está disponible, el framework intenta `npm install` automáticamente si existe `package.json` en la raíz.
+- las suites UI del dataspace y de componentes dependen de Playwright instalado en `validation/ui`.
 
 ## Uso del framework
 
@@ -375,6 +450,19 @@ Qué hace:
 
 El `docker-compose.kafka.yml` está afinado para un broker KRaft de un solo nodo con márgenes de heartbeat y sesión menos agresivos que los valores por defecto, porque en entornos como WSL o Docker Desktop los timeouts cortos pueden provocar ciclos de `fencing/unfencing` durante la fase de estabilización.
 
+Fuente de verdad de Kafka:
+- `deployer.config` puede definir `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_CLUSTER_BOOTSTRAP_SERVERS`, `KAFKA_CLUSTER_ADVERTISED_HOST`, `KAFKA_TOPIC_NAME`, `KAFKA_TOPIC_STRATEGY`, `KAFKA_SECURITY_PROTOCOL`, `KAFKA_CONTAINER_NAME`, `KAFKA_CONTAINER_IMAGE` y `KAFKA_CONTAINER_ENV_FILE`.
+- el adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `Level 6`.
+- si `KAFKA_CONTAINER_ENV_FILE` apunta a un fichero SASL, el framework lo usa al autoaprovisionar el broker.
+- si el framework autoaprovisiona Kafka para la suite `EDC+Kafka`, arranca un broker con dos listeners anunciados: uno para el host y otro para los pods, para que la medicion y el dataplane puedan usar el mismo broker sin depender de `localhost` dentro del cluster.
+
+Activacion del runtime Kafka del conector:
+- el codigo fuente del conector ya empaqueta `data-plane-kafka` en el launcher local.
+- eso deja preparada la imagen local del conector para flujos EDC+Kafka cuando se construye con el workflow de imagenes locales.
+- el `kafka_metrics.json` persistido sigue siendo el benchmark del broker.
+- `Level 6` puede ejecutar ademas una suite opcional `EDC+Kafka` con `LEVEL6_RUN_KAFKA_EDC=true`, que genera `kafka_edc_results.json` y artefactos por pareja en `kafka_edc/`.
+- esa suite reproduce el flujo funcional `asset Kafka -> catalogo -> negociacion -> transfer Kafka-PUSH -> consumo del topic destino`, mas cerca del sample oficial `Transfer06KafkaBrokerTest`.
+
 Parámetros útiles:
 - `--messages <n>`
 - `--max-retries <n>` (por defecto `3`)
@@ -421,6 +509,18 @@ Por defecto, `local_build_load_deploy.sh` despliega en todos los namespaces `DS_
 Si quieres forzar un único namespace, usa `--namespace <name>`.
 
 En el menú legacy (`python inesdata.py`), la opción `L` ejecuta este flujo en modo Full (sin selección por componente), con confirmación directa.
+
+En la automatización de niveles, este paso ya se aplica por defecto: `Level 4` ejecuta automáticamente el workflow local justo después de desplegar conectores (antes de su validación final), usando `connector-interface` y `skip-prebuild=0`.
+
+No necesitas añadir variables en `deployer.config`. Solo úsalo como override opcional si quieres cambiar o desactivar el comportamiento por defecto:
+
+```bash
+LOCAL_IMAGE_OVERRIDE_AFTER_LEVEL4=0
+LOCAL_IMAGE_OVERRIDE_COMPONENT=public-portal-frontend
+LOCAL_IMAGE_OVERRIDE_SKIP_PREBUILD=1
+```
+
+`LOCAL_IMAGE_OVERRIDE_COMPONENT` es opcional: si se omite, se usa `connector-interface`. Valores permitidos: `connector`, `connector-interface`, `registration-service`, `public-portal-backend`, `public-portal-frontend`.
 
 Si solo quieres construir imágenes desde el script de build:
 
@@ -533,6 +633,7 @@ Cada experimento se guarda en `experiments/experiment_<timestamp>/` y puede incl
 - `raw_requests.jsonl`
 - `aggregated_metrics.json`
 - `kafka_metrics.json` (opcional)
+- `kafka_edc_results.json` (opcional)
 - `summary.json`
 - `summary.md`
 - `graphs/`
@@ -545,6 +646,7 @@ experiments/
     metadata.json
     aggregated_metrics.json
     kafka_metrics.json
+    kafka_edc_results.json
     summary.json
     summary.md
     graphs/

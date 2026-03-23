@@ -21,6 +21,7 @@ class ValidationEngine:
         validation_test_entities_absent=None,
         ds_domain_resolver=None,
         ds_name="demo",
+        transfer_storage_verifier=None,
     ):
         self.newman_executor = newman_executor or NewmanExecutor()
         self.load_connector_credentials = load_connector_credentials
@@ -29,6 +30,8 @@ class ValidationEngine:
         self.validation_test_entities_absent = validation_test_entities_absent
         self.ds_domain_resolver = ds_domain_resolver
         self.ds_name = ds_name
+        self.transfer_storage_verifier = transfer_storage_verifier
+        self.last_storage_checks = []
 
     def _require_dependency(self, dependency, name):
         if dependency is None:
@@ -77,7 +80,9 @@ class ValidationEngine:
             "keycloakUrl": keycloak_url,
             "keycloakClientId": "dataspace-users",
             "providerProtocolAddress": f"http://{provider}:19194/protocol",
-            "consumerProtocolAddress": f"http://{consumer}:19194/protocol"
+            "consumerProtocolAddress": f"http://{consumer}:19194/protocol",
+            "e2e_expected_provider_bucket": f"{dataspace}-{provider}",
+            "e2e_expected_consumer_bucket": f"{dataspace}-{consumer}",
         }
 
     def run_dataspace_validation(self, provider, consumer, experiment_dir=None, run_index=None):
@@ -107,8 +112,6 @@ class ValidationEngine:
                     f"{connector} ({lingering})"
                 )
 
-        env_vars = self.build_newman_env(provider, consumer)
-
         report_dir = None
         if experiment_dir:
             pair_dir = f"{provider}__{consumer}"
@@ -116,8 +119,34 @@ class ValidationEngine:
             if run_index is not None:
                 base_report_dir = os.path.join(base_report_dir, f"run_{int(run_index):03d}")
             report_dir = os.path.join(base_report_dir, pair_dir)
+            os.makedirs(report_dir, exist_ok=True)
 
-        return self.newman_executor.run_validation_collections(env_vars, report_dir=report_dir)
+        env_vars = self.build_newman_env(provider, consumer)
+        baseline_snapshot = None
+        baseline_reason = None
+        if self.transfer_storage_verifier is not None and experiment_dir:
+            try:
+                baseline_snapshot = self.transfer_storage_verifier.capture_consumer_bucket_snapshot(
+                    consumer,
+                    env_vars["e2e_expected_consumer_bucket"],
+                )
+            except Exception as exc:
+                baseline_reason = str(exc)
+
+        reports = self.newman_executor.run_validation_collections(env_vars, report_dir=report_dir)
+
+        if self.transfer_storage_verifier is not None and report_dir:
+            storage_check = self.transfer_storage_verifier.verify_consumer_transfer_persistence(
+                provider,
+                consumer,
+                report_dir,
+                before_snapshot=baseline_snapshot,
+                baseline_reason=baseline_reason,
+                experiment_dir=experiment_dir,
+            )
+            self.last_storage_checks.append(storage_check)
+
+        return reports
 
     def run_all_dataspace_tests(self, connectors, experiment_dir=None, run_index=None):
         """Run dataspace interoperability tests for all connector pairs."""
@@ -127,6 +156,7 @@ class ValidationEngine:
 
         pairs = list(permutations(connectors, 2))
         exported_reports = []
+        self.last_storage_checks = []
 
         for provider, consumer in pairs:
             reports = self.run_dataspace_validation(

@@ -25,15 +25,17 @@ No está pensada para un componente concreto. Está pensada para responder a una
 
 ## Qué significa `components`
 
-La carpeta `validation/components/` ya existe para separar validaciones específicas por componente.
+La carpeta `validation/components/` separa validaciones específicas por componente.
 
-Ahora mismo esta estructura está preparada, pero todavía no se ejecuta automáticamente desde `inesdata.py`.
+Hoy conviven dos situaciones:
 
-Su objetivo es alojar, próximamente, pruebas como estas:
+- `ontology_hub/` ya actúa como implementación de referencia y sí puede ejecutarse automáticamente desde `Level 6`.
+- `ai_model_hub/` y `semantic_virtualization/` siguen siendo estructura reservada para futuras implementaciones.
 
-- validación API específica de Ontology Hub
-- validación API específica de AI Model Hub
-- validación API específica de Semantic Virtualization
+La ejecución automática de una validación de componente depende de dos condiciones:
+
+1. el componente debe estar declarado en `COMPONENTS` en `deployer.config`. Ejemplo: `COMPONENTS=COMPONENTS=ontology-hub,ai-model-hub`
+2. debe existir un runner registrado para ese componente
 
 ## Qué significa `shared`
 
@@ -45,23 +47,28 @@ Hoy se usa sobre todo para centralizar el script compartido `common_tests.js`.
 
 ### Pruebas API
 
-Son las pruebas que ya están activas.
+Son las pruebas que constituyen la base obligatoria del framework.
 
 Se ejecutan con Newman y verifican contratos, respuestas y flujos backend.
 
 Sirven para comprobar interoperabilidad y consistencia de las APIs implicadas en el dataspace.
 
+Además de la validación core, algunos componentes pueden tener también pruebas API específicas dentro de `validation/components/`.
+
 ### Pruebas UI
 
-La carpeta `validation/ui/` existe hoy solo como preparación inicial.
+La carpeta `validation/ui/` contiene suites Playwright activas para:
 
-Su objetivo futuro es cubrir validaciones funcionales sobre interfaces de usuario, por ejemplo:
+- login y shell del conector
+- flujo provider
+- flujo consumer
+- negociación
+- transferencia
+- comprobaciones visuales opcionales de MinIO Console
 
-- comportamiento del portal
-- flujos de usuario
-- coherencia entre UI y API
+`Level 6` ejecuta por defecto un smoke UI estable por conector, y puede ejecutar suites opcionales adicionales según la configuración del entorno.
 
-Hoy no forman parte de la ejecución normal del framework.
+Además, `ontology_hub` dispone de su propia suite UI dentro de `validation/components/ontology_hub/ui/`, separada de la UI del dataspace core.
 
 ## Qué debe saber un desarrollador de componentes
 
@@ -75,4 +82,5 @@ La responsabilidad práctica está separada así:
 En otras palabras:
 
 - sí debes conocer qué valida el sistema
-- no debes editar `validation/` ni `framework/` para integrar tu componente
+- no debes asumir que integrar el componente equivale a modificar `framework/`
+- la capa de validación se mantiene desde el framework y puede ampliarse después de que el componente esté desplegado

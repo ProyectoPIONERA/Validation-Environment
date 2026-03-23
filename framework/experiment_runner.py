@@ -100,6 +100,76 @@ class ExperimentRunner:
         filtered_kwargs = {key: value for key, value in kwargs.items() if key in parameters}
         return save_method(experiment_dir, connectors, **filtered_kwargs)
 
+    @staticmethod
+    def _serialize_error(exc):
+        return {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    def _collapse_iteration_results(self, iteration_results):
+        if not iteration_results:
+            return None, None
+
+        if self.iterations == 1:
+            first = iteration_results[0]
+            return first.get("validation"), first.get("metrics")
+
+        snapshot = list(iteration_results)
+        return snapshot, snapshot
+
+    def _collapse_storage_checks(self, iteration_results):
+        if not iteration_results:
+            return []
+
+        if self.iterations == 1:
+            return list(iteration_results[0].get("storage_checks") or [])
+
+        return [
+            {
+                "run_index": item.get("run_index"),
+                "storage_checks": list(item.get("storage_checks") or []),
+            }
+            for item in iteration_results
+        ]
+
+    def _persist_experiment_state(
+        self,
+        experiment_dir,
+        *,
+        status,
+        timestamp,
+        connectors,
+        iteration_results=None,
+        newman_request_metrics=None,
+        kafka_metrics=None,
+        graphs=None,
+        summary_files=None,
+        storage_checks=None,
+        error=None,
+    ):
+        validation_result, metrics_result = self._collapse_iteration_results(iteration_results or [])
+        payload = {
+            "status": status,
+            "timestamp": timestamp,
+            "iterations": self.iterations,
+            "baseline": self.baseline,
+            "connectors": list(connectors or []),
+            "validation": validation_result,
+            "metrics": metrics_result,
+            "newman_request_metrics": newman_request_metrics,
+            "kafka_metrics": kafka_metrics,
+            "storage_checks": storage_checks if storage_checks is not None else self._collapse_storage_checks(iteration_results or []),
+            "graphs": graphs or {},
+            "summary_files": summary_files or {},
+            "error": error,
+        }
+        if iteration_results:
+            payload["iteration_results"] = list(iteration_results)
+
+        self.experiment_storage.save(payload, experiment_dir=experiment_dir)
+        return payload
+
     def _collect_metrics(self, connectors, experiment_dir, run_index=None):
         if self.metrics_collector is None:
             return None
@@ -129,6 +199,35 @@ class ExperimentRunner:
             return fallback(connectors, **kwargs)
 
         raise RuntimeError("Metrics collector does not expose a supported collect method")
+
+    def _collect_newman_request_metrics(self, experiment_dir, tolerate_failures=False):
+        if self.metrics_collector is None:
+            return None
+
+        collect_newman_metrics = getattr(self.metrics_collector, "collect_experiment_newman_metrics", None)
+        if callable(collect_newman_metrics):
+            try:
+                return collect_newman_metrics(experiment_dir)
+            except Exception as exc:
+                if tolerate_failures:
+                    print(f"[WARNING] Newman metrics collection failed: {exc}")
+                    return None
+                raise
+
+        fallback = getattr(self.metrics_collector, "collect_newman_request_metrics", None)
+        if not callable(fallback):
+            return None
+
+        try:
+            return fallback(
+                self.experiment_storage.newman_reports_dir(experiment_dir),
+                experiment_dir=experiment_dir,
+            )
+        except Exception as exc:
+            if tolerate_failures:
+                print(f"[WARNING] Newman metrics collection failed: {exc}")
+                return None
+            raise
 
     def _build_graphs(self, experiment_dir):
         if self.graph_builder is None:
@@ -199,6 +298,14 @@ class ExperimentRunner:
         if self.metrics_collector is None:
             return None
 
+        helper = getattr(self.metrics_collector, "run_kafka_benchmark_experiment", None)
+        if callable(helper):
+            return helper(
+                experiment_dir,
+                iterations=iterations,
+                kafka_manager=self.kafka_manager,
+            )
+
         collect_kafka = getattr(self.metrics_collector, "collect_kafka_benchmark", None)
         if not callable(collect_kafka):
             return None
@@ -257,6 +364,13 @@ class ExperimentRunner:
     def run(self):
         """Run the complete experiment lifecycle."""
         experiment_dir = None
+        connectors = []
+        iteration_results = []
+        newman_request_metrics = None
+        kafka_metrics = None
+        storage_checks = []
+        graph_paths = {}
+        summary_files = {}
         try:
             self._call_if_available(self.adapter, "deploy_infrastructure")
 
@@ -270,8 +384,17 @@ class ExperimentRunner:
 
             experiment_dir = self.experiment_storage.create_experiment_directory()
             self._save_experiment_metadata(experiment_dir, connectors)
+            # Always materialize the report root early so failed validations still
+            # leave the expected experiment scaffold behind.
+            self.experiment_storage.newman_reports_dir(experiment_dir)
 
-            iteration_results = []
+            initial_timestamp = datetime.now().isoformat()
+            self._persist_experiment_state(
+                experiment_dir,
+                status="running",
+                timestamp=initial_timestamp,
+                connectors=connectors,
+            )
 
             for run_index in range(1, self.iterations + 1):
                 validation_result = self._run_validation(
@@ -284,39 +407,41 @@ class ExperimentRunner:
                     experiment_dir,
                     run_index=run_index,
                 )
+                storage_checks = list(getattr(self.validation_engine, "last_storage_checks", []) or [])
                 iteration_results.append({
                     "run_index": run_index,
                     "validation": validation_result,
+                    "storage_checks": storage_checks,
                     "metrics": metrics,
                 })
+
+                self._persist_experiment_state(
+                    experiment_dir,
+                    status="running",
+                    timestamp=datetime.now().isoformat(),
+                    connectors=connectors,
+                    iteration_results=iteration_results,
+                )
 
             validation_result = iteration_results[0]["validation"] if self.iterations == 1 else iteration_results
             metrics = iteration_results[0]["metrics"] if self.iterations == 1 else iteration_results
 
-            newman_request_metrics = None
-            if self.metrics_collector is not None:
-                collect_newman_metrics = getattr(self.metrics_collector, "collect_newman_request_metrics", None)
-                if callable(collect_newman_metrics):
-                    newman_request_metrics = collect_newman_metrics(
-                        self.experiment_storage.newman_reports_dir(experiment_dir),
-                        experiment_dir=experiment_dir,
-                    )
+            newman_request_metrics = self._collect_newman_request_metrics(experiment_dir)
 
             kafka_metrics = self._collect_kafka_metrics(experiment_dir, self.iterations)
+            storage_checks = self._collapse_storage_checks(iteration_results)
 
             timestamp = datetime.now().isoformat()
-            bundle = {
-                "timestamp": timestamp,
-                "iterations": self.iterations,
-                "baseline": self.baseline,
-                "connectors": connectors,
-                "validation": validation_result,
-                "metrics": metrics,
-                "newman_request_metrics": newman_request_metrics,
-                "kafka_metrics": kafka_metrics,
-            }
-
-            self.experiment_storage.save(bundle, experiment_dir=experiment_dir)
+            self._persist_experiment_state(
+                experiment_dir,
+                status="completed",
+                timestamp=timestamp,
+                connectors=connectors,
+                iteration_results=iteration_results,
+                newman_request_metrics=newman_request_metrics,
+                kafka_metrics=kafka_metrics,
+                storage_checks=storage_checks,
+            )
             graph_paths = self._build_graphs(experiment_dir)
             summary_files = self._build_summary(
                 experiment_dir,
@@ -324,7 +449,21 @@ class ExperimentRunner:
                 kafka_enabled=bool(getattr(self.metrics_collector, "kafka_enabled", False)),
             )
 
+            self._persist_experiment_state(
+                experiment_dir,
+                status="completed",
+                timestamp=timestamp,
+                connectors=connectors,
+                iteration_results=iteration_results,
+                newman_request_metrics=newman_request_metrics,
+                kafka_metrics=kafka_metrics,
+                storage_checks=storage_checks,
+                graphs=graph_paths,
+                summary_files=summary_files,
+            )
+
             return {
+                "status": "completed",
                 "experiment_dir": experiment_dir,
                 "iterations": self.iterations,
                 "connectors": connectors,
@@ -332,9 +471,31 @@ class ExperimentRunner:
                 "metrics": metrics,
                 "newman_request_metrics": newman_request_metrics,
                 "kafka_metrics": kafka_metrics,
+                "storage_checks": storage_checks,
                 "graphs": graph_paths,
                 "summary_files": summary_files,
             }
+        except Exception as exc:
+            if experiment_dir is not None and newman_request_metrics is None:
+                newman_request_metrics = self._collect_newman_request_metrics(
+                    experiment_dir,
+                    tolerate_failures=True,
+                )
+            if experiment_dir is not None:
+                self._persist_experiment_state(
+                    experiment_dir,
+                    status="failed",
+                    timestamp=datetime.now().isoformat(),
+                    connectors=connectors,
+                    iteration_results=iteration_results,
+                    newman_request_metrics=newman_request_metrics,
+                    kafka_metrics=kafka_metrics,
+                    storage_checks=storage_checks,
+                    graphs=graph_paths,
+                    summary_files=summary_files,
+                    error=self._serialize_error(exc),
+                )
+            raise
         finally:
             if self.kafka_manager is not None:
                 self.kafka_manager.stop_kafka()

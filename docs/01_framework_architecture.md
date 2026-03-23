@@ -86,5 +86,3 @@ La regla práctica es esta:
 ## Qué no debe hacerse
 
 Para integrar un componente no debería ser necesario tocar `framework/`.
-
-Si una integración nueva te obliga a modificar el núcleo del framework, eso suele indicar una necesidad de ajuste de plataforma o de adapter, no del componente en sí.

@@ -172,6 +172,14 @@ class ExperimentStorage:
         return file_name
 
     @staticmethod
+    def save_kafka_edc_results_json(results, experiment_dir):
+        """Persist EDC+Kafka transfer validation results to JSON."""
+        file_name = os.path.join(experiment_dir, "kafka_edc_results.json")
+        ExperimentStorage._write_json(file_name, results)
+        print(f"Kafka EDC validation results saved to {file_name}")
+        return file_name
+
+    @staticmethod
     def save_summary_json(results, experiment_dir):
         """Persist normalized experiment summary to summary.json."""
         file_name = os.path.join(experiment_dir, "summary.json")

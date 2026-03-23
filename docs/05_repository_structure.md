@@ -27,7 +27,7 @@ Contiene la validación activa del núcleo del dataspace.
 
 ### `validation/components/`
 
-Reserva espacio para validaciones por componente.
+Contiene validaciones específicas por componente.
 
 Hoy existen estas carpetas:
 
@@ -35,41 +35,45 @@ Hoy existen estas carpetas:
 - `ai_model_hub/`
 - `semantic_virtualization/`
 
-Actualmente funcionan como estructura preparada. No forman parte todavía de la ejecución automática desde `inesdata.py`.
+Estado actual:
+
+- `ontology_hub/` es una implementación activa de referencia con validación API y UI.
+- `ai_model_hub/` y `semantic_virtualization/` siguen siendo estructura reservada.
+- `Level 6` puede ejecutar automáticamente validaciones de componente cuando el componente está configurado y existe runner registrado.
 
 ### `validation/shared/`
 
-Contiene utilidades compartidas por las pruebas.
-
-Hoy la parte relevante es:
+Contiene utilidades compartidas por las pruebas en:
 
 - `validation/shared/api/common_tests.js`
 
 ### `validation/ui/`
 
-Es scaffolding para pruebas UI futuras.
-
-Hoy contiene:
+Contiene la validación UI del dataspace core con Playwright:
 
 - `package.json`
 - `playwright.config.ts`
 - `README.md`
+- `core/`
+- `ops/`
+- `components/`
+- `shared/`
 
-No forma parte de la ejecución normal del framework.
+Sí forma parte del framework actual:
+
+- `Level 6` ejecuta un smoke UI estable por conector
+- puede ejecutar una suite `ops` opcional de MinIO Console
+- guarda sus artefactos dentro del experimento activo
 
 ## `framework/`
 
 Aquí vive la lógica reutilizable del sistema.
 
-Archivos importantes para nuevos desarrolladores:
+Archivos importantes para nuevos desarrolladores de validación:
 
 - `validation_engine.py`: coordina la validación entre pares de conectores
 - `newman_executor.py`: ejecuta las colecciones con Newman
 - `experiment_storage.py`: guarda resultados y artefactos
-
-Regla práctica:
-
-- si integras un componente, normalmente no deberías editar esta carpeta
 
 ## `adapters/`
 
@@ -95,16 +99,14 @@ Subdirectorios destacados:
 
 ## `inesdata-deployment/`
 
-Aquí están los charts y values Helm usados por el entorno local.
-
-Zonas relevantes:
+Aquí están los charts y values Helm usados por el entorno local:
 
 - `common/`: servicios base
 - `dataspace/`: despliegue base del dataspace
 - `connector/`: chart del conector
 - `components/`: componentes opcionales desplegados como servicios
 
-Hoy el ejemplo real de componente API-based es:
+Actualmente el ejemplo real de componente API-based es:
 
 - `inesdata-deployment/components/ontology-hub/`
 
@@ -125,3 +127,11 @@ Empieza por:
 - `01_framework_architecture.md`
 - `03_integration_guide.md`
 - `04_execution_flow.md`
+- `06_information_exchange_flow.md`
+
+Y continúa con la serie de evolución del sistema:
+
+- `07_experiment_system.md`
+- `08_metrics_pipeline.md`
+- `09_kafka_real_measurements.md`
+- `10_ui_validation_core.md`

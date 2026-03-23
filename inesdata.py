@@ -21,7 +21,7 @@ from runtime_dependencies import ensure_runtime_dependencies
 
 ensure_runtime_dependencies(
     requirements_path=os.path.join(os.path.dirname(__file__), "requirements.txt"),
-    module_names=("yaml", "requests", "tabulate", "ruamel.yaml"),
+    module_names=("yaml", "requests", "tabulate", "ruamel.yaml", "minio", "kafka"),
     label="legacy INESData entrypoint",
 )
 
@@ -32,7 +32,9 @@ from tabulate import tabulate
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
 from framework.experiment_storage import ExperimentStorage
+from framework.kafka_edc_validation import KafkaEdcValidationSuite
 from framework.newman_executor import NewmanExecutor
+from framework.transfer_storage_verifier import TransferStorageVerifier
 from framework.validation_engine import ValidationEngine
 from framework.metrics_collector import MetricsCollector
 from adapters.inesdata import InesdataAdapter, InesdataConfig
@@ -1270,12 +1272,34 @@ wait_for_all_connectors = INESDATA_ADAPTER.connectors.wait_for_all_connectors
 load_connector_credentials = INESDATA_ADAPTER.connectors.load_connector_credentials
 display_connector_summary = INESDATA_ADAPTER.connectors.display_connector_summary
 setup_minio_bucket = INESDATA_ADAPTER.connectors.setup_minio_bucket
+ensure_all_minio_policies = INESDATA_ADAPTER.connectors.ensure_all_minio_policies
 force_clean_postgres_db = INESDATA_ADAPTER.connectors.force_clean_postgres_db
 create_connectors = INESDATA_ADAPTER.connectors.create_connector
 show_connector_logs = INESDATA_ADAPTER.connectors.show_connector_logs
 lvl_1 = INESDATA_ADAPTER.setup_cluster
 lvl_2 = INESDATA_ADAPTER.deploy_infrastructure
 lvl_3 = INESDATA_ADAPTER.deploy_dataspace
+
+
+def _validate_connectors_with_stabilization(connectors, retries=1, wait_seconds=20):
+    """Retry connector validation once after a short stabilization wait.
+
+    This avoids false negatives immediately after rollout operations.
+    """
+    if validate_connectors_deployment(connectors):
+        return True
+
+    for attempt in range(1, retries + 1):
+        print(
+            f"\nConnector validation failed (attempt {attempt}/{retries + 1}). "
+            f"Waiting {wait_seconds}s for stabilization before retry..."
+        )
+        time.sleep(wait_seconds)
+        if validate_connectors_deployment(connectors):
+            print("Connector validation recovered after stabilization retry.")
+            return True
+
+    return False
 
 
 def lvl_4():
@@ -1285,7 +1309,9 @@ def lvl_4():
     if not all_connectors:
         raise RuntimeError("Level 4 did not deploy any connectors")
 
-    if not validate_connectors_deployment(all_connectors):
+    _maybe_apply_local_image_override_after_level_4()
+
+    if not _validate_connectors_with_stabilization(all_connectors):
         print("\nConnector validation failed.")
 
         if not AUTO_MODE:
@@ -1317,11 +1343,13 @@ def is_kafka_available():
     Returns:
         bool: True if Kafka is available, False otherwise
     """
-    try:
-        result = run_silent("docker ps --filter name=kafka --format '{{.Names}}'")
-        return result and "kafka" in result.lower()
-    except Exception:
-        return False
+    adapter_method = getattr(INESDATA_ADAPTER, "is_kafka_available", None)
+    if callable(adapter_method):
+        try:
+            return bool(adapter_method())
+        except Exception:
+            return False
+    return False
 
 
 def ensure_kafka_topic(topic_name="kafka-stream-topic"):
@@ -1333,35 +1361,14 @@ def ensure_kafka_topic(topic_name="kafka-stream-topic"):
     Returns:
         bool: True if topic exists or was created, False otherwise
     """
-    if not is_kafka_available():
-        print("Kafka container not running")
-        return False
-    
-    try:
-        # Check if topic exists
-        result = run_silent(
-            f"docker exec $(docker ps -q --filter name=kafka) "
-            f"kafka-topics --list --bootstrap-server localhost:9092"
-        )
-        
-        if topic_name in result:
-            print(f"Kafka topic '{topic_name}' already exists")
-            return True
-        
-        # Create topic
-        run_silent(
-            f"docker exec $(docker ps -q --filter name=kafka) "
-            f"kafka-topics --create --topic {topic_name} "
-            f"--bootstrap-server localhost:9092 "
-            f"--partitions 1 --replication-factor 1"
-        )
-        
-        print(f"Created Kafka topic: {topic_name}")
-        return True
-        
-    except Exception as e:
-        print(f"Error managing Kafka topic: {e}")
-        return False
+    adapter_method = getattr(INESDATA_ADAPTER, "ensure_kafka_topic", None)
+    if callable(adapter_method):
+        try:
+            return bool(adapter_method(topic_name))
+        except Exception as e:
+            print(f"Error managing Kafka topic: {e}")
+            return False
+    return False
 
 
 METRICS_COLLECTOR = MetricsCollector(
@@ -1371,6 +1378,13 @@ METRICS_COLLECTOR = MetricsCollector(
     experiment_storage=ExperimentStorage,
     auto_mode=lambda: AUTO_MODE,
 )
+LEVEL6_KAFKA_METRICS_COLLECTOR = framework_cli.build_metrics_collector(
+    INESDATA_ADAPTER,
+    collector_cls=MetricsCollector,
+    experiment_storage=ExperimentStorage,
+    kafka_enabled=True,
+)
+LEVEL6_KAFKA_MANAGER = framework_cli.build_kafka_manager(INESDATA_ADAPTER)
 
 # Metrics collection helpers moved to framework.metrics_collector.MetricsCollector
 
@@ -1437,7 +1451,7 @@ def validate_connectors_deployment(connectors):
         pod_name = parts[0]
         status = parts[2]
         
-        if "conn-" in pod_name and "interface" not in pod_name:
+        if "conn-" in pod_name and "interface" not in pod_name and "inteface" not in pod_name:
             if status != "Running":
                 print(f"Connector pod not running: {pod_name} ({status})")
                 failed = True
@@ -1482,7 +1496,7 @@ def get_connectors_from_cluster():
             
         name = parts[0]
         
-        if name.startswith("conn-") and "interface" not in name:
+        if name.startswith("conn-") and "interface" not in name and "inteface" not in name:
             connector = "-".join(name.split("-")[:3])
             connectors.add(connector)
     
@@ -1830,9 +1844,358 @@ VALIDATION_ENGINE = ValidationEngine(
     validation_test_entities_absent=INESDATA_ADAPTER.connectors.validation_test_entities_absent,
     ds_domain_resolver=Config.ds_domain_base,
     ds_name=Config.DS_NAME,
+    transfer_storage_verifier=TransferStorageVerifier(
+        load_connector_credentials=load_connector_credentials,
+        load_deployer_config=load_deployer_config,
+        experiment_storage=ExperimentStorage,
+    ),
 )
 
 # Dataspace validation helpers moved to framework.validation_engine.ValidationEngine
+
+
+def _save_level6_experiment_state(
+    experiment_dir,
+    connectors,
+    *,
+    status,
+    validation_reports=None,
+    newman_request_metrics=None,
+    kafka_metrics=None,
+    kafka_edc_results=None,
+    storage_checks=None,
+    ui_results=None,
+    component_results=None,
+    error=None,
+):
+    payload = {
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+        "source": "inesdata.py:level6",
+        "connectors": list(connectors or []),
+        "validation_reports": list(validation_reports or []),
+        "newman_request_metrics": list(newman_request_metrics or []),
+        "kafka_metrics": kafka_metrics,
+        "kafka_edc_results": list(kafka_edc_results or []),
+        "storage_checks": list(storage_checks or []),
+        "ui_results": list(ui_results or []),
+        "component_results": list(component_results or []),
+        "error": error,
+    }
+    ExperimentStorage.save(payload, experiment_dir=experiment_dir)
+    return payload
+
+
+def _run_level6_kafka_benchmark(experiment_dir):
+    run_benchmark = getattr(LEVEL6_KAFKA_METRICS_COLLECTOR, "run_kafka_benchmark_experiment", None)
+    if not callable(run_benchmark):
+        return None
+    try:
+        return run_benchmark(
+            experiment_dir,
+            iterations=1,
+            kafka_manager=LEVEL6_KAFKA_MANAGER,
+        )
+    finally:
+        stop_kafka = getattr(LEVEL6_KAFKA_MANAGER, "stop_kafka", None)
+        if callable(stop_kafka):
+            stop_kafka()
+
+
+LEVEL6_KAFKA_EDC_VALIDATOR = KafkaEdcValidationSuite(
+    load_connector_credentials=load_connector_credentials,
+    load_deployer_config=load_deployer_config,
+    kafka_runtime_loader=INESDATA_ADAPTER.get_kafka_config,
+    ensure_kafka_topic=INESDATA_ADAPTER.ensure_kafka_topic,
+    kafka_manager=LEVEL6_KAFKA_MANAGER,
+    experiment_storage=ExperimentStorage,
+    ds_domain_resolver=Config.ds_domain_base,
+    ds_name_loader=InesdataConfig.dataspace_name,
+)
+
+
+LEVEL6_UI_SPECS = (
+    os.path.join("core", "01-login-readiness.spec.ts"),
+    os.path.join("core", "04-consumer-catalog.spec.ts"),
+)
+LEVEL6_UI_OPS_SPEC = os.path.join("ops", "minio-bucket-visibility.spec.ts")
+LEVEL6_UI_OPS_CONFIG = "playwright.ops.config.ts"
+
+
+def _env_flag_enabled(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _config_or_env_flag_enabled(name, default=False):
+    if name in os.environ:
+        return _env_flag_enabled(name, default=default)
+
+    deployer_config = load_deployer_config() or {}
+    raw = deployer_config.get(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _build_level6_ui_artifact_paths(experiment_dir, connector):
+    base_dir = os.path.join(experiment_dir, "ui", connector)
+    paths = {
+        "base_dir": base_dir,
+        "output_dir": os.path.join(base_dir, "test-results"),
+        "html_report_dir": os.path.join(base_dir, "playwright-report"),
+        "blob_report_dir": os.path.join(base_dir, "blob-report"),
+        "json_report_file": os.path.join(base_dir, "results.json"),
+    }
+    for path in paths.values():
+        if path.endswith(".json"):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        else:
+            os.makedirs(path, exist_ok=True)
+    return paths
+
+
+def _build_level6_ui_ops_artifact_paths(experiment_dir):
+    base_dir = os.path.join(experiment_dir, "ui-ops", "minio-console")
+    paths = {
+        "base_dir": base_dir,
+        "output_dir": os.path.join(base_dir, "test-results"),
+        "html_report_dir": os.path.join(base_dir, "playwright-report"),
+        "blob_report_dir": os.path.join(base_dir, "blob-report"),
+        "json_report_file": os.path.join(base_dir, "results.json"),
+    }
+    for path in paths.values():
+        if path.endswith(".json"):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        else:
+            os.makedirs(path, exist_ok=True)
+    return paths
+
+
+def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal_pass, experiment_dir):
+    artifact_paths = _build_level6_ui_artifact_paths(experiment_dir, connector)
+    env = {
+        **os.environ,
+        "PORTAL_BASE_URL": portal_url,
+        "PORTAL_USER": portal_user,
+        "PORTAL_PASSWORD": portal_pass,
+        "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
+        "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
+        "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
+        "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
+    }
+    command = ["npx", "playwright", "test", *LEVEL6_UI_SPECS]
+    error = None
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ui_test_dir,
+            env=env,
+        )
+        status = "passed" if result.returncode == 0 else "failed"
+        exit_code = result.returncode
+    except OSError as exc:
+        status = "skipped"
+        exit_code = None
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    return {
+        "connector": connector,
+        "test": "ui-core-smoke",
+        "status": status,
+        "exit_code": exit_code,
+        "portal_url": portal_url,
+        "specs": list(LEVEL6_UI_SPECS),
+        "artifacts": {
+            "test_results_dir": artifact_paths["output_dir"],
+            "html_report_dir": artifact_paths["html_report_dir"],
+            "blob_report_dir": artifact_paths["blob_report_dir"],
+            "json_report_file": artifact_paths["json_report_file"],
+        },
+        "error": error,
+    }
+
+
+def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
+    artifact_paths = _build_level6_ui_ops_artifact_paths(experiment_dir)
+    env = {
+        **os.environ,
+        "UI_PROVIDER_CONNECTOR": provider_connector,
+        "UI_CONSUMER_CONNECTOR": consumer_connector,
+        "PLAYWRIGHT_OPS_OUTPUT_DIR": artifact_paths["output_dir"],
+        "PLAYWRIGHT_OPS_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
+        "PLAYWRIGHT_OPS_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
+        "PLAYWRIGHT_OPS_JSON_REPORT_FILE": artifact_paths["json_report_file"],
+    }
+    command = [
+        "npx",
+        "playwright",
+        "test",
+        "--config",
+        LEVEL6_UI_OPS_CONFIG,
+        LEVEL6_UI_OPS_SPEC,
+    ]
+    error = None
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ui_test_dir,
+            env=env,
+        )
+        status = "passed" if result.returncode == 0 else "failed"
+        exit_code = result.returncode
+    except OSError as exc:
+        status = "skipped"
+        exit_code = None
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    return {
+        "test": "ui-ops-minio-console",
+        "status": status,
+        "exit_code": exit_code,
+        "provider_connector": provider_connector,
+        "consumer_connector": consumer_connector,
+        "specs": [LEVEL6_UI_OPS_SPEC],
+        "playwright_config": LEVEL6_UI_OPS_CONFIG,
+        "artifacts": {
+            "test_results_dir": artifact_paths["output_dir"],
+            "html_report_dir": artifact_paths["html_report_dir"],
+            "blob_report_dir": artifact_paths["blob_report_dir"],
+            "json_report_file": artifact_paths["json_report_file"],
+        },
+        "error": error,
+    }
+
+
+def _configured_optional_components():
+    deployer_config = load_deployer_config() or {}
+    raw = (deployer_config.get("COMPONENTS") or "").strip()
+    if not raw:
+        return []
+    return [token.strip().lower().replace("_", "-") for token in raw.split(",") if token.strip()]
+
+
+def _should_run_level6_kafka_edc_validation():
+    return _config_or_env_flag_enabled("LEVEL6_RUN_KAFKA_EDC", default=False)
+
+
+def _run_level6_kafka_edc_validation(connectors, experiment_dir):
+    if len(connectors) < 2:
+        return [
+            {
+                "status": "skipped",
+                "reason": "not_enough_connectors",
+                "timestamp": datetime.now().isoformat(),
+            }
+        ]
+
+    results = LEVEL6_KAFKA_EDC_VALIDATOR.run_all(connectors, experiment_dir=experiment_dir) or []
+    ExperimentStorage.save_kafka_edc_results_json(results, experiment_dir)
+    return results
+
+
+def _should_run_level6_component_validation():
+    components = _configured_optional_components()
+    if not components:
+        return False
+
+    raw = os.environ.get("LEVEL6_RUN_COMPONENT_VALIDATION")
+    if raw is None:
+        return True
+
+    return _env_flag_enabled("LEVEL6_RUN_COMPONENT_VALIDATION", default=True)
+
+
+def _run_level6_component_validations(experiment_dir):
+    from adapters.inesdata.components import INESDataComponentsAdapter
+    from validation.components.runner import run_component_validations
+
+    components = _configured_optional_components()
+    if not components:
+        return []
+
+    components_adapter = INESDataComponentsAdapter(
+        run=run,
+        run_silent=run_silent,
+        auto_mode_getter=lambda: AUTO_MODE,
+        infrastructure_adapter=INESDATA_ADAPTER.infrastructure,
+        config_adapter=INESDATA_ADAPTER.config_adapter,
+        config_cls=InesdataConfig,
+    )
+    component_urls = components_adapter.infer_component_urls(components)
+
+    results = run_component_validations(component_urls, experiment_dir=experiment_dir)
+    resolved_components = {result.get("component") for result in results}
+    for component in components:
+        if component not in resolved_components:
+            results.append(
+                {
+                    "component": component,
+                    "status": "skipped",
+                    "reason": "component_url_not_inferred",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+    return results
+
+
+def _connector_hosts_resolve(connectors):
+    unresolved = []
+    domain = Config.ds_domain_base()
+    if not domain:
+        return unresolved
+
+    for connector in connectors or []:
+        host = f"{connector}.{domain}"
+        try:
+            socket.gethostbyname(host)
+        except OSError:
+            unresolved.append(host)
+
+    return unresolved
+
+
+def _ensure_level6_connector_hosts(connectors):
+    connector_hosts = INESDATA_ADAPTER.config_adapter.generate_connector_hosts(connectors)
+    if connector_hosts:
+        INESDATA_ADAPTER.infrastructure.manage_hosts_entries(
+            connector_hosts,
+            header_comment="# Dataspace Connector Hosts",
+        )
+
+    unresolved = _connector_hosts_resolve(connectors)
+    if unresolved:
+        joined = ", ".join(unresolved)
+        raise RuntimeError(
+            "Connector hostnames do not resolve locally. "
+            f"Check /etc/hosts and minikube tunnel for: {joined}"
+        )
+
+
+def _ensure_level6_connectors_ready():
+    if not ensure_vault_unsealed():
+        raise RuntimeError("Vault is sealed or unavailable")
+
+    connectors = get_connectors_from_cluster()
+    if connectors:
+        return connectors
+
+    print("No running connectors detected after Vault recovery. Waiting for demo namespace pods...")
+    INESDATA_ADAPTER.infrastructure.wait_for_namespace_pods(
+        Config.namespace_demo(),
+        timeout=120,
+    )
+    return get_connectors_from_cluster()
 
 # =========================================================
 # LEVEL 6 - VALIDATION TESTS
@@ -1846,27 +2209,269 @@ def lvl_6():
     
     if not NEWMAN_EXECUTOR.is_available():
         raise RuntimeError("Newman not installed. Install with: npm install or npm install -g newman")
-    
-    connectors = get_connectors_from_cluster()
+
+    connectors = _ensure_level6_connectors_ready()
     
     if not connectors:
-        raise RuntimeError("No connectors running")
+        raise RuntimeError("No connectors running after Vault recovery")
+
+    _ensure_level6_connector_hosts(connectors)
     
     if len(connectors) < 2:
         raise RuntimeError("At least 2 connectors required")
     
     print(f"Detected connectors: {connectors}\n")
-    
-    if not validate_connectors_deployment(connectors):
-        raise RuntimeError("Connector deployment validation failed")
-    
-    VALIDATION_ENGINE.run_all_dataspace_tests(connectors)
-
     experiment_dir = ExperimentStorage.create_experiment_directory()
     ExperimentStorage.save_experiment_metadata(experiment_dir, connectors)
+    ExperimentStorage.newman_reports_dir(experiment_dir)
 
-    # Run Kafka latency experiments (optional)
-    METRICS_COLLECTOR.run_kafka_experiments(connectors, experiment_dir)
+    validation_reports = []
+    newman_request_metrics = []
+    kafka_metrics = None
+    kafka_edc_results = []
+    storage_checks = []
+    ui_results = []
+    component_results = []
+    _save_level6_experiment_state(
+        experiment_dir,
+        connectors,
+        status="running",
+        validation_reports=validation_reports,
+        newman_request_metrics=newman_request_metrics,
+        kafka_metrics=kafka_metrics,
+        kafka_edc_results=kafka_edc_results,
+        storage_checks=storage_checks,
+        ui_results=ui_results,
+        component_results=component_results,
+    )
+
+    try:
+        if not validate_connectors_deployment(connectors):
+            raise RuntimeError("Connector deployment validation failed")
+
+        # Ensure MinIO S3 policies are attached for all connectors (idempotent, survives MinIO restarts)
+        ensure_all_minio_policies(connectors)
+
+        VALIDATION_ENGINE.last_storage_checks = []
+        validation_reports = VALIDATION_ENGINE.run_all_dataspace_tests(
+            connectors,
+            experiment_dir=experiment_dir,
+        ) or []
+        storage_checks = list(getattr(VALIDATION_ENGINE, "last_storage_checks", []) or [])
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="running",
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+        )
+
+        newman_request_metrics = METRICS_COLLECTOR.collect_experiment_newman_metrics(experiment_dir) or []
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="running",
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+        )
+
+        if _should_run_level6_kafka_edc_validation():
+            print("\nRunning optional EDC+Kafka transfer validation suite...")
+            kafka_edc_results = _run_level6_kafka_edc_validation(connectors, experiment_dir) or []
+            for result in kafka_edc_results:
+                provider = result.get("provider", "unknown-provider")
+                consumer = result.get("consumer", "unknown-consumer")
+                status = result.get("status", "unknown")
+                if status == "passed":
+                    print(f"  EDC+Kafka validation passed for {provider} -> {consumer}")
+                elif status == "failed":
+                    error = (result.get("error") or {}).get("message", "unknown reason")
+                    print(f"  Warning: EDC+Kafka validation failed for {provider} -> {consumer} ({error})")
+                else:
+                    reason = result.get("reason", "unknown reason")
+                    print(f"  EDC+Kafka validation skipped for {provider} -> {consumer} ({reason})")
+
+            _save_level6_experiment_state(
+                experiment_dir,
+                connectors,
+                status="running",
+                validation_reports=validation_reports,
+                newman_request_metrics=newman_request_metrics,
+                kafka_metrics=kafka_metrics,
+                kafka_edc_results=kafka_edc_results,
+                storage_checks=storage_checks,
+                ui_results=ui_results,
+                component_results=component_results,
+            )
+
+        kafka_metrics = _run_level6_kafka_benchmark(experiment_dir)
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="running",
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+        )
+
+        # Run the stable Playwright smoke suite for each connector
+        ui_test_dir = os.path.join(Config.script_dir(), "validation", "ui")
+        if os.path.isdir(ui_test_dir):
+            for connector in connectors:
+                creds = load_connector_credentials(connector)
+                if not creds:
+                    print(f"  No credentials for {connector}, skipping UI smoke tests")
+                    ui_results.append({
+                        "connector": connector,
+                        "test": "ui-core-smoke",
+                        "status": "skipped",
+                        "reason": "missing_credentials",
+                    })
+                    continue
+                portal_url = build_connector_url(connector)
+                portal_user = creds.get("connector_user", {}).get("user", "")
+                portal_pass = creds.get("connector_user", {}).get("passwd", "")
+                print(f"\nRunning UI core smoke suite for {connector}...")
+                ui_result = _run_level6_ui_smoke(
+                    ui_test_dir,
+                    connector,
+                    portal_url,
+                    portal_user,
+                    portal_pass,
+                    experiment_dir,
+                )
+                ui_results.append(ui_result)
+                if ui_result["status"] == "failed":
+                    print(
+                        f"  Warning: UI core smoke suite failed for {connector} "
+                        f"(exit {ui_result['exit_code']})"
+                    )
+                elif ui_result["status"] == "skipped":
+                    skip_reason = (ui_result.get("error") or {}).get("message", "unknown reason")
+                    print(f"  Warning: UI core smoke suite skipped for {connector} ({skip_reason})")
+                else:
+                    print(f"  UI core smoke suite passed for {connector}")
+
+            if _env_flag_enabled("LEVEL6_RUN_UI_OPS", default=False):
+                if len(connectors) < 2:
+                    print("Warning: not enough connectors for optional UI ops suite — skipping")
+                    ui_results.append({
+                        "test": "ui-ops-minio-console",
+                        "status": "skipped",
+                        "reason": "not_enough_connectors",
+                    })
+                else:
+                    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
+                    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
+                        (connector for connector in connectors if connector != provider_connector),
+                        connectors[1],
+                    )
+                    print(
+                        f"\nRunning optional UI ops MinIO suite for "
+                        f"{provider_connector} -> {consumer_connector}..."
+                    )
+                    ui_ops_result = _run_level6_ui_ops(
+                        ui_test_dir,
+                        provider_connector,
+                        consumer_connector,
+                        experiment_dir,
+                    )
+                    ui_results.append(ui_ops_result)
+                    if ui_ops_result["status"] == "failed":
+                        print(
+                            "  Warning: optional UI ops MinIO suite failed "
+                            f"(exit {ui_ops_result['exit_code']})"
+                        )
+                    elif ui_ops_result["status"] == "skipped":
+                        skip_reason = (ui_ops_result.get("error") or {}).get("message", "unknown reason")
+                        print(f"  Warning: optional UI ops MinIO suite skipped ({skip_reason})")
+                    else:
+                        print("  Optional UI ops MinIO suite passed")
+        else:
+            print("Warning: validation/ui directory not found — skipping UI smoke tests")
+
+        if _should_run_level6_component_validation():
+            print("\nRunning component validation suite...")
+            try:
+                component_results = _run_level6_component_validations(experiment_dir) or []
+            except Exception as exc:
+                component_results = [
+                    {
+                        "component": "_component-validation",
+                        "status": "failed",
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                ]
+
+            for result in component_results:
+                component = result.get("component", "unknown-component")
+                status = result.get("status", "unknown")
+                if status == "passed":
+                    print(f"  Component validation passed for {component}")
+                elif status == "failed":
+                    print(f"  Warning: component validation failed for {component}")
+                else:
+                    reason = result.get("reason") or (result.get("error") or {}).get("message", "unknown reason")
+                    print(f"  Component validation skipped for {component} ({reason})")
+
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="completed",
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+        )
+    except Exception as exc:
+        if not newman_request_metrics:
+            try:
+                newman_request_metrics = METRICS_COLLECTOR.collect_experiment_newman_metrics(experiment_dir) or []
+            except Exception as metrics_exc:
+                print(f"[WARNING] Newman metrics collection failed during Level 6 error handling: {metrics_exc}")
+        if kafka_metrics is None:
+            try:
+                kafka_metrics = _run_level6_kafka_benchmark(experiment_dir)
+            except Exception as kafka_exc:
+                print(f"[WARNING] Kafka benchmark failed during Level 6 error handling: {kafka_exc}")
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="failed",
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+            error={
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        )
+        raise
 
     print("\n========================================")
     print("VALIDATION COMPLETED")
@@ -1971,6 +2576,9 @@ def run_all_levels():
     print("\nThis will execute all levels sequentially.")
     print("Total duration: environment-dependent; may take 15+ minutes")
     print("\n" + "="*50 + "\n")
+
+    if not _ensure_local_deployer_config_ready_for_levels(CONFIG_GUARDED_LEVELS):
+        return
     
     if AUTO_MODE:
         print("[AUTO_MODE] Starting automatic deployment...\n")
@@ -2054,7 +2662,214 @@ LEVELS = {
 LOCAL_WORKFLOW_SCRIPT_REL_PATH = os.path.join(
     "adapters", "inesdata", "scripts", "local_build_load_deploy.sh"
 )
+FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH = os.path.join("scripts", "bootstrap_framework.sh")
 CLEAN_WORKSPACE_SCRIPT_REL_PATH = os.path.join("scripts", "clean_workspace.sh")
+LOCAL_IMAGE_OVERRIDE_AFTER_LEVEL4_KEY = "LOCAL_IMAGE_OVERRIDE_AFTER_LEVEL4"
+LOCAL_IMAGE_OVERRIDE_COMPONENT_KEY = "LOCAL_IMAGE_OVERRIDE_COMPONENT"
+LOCAL_IMAGE_OVERRIDE_SKIP_PREBUILD_KEY = "LOCAL_IMAGE_OVERRIDE_SKIP_PREBUILD"
+LOCAL_IMAGE_OVERRIDE_DEFAULT_ENABLED = True
+LOCAL_IMAGE_OVERRIDE_DEFAULT_COMPONENT = "connector-interface"
+LOCAL_IMAGE_OVERRIDE_DEFAULT_SKIP_PREBUILD = False
+LOCAL_IMAGE_OVERRIDE_ALLOWED_COMPONENTS = {
+    "connector",
+    "connector-interface",
+    "registration-service",
+    "public-portal-backend",
+    "public-portal-frontend",
+}
+FRAMEWORK_DOCTOR_SYSTEM_COMMANDS = (
+    ("python3", ["python3", "--version"], "Instala Python 3 y el paquete venv del sistema."),
+    ("git", ["git", "--version"], "Instala Git en la máquina anfitriona."),
+    ("docker", ["docker", "--version"], "Instala Docker y verifica que el daemon esté accesible."),
+    ("minikube", ["minikube", "version"], "Instala Minikube para usar los niveles 1-6."),
+    ("helm", ["helm", "version", "--short"], "Instala Helm para desplegar charts de INESData."),
+    ("kubectl", ["kubectl", "version", "--client=true"], "Instala kubectl para operar el clúster."),
+    ("psql", ["psql", "--version"], "Instala el cliente de PostgreSQL."),
+    ("node", ["node", "--version"], "Instala Node.js para Newman y Playwright."),
+    ("npm", ["npm", "--version"], "Instala npm junto con Node.js."),
+)
+CONFIG_GUARDED_LEVELS = {"2", "3", "4", "5", "6"}
+OPTIONAL_DEPLOYER_CONFIG_KEYS = {
+    "COMPONENTS",
+    "KAFKA_BOOTSTRAP_SERVERS",
+    "KAFKA_TOPIC_NAME",
+    "KAFKA_TOPIC_STRATEGY",
+    "KAFKA_SECURITY_PROTOCOL",
+    "KAFKA_SASL_MECHANISM",
+    "KAFKA_USERNAME",
+    "KAFKA_PASSWORD",
+    "KAFKA_CONTAINER_NAME",
+    "KAFKA_CONTAINER_IMAGE",
+    "KAFKA_CONTAINER_ENV_FILE",
+    "KAFKA_MESSAGE_COUNT",
+    "KAFKA_MESSAGE_SIZE_BYTES",
+    "KAFKA_POLL_TIMEOUT_SECONDS",
+    "KAFKA_CONSUMER_GROUP_PREFIX",
+    "KAFKA_REQUEST_TIMEOUT_MS",
+    "KAFKA_API_TIMEOUT_MS",
+    "KAFKA_MAX_BLOCK_MS",
+    "KAFKA_CONSUMER_REQUEST_TIMEOUT_MS",
+    "KAFKA_TOPIC_READY_TIMEOUT_SECONDS",
+    "KAFKA_DATAPLANE_SINK_PARTITION_SIZE",
+}
+
+
+def _parse_bool_config(value, default):
+    """Parse deployer.config booleans and fallback to the provided default."""
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return default
+
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+
+    raise RuntimeError(
+        f"Invalid boolean value '{value}'. Use one of: 1,true,yes,on,0,false,no,off"
+    )
+
+
+def _resolve_local_image_override_config():
+    """Read optional post-Level-4 local image override settings from deployer.config."""
+    deployer_config = load_deployer_config() or {}
+    enabled_raw = deployer_config.get(LOCAL_IMAGE_OVERRIDE_AFTER_LEVEL4_KEY)
+    component_raw = deployer_config.get(LOCAL_IMAGE_OVERRIDE_COMPONENT_KEY)
+    skip_prebuild_raw = deployer_config.get(LOCAL_IMAGE_OVERRIDE_SKIP_PREBUILD_KEY)
+
+    enabled = _parse_bool_config(enabled_raw, LOCAL_IMAGE_OVERRIDE_DEFAULT_ENABLED)
+    skip_prebuild = _parse_bool_config(skip_prebuild_raw, LOCAL_IMAGE_OVERRIDE_DEFAULT_SKIP_PREBUILD)
+
+    component = (
+        component_raw
+        if component_raw is not None
+        else LOCAL_IMAGE_OVERRIDE_DEFAULT_COMPONENT
+    )
+    component = component.strip() if isinstance(component, str) else str(component).strip()
+    if not component:
+        component = LOCAL_IMAGE_OVERRIDE_DEFAULT_COMPONENT
+
+    if component and component not in LOCAL_IMAGE_OVERRIDE_ALLOWED_COMPONENTS:
+        allowed = ", ".join(sorted(LOCAL_IMAGE_OVERRIDE_ALLOWED_COMPONENTS))
+        raise RuntimeError(
+            f"Invalid {LOCAL_IMAGE_OVERRIDE_COMPONENT_KEY}: '{component}'. Allowed values: {allowed}"
+        )
+
+    return {
+        "enabled": enabled,
+        "component": component,
+        "skip_prebuild": skip_prebuild,
+    }
+
+
+def _local_deployer_config_path():
+    """Return the user-facing deployer.config path next to inesdata.py."""
+    return os.path.join(Config.script_dir(), "deployer.config")
+
+
+def _local_deployer_config_example_path():
+    """Return the local deployer.config.example path next to inesdata.py."""
+    return os.path.join(Config.script_dir(), "deployer.config.example")
+
+
+def _required_local_deployer_config_keys():
+    """Use deployer.config.example as the baseline contract for guarded levels."""
+    example_path = _local_deployer_config_example_path()
+    example_values = _read_local_key_value_config(example_path)
+    if example_values:
+        return sorted(key for key in example_values if key not in OPTIONAL_DEPLOYER_CONFIG_KEYS)
+
+    return [
+        "ENVIRONMENT",
+        "PG_HOST",
+        "PG_USER",
+        "PG_PASSWORD",
+        "KC_URL",
+        "KC_USER",
+        "KC_PASSWORD",
+        "KC_INTERNAL_URL",
+        "VT_URL",
+        "VT_TOKEN",
+        "DATABASE_HOSTNAME",
+        "KEYCLOAK_HOSTNAME",
+        "MINIO_HOSTNAME",
+        "VAULT_URL",
+        "DOMAIN_BASE",
+        "DS_DOMAIN_BASE",
+        "MINIO_USER",
+        "MINIO_PASSWORD",
+        "DS_1_NAME",
+        "DS_1_NAMESPACE",
+        "DS_1_CONNECTORS",
+    ]
+
+
+def _validate_local_deployer_config_for_levels(level_ids):
+    """Validate that the local deployer.config exists and has the baseline keys."""
+    normalized_levels = {str(level_id) for level_id in (level_ids or [])}
+    if not (normalized_levels & CONFIG_GUARDED_LEVELS):
+        return True, []
+
+    config_path = _local_deployer_config_path()
+    if not os.path.exists(config_path):
+        return False, [f"Missing local deployer.config: {config_path}"]
+
+    config_values = _read_local_key_value_config(config_path)
+    missing_keys = [key for key in _required_local_deployer_config_keys() if not config_values.get(key)]
+    if missing_keys:
+        return False, [f"Missing required keys in deployer.config: {', '.join(missing_keys)}"]
+
+    return True, []
+
+
+def _ensure_local_deployer_config_ready_for_levels(level_ids):
+    """Print a friendly message and block guarded levels when config is missing or incomplete."""
+    ready, issues = _validate_local_deployer_config_for_levels(level_ids)
+    if ready:
+        return True
+
+    levels_text = ", ".join(sorted({str(level_id) for level_id in (level_ids or [])}))
+    print("\nCannot continue because deployer.config is missing or incomplete.")
+    if levels_text:
+        print(f"Guarded levels requested: {levels_text}")
+    for issue in issues:
+        print(f"- {issue}")
+    print("\nSuggested next steps:")
+    print(f"- Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}")
+    print("- Or use option B in the menu to bootstrap the framework")
+    print("- Review deployer.config before retrying the guarded levels\n")
+    return False
+
+
+def _maybe_apply_local_image_override_after_level_4():
+    """Optionally run local build/load/deploy after Level 4 to avoid pinned image rollback."""
+    override_config = _resolve_local_image_override_config()
+    if not override_config["enabled"]:
+        return
+
+    platform_dirs = _detect_platform_dirs_from_adapter_configs()
+    if not platform_dirs:
+        raise RuntimeError(
+            "Local image override is enabled but no platform directory was detected from adapter REPO_DIR"
+        )
+
+    extra_args = ["--platform-dir", platform_dirs[0]]
+
+    if override_config["component"]:
+        extra_args.extend(["--component", override_config["component"]])
+
+    if override_config["skip_prebuild"]:
+        extra_args.append("--skip-prebuild")
+
+    print("\nApplying local image override after Level 4...")
+    print(f"  Component: {override_config['component'] or 'all'}")
+    print(f"  Skip pre-build: {'yes' if override_config['skip_prebuild'] else 'no'}")
+
+    if not _execute_local_images_workflow(extra_args):
+        raise RuntimeError("Post-Level-4 local image override failed")
 
 
 
@@ -2142,6 +2957,378 @@ def _execute_local_images_workflow(extra_args):
     return False
 
 
+def _run_command_capture(args, cwd=None):
+    """Run a command and capture a compact one-line summary."""
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    return result.returncode, output
+
+
+def _doctor_item(category, name, status, details, remediation=None):
+    return {
+        "category": category,
+        "name": name,
+        "status": status,
+        "details": details,
+        "remediation": remediation,
+    }
+
+
+def _read_local_key_value_config(path):
+    values = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                normalized = line.strip()
+                if normalized and "=" in normalized and not normalized.startswith("#"):
+                    key, value = normalized.split("=", 1)
+                    values[key.strip()] = value.strip()
+    except OSError:
+        return {}
+    return values
+
+
+def _collect_framework_doctor_report():
+    """Inspect local readiness to execute the framework from a fresh machine."""
+    root_dir = Config.script_dir()
+    ui_dir = os.path.join(root_dir, "validation", "ui")
+    root_venv_python = os.path.join(root_dir, ".venv", "bin", "python")
+    local_newman = os.path.join(root_dir, "node_modules", ".bin", "newman")
+    local_playwright = os.path.join(ui_dir, "node_modules", ".bin", "playwright")
+    deployer_config_path = os.path.join(root_dir, "deployer.config")
+    deployer_example_path = os.path.join(root_dir, "deployer.config.example")
+    platform_repo_dir = os.path.join(root_dir, Config.REPO_DIR)
+
+    checks = []
+
+    for command_name, version_args, remediation in FRAMEWORK_DOCTOR_SYSTEM_COMMANDS:
+        resolved = shutil.which(command_name)
+        if not resolved:
+            checks.append(
+                _doctor_item(
+                    "system",
+                    command_name,
+                    "missing",
+                    "Command not found in PATH",
+                    remediation,
+                )
+            )
+            continue
+
+        return_code, version_text = _run_command_capture(version_args)
+        details = version_text.splitlines()[0].strip() if version_text else resolved
+        status = "ok" if return_code == 0 else "warning"
+        if return_code != 0:
+            details = details or f"{command_name} returned exit code {return_code}"
+        checks.append(_doctor_item("system", command_name, status, details, remediation))
+
+    if os.path.exists(root_venv_python):
+        return_code, version_text = _run_command_capture([root_venv_python, "--version"])
+        checks.append(
+            _doctor_item(
+                "framework",
+                "root .venv",
+                "ok" if return_code == 0 else "warning",
+                version_text.splitlines()[0].strip() if version_text else root_venv_python,
+                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+            )
+        )
+    else:
+        checks.append(
+            _doctor_item(
+                "framework",
+                "root .venv",
+                "missing",
+                f"Missing virtual environment interpreter: {root_venv_python}",
+                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+            )
+        )
+
+    current_python = os.path.realpath(sys.executable)
+    expected_root = os.path.realpath(os.path.join(root_dir, ".venv"))
+    active_status = "ok" if current_python.startswith(expected_root) else "warning"
+    active_details = current_python
+    active_remediation = None
+    if active_status != "ok":
+        active_remediation = "Activate the root virtual environment with: source .venv/bin/activate"
+    checks.append(_doctor_item("framework", "active python", active_status, active_details, active_remediation))
+
+    if os.path.exists(local_newman):
+        return_code, version_text = _run_command_capture([local_newman, "--version"], cwd=root_dir)
+        checks.append(
+            _doctor_item(
+                "framework",
+                "newman",
+                "ok" if return_code == 0 else "warning",
+                version_text or local_newman,
+                "Run: npm install",
+            )
+        )
+    else:
+        global_newman = shutil.which("newman")
+        if global_newman:
+            return_code, version_text = _run_command_capture([global_newman, "--version"], cwd=root_dir)
+            checks.append(
+                _doctor_item(
+                    "framework",
+                    "newman",
+                    "ok" if return_code == 0 else "warning",
+                    version_text.splitlines()[0].strip() if version_text else global_newman,
+                    "Prefer a local install with: npm install",
+                )
+            )
+        else:
+            checks.append(
+                _doctor_item(
+                    "framework",
+                    "newman",
+                    "missing",
+                    "Neither local nor global Newman is available",
+                    "Run: npm install",
+                )
+            )
+
+    if os.path.exists(local_playwright):
+        return_code, version_text = _run_command_capture([local_playwright, "--version"], cwd=ui_dir)
+        checks.append(
+            _doctor_item(
+                "ui",
+                "playwright cli",
+                "ok" if return_code == 0 else "warning",
+                version_text.splitlines()[0].strip() if version_text else local_playwright,
+                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+            )
+        )
+
+        list_return_code, browser_text = _run_command_capture(
+            [local_playwright, "install", "--list"],
+            cwd=ui_dir,
+        )
+        browser_status = "ok"
+        browser_details = "Playwright browsers detected"
+        if list_return_code != 0:
+            browser_status = "warning"
+            browser_details = "Unable to query installed Playwright browsers"
+        elif "Browsers:" not in browser_text:
+            browser_status = "warning"
+            browser_details = "Playwright browsers do not appear to be installed"
+        else:
+            browser_lines = [line.strip() for line in browser_text.splitlines() if line.strip().startswith("/")]
+            if browser_lines:
+                browser_details = browser_lines[0]
+        checks.append(
+            _doctor_item(
+                "ui",
+                "playwright browsers",
+                browser_status,
+                browser_details,
+                "Run: cd validation/ui && npx playwright install",
+            )
+        )
+    else:
+        checks.append(
+            _doctor_item(
+                "ui",
+                "playwright cli",
+                "missing",
+                f"Missing Playwright binary: {local_playwright}",
+                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+            )
+        )
+
+    if os.path.exists(deployer_config_path):
+        config_values = _read_local_key_value_config(deployer_config_path)
+        required_keys = [key for key in ("DOMAIN_BASE", "DS_DOMAIN_BASE") if not config_values.get(key)]
+        status = "ok" if not required_keys else "warning"
+        details = deployer_config_path
+        remediation = None
+        if required_keys:
+            details = f"Missing required keys in deployer.config: {', '.join(required_keys)}"
+            remediation = "Edit deployer.config before running the deployment levels."
+        checks.append(_doctor_item("config", "deployer.config", status, details, remediation))
+
+        kafka_bootstrap = config_values.get("KAFKA_BOOTSTRAP_SERVERS")
+        if kafka_bootstrap:
+            checks.append(
+                _doctor_item(
+                    "kafka",
+                    "bootstrap servers",
+                    "ok",
+                    kafka_bootstrap,
+                    None,
+                )
+            )
+
+        kafka_env_file = config_values.get("KAFKA_CONTAINER_ENV_FILE")
+        if kafka_env_file:
+            resolved_env_file = kafka_env_file
+            if not os.path.isabs(resolved_env_file):
+                resolved_env_file = os.path.abspath(os.path.join(root_dir, resolved_env_file))
+            exists = os.path.exists(resolved_env_file)
+            checks.append(
+                _doctor_item(
+                    "kafka",
+                    "container env file",
+                    "ok" if exists else "warning",
+                    resolved_env_file if exists else f"Missing Kafka env file: {resolved_env_file}",
+                    None if exists else "Create the Kafka env file or remove KAFKA_CONTAINER_ENV_FILE from deployer.config.",
+                )
+            )
+    else:
+        remediation = None
+        if os.path.exists(deployer_example_path):
+            remediation = "Run the bootstrap script or copy deployer.config.example to deployer.config."
+        checks.append(
+            _doctor_item(
+                "config",
+                "deployer.config",
+                "missing",
+                "Local deployer.config is missing",
+                remediation,
+            )
+        )
+
+    if os.path.isdir(platform_repo_dir):
+        checks.append(
+            _doctor_item(
+                "config",
+                "inesdata-deployment repo",
+                "ok",
+                platform_repo_dir,
+                None,
+            )
+        )
+    else:
+        checks.append(
+            _doctor_item(
+                "config",
+                "inesdata-deployment repo",
+                "warning",
+                "The platform repository is not present yet; Level 2 can clone it automatically.",
+                "Run Level 2 or clone the platform repository manually if needed.",
+            )
+        )
+
+    hosts_path = get_hosts_path()
+    if hosts_path and os.path.exists(hosts_path):
+        writable = os.access(hosts_path, os.W_OK)
+        status = "ok" if writable else "warning"
+        details = f"{hosts_path} ({'writable' if writable else 'requires elevated privileges'})"
+        remediation = None if writable else "Run with sufficient privileges when the framework needs to update hosts."
+        checks.append(_doctor_item("config", "hosts file", status, details, remediation))
+    else:
+        checks.append(
+            _doctor_item(
+                "config",
+                "hosts file",
+                "warning",
+                "Hosts file path is not available for automatic update on this OS.",
+                "Update the required host entries manually.",
+            )
+        )
+
+    if shutil.which("pgrep"):
+        tunnel_result = subprocess.run(
+            ["pgrep", "-af", "minikube tunnel"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if tunnel_result.returncode == 0 and (tunnel_result.stdout or "").strip():
+            tunnel_status = "ok"
+            tunnel_details = "minikube tunnel process detected"
+            tunnel_remediation = None
+        else:
+            tunnel_status = "warning"
+            tunnel_details = "minikube tunnel not detected"
+            tunnel_remediation = "Before Level 3, run: minikube tunnel"
+    else:
+        tunnel_status = "warning"
+        tunnel_details = "pgrep is not available, so the tunnel process cannot be inspected automatically"
+        tunnel_remediation = "Before Level 3, verify manually that minikube tunnel is running."
+    checks.append(_doctor_item("runtime", "minikube tunnel", tunnel_status, tunnel_details, tunnel_remediation))
+
+    if any(item["status"] == "missing" for item in checks):
+        overall_status = "not_ready"
+    elif any(item["status"] == "warning" for item in checks):
+        overall_status = "ready_with_warnings"
+    else:
+        overall_status = "ready"
+
+    return {
+        "status": overall_status,
+        "timestamp": datetime.now().isoformat(),
+        "checks": checks,
+    }
+
+
+def run_framework_doctor():
+    """Print a local readiness report for the framework and Level 6 validation."""
+    report = _collect_framework_doctor_report()
+
+    print("\n" + "=" * 50)
+    print("FRAMEWORK DOCTOR")
+    print("=" * 50)
+    print(f"\nOverall status: {report['status']}\n")
+
+    rows = [
+        [
+            item["category"],
+            item["name"],
+            item["status"],
+            item["details"],
+        ]
+        for item in report["checks"]
+    ]
+    print(tabulate(rows, headers=["Category", "Check", "Status", "Details"], tablefmt="github"))
+
+    remediations = [
+        f"- {item['name']}: {item['remediation']}"
+        for item in report["checks"]
+        if item.get("remediation") and item.get("status") != "ok"
+    ]
+    if remediations:
+        print("\nRecommended actions:")
+        print("\n".join(remediations))
+
+    print()
+    return report
+
+
+def run_framework_bootstrap_interactive():
+    """Run local bootstrap to prepare Python, Newman, Playwright and deployer.config."""
+    script_path = os.path.join(Config.script_dir(), FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH)
+    if not os.path.isfile(script_path):
+        print(f"\nBootstrap script not found: {script_path}\n")
+        return None
+
+    try:
+        confirm = input("\nRun framework bootstrap now? (Y/N, default: Y): ").strip().upper() or "Y"
+    except EOFError:
+        confirm = "N"
+
+    if confirm != "Y":
+        print("\nBootstrap cancelled.\n")
+        return None
+
+    command = ["bash", script_path]
+    print(f"\nLaunching framework bootstrap: {' '.join(command)}\n")
+    result = subprocess.run(command, cwd=Config.script_dir())
+
+    if result.returncode == 0:
+        print("\nFramework bootstrap completed successfully.\n")
+    else:
+        print("\nFramework bootstrap failed. Check logs above.\n")
+
+    return result.returncode
+
+
 def run_local_images_workflow_interactive():
     """Build and deploy local images (Full mode)."""
     platform_dirs = _detect_platform_dirs_from_adapter_configs()
@@ -2175,7 +3362,7 @@ def run_workspace_cleanup_interactive():
         print("1 - Apply cleanup")
         print("    Removes __pycache__, *.pyc and tool caches")
         print("2 - Apply cleanup + include results")
-        print("    Also removes experiments/ and newman/")
+        print("    Also removes experiments/, newman/ and Playwright results")
         print("B - Back")
 
         try:
@@ -2285,6 +3472,8 @@ def show_menu():
     Menu options:
     - 0: Run all levels (1-6) sequentially
     - 1-6: Run individual levels
+    - B: Bootstrap local framework dependencies
+    - D: Run local readiness doctor
     - N: Launch new framework CLI
     - C: Run workspace cleanup script
     - L: Build and deploy local images
@@ -2303,6 +3492,9 @@ def show_menu():
         print("4 - Level 4: Deploy Connectors")
         print("5 - Level 5: Deploy Components")
         print("6 - Level 6: Run Validation Tests")
+        print("\n[Setup]")
+        print("B - Bootstrap Framework Dependencies")
+        print("D - Run Framework Doctor")
         print("\n[Modern CLI]")
         print("N - Use new framework CLI")
         print("\n[Developer]")
@@ -2333,6 +3525,16 @@ def show_menu():
                 run_new_cli_interactive()
             except KeyboardInterrupt:
                 print("\n\nCLI execution cancelled by user\n")
+        elif choice == "B":
+            try:
+                run_framework_bootstrap_interactive()
+            except KeyboardInterrupt:
+                print("\n\nFramework bootstrap cancelled by user\n")
+        elif choice == "D":
+            try:
+                run_framework_doctor()
+            except KeyboardInterrupt:
+                print("\n\nFramework doctor cancelled by user\n")
         elif choice == "C":
             try:
                 run_workspace_cleanup_interactive()
@@ -2344,6 +3546,8 @@ def show_menu():
             except KeyboardInterrupt:
                 print("\n\nBuild and deploy local images cancelled by user\n")
         elif choice in LEVELS:
+            if choice in CONFIG_GUARDED_LEVELS and not _ensure_local_deployer_config_ready_for_levels({choice}):
+                continue
             try:
                 LEVELS[choice]()
             except KeyboardInterrupt:

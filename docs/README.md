@@ -18,11 +18,30 @@ La idea principal es simple:
 - `validation/` contiene las colecciones y scripts de prueba.
 - `inesdata-deployment/` contiene los charts y values Helm del entorno.
 
-## Documentación principal
+## Cómo leer esta carpeta
+
+La documentación está pensada para leerse en dos bloques secuenciales:
+
+1. `00` a `06`: describen la base del framework, su arquitectura y el flujo operativo.
+2. `07` a `10`: describen la evolución por fases del sistema de validación y artefactos.
+
+En esa división por fases:
+
+- `Fase 1`: sistema de experimentos
+- `Fase 2`: pipeline de métricas
+- `Fase 3`: medidas reales de Kafka
+- `Fase 4`: validación UI con Playwright
+
+## Orden recomendado de lectura
 
 - [00_overview.md](./00_overview.md): visión general del framework y del problema que resuelve.
-- [01_framework_architecture.md](./01_framework_architecture.md): arquitectura actual explicada de forma simple.
+- [01_framework_architecture.md](./01_framework_architecture.md): arquitectura actual.
 - [02_validation_architecture.md](./02_validation_architecture.md): qué valida hoy el sistema y cómo evolucionará.
 - [03_integration_guide.md](./03_integration_guide.md): guía práctica para integrar componentes.
 - [04_execution_flow.md](./04_execution_flow.md): flujo secuencial desde `inesdata.py`.
 - [05_repository_structure.md](./05_repository_structure.md): mapa del repositorio para nuevos desarrolladores.
+- [06_information_exchange_flow.md](./06_information_exchange_flow.md): flujo manual de intercambio de información para reproducirlo en Postman.
+- [07_experiment_system.md](./07_experiment_system.md): contrato de artefactos del experimento.
+- [08_metrics_pipeline.md](./08_metrics_pipeline.md): extracción y agregación de métricas.
+- [09_kafka_real_measurements.md](./09_kafka_real_measurements.md): benchmarking Kafka persistido.
+- [10_ui_validation_core.md](./10_ui_validation_core.md): validación UI alineada con los flujos API.

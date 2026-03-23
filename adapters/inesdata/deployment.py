@@ -28,6 +28,12 @@ class INESDataDeploymentAdapter:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
 
+    def _dataspace_name(self):
+        getter = getattr(self.config, "dataspace_name", None)
+        if callable(getter):
+            return getter()
+        return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
+
     def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None):
         if minikube_ip is None:
             minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
@@ -88,7 +94,7 @@ class INESDataDeploymentAdapter:
         return False
 
     def restart_registration_service(self):
-        deployment_name = f"{self.config.DS_NAME}-registration-service"
+        deployment_name = f"{self._dataspace_name()}-registration-service"
         namespace = self.config.namespace_demo()
 
         print("\nRestarting registration-service deployment to pick up the recreated database credentials...")
@@ -130,7 +136,7 @@ class INESDataDeploymentAdapter:
             print("[AUTO_MODE] Skipping tunnel confirmation\n")
 
         repo_dir = self.config.repo_dir()
-        ds_name = self.config.DS_NAME
+        ds_name = self._dataspace_name()
         python_exec = self.config.python_exec()
 
         if not os.path.exists(repo_dir):

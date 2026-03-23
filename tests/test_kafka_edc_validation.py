@@ -1,0 +1,561 @@
+import itertools
+import json
+import os
+import tempfile
+import unittest
+import requests
+from unittest.mock import patch
+
+from framework.kafka_edc_validation import KafkaEdcValidationSuite
+
+
+class _FakeResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = "" if payload is None else json.dumps(payload)
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("empty body")
+        return self._payload
+
+
+class _FakeSession:
+    def __init__(self):
+        self.asset_topic = None
+        self.asset_id = None
+        self.destination_topic = None
+        self.asset_bootstrap_servers = None
+        self.destination_bootstrap_servers = None
+        self.assets = {}
+        self.policies = {}
+        self.contracts = {}
+        self.transfers = {}
+        self.terminated_transfers = []
+        self.deprovisioned_transfers = []
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if "openid-connect/token" in url:
+            username = (data or {}).get("username", "user")
+            return _FakeResponse(200, {"access_token": f"jwt-{username}"})
+
+        if url.endswith("/management/v3/assets"):
+            self.asset_topic = ((json or {}).get("dataAddress") or {}).get("topic")
+            self.asset_bootstrap_servers = ((json or {}).get("dataAddress") or {}).get("kafka.bootstrap.servers")
+            self.asset_id = (json or {}).get("@id")
+            self.assets[self.asset_id] = {"@id": self.asset_id}
+            return _FakeResponse(200, {"@id": json.get("@id")})
+
+        if url.endswith("/management/v3/policydefinitions"):
+            policy_id = (json or {}).get("@id")
+            self.policies[policy_id] = {"@id": policy_id}
+            return _FakeResponse(200, {"@id": json.get("@id")})
+
+        if url.endswith("/management/v3/contractdefinitions"):
+            contract_id = (json or {}).get("@id")
+            self.contracts[contract_id] = {"@id": contract_id}
+            return _FakeResponse(200, {"@id": json.get("@id")})
+
+        if url.endswith("/management/v3/assets/request"):
+            return _FakeResponse(200, list(self.assets.values()))
+
+        if url.endswith("/management/v3/policydefinitions/request"):
+            return _FakeResponse(200, list(self.policies.values()))
+
+        if url.endswith("/management/v3/contractdefinitions/request"):
+            return _FakeResponse(200, list(self.contracts.values()))
+
+        if url.endswith("/management/v3/catalog/request"):
+            return _FakeResponse(
+                200,
+                {
+                    "dspace:participantId": "conn-provider",
+                    "dcat:dataset": [
+                        {
+                            "@id": self.asset_id or "unknown-asset",
+                            "odrl:hasPolicy": {
+                                "@id": "offer-policy-id",
+                            },
+                            "description": f"dataset for {self.asset_id or 'unknown-asset'}",
+                        }
+                    ],
+                },
+            )
+
+        if url.endswith("/management/v3/contractnegotiations"):
+            return _FakeResponse(200, {"@id": "neg-1"})
+
+        if url.endswith("/management/v3/transferprocesses"):
+            self.destination_topic = ((json or {}).get("dataDestination") or {}).get("topic")
+            self.destination_bootstrap_servers = ((json or {}).get("dataDestination") or {}).get("kafka.bootstrap.servers")
+            if self.asset_topic and self.destination_topic:
+                _FakeBrokerState.routes[self.asset_topic] = self.destination_topic
+            self.transfers["transfer-1"] = {
+                "@id": "transfer-1",
+                "state": "STARTED",
+                "assetId": self.asset_id,
+            }
+            return _FakeResponse(200, {"@id": "transfer-1"})
+
+        if url.endswith("/management/v3/contractnegotiations/request"):
+            return _FakeResponse(200, [{"@id": "neg-1", "state": "FINALIZED", "contractAgreementId": "agreement-1"}])
+
+        if url.endswith("/management/v3/transferprocesses/request"):
+            return _FakeResponse(200, list(self.transfers.values()))
+
+        if url.endswith("/management/v3/transferprocesses/transfer-1/terminate"):
+            self.terminated_transfers.append("transfer-1")
+            if "transfer-1" in self.transfers:
+                self.transfers["transfer-1"]["state"] = "TERMINATED"
+            return _FakeResponse(204, None)
+
+        if url.endswith("/management/v3/transferprocesses/transfer-1/deprovision"):
+            self.deprovisioned_transfers.append("transfer-1")
+            if "transfer-1" in self.transfers:
+                self.transfers["transfer-1"]["state"] = "DEPROVISIONED"
+            return _FakeResponse(204, None)
+
+        raise AssertionError(f"Unexpected POST URL: {url}")
+
+    def get(self, url, headers=None, timeout=None):
+        if url.endswith("/management/v3/contractnegotiations/neg-1"):
+            return _FakeResponse(200, {"@id": "neg-1", "state": "FINALIZED", "contractAgreementId": "agreement-1"})
+
+        if url.endswith("/management/v3/transferprocesses/transfer-1"):
+            return _FakeResponse(200, self.transfers.get("transfer-1", {"@id": "transfer-1", "state": "STARTED"}))
+
+        if url.endswith("/management/v3/transferprocesses/transfer-1/state"):
+            state = self.transfers.get("transfer-1", {}).get("state", "TERMINATED")
+            return _FakeResponse(200, {"@type": "TransferState", "state": state})
+
+        raise AssertionError(f"Unexpected GET URL: {url}")
+
+    def delete(self, url, headers=None, timeout=None):
+        if "/management/v3/assets/" in url:
+            asset_id = url.rsplit("/", 1)[-1]
+            self.assets.pop(asset_id, None)
+            return _FakeResponse(204, None)
+        if "/management/v3/policydefinitions/" in url:
+            policy_id = url.rsplit("/", 1)[-1]
+            self.policies.pop(policy_id, None)
+            return _FakeResponse(204, None)
+        if "/management/v3/contractdefinitions/" in url:
+            contract_id = url.rsplit("/", 1)[-1]
+            self.contracts.pop(contract_id, None)
+            return _FakeResponse(204, None)
+        raise AssertionError(f"Unexpected DELETE URL: {url}")
+
+
+class _FakeMessage:
+    def __init__(self, value):
+        self.value = value
+
+
+class _FakeBrokerState:
+    topics = {}
+    routes = {}
+
+    @classmethod
+    def reset(cls):
+        cls.topics = {}
+        cls.routes = {}
+
+
+class _FakeProducer:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def send(self, topic, value):
+        _FakeBrokerState.topics.setdefault(topic, []).append(value)
+        destination_topic = _FakeBrokerState.routes.get(topic)
+        if destination_topic:
+            _FakeBrokerState.topics.setdefault(destination_topic, []).append(value)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class _FakeConsumer:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.topics = []
+        self.offset = 0
+
+    def subscribe(self, topics):
+        self.topics = list(topics)
+
+    def poll(self, timeout_ms=0):
+        if not self.topics:
+            return {}
+        topic = self.topics[0]
+        messages = _FakeBrokerState.topics.get(topic, [])
+        if self.offset >= len(messages):
+            return {}
+        batch = [_FakeMessage(value) for value in messages[self.offset:]]
+        self.offset = len(messages)
+        return {topic: batch}
+
+    def close(self):
+        return None
+
+
+class _FakeNewTopic:
+    def __init__(self, name, num_partitions, replication_factor):
+        self.name = name
+        self.num_partitions = num_partitions
+        self.replication_factor = replication_factor
+
+
+class _FakeAdminClient:
+    created_topics = []
+    last_kwargs = None
+
+    def __init__(self, **kwargs):
+        type(self).last_kwargs = kwargs
+        self._topics = set()
+
+    def list_topics(self):
+        return set(self._topics)
+
+    def create_topics(self, topics):
+        for topic in topics:
+            self._topics.add(topic.name)
+            type(self).created_topics.append(topic.name)
+
+    def list_consumer_groups(self):
+        return []
+
+    def describe_consumer_groups(self, group_ids):
+        return []
+
+    def close(self):
+        return None
+
+
+class _FakeGroupDescription:
+    def __init__(self, state, members):
+        self.state = state
+        self.members = members
+
+
+class _FakeAdminClientWithConsumerGroup(_FakeAdminClient):
+    list_calls = 0
+
+    def list_consumer_groups(self):
+        type(self).list_calls += 1
+        if type(self).list_calls < 2:
+            return []
+        return [("corr-1:corr-1", "consumer")]
+
+    def describe_consumer_groups(self, group_ids):
+        return [_FakeGroupDescription("Stable", [object()])]
+
+
+class _FlakyAdminClient(_FakeAdminClient):
+    init_calls = 0
+
+    def __init__(self, **kwargs):
+        type(self).init_calls += 1
+        if type(self).init_calls == 1:
+            raise RuntimeError("NoBrokersAvailable")
+        super().__init__(**kwargs)
+
+
+class _FakeKafkaManager:
+    def __init__(self):
+        self.stop_calls = 0
+        self.ensure_calls = 0
+        self.started_by_framework = True
+        self.cluster_bootstrap_servers = "host.docker.internal:39093"
+
+    def stop_kafka(self):
+        self.stop_calls += 1
+
+    def ensure_kafka_running(self):
+        self.ensure_calls += 1
+        return "localhost:39093"
+
+
+class _RetryLoginSession(_FakeSession):
+    def __init__(self):
+        super().__init__()
+        self.login_attempts = 0
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if "openid-connect/token" in url:
+            self.login_attempts += 1
+            if self.login_attempts == 1:
+                raise requests.exceptions.ConnectionError("connection refused")
+            return _FakeResponse(200, {"access_token": "jwt-after-retry"})
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
+class KafkaEdcValidationSuiteTests(unittest.TestCase):
+    def setUp(self):
+        _FakeBrokerState.reset()
+        _FakeAdminClient.created_topics = []
+        _FakeAdminClient.last_kwargs = None
+        _FakeAdminClientWithConsumerGroup.created_topics = []
+        _FakeAdminClientWithConsumerGroup.last_kwargs = None
+        _FakeAdminClientWithConsumerGroup.list_calls = 0
+        _FlakyAdminClient.created_topics = []
+        _FlakyAdminClient.last_kwargs = None
+        _FlakyAdminClient.init_calls = 0
+
+    def test_run_pair_executes_edc_kafka_flow_and_persists_artifact(self):
+        ensured_topics = []
+        counter = itertools.count(1000, 5)
+        session = _FakeSession()
+
+        def time_provider():
+            return float(next(counter))
+
+        credentials = {
+            "conn-provider": {"connector_user": {"user": "provider-user", "passwd": "provider-pass"}},
+            "conn-consumer": {"connector_user": {"user": "consumer-user", "passwd": "consumer-pass"}},
+        }
+
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: credentials[connector],
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak.local",
+                "KAFKA_CLUSTER_BOOTSTRAP_SERVERS": "broker-cluster:29092",
+            },
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "localhost:9092",
+                "topic_name": "edc-kafka-suite",
+                "message_count": 3,
+                "security_protocol": "PLAINTEXT",
+                "consumer_poll_timeout_seconds": 5,
+                "startup_grace_seconds": 0,
+            },
+            ensure_kafka_topic=lambda topic_name: ensured_topics.append(topic_name) or True,
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            producer_class=_FakeProducer,
+            consumer_class=_FakeConsumer,
+            session=session,
+            time_provider=time_provider,
+            uuid_factory=iter(["testcase", "id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9"]).__next__,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = suite.run_pair("conn-provider", "conn-consumer", experiment_dir=tmpdir)
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["agreement_id"], "agreement-1")
+            self.assertEqual(result["transfer_state"], "STARTED")
+            self.assertEqual(result["metrics"]["messages_produced"], 3)
+            self.assertEqual(result["metrics"]["messages_consumed"], 3)
+            self.assertTrue(result["artifact_path"].endswith("kafka_edc/conn-provider__conn-consumer.json"))
+            self.assertTrue(os.path.exists(result["artifact_path"]))
+            self.assertEqual(ensured_topics, [])
+            self.assertEqual(result["bootstrap_servers"], "localhost:9092")
+            self.assertEqual(result["cluster_bootstrap_servers"], "broker-cluster:29092")
+            self.assertEqual(result["source_topic"], _FakeAdminClient.created_topics[0])
+            self.assertEqual(result["destination_topic"], _FakeAdminClient.created_topics[1])
+            self.assertEqual(result["steps"][-1]["name"], "measure_kafka_transfer_latency")
+            self.assertEqual(session.asset_bootstrap_servers, "broker-cluster:29092")
+            self.assertEqual(session.destination_bootstrap_servers, "broker-cluster:29092")
+            self.assertIn("transfer-1", session.terminated_transfers)
+            self.assertIn("transfer-1", session.deprovisioned_transfers)
+
+    def test_run_pair_uses_runtime_bootstrap_servers_to_ensure_topic(self):
+        fallback_topics = []
+        counter = itertools.count(2000, 5)
+        session = _FakeSession()
+
+        def time_provider():
+            return float(next(counter))
+
+        credentials = {
+            "conn-provider": {"connector_user": {"user": "provider-user", "passwd": "provider-pass"}},
+            "conn-consumer": {"connector_user": {"user": "consumer-user", "passwd": "consumer-pass"}},
+        }
+
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: credentials[connector],
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "broker-runtime:29092",
+                "topic_name": "edc-kafka-suite",
+                "message_count": 2,
+                "security_protocol": "PLAINTEXT",
+                "consumer_poll_timeout_seconds": 5,
+                "startup_grace_seconds": 0,
+            },
+            ensure_kafka_topic=lambda topic_name: fallback_topics.append(topic_name) or True,
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            producer_class=_FakeProducer,
+            consumer_class=_FakeConsumer,
+            session=session,
+            time_provider=time_provider,
+            uuid_factory=iter(["runtimecase", "id1", "id2", "id3", "id4", "id5", "id6", "id7"]).__next__,
+        )
+
+        result = suite.run_pair("conn-provider", "conn-consumer")
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(fallback_topics, [])
+        self.assertEqual(_FakeAdminClient.last_kwargs["bootstrap_servers"], "broker-runtime:29092")
+        self.assertEqual(_FakeAdminClient.created_topics, [result["source_topic"], result["destination_topic"]])
+        self.assertEqual(result["steps"][0]["method"], "runtime_admin")
+        self.assertEqual(result["cluster_bootstrap_servers"], "broker-runtime:29092")
+        self.assertEqual(session.asset_bootstrap_servers, "broker-runtime:29092")
+        self.assertEqual(session.destination_bootstrap_servers, "broker-runtime:29092")
+
+    def test_run_pair_derives_cluster_bootstrap_servers_from_localhost_runtime(self):
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "localhost:39092",
+                "topic_name": "edc-kafka-suite",
+                "message_count": 1,
+                "security_protocol": "PLAINTEXT",
+                "consumer_poll_timeout_seconds": 5,
+                "startup_grace_seconds": 0,
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            producer_class=_FakeProducer,
+            consumer_class=_FakeConsumer,
+            session=_FakeSession(),
+            time_provider=lambda: 1000.0,
+            uuid_factory=iter(["derivecase", "id1", "id2", "id3", "id4", "id5", "id6"]).__next__,
+        )
+
+        runtime = suite._ensure_kafka_runtime(suite._load_kafka_runtime())
+
+        self.assertEqual(runtime["host_bootstrap_servers"], "localhost:39092")
+        self.assertEqual(
+            runtime["cluster_bootstrap_servers"],
+            "host.docker.internal:39092,host.minikube.internal:39092",
+        )
+
+    def test_wait_for_transfer_runtime_stabilization_waits_for_consumer_group(self):
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClientWithConsumerGroup,
+            new_topic_class=_FakeNewTopic,
+            session=_FakeSession(),
+        )
+
+        fake_clock = itertools.count(100)
+
+        with patch("framework.kafka_edc_validation.time.time", side_effect=lambda: float(next(fake_clock))):
+            with patch("framework.kafka_edc_validation.time.sleep", return_value=None):
+                result = suite._wait_for_transfer_runtime_stabilization(
+                    {
+                        "bootstrap_servers": "broker-runtime:29092",
+                        "host_bootstrap_servers": "broker-runtime:29092",
+                        "startup_grace_seconds": 5,
+                        "poll_interval_seconds": 1,
+                    },
+                    {"correlationId": "corr-1"},
+                    "source-topic",
+                )
+
+        self.assertEqual(result["strategy"], "consumer_group_ready")
+        self.assertEqual(result["group_id"], "corr-1:corr-1")
+        self.assertEqual(result["state"], "Stable")
+        self.assertEqual(result["member_count"], 1)
+
+    def test_wait_for_cleanup_settlement_only_waits_when_cleanup_did_work(self):
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            session=_FakeSession(),
+        )
+
+        with patch("framework.kafka_edc_validation.time.sleep", return_value=None) as sleep_mock:
+            waited = suite._wait_for_cleanup_settlement(
+                {"pre_run_settle_seconds": 7},
+                [{"connector": "conn-a", "terminated_transfers": [{"transfer_id": "t-1"}]}],
+            )
+            skipped = suite._wait_for_cleanup_settlement(
+                {"pre_run_settle_seconds": 7},
+                [{"connector": "conn-a", "terminated_transfers": []}],
+            )
+
+        self.assertEqual(waited["status"], "waited")
+        self.assertEqual(waited["seconds_waited"], 7)
+        self.assertEqual(skipped["status"], "skipped")
+        self.assertEqual(skipped["reason"], "no_cleanup_actions")
+        sleep_mock.assert_called_once_with(7)
+
+    def test_ensure_topic_with_runtime_retries_after_broker_restart(self):
+        kafka_manager = _FakeKafkaManager()
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FlakyAdminClient,
+            new_topic_class=_FakeNewTopic,
+            kafka_manager=kafka_manager,
+            session=_FakeSession(),
+        )
+
+        runtime = {
+            "bootstrap_servers": "localhost:39092",
+            "host_bootstrap_servers": "localhost:39092",
+            "cluster_bootstrap_servers": "host.docker.internal:39092",
+        }
+
+        self.assertTrue(suite._ensure_topic_with_runtime(runtime, "topic-a"))
+        self.assertEqual(kafka_manager.stop_calls, 1)
+        self.assertEqual(kafka_manager.ensure_calls, 1)
+        self.assertEqual(runtime["bootstrap_servers"], "localhost:39093")
+        self.assertEqual(runtime["cluster_bootstrap_servers"], "host.docker.internal:39093")
+
+    def test_login_retries_transient_keycloak_failure(self):
+        session = _RetryLoginSession()
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            session=session,
+        )
+
+        with patch("framework.kafka_edc_validation.time.sleep", return_value=None) as sleep_mock:
+            token = suite._login("conn-a", "consumer")
+
+        self.assertEqual(token, "jwt-after-retry")
+        self.assertEqual(session.login_attempts, 2)
+        sleep_mock.assert_called_once_with(2)
+
+
+if __name__ == "__main__":
+    unittest.main()

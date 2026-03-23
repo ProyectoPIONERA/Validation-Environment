@@ -32,7 +32,7 @@ export class CatalogBrowserComponent implements OnInit {
   }
 
   viewContractOffers(assetId: string, contractOffers: any, endpointUrl: string, properties: any) {
-    this.router.navigate(['catalog/datasets/view'],{
+    this.router.navigate(['/catalog/datasets/view'],{
 			state: {
         assetDetailData: {
           assetId: assetId,

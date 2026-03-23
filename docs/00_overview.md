@@ -9,7 +9,10 @@ Hoy cubre principalmente:
 - despliegue local del cluster y servicios base
 - despliegue del dataspace y de los conectores
 - despliegue opcional de componentes adicionales
-- validación API de interoperabilidad con Newman
+- validación API core con Newman
+- validación UI con Playwright
+- validación específica de componentes cuando existe runner registrado
+- persistencia de experimentos, métricas y artefactos de ejecución
 
 ## Qué problema resuelve
 
@@ -24,30 +27,47 @@ Sin este framework, cada integración tendría que resolverse de forma manual y 
 
 ## Idea general de la arquitectura
 
-La estructura actual del repositorio se entiende bien si la miramos en cuatro bloques:
+La estructura actual del repositorio se entiende bien si la miramos en cinco bloques:
 
 1. `inesdata.py` orquesta los niveles de trabajo.
 2. `adapters/inesdata/` encapsula la lógica específica de INESData.
 3. `framework/` contiene la lógica genérica de validación y resultados.
-4. `validation/` contiene las pruebas API actuales y la estructura preparada para pruebas de componentes y UI.
+4. `validation/` contiene las suites API, UI y por componente.
+5. `inesdata-deployment/` contiene charts y values de despliegue.
 
-## Qué está implementado hoy
+## Qué está implementado
 
-- La validación activa es la validación API del núcleo del dataspace.
+- La validación core del dataspace se ejecuta con Newman desde `validation/core/collections/`.
 - Las colecciones activas están en `validation/core/collections/`.
 - Los scripts JS activos están en `validation/core/tests/` y `validation/shared/api/`.
-- `validation/components/` ya existe como estructura modular, pero todavía no entra en la ejecución automática.
-- `validation/ui/` existe solo como scaffolding inicial.
+- `Level 6` crea un experimento y persiste artefactos en `experiments/experiment_<timestamp>/`.
+- El pipeline de métricas transforma los reportes de Newman en artefactos persistidos del experimento.
+- Kafka puede medirse como benchmark real y dejar `kafka_metrics.json`.
+- `validation/ui/` contiene suites Playwright activas; `Level 6` ejecuta un smoke estable por conector y una suite `ops` opcional.
+- `validation/components/` ya no es solo estructura: `ontology_hub` se valida automáticamente en `Level 6` cuando está configurado en `COMPONENTS`.
 
 ## Qué debe leer un desarrollador nuevo
 
+Si tu propósito es entender el framework completo, el orden recomendado es:
+
+1. [01_framework_architecture.md](./01_framework_architecture.md)
+2. [02_validation_architecture.md](./02_validation_architecture.md)
+3. [04_execution_flow.md](./04_execution_flow.md)
+4. [05_repository_structure.md](./05_repository_structure.md)
+5. [07_experiment_system.md](./07_experiment_system.md)
+6. [08_metrics_pipeline.md](./08_metrics_pipeline.md)
+7. [09_kafka_real_measurements.md](./09_kafka_real_measurements.md)
+8. [10_ui_validation_core.md](./10_ui_validation_core.md)
+
 Si tu propósito es integrar o mantener un componente:
 
-1. Lee [01_framework_architecture.md](./01_framework_architecture.md).
-2. Mira [05_repository_structure.md](./05_repository_structure.md).
-3. Sigue [03_integration_guide.md](./03_integration_guide.md).
+1. [01_framework_architecture.md](./01_framework_architecture.md).
+2. [03_integration_guide.md](./03_integration_guide.md).
+2. [05_repository_structure.md](./05_repository_structure.md).
+3. [02_validation_architecture.md](./02_validation_architecture.md).
 
 Si tu propósito es entender la validación:
 
-1. Lee [02_validation_architecture.md](./02_validation_architecture.md).
-2. Luego revisa [04_execution_flow.md](./04_execution_flow.md).
+1. [02_validation_architecture.md](./02_validation_architecture.md).
+2. [04_execution_flow.md](./04_execution_flow.md).
+3. [07_experiment_system.md](./07_experiment_system.md) a [10_ui_validation_core.md](./10_ui_validation_core.md).

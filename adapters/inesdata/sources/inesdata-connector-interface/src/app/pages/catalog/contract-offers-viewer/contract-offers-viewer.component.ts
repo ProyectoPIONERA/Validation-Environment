@@ -60,19 +60,26 @@ export class ContractOffersViewerComponent {
     private policyCardBuilder: PolicyCardBuilder,
     private readonly dialog: MatDialog,
     private router: Router) {
-    this.data =undefined
-    this.data = this.router.getCurrentNavigation()?.extras.state.assetDetailData;
-    if(!this.data){
-      this.router.navigate(['/'])
+    this.data = undefined
+    this.data = this.router.getCurrentNavigation()?.extras.state?.assetDetailData
+      ?? history.state?.assetDetailData;
+
+    if (!this.data) {
+      this.notificationService.showWarning('Asset details are no longer available. Please open it again from the list.');
+      this.router.navigate(['/catalog']);
+      return;
     }
-    this.assetDataKeys = Object.keys(this.data.properties.assetData);
+
+    const assetData = this.data?.properties?.assetData ?? {};
+    this.assetDataKeys = Object.keys(assetData);
     this.processAssetData();
-    if(this.data.contractOffers){
+
+    if (this.data.contractOffers) {
       this.processPolicies();
     }
 
-    if(this.data.dataAddress) {
-      if(this.data.privateProperties) {
+    if (this.data.dataAddress) {
+      if (this.data.privateProperties) {
         this.dataAddressType = DATA_ADDRESS_TYPES.inesDataStore;
       } else {
         this.dataAddressType = this.getDataAddressName(this.data.dataAddress.type);
@@ -119,7 +126,8 @@ export class ContractOffersViewerComponent {
 
   processAssetData() {
     this.assetDataKeys = this.assetDataKeys.filter(key => {
-      const entries = this.getEntries(this.data.properties.assetData[key]);
+      const assetData = this.data?.properties?.assetData ?? {};
+      const entries = this.getEntries(assetData[key]);
 
       if (entries.length === 0) {
         return false;

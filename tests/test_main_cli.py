@@ -231,6 +231,7 @@ class MainCliTests(unittest.TestCase):
         validation_engine = main.build_validation_engine(adapter)
 
         self.assertIsNotNone(validation_engine.validation_test_entities_absent)
+        self.assertIsNotNone(validation_engine.transfer_storage_verifier)
 
     def test_list_command_rejects_extra_argument(self):
         stderr = io.StringIO()
@@ -285,6 +286,7 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["validation"], {"validated": ["conn-a", "conn-b"]})
         self.assertEqual(result["newman_request_metrics"], [])
+        self.assertEqual(result["storage_checks"], [])
         self.assertTrue(result["experiment_dir"].startswith("/tmp/cli-test-"))
 
     def test_metrics_command_uses_metrics_collector(self):
