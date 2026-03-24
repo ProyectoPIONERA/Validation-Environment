@@ -46,6 +46,12 @@ export const routes: Routes = [
     loadChildren: () => import('./pages/vocabularies/vocabularies.module').then(m => m.VocabulariesModule)
   },
   {
+    path: 'ontologies',
+    data: {title: 'Ontologies', icon: 'schema'},
+    canActivate: [AuthUserGuard],
+    loadChildren: () => import('./pages/ontologies/ontologies.module').then(m => m.OntologiesModule)
+  },
+  {
     path: '', redirectTo: 'catalog', pathMatch: 'full'
   }
 ];
