@@ -94,3 +94,5 @@ Thumbs.db
 logs/
 docs_/
 bugs/
+validation/components/ontology_hub/tools
+adapters/inesdata/sources/Ontology-Hub

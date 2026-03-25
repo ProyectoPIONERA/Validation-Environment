@@ -16,6 +16,7 @@ class ExperimentLoader:
         "test_results.json",
         "summary.json",
         "kafka_metrics.json",
+        "ui_validation_summary.json",
     )
 
     @staticmethod

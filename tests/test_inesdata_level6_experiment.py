@@ -34,6 +34,181 @@ def _materialize_fixture_reports(experiment_dir):
     return exported
 
 
+def _build_level6_ui_results_payload():
+    return {
+        "stats": {
+            "expected": 2,
+            "unexpected": 0,
+            "flaky": 0,
+            "skipped": 0,
+        },
+        "suites": [
+            {
+                "title": "core/01-login-readiness.spec.ts",
+                "file": "core/01-login-readiness.spec.ts",
+                "specs": [
+                    {
+                        "title": "01 login readiness: authentication and shell loaded",
+                        "file": "core/01-login-readiness.spec.ts",
+                        "tests": [
+                            {
+                                "results": [
+                                    {
+                                        "status": "passed",
+                                        "errors": [],
+                                        "attachments": [
+                                            {
+                                                "name": "01-after-login",
+                                                "contentType": "image/png",
+                                                "path": "/tmp/login.png",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "title": "core/04-consumer-catalog.spec.ts",
+                "file": "core/04-consumer-catalog.spec.ts",
+                "specs": [
+                    {
+                        "title": "04 consumer catalog: listing and detail without access errors",
+                        "file": "core/04-consumer-catalog.spec.ts",
+                        "tests": [
+                            {
+                                "results": [
+                                    {
+                                        "status": "passed",
+                                        "errors": [],
+                                        "attachments": [
+                                            {
+                                                "name": "trace",
+                                                "contentType": "application/zip",
+                                                "path": "/tmp/catalog-trace.zip",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _build_level6_ui_dataspace_results_payload():
+    return {
+        "stats": {
+            "expected": 5,
+            "unexpected": 0,
+            "flaky": 0,
+            "skipped": 0,
+        },
+        "suites": [
+            {
+                "title": "core/03-provider-setup.spec.ts",
+                "file": "core/03-provider-setup.spec.ts",
+                "specs": [
+                    {
+                        "title": "03 provider setup: asset creation with file upload",
+                        "file": "core/03-provider-setup.spec.ts",
+                        "tests": [{"results": [{"status": "passed", "errors": [], "attachments": []}]}],
+                    }
+                ],
+            },
+            {
+                "title": "core/03b-provider-policy-create.spec.ts",
+                "file": "core/03b-provider-policy-create.spec.ts",
+                "specs": [
+                    {
+                        "title": "03b provider setup: policy creation from the UI",
+                        "file": "core/03b-provider-policy-create.spec.ts",
+                        "tests": [{"results": [{"status": "passed", "errors": [], "attachments": []}]}],
+                    }
+                ],
+            },
+            {
+                "title": "core/03c-provider-contract-definition-create.spec.ts",
+                "file": "core/03c-provider-contract-definition-create.spec.ts",
+                "specs": [
+                    {
+                        "title": "03c provider setup: contract definition creation from the UI",
+                        "file": "core/03c-provider-contract-definition-create.spec.ts",
+                        "tests": [{"results": [{"status": "passed", "errors": [], "attachments": []}]}],
+                    }
+                ],
+            },
+            {
+                "title": "core/05-consumer-negotiation.spec.ts",
+                "file": "core/05-consumer-negotiation.spec.ts",
+                "specs": [
+                    {
+                        "title": "05 consumer negotiation: visible negotiation from catalog",
+                        "file": "core/05-consumer-negotiation.spec.ts",
+                        "tests": [{"results": [{"status": "passed", "errors": [], "attachments": []}]}],
+                    }
+                ],
+            },
+            {
+                "title": "core/06-consumer-transfer.spec.ts",
+                "file": "core/06-consumer-transfer.spec.ts",
+                "specs": [
+                    {
+                        "title": "06 consumer transfer: visible transfer from contracts and history",
+                        "file": "core/06-consumer-transfer.spec.ts",
+                        "tests": [{"results": [{"status": "passed", "errors": [], "attachments": []}]}],
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _build_level6_ui_ops_results_payload():
+    return {
+        "stats": {
+            "expected": 1,
+            "unexpected": 0,
+            "flaky": 0,
+            "skipped": 0,
+        },
+        "suites": [
+            {
+                "title": "ops/minio-bucket-visibility.spec.ts",
+                "file": "ops/minio-bucket-visibility.spec.ts",
+                "specs": [
+                    {
+                        "title": "ops minio visibility: provider and consumer buckets are visible",
+                        "file": "ops/minio-bucket-visibility.spec.ts",
+                        "tests": [
+                            {
+                                "results": [
+                                    {
+                                        "status": "passed",
+                                        "errors": [],
+                                        "attachments": [
+                                            {
+                                                "name": "bucket-visibility",
+                                                "contentType": "image/png",
+                                                "path": "/tmp/minio.png",
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+
 class InesdataLevel6ExperimentTests(unittest.TestCase):
     def setUp(self):
         self._ensure_vault_unsealed_patcher = mock.patch.object(
@@ -65,7 +240,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "ensure_vault_unsealed", return_value=True) as mock_unseal,
                 mock.patch.object(
                     inesdata,
@@ -142,7 +317,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
 
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -173,7 +348,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -210,6 +385,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(stored["storage_checks"], [])
             self.assertEqual(stored["kafka_edc_results"], [])
             self.assertEqual(stored["ui_results"], [])
+            self.assertEqual(stored["ui_validation"]["status"], "not_run")
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 0)
+            self.assertTrue(
+                stored["ui_validation"]["artifacts"]["report_json"].endswith("ui_validation_summary.json")
+            )
             self.assertEqual(stored["component_results"], [])
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "raw_requests.jsonl")))
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "aggregated_metrics.json")))
@@ -219,7 +399,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -263,7 +443,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -300,9 +480,19 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             ui_test_dir = os.path.join(inesdata.Config.script_dir(), "validation", "ui")
             original_isdir = os.path.isdir
+
+            def fake_subprocess_run(command, cwd=None, env=None):
+                with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
+                    json.dump(_build_level6_ui_results_payload(), handle)
+                return mock.Mock(returncode=0)
+
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(
+                    inesdata,
+                    "load_deployer_config",
+                    return_value={"LEVEL6_RUN_UI_DATASPACE": "false"},
+                ),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -336,7 +526,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(
                     inesdata.subprocess,
                     "run",
-                    return_value=mock.Mock(returncode=0),
+                    side_effect=fake_subprocess_run,
                 ) as mock_run,
             ):
                 inesdata.lvl_6()
@@ -348,7 +538,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             first_env = first_call.kwargs["env"]
 
             self.assertEqual(first_command[:3], ["npx", "playwright", "test"])
-            self.assertEqual(first_command[3:], list(inesdata.LEVEL6_UI_SPECS))
+            self.assertEqual(first_command[3:], list(inesdata.LEVEL6_UI_SMOKE_SPECS))
             self.assertEqual(first_call.kwargs["cwd"], ui_test_dir)
             self.assertEqual(first_env["PORTAL_BASE_URL"], "https://conn-a.example.local")
             self.assertEqual(first_env["PORTAL_USER"], "portal-user")
@@ -380,10 +570,96 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(len(stored["ui_results"]), 2)
             self.assertEqual(stored["ui_results"][0]["test"], "ui-core-smoke")
             self.assertEqual(stored["ui_results"][0]["status"], "passed")
+            self.assertEqual(stored["ui_results"][0]["suite"], "ui-core")
+            self.assertEqual(stored["ui_results"][0]["summary"]["total"], 2)
+            self.assertEqual(stored["ui_results"][0]["summary"]["passed"], 2)
+            self.assertEqual(stored["ui_results"][0]["support_checks"][0]["test_case_id"], "DS-UI-01")
+            self.assertEqual(stored["ui_results"][0]["dataspace_cases"][0]["test_case_id"], "DS-UI-04")
+            self.assertEqual(stored["ui_validation"]["status"], "passed")
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 2)
+            self.assertEqual(stored["ui_validation"]["support_summary"]["passed"], 2)
+            self.assertEqual(stored["ui_validation"]["dataspace_summary"]["passed"], 2)
+            self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["support_checks"]["total"], 1)
+            self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["dataspace_cases"]["total"], 1)
+            self.assertEqual(
+                stored["ui_validation"]["operations_involved"],
+                ["list_catalog", "load_portal_shell", "login", "open_catalog_detail"],
+            )
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["login"]["passed"], 2)
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["list_catalog"]["passed"], 2)
+            self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
+            self.assertEqual(
+                stored["ui_results"][0]["artifacts"]["report_json"],
+                os.path.join(tmpdir, "ui", "conn-a", "ui_core_validation.json"),
+            )
             self.assertEqual(
                 stored["ui_results"][0]["artifacts"]["json_report_file"],
                 os.path.join(tmpdir, "ui", "conn-a", "results.json"),
             )
+            self.assertTrue(os.path.exists(stored["ui_results"][0]["artifacts"]["report_json"]))
+
+    def test_level6_runs_ui_dataspace_suite_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_isdir = os.path.isdir
+
+            def _fake_run(command, cwd=None, env=None):
+                if command[3:] == list(inesdata.LEVEL6_UI_SMOKE_SPECS):
+                    output_path = env["PLAYWRIGHT_JSON_REPORT_FILE"]
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    with open(output_path, "w", encoding="utf-8") as handle:
+                        json.dump(_build_level6_ui_results_payload(), handle)
+                    return mock.Mock(returncode=0)
+                if command[3] == "--workers=1" and command[4:] == list(inesdata.LEVEL6_UI_DATASPACE_SPECS):
+                    output_path = env["PLAYWRIGHT_JSON_REPORT_FILE"]
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    with open(output_path, "w", encoding="utf-8") as handle:
+                        json.dump(_build_level6_ui_dataspace_results_payload(), handle)
+                    self.assertEqual(env["UI_PROVIDER_CONNECTOR"], "conn-a")
+                    self.assertEqual(env["UI_CONSUMER_CONNECTOR"], "conn-b")
+                    self.assertEqual(env["PORTAL_TEST_FILE_MB"], "10")
+                    return mock.Mock(returncode=0)
+                raise AssertionError(f"Unexpected command: {command}")
+
+            with (
+                mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
+                mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
+                mock.patch.object(
+                    inesdata.VALIDATION_ENGINE,
+                    "run_all_dataspace_tests",
+                    side_effect=lambda connectors, experiment_dir=None: _materialize_fixture_reports(experiment_dir),
+                ),
+                mock.patch.object(inesdata, "_run_level6_kafka_benchmark", return_value=None),
+                mock.patch.object(inesdata.ExperimentStorage, "create_experiment_directory", return_value=tmpdir),
+                mock.patch.object(inesdata, "load_connector_credentials", return_value={"connector_user": {"user": "demo", "passwd": "demo"}}),
+                mock.patch.object(inesdata, "build_connector_url", side_effect=lambda connector: f"http://{connector}.example.local/inesdata-connector-interface"),
+                mock.patch.object(inesdata.subprocess, "run", side_effect=_fake_run),
+                mock.patch.object(
+                    inesdata.os.path,
+                    "isdir",
+                    side_effect=lambda path: True if path == os.path.join(inesdata.Config.script_dir(), "validation", "ui") else original_isdir(path),
+                ),
+            ):
+                inesdata.lvl_6()
+
+            with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+
+            self.assertEqual(len(stored["ui_results"]), 3)
+            self.assertEqual(stored["ui_results"][2]["test"], "ui-core-dataspace")
+            self.assertEqual(stored["ui_results"][2]["status"], "passed")
+            self.assertEqual(stored["ui_results"][2]["suite"], "ui-core-dataspace")
+            self.assertEqual(stored["ui_results"][2]["provider_connector"], "conn-a")
+            self.assertEqual(stored["ui_results"][2]["consumer_connector"], "conn-b")
+            self.assertEqual(stored["ui_results"][2]["dataspace_summary"]["passed"], 5)
+            self.assertEqual(stored["ui_results"][2]["dataspace_cases"][0]["test_case_id"], "DS-UI-03")
+            self.assertEqual(
+                stored["ui_results"][2]["artifacts"]["report_json"],
+                os.path.join(tmpdir, "ui-dataspace", "conn-a__conn-b", "ui_dataspace_validation.json"),
+            )
+            self.assertTrue(os.path.exists(stored["ui_results"][2]["artifacts"]["report_json"]))
 
     def test_level6_runs_component_validation_by_default_when_components_are_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -462,7 +738,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"LEVEL6_RUN_KAFKA_EDC": "true"}, clear=False),
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -544,7 +820,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
             with (
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -591,15 +867,41 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertIsNone(stored["ui_results"][0]["exit_code"])
             self.assertEqual(stored["ui_results"][0]["error"]["type"], "FileNotFoundError")
             self.assertIn("npx not found", stored["ui_results"][0]["error"]["message"])
+            self.assertEqual(stored["ui_results"][0]["suite"], "ui-core")
+            self.assertEqual(stored["ui_results"][0]["summary"]["total"], 2)
+            self.assertEqual(stored["ui_results"][0]["support_checks"][0]["test_case_id"], "DS-UI-01")
+            self.assertEqual(stored["ui_results"][0]["dataspace_cases"][0]["test_case_id"], "DS-UI-04")
+            self.assertEqual(stored["ui_validation"]["status"], "skipped")
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 2)
+            self.assertEqual(stored["ui_validation"]["summary"]["skipped"], 2)
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["login"]["skipped"], 2)
+            self.assertTrue(os.path.exists(stored["ui_results"][0]["artifacts"]["report_json"]))
+            self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
 
     def test_level6_runs_optional_ui_ops_suite_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             ui_test_dir = os.path.join(inesdata.Config.script_dir(), "validation", "ui")
             original_isdir = os.path.isdir
+
+            def fake_subprocess_run(command, cwd=None, env=None):
+                payload = (
+                    _build_level6_ui_ops_results_payload()
+                    if env.get("PLAYWRIGHT_OPS_JSON_REPORT_FILE")
+                    else _build_level6_ui_results_payload()
+                )
+                json_report_file = env.get("PLAYWRIGHT_OPS_JSON_REPORT_FILE") or env.get("PLAYWRIGHT_JSON_REPORT_FILE")
+                with open(json_report_file, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                return mock.Mock(returncode=0)
+
             with (
                 mock.patch.dict(os.environ, {"LEVEL6_RUN_UI_OPS": "true"}, clear=False),
                 mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(
+                    inesdata,
+                    "load_deployer_config",
+                    return_value={"LEVEL6_RUN_UI_DATASPACE": "false"},
+                ),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
@@ -633,7 +935,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(
                     inesdata.subprocess,
                     "run",
-                    return_value=mock.Mock(returncode=0),
+                    side_effect=fake_subprocess_run,
                 ) as mock_run,
             ):
                 inesdata.lvl_6()
@@ -681,8 +983,34 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(len(stored["ui_results"]), 3)
             self.assertEqual(stored["ui_results"][2]["test"], "ui-ops-minio-console")
             self.assertEqual(stored["ui_results"][2]["status"], "passed")
+            self.assertEqual(stored["ui_results"][2]["suite"], "ui-ops")
             self.assertEqual(stored["ui_results"][2]["provider_connector"], "conn-a")
             self.assertEqual(stored["ui_results"][2]["consumer_connector"], "conn-b")
+            self.assertEqual(stored["ui_results"][2]["ops_checks"][0]["test_case_id"], "DS-UI-OPS-01")
+            self.assertEqual(stored["ui_results"][2]["ops_summary"]["passed"], 1)
+            self.assertEqual(stored["ui_validation"]["status"], "passed")
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 3)
+            self.assertEqual(stored["ui_validation"]["summary"]["passed"], 3)
+            self.assertEqual(stored["ui_validation"]["ops_summary"]["passed"], 1)
+            self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["ops_checks"]["total"], 1)
+            self.assertEqual(
+                stored["ui_validation"]["operations_involved"],
+                [
+                    "inspect_storage",
+                    "list_catalog",
+                    "load_portal_shell",
+                    "login",
+                    "open_catalog_detail",
+                    "verify_bucket_visibility",
+                ],
+            )
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["inspect_storage"]["passed"], 1)
+            self.assertEqual(
+                stored["ui_results"][2]["artifacts"]["report_json"],
+                os.path.join(tmpdir, "ui-ops", "minio-console", "ui_ops_validation.json"),
+            )
+            self.assertTrue(os.path.exists(stored["ui_results"][2]["artifacts"]["report_json"]))
+            self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
 
 
 if __name__ == "__main__":

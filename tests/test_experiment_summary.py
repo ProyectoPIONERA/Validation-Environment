@@ -43,6 +43,34 @@ class ExperimentSummaryTests(unittest.TestCase):
                     "throughput_messages_per_second": 120.0,
                 }
             }, tmpdir)
+            ExperimentStorage.save(
+                {
+                    "status": "passed",
+                    "summary": {"total": 2, "passed": 2, "failed": 0, "skipped": 0, "not_run": 0},
+                    "support_summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+                    "dataspace_summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+                    "ops_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+                    "operations_involved": ["create_asset", "upload_asset_file"],
+                    "operation_summary": {
+                        "create_asset": {
+                            "total": 1,
+                            "passed": 1,
+                            "failed": 0,
+                            "skipped": 0,
+                            "test_case_ids": ["DS-UI-03"],
+                        },
+                        "upload_asset_file": {
+                            "total": 1,
+                            "passed": 1,
+                            "failed": 0,
+                            "skipped": 0,
+                            "test_case_ids": ["DS-UI-03"],
+                        },
+                    },
+                },
+                experiment_dir=tmpdir,
+                file_name="ui_validation_summary.json",
+            )
             graphs_dir = os.path.join(tmpdir, "graphs")
             os.makedirs(graphs_dir, exist_ok=True)
             for file_name in ("request_latency_avg.png", "kafka_throughput.png"):
@@ -64,10 +92,16 @@ class ExperimentSummaryTests(unittest.TestCase):
         self.assertTrue(summary["baseline"] is False)
         self.assertIn("Create Asset", summary["endpoint_latency_table"])
         self.assertEqual(summary["kafka_metrics"]["throughput_messages_per_sec"], 120.0)
+        self.assertEqual(summary["ui_validation"]["status"], "passed")
+        self.assertEqual(summary["ui_validation"]["summary"]["total"], 2)
+        self.assertEqual(summary["ui_validation"]["operations_involved"], ["create_asset", "upload_asset_file"])
         self.assertEqual(summary["generated_graphs"], ["kafka_throughput.png", "request_latency_avg.png"])
         self.assertEqual(summary["raw_request_count"], 4)
         self.assertIn("# Experiment Report:", markdown)
         self.assertIn("## Endpoint Latency", markdown)
+        self.assertIn("## UI Validation", markdown)
+        self.assertIn("Operations involved", markdown)
+        self.assertIn("create_asset, upload_asset_file", markdown)
         self.assertIn("## Kafka Benchmark", markdown)
         self.assertIn("| Endpoint | Count | p50 | p95 | p99 | Error Rate |", markdown)
         self.assertIn("`kafka_throughput.png`", markdown)

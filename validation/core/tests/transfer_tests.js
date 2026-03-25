@@ -189,6 +189,7 @@ if (requestName === "Check Transfer Status") {
     const validTransferStates = [
         "INITIAL",
         "STARTED",
+        "REQUESTING",
         "PROVISIONING",
         "PROVISIONED",
         "REQUESTED",

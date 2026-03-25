@@ -735,10 +735,17 @@ def ensure_vault_unsealed():
         return False
 
     status = run_silent(
-        f"kubectl exec {pod} -n {Config.NS_COMMON} -- vault status -format=json"
+        f"timeout 20 kubectl exec {pod} -n {Config.NS_COMMON} -- vault status -format=json"
     )
 
     if not status:
+        ready_state = run_silent(
+            f"kubectl get pod {pod} -n {Config.NS_COMMON} "
+            "-o jsonpath='{.status.containerStatuses[0].ready}'"
+        )
+        if (ready_state or "").strip("'\"").lower() == "true":
+            print("Vault status probe timed out, but the Vault pod is Ready. Assuming Vault is already unsealed.")
+            return True
         print("Could not get Vault status")
         return False
 
@@ -1868,6 +1875,10 @@ def _save_level6_experiment_state(
     component_results=None,
     error=None,
 ):
+    ui_validation = _aggregate_level6_ui_results(
+        ui_results or [],
+        experiment_dir=experiment_dir,
+    )
     payload = {
         "status": status,
         "timestamp": datetime.now().isoformat(),
@@ -1879,6 +1890,7 @@ def _save_level6_experiment_state(
         "kafka_edc_results": list(kafka_edc_results or []),
         "storage_checks": list(storage_checks or []),
         "ui_results": list(ui_results or []),
+        "ui_validation": ui_validation,
         "component_results": list(component_results or []),
         "error": error,
     }
@@ -1914,9 +1926,16 @@ LEVEL6_KAFKA_EDC_VALIDATOR = KafkaEdcValidationSuite(
 )
 
 
-LEVEL6_UI_SPECS = (
+LEVEL6_UI_SMOKE_SPECS = (
     os.path.join("core", "01-login-readiness.spec.ts"),
     os.path.join("core", "04-consumer-catalog.spec.ts"),
+)
+LEVEL6_UI_DATASPACE_SPECS = (
+    os.path.join("core", "03-provider-setup.spec.ts"),
+    os.path.join("core", "03b-provider-policy-create.spec.ts"),
+    os.path.join("core", "03c-provider-contract-definition-create.spec.ts"),
+    os.path.join("core", "05-consumer-negotiation.spec.ts"),
+    os.path.join("core", "06-consumer-transfer.spec.ts"),
 )
 LEVEL6_UI_OPS_SPEC = os.path.join("ops", "minio-bucket-visibility.spec.ts")
 LEVEL6_UI_OPS_CONFIG = "playwright.ops.config.ts"
@@ -1950,6 +1969,7 @@ def _build_level6_ui_artifact_paths(experiment_dir, connector):
         "html_report_dir": os.path.join(base_dir, "playwright-report"),
         "blob_report_dir": os.path.join(base_dir, "blob-report"),
         "json_report_file": os.path.join(base_dir, "results.json"),
+        "report_json": os.path.join(base_dir, "ui_core_validation.json"),
     }
     for path in paths.values():
         if path.endswith(".json"):
@@ -1967,6 +1987,25 @@ def _build_level6_ui_ops_artifact_paths(experiment_dir):
         "html_report_dir": os.path.join(base_dir, "playwright-report"),
         "blob_report_dir": os.path.join(base_dir, "blob-report"),
         "json_report_file": os.path.join(base_dir, "results.json"),
+        "report_json": os.path.join(base_dir, "ui_ops_validation.json"),
+    }
+    for path in paths.values():
+        if path.endswith(".json"):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        else:
+            os.makedirs(path, exist_ok=True)
+    return paths
+
+
+def _build_level6_ui_dataspace_artifact_paths(experiment_dir, provider_connector, consumer_connector):
+    base_dir = os.path.join(experiment_dir, "ui-dataspace", f"{provider_connector}__{consumer_connector}")
+    paths = {
+        "base_dir": base_dir,
+        "output_dir": os.path.join(base_dir, "test-results"),
+        "html_report_dir": os.path.join(base_dir, "playwright-report"),
+        "blob_report_dir": os.path.join(base_dir, "blob-report"),
+        "json_report_file": os.path.join(base_dir, "results.json"),
+        "report_json": os.path.join(base_dir, "ui_dataspace_validation.json"),
     }
     for path in paths.values():
         if path.endswith(".json"):
@@ -1988,7 +2027,9 @@ def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
         "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
     }
-    command = ["npx", "playwright", "test", *LEVEL6_UI_SPECS]
+    specs = list(LEVEL6_UI_SMOKE_SPECS)
+    print(f"  Level 6 UI smoke profile for {connector}: {', '.join(specs)}")
+    command = ["npx", "playwright", "test", *specs]
     error = None
     try:
         result = subprocess.run(
@@ -2006,21 +2047,104 @@ def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal
             "message": str(exc),
         }
 
-    return {
+    result = {
         "connector": connector,
         "test": "ui-core-smoke",
         "status": status,
         "exit_code": exit_code,
         "portal_url": portal_url,
-        "specs": list(LEVEL6_UI_SPECS),
+        "specs": specs,
         "artifacts": {
             "test_results_dir": artifact_paths["output_dir"],
             "html_report_dir": artifact_paths["html_report_dir"],
             "blob_report_dir": artifact_paths["blob_report_dir"],
             "json_report_file": artifact_paths["json_report_file"],
+            "report_json": artifact_paths["report_json"],
         },
         "error": error,
     }
+    return _enrich_level6_ui_result(result)
+
+
+def _run_level6_ui_dataspace(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
+    artifact_paths = _build_level6_ui_dataspace_artifact_paths(
+        experiment_dir,
+        provider_connector,
+        consumer_connector,
+    )
+    env = {
+        **os.environ,
+        "UI_PROVIDER_CONNECTOR": provider_connector,
+        "UI_CONSUMER_CONNECTOR": consumer_connector,
+        # Level 6 validates the end-to-end publication flow, not upload stress limits.
+        # A smaller default fixture keeps the UI upload deterministic on shared clusters
+        # while still exercising the real storage/upload path.
+        "PORTAL_TEST_FILE_MB": os.environ.get("PORTAL_TEST_FILE_MB") or "10",
+        "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
+        "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
+        "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
+        "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
+    }
+    specs = list(LEVEL6_UI_DATASPACE_SPECS)
+    print(
+        f"  Level 6 UI dataspace profile for {provider_connector} -> "
+        f"{consumer_connector}: {', '.join(specs)}"
+    )
+    # These flows share the same provider/consumer pair and stress catalog propagation.
+    # Running them serially in Level 6 avoids false negatives caused by concurrent UI workers.
+    command = ["npx", "playwright", "test", "--workers=1", *specs]
+    error = None
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ui_test_dir,
+            env=env,
+        )
+        status = "passed" if result.returncode == 0 else "failed"
+        exit_code = result.returncode
+    except OSError as exc:
+        status = "skipped"
+        exit_code = None
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    result = {
+        "provider_connector": provider_connector,
+        "consumer_connector": consumer_connector,
+        "test": "ui-core-dataspace",
+        "status": status,
+        "exit_code": exit_code,
+        "specs": specs,
+        "artifacts": {
+            "test_results_dir": artifact_paths["output_dir"],
+            "html_report_dir": artifact_paths["html_report_dir"],
+            "blob_report_dir": artifact_paths["blob_report_dir"],
+            "json_report_file": artifact_paths["json_report_file"],
+            "report_json": artifact_paths["report_json"],
+        },
+        "error": error,
+    }
+    return _enrich_level6_ui_result(result)
+
+
+def _wait_for_level6_keycloak_readiness() -> bool:
+    deployer_config = load_deployer_config() or {}
+    if not all(
+        deployer_config.get(key)
+        for key in ("KC_URL", "KC_USER", "KC_PASSWORD")
+    ):
+        print("Keycloak readiness check skipped: KC_URL/KC_USER/KC_PASSWORD missing")
+        return True
+
+    connectors_adapter = getattr(INESDATA_ADAPTER, "connectors", None)
+    wait_for_keycloak_admin_ready = getattr(connectors_adapter, "wait_for_keycloak_admin_ready", None)
+    if not callable(wait_for_keycloak_admin_ready):
+        print("Keycloak readiness check skipped: connector adapter does not expose wait_for_keycloak_admin_ready")
+        return True
+
+    return bool(wait_for_keycloak_admin_ready())
 
 
 def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
@@ -2059,7 +2183,7 @@ def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, expe
             "message": str(exc),
         }
 
-    return {
+    result = {
         "test": "ui-ops-minio-console",
         "status": status,
         "exit_code": exit_code,
@@ -2072,9 +2196,109 @@ def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, expe
             "html_report_dir": artifact_paths["html_report_dir"],
             "blob_report_dir": artifact_paths["blob_report_dir"],
             "json_report_file": artifact_paths["json_report_file"],
+            "report_json": artifact_paths["report_json"],
         },
         "error": error,
     }
+    return _enrich_level6_ui_result(result)
+
+
+def _enrich_level6_ui_result(result):
+    try:
+        from validation.ui.reporting import enrich_level6_ui_result
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        enriched = dict(result or {})
+        enriched["reporting_error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        return enriched
+
+    try:
+        return enrich_level6_ui_result(result or {})
+    except Exception as exc:  # pragma: no cover - defensive integration guard
+        enriched = dict(result or {})
+        enriched["reporting_error"] = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+        return enriched
+
+
+def _aggregate_level6_ui_results(ui_results, experiment_dir):
+    try:
+        from validation.ui.reporting import aggregate_level6_ui_results
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        return {
+            "scope": "dataspace_ui",
+            "status": "not_run" if not ui_results else "skipped",
+            "summary": {
+                "total": len(list(ui_results or [])),
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "not_run": 0 if ui_results else 1,
+            },
+            "suite_runs": [],
+            "executed_cases": [],
+            "dataspace_cases": [],
+            "support_checks": [],
+            "ops_checks": [],
+            "execution_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "dataspace_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "support_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "ops_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "catalog_coverage_summary": {
+                "dataspace_cases": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+                "support_checks": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+                "ops_checks": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            },
+            "evidence_index": [],
+            "findings": [],
+            "catalog_alignment": {},
+            "artifacts": {},
+            "reporting_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
+
+    try:
+        return aggregate_level6_ui_results(ui_results or [], experiment_dir=experiment_dir)
+    except Exception as exc:  # pragma: no cover - defensive integration guard
+        return {
+            "scope": "dataspace_ui",
+            "status": "not_run" if not ui_results else "skipped",
+            "summary": {
+                "total": len(list(ui_results or [])),
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "not_run": 0 if ui_results else 1,
+            },
+            "suite_runs": [],
+            "executed_cases": [],
+            "dataspace_cases": [],
+            "support_checks": [],
+            "ops_checks": [],
+            "execution_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "dataspace_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "support_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "ops_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "catalog_coverage_summary": {
+                "dataspace_cases": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+                "support_checks": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+                "ops_checks": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            },
+            "evidence_index": [],
+            "findings": [],
+            "catalog_alignment": {},
+            "artifacts": {},
+            "reporting_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
 
 
 def _configured_optional_components():
@@ -2252,6 +2476,9 @@ def lvl_6():
         # Ensure MinIO S3 policies are attached for all connectors (idempotent, survives MinIO restarts)
         ensure_all_minio_policies(connectors)
 
+        if not _wait_for_level6_keycloak_readiness():
+            raise RuntimeError("Keycloak authentication readiness check failed")
+
         VALIDATION_ENGINE.last_storage_checks = []
         validation_reports = VALIDATION_ENGINE.run_all_dataspace_tests(
             connectors,
@@ -2366,7 +2593,50 @@ def lvl_6():
                 else:
                     print(f"  UI core smoke suite passed for {connector}")
 
-            if _env_flag_enabled("LEVEL6_RUN_UI_OPS", default=False):
+            if _config_or_env_flag_enabled("LEVEL6_RUN_UI_DATASPACE", default=True):
+                if len(connectors) < 2:
+                    print("Warning: not enough connectors for UI dataspace suite — skipping")
+                    ui_results.append({
+                        "test": "ui-core-dataspace",
+                        "status": "skipped",
+                        "reason": "not_enough_connectors",
+                    })
+                else:
+                    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
+                    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
+                        (connector for connector in connectors if connector != provider_connector),
+                        connectors[1],
+                    )
+                    print(
+                        f"\nRunning UI dataspace suite for "
+                        f"{provider_connector} -> {consumer_connector}..."
+                    )
+                    ui_result = _run_level6_ui_dataspace(
+                        ui_test_dir,
+                        provider_connector,
+                        consumer_connector,
+                        experiment_dir,
+                    )
+                    ui_results.append(ui_result)
+                    if ui_result["status"] == "failed":
+                        print(
+                            f"  Warning: UI dataspace suite failed for "
+                            f"{provider_connector} -> {consumer_connector} "
+                            f"(exit {ui_result['exit_code']})"
+                        )
+                    elif ui_result["status"] == "skipped":
+                        skip_reason = (ui_result.get("error") or {}).get("message", "unknown reason")
+                        print(
+                            f"  Warning: UI dataspace suite skipped for "
+                            f"{provider_connector} -> {consumer_connector} ({skip_reason})"
+                        )
+                    else:
+                        print(
+                            f"  UI dataspace suite passed for "
+                            f"{provider_connector} -> {consumer_connector}"
+                        )
+
+            if _config_or_env_flag_enabled("LEVEL6_RUN_UI_OPS", default=False):
                 if len(connectors) < 2:
                     print("Warning: not enough connectors for optional UI ops suite — skipping")
                     ui_results.append({

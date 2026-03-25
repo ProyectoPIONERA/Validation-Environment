@@ -30,7 +30,8 @@ La carpeta `validation/components/` separa validaciones específicas por compone
 Hoy conviven dos situaciones:
 
 - `ontology_hub/` ya actúa como implementación de referencia y sí puede ejecutarse automáticamente desde `Level 6`.
-- `ai_model_hub/` y `semantic_virtualization/` siguen siendo estructura reservada para futuras implementaciones.
+- `ai_model_hub/` ya dispone de estructura base y catálogo PT5, pero todavía no tiene runner registrado ni se ejecuta automáticamente.
+- `semantic_virtualization/` sigue siendo estructura reservada para futuras implementaciones.
 
 La ejecución automática de una validación de componente depende de dos condiciones:
 

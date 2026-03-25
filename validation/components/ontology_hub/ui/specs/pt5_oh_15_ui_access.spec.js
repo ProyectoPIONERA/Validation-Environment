@@ -22,7 +22,7 @@ test("PT5-OH-15: public UI and API documentation are published together", async 
   await captureStep(page, "02-api-docs");
 
   await attachJson("pt5-oh-15-report", {
-    homeUrl: `${ontologyHubRuntime.baseUrl}/dataset/lov/`,
-    apiDocsUrl: `${ontologyHubRuntime.baseUrl}/dataset/lov/api`,
+    homeUrl: `${ontologyHubRuntime.baseUrl}/dataset`,
+    apiDocsUrl: `${ontologyHubRuntime.baseUrl}/dataset/api`,
   });
 });

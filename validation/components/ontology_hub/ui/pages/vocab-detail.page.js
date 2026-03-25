@@ -4,7 +4,7 @@ class OntologyHubVocabDetailPage {
   }
 
   async goto(baseUrl, prefix) {
-    await this.page.goto(`${baseUrl}/dataset/lov/vocabs/${prefix}`, { waitUntil: "networkidle" });
+    await this.page.goto(`${baseUrl}/dataset/vocabs/${prefix}`, { waitUntil: "networkidle" });
   }
 
   async expectReady(titleText, prefix) {
@@ -35,6 +35,7 @@ class OntologyHubVocabDetailPage {
   }
 
   async expectVersionHistoryMarkers() {
+    await this.page.locator(".ontology-tab").filter({ hasText: "Version History" }).first().click();
     await this.page.getByText("Vocabulary Version History", { exact: true }).waitFor({
       state: "visible",
     });
@@ -42,7 +43,34 @@ class OntologyHubVocabDetailPage {
   }
 
   versionDownloadLink(dateString) {
-    return this.page.locator(`a[href$='/dataset/lov/vocabs/demohub/versions/${dateString}.n3']`).first();
+    return this.page
+      .locator("[data-onto-panel='version-history'].is-active")
+      .getByRole("link", { name: `Download ${dateString}.n3`, exact: true })
+      .first();
+  }
+
+  async exposedVersionResourceUrls(baseUrl, prefix) {
+    const hrefUrls = await this.page
+      .locator(`a[href*="/dataset/vocabs/${prefix}/versions/"][href$=".n3"]`)
+      .evaluateAll((nodes) =>
+        nodes
+          .map((node) => node.getAttribute("href") || "")
+          .filter(Boolean),
+      );
+    const dataSourceUrls = await this.page
+      .locator("[data-source-url]")
+      .evaluateAll((nodes) =>
+        nodes
+          .map((node) => node.getAttribute("data-source-url") || "")
+          .filter(Boolean),
+      );
+    return Array.from(
+      new Set(
+        [...hrefUrls, ...dataSourceUrls]
+          .filter((value) => value.includes(`/dataset/vocabs/${prefix}/versions/`))
+          .map((value) => new URL(value, baseUrl).toString()),
+      ),
+    );
   }
 }
 

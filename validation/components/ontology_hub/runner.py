@@ -9,14 +9,62 @@ from urllib import error, parse, request
 COMPONENT_KEY = "ontology-hub"
 DEFAULT_SEARCH_TERM = os.environ.get("ONTOLOGY_HUB_VALIDATION_QUERY", "Person")
 DEFAULT_EXPECTED_LABEL = os.environ.get("ONTOLOGY_HUB_EXPECTED_LABEL", "Person")
-DEFAULT_EXPECTED_VOCAB = os.environ.get("ONTOLOGY_HUB_EXPECTED_VOCAB", "demohub")
-DEFAULT_EXPECTED_TAG = os.environ.get("ONTOLOGY_HUB_EXPECTED_TAG", "validationdemo")
-API_SEARCH_PATH = "/dataset/lov/api/v2/term/search"
-SPARQL_PATH = "/dataset/lov/sparql"
-PATTERNS_PATH = "/dataset/lov/patterns"
-HOME_PATH = "/dataset/lov/"
-API_DOCS_PATH = "/dataset/lov/api"
-DEFAULT_EXPECTED_CLASS_URI = os.environ.get("ONTOLOGY_HUB_EXPECTED_CLASS_URI", "http://example.org/demohub/Person")
+DEFAULT_EXPECTED_VOCAB = os.environ.get("ONTOLOGY_HUB_EXPECTED_VOCAB", "s4grid")
+DEFAULT_EXPECTED_TAG = os.environ.get("ONTOLOGY_HUB_EXPECTED_TAG", "Catalogs")
+API_SEARCH_PATH = "/dataset/api/v2/term/search"
+SPARQL_PATH = "/dataset/sparql"
+PATTERNS_PATH = "/dataset/patterns"
+HOME_PATH = "/dataset"
+API_DOCS_PATH = "/dataset/api"
+DEFAULT_EXPECTED_CLASS_URI = os.environ.get("ONTOLOGY_HUB_EXPECTED_CLASS_URI", "http://schema.org/Person")
+
+API_CASE_METADATA: Dict[str, Dict[str, str]] = {
+    "PT5-OH-08": {
+        "case_group": "pt5",
+        "validation_type": "functional",
+        "dataspace_dimension": "discovery",
+        "mapping_status": "mapped",
+        "automation_mode": "api",
+        "execution_mode": "api",
+        "coverage_status": "automated",
+    },
+    "PT5-OH-09": {
+        "case_group": "pt5",
+        "validation_type": "functional",
+        "dataspace_dimension": "discovery",
+        "mapping_status": "partial",
+        "automation_mode": "api_equivalent",
+        "execution_mode": "api_equivalent",
+        "coverage_status": "partial",
+    },
+    "PT5-OH-13": {
+        "case_group": "pt5",
+        "validation_type": "interoperability",
+        "dataspace_dimension": "interoperability",
+        "mapping_status": "mapped",
+        "automation_mode": "api",
+        "execution_mode": "api",
+        "coverage_status": "automated",
+    },
+    "PT5-OH-14": {
+        "case_group": "pt5",
+        "validation_type": "integration",
+        "dataspace_dimension": "services",
+        "mapping_status": "partial",
+        "automation_mode": "api",
+        "execution_mode": "api",
+        "coverage_status": "partial",
+    },
+    "PT5-OH-15": {
+        "case_group": "pt5",
+        "validation_type": "integration",
+        "dataspace_dimension": "integration",
+        "mapping_status": "partial",
+        "automation_mode": "api",
+        "execution_mode": "api",
+        "coverage_status": "partial",
+    },
+}
 
 
 def _component_dir(experiment_dir: str | None) -> str | None:
@@ -82,6 +130,11 @@ def _find_bucket(aggregations: Dict[str, Any], agg_name: str, bucket_key: str) -
     return None
 
 
+def _result_contains_value(result: Dict[str, Any], key: str, expected_value: str) -> bool:
+    flattened = _flatten_text(_get_result_value(result, key)).lower()
+    return expected_value.lower() in flattened
+
+
 def evaluate_term_search_response(
     http_status: int,
     content_type: str,
@@ -142,13 +195,15 @@ def evaluate_term_search_response(
 
             matched_query = False
             matched_vocab = expected_vocab is None
+            matched_tag = expected_tag is None
             for item in results_payload:
                 flattened = _flatten_text(item).lower()
                 if expected_query.lower() in flattened:
                     matched_query = True
-                vocab_value = _get_result_value(item, "vocabulary.prefix")
-                if expected_vocab and expected_vocab in _flatten_text(vocab_value):
+                if expected_vocab and _result_contains_value(item, "vocabulary.prefix", expected_vocab):
                     matched_vocab = True
+                if expected_tag and _result_contains_value(item, "tags", expected_tag):
+                    matched_tag = True
             if not matched_query:
                 result["status"] = "failed"
                 result["assertions"].append(
@@ -159,6 +214,11 @@ def evaluate_term_search_response(
                 result["assertions"].append(
                     f"Expected at least one result belonging to vocabulary '{expected_vocab}'"
                 )
+            if not matched_tag:
+                result["status"] = "failed"
+                result["assertions"].append(
+                    f"Expected at least one result tagged with '{expected_tag}'"
+                )
 
         if expected_vocab:
             if filters.get("vocab") and filters.get("vocab") != expected_vocab:
@@ -166,10 +226,13 @@ def evaluate_term_search_response(
                 result["assertions"].append(
                     f"Expected filter vocab='{expected_vocab}', got '{filters.get('vocab')}'"
                 )
-            if _find_bucket(aggregations, "vocabs", expected_vocab) is None:
+            if (
+                filters.get("vocab") != expected_vocab
+                and _find_bucket(aggregations, "vocabs", expected_vocab) is None
+            ):
                 result["status"] = "failed"
                 result["assertions"].append(
-                    f"Expected vocabs aggregation to contain '{expected_vocab}'"
+                    f"Expected the response to expose vocabulary '{expected_vocab}' either in filters or aggregations"
                 )
 
         if expected_tag:
@@ -178,10 +241,10 @@ def evaluate_term_search_response(
                 result["assertions"].append(
                     f"Expected filter tag='{expected_tag}', got '{filters.get('tag')}'"
                 )
-            if _find_bucket(aggregations, "tags", expected_tag) is None:
+            if filters.get("tag") != expected_tag and _find_bucket(aggregations, "tags", expected_tag) is None:
                 result["status"] = "failed"
                 result["assertions"].append(
-                    f"Expected tags aggregation to contain '{expected_tag}'"
+                    f"Expected the response to expose tag '{expected_tag}' either in filters or aggregations"
                 )
     else:
         result["payload_size"] = len(payload)
@@ -230,24 +293,75 @@ def _build_case_result(
     test_case_id: str,
     description: str,
     case_type: str,
+    metadata: Dict[str, str],
     requests_payload: Dict[str, Any] | List[Dict[str, Any]],
     responses_payload: Dict[str, Any] | List[Dict[str, Any]],
     evaluation: Dict[str, Any],
     expected_result: str,
-    mapping_status: str,
-    automation_mode: str,
 ) -> Dict[str, Any]:
     return {
         "test_case_id": test_case_id,
         "description": description,
         "type": case_type,
-        "mapping_status": mapping_status,
-        "automation_mode": automation_mode,
+        "case_group": metadata["case_group"],
+        "validation_type": metadata["validation_type"],
+        "dataspace_dimension": metadata["dataspace_dimension"],
+        "mapping_status": metadata["mapping_status"],
+        "automation_mode": metadata["automation_mode"],
+        "execution_mode": metadata["execution_mode"],
+        "coverage_status": metadata["coverage_status"],
         "request": requests_payload,
         "response": responses_payload,
         "evaluation": evaluation,
         "expected_result": expected_result,
     }
+
+
+def _summarize_case_list(executed_cases: List[Dict[str, Any]]) -> Dict[str, int]:
+    summary = {
+        "total": len(executed_cases),
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+    for case in executed_cases:
+        status = ((case.get("evaluation") or {}).get("status") or "").lower()
+        if status in summary:
+            summary[status] += 1
+    return summary
+
+
+def _build_api_evidence_index(
+    executed_cases: List[Dict[str, Any]],
+    report_path: str | None,
+    raw_artifact_paths: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    evidence_index: List[Dict[str, Any]] = []
+    if report_path:
+        evidence_index.append(
+            {
+                "scope": "suite",
+                "suite": "api",
+                "artifact_name": "report_json",
+                "path": report_path,
+            }
+        )
+
+    for case in executed_cases:
+        artifact_path = raw_artifact_paths.get(case.get("test_case_id", ""))
+        if not artifact_path:
+            continue
+        evidence_index.append(
+            {
+                "scope": "case",
+                "suite": "api",
+                "test_case_id": case.get("test_case_id"),
+                "case_group": case.get("case_group"),
+                "artifact_name": "raw_response",
+                "path": artifact_path,
+            }
+        )
+    return evidence_index
 
 
 def _run_search_case(
@@ -257,8 +371,6 @@ def _run_search_case(
     description: str,
     query_params: Dict[str, str],
     expected_result: str,
-    mapping_status: str,
-    automation_mode: str,
     expected_vocab: str | None = None,
     expected_tag: str | None = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -276,6 +388,7 @@ def _run_search_case(
         test_case_id=test_case_id,
         description=description,
         case_type="api",
+        metadata=API_CASE_METADATA[test_case_id],
         requests_payload={
             "method": "GET",
             "url": request_url,
@@ -287,8 +400,6 @@ def _run_search_case(
         },
         evaluation=evaluation,
         expected_result=expected_result,
-        mapping_status=mapping_status,
-        automation_mode=automation_mode,
     )
     raw_artifact = {
         "url": request_url,
@@ -307,8 +418,6 @@ def _run_html_case(
     path: str,
     required_markers: Sequence[str],
     expected_result: str,
-    mapping_status: str,
-    automation_mode: str,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     request_url = f"{base_url}{path}"
     http_status, content_type, body_text = _http_get(request_url)
@@ -322,6 +431,7 @@ def _run_html_case(
         test_case_id=test_case_id,
         description=description,
         case_type="api",
+        metadata=API_CASE_METADATA[test_case_id],
         requests_payload={
             "method": "GET",
             "url": request_url,
@@ -332,8 +442,6 @@ def _run_html_case(
         },
         evaluation=evaluation,
         expected_result=expected_result,
-        mapping_status=mapping_status,
-        automation_mode=automation_mode,
     )
     raw_artifact = {
         "url": request_url,
@@ -353,13 +461,13 @@ def _run_ui_api_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
         ui_status,
         ui_type,
         ui_body,
-        required_markers=["/dataset/lov/api", "/dataset/lov/vocabs"],
+        required_markers=["/dataset/api", "/dataset/vocabs"],
     )
     api_evaluation = evaluate_html_page_response(
         api_status,
         api_type,
         api_body,
-        required_markers=["term/search", "/dataset/lov/api/v2/term/search"],
+        required_markers=["/api/v2/term/search", "/dataset/api/v2/agent/list"],
     )
     overall_status = "passed"
     assertions: List[str] = []
@@ -374,6 +482,7 @@ def _run_ui_api_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
         test_case_id="PT5-OH-15",
         description="Acceso coordinado via UI y API",
         case_type="api",
+        metadata=API_CASE_METADATA["PT5-OH-15"],
         requests_payload=[
             {"method": "GET", "url": ui_url, "role": "ui"},
             {"method": "GET", "url": api_url, "role": "api_docs"},
@@ -391,8 +500,6 @@ def _run_ui_api_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
             },
         },
         expected_result="La UI principal y la documentacion API se publican de forma coordinada y accesible.",
-        mapping_status="partial",
-        automation_mode="api",
     )
     raw_artifact = {
         "ui": {
@@ -468,6 +575,7 @@ def _run_sparql_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
         test_case_id="PT5-OH-13",
         description="Consulta SPARQL real sobre la ontologia de ejemplo sembrada",
         case_type="api",
+        metadata=API_CASE_METADATA["PT5-OH-13"],
         requests_payload={
             "method": "GET",
             "url": request_url,
@@ -479,8 +587,6 @@ def _run_sparql_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
         },
         evaluation=evaluation,
         expected_result="La consulta ASK sobre la clase sembrada devuelve true en el endpoint SPARQL publico.",
-        mapping_status="mapped",
-        automation_mode="api",
     )
     raw_artifact = {
         "url": request_url,
@@ -496,7 +602,7 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
     started_at = datetime.now().isoformat()
 
     executed_cases: List[Dict[str, Any]] = []
-    raw_artifacts: Dict[str, Dict[str, Any]] = {}
+    raw_artifacts: List[Tuple[str, str, Dict[str, Any]]] = []
 
     pt5_oh_08, artifact_08 = _run_search_case(
         base_url=normalized_base_url,
@@ -507,12 +613,10 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
             "type": "class",
         },
         expected_result="La busqueda devuelve al menos un termino indexado de ejemplo, con agregaciones y contenido coherentes.",
-        mapping_status="mapped",
-        automation_mode="api",
         expected_vocab=DEFAULT_EXPECTED_VOCAB,
     )
     executed_cases.append(pt5_oh_08)
-    raw_artifacts["pt5-oh-08-response.json"] = artifact_08
+    raw_artifacts.append(("PT5-OH-08", "pt5-oh-08-response.json", artifact_08))
 
     pt5_oh_09, artifact_09 = _run_search_case(
         base_url=normalized_base_url,
@@ -525,34 +629,30 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
             "tag": DEFAULT_EXPECTED_TAG,
         },
         expected_result="La busqueda filtrada devuelve resultados coherentes con el vocabulario y la etiqueta de ejemplo.",
-        mapping_status="partial",
-        automation_mode="api_equivalent",
         expected_vocab=DEFAULT_EXPECTED_VOCAB,
         expected_tag=DEFAULT_EXPECTED_TAG,
     )
     executed_cases.append(pt5_oh_09)
-    raw_artifacts["pt5-oh-09-response.json"] = artifact_09
+    raw_artifacts.append(("PT5-OH-09", "pt5-oh-09-response.json", artifact_09))
 
     pt5_oh_13, artifact_13 = _run_sparql_access_case(normalized_base_url)
     executed_cases.append(pt5_oh_13)
-    raw_artifacts["pt5-oh-13-response.json"] = artifact_13
+    raw_artifacts.append(("PT5-OH-13", "pt5-oh-13-response.json", artifact_13))
 
     pt5_oh_14, artifact_14 = _run_html_case(
         base_url=normalized_base_url,
         test_case_id="PT5-OH-14",
         description="Acceso al servicio de patrones",
-        path=PATTERNS_PATH,
-        required_markers=["pattern", "patterns"],
+        path=f"{PATTERNS_PATH}?{parse.urlencode({'q': DEFAULT_EXPECTED_VOCAB})}",
+        required_markers=["selected vocabularies", f"checkbox_{DEFAULT_EXPECTED_VOCAB}"],
         expected_result="La pagina del servicio de patrones esta publicada y accesible.",
-        mapping_status="partial",
-        automation_mode="api",
     )
     executed_cases.append(pt5_oh_14)
-    raw_artifacts["pt5-oh-14-response.json"] = artifact_14
+    raw_artifacts.append(("PT5-OH-14", "pt5-oh-14-response.json", artifact_14))
 
     pt5_oh_15, artifact_15 = _run_ui_api_access_case(normalized_base_url)
     executed_cases.append(pt5_oh_15)
-    raw_artifacts["pt5-oh-15-response.json"] = artifact_15
+    raw_artifacts.append(("PT5-OH-15", "pt5-oh-15-response.json", artifact_15))
 
     summary = {
         "total": len(executed_cases),
@@ -561,6 +661,7 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         "skipped": 0,
     }
     overall_status = "failed" if summary["failed"] else "passed"
+    pt5_summary = _summarize_case_list(executed_cases)
 
     component_result: Dict[str, Any] = {
         "component": COMPONENT_KEY,
@@ -575,16 +676,28 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         },
         "executed_cases": executed_cases,
         "summary": summary,
+        "pt5_cases": executed_cases,
+        "support_checks": [],
+        "pt5_summary": pt5_summary,
+        "support_summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+        "evidence_index": [],
     }
 
     component_dir = _component_dir(experiment_dir)
     if component_dir:
         artifact_paths: Dict[str, str] = {}
-        for file_name, payload in raw_artifacts.items():
+        case_artifact_paths: Dict[str, str] = {}
+        for test_case_id, file_name, payload in raw_artifacts:
             artifact_path = os.path.join(component_dir, file_name)
             _write_json(artifact_path, payload)
             artifact_paths[file_name] = artifact_path
+            case_artifact_paths[test_case_id] = artifact_path
         report_path = os.path.join(component_dir, "ontology_hub_validation.json")
+        component_result["evidence_index"] = _build_api_evidence_index(
+            executed_cases,
+            report_path,
+            case_artifact_paths,
+        )
         _write_json(report_path, component_result)
         component_result["artifacts"] = {
             "report_json": report_path,

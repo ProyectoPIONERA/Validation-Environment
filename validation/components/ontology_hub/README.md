@@ -22,6 +22,19 @@ Los casos estructurados estan en:
 
 - `validation/components/ontology_hub/test_cases.yaml`
 
+El catalogo local distingue ahora dos grupos:
+
+- `test_cases`: casos oficiales PT5
+- `support_checks`: comprobaciones auxiliares necesarias para estabilizar la ejecucion automatica sin contarlas como cobertura PT5 oficial
+
+Ademas, cada entrada puede declarar:
+
+- `validation_type`
+- `dataspace_dimension`
+- `execution_mode`
+- `coverage_status`
+- `mapping_status`
+
 ## Agrupacion por Flujos
 
 ### 1. Gestion de vocabularios
@@ -95,22 +108,29 @@ Las siguientes rutas se han confirmado directamente en la instancia demo:
 
 ## Bateria Automatizada Implementada
 
-La bateria automatizada actual implementa cinco casos PT5 por API y cinco casos PT5 por UI.
+La bateria automatizada actual implementa cinco casos PT5 por API, seis casos PT5 por UI y dos checks de soporte por UI.
 
 API:
 
 - `PT5-OH-08` busqueda de vocabularios por texto libre
+- `PT5-OH-09` busqueda filtrada equivalente por API
 - `PT5-OH-13` consulta SPARQL real sobre la ontologia de ejemplo
 - `PT5-OH-14` acceso al servicio de patrones
 - `PT5-OH-15` disponibilidad coordinada de UI y documentacion API
 
 UI:
 
+- `PT5-OH-01` creacion de vocabulario por URI
 - `PT5-OH-09` filtrado de vocabularios por tag y vocabulario
 - `PT5-OH-10` historial de versiones y recursos `.n3` versionados
 - `PT5-OH-11` visualizacion completa de la ficha de ontologia
 - `PT5-OH-12` estadisticas visibles en la ficha
 - `PT5-OH-15` acceso coordinado a la UI publica y a la documentacion API
+
+Checks de soporte UI:
+
+- `OH-LOGIN` acceso autenticado al area de edicion
+- `OH-LIST-SEARCH` listado publico y apertura de resultado
 
 Archivos:
 
@@ -128,10 +148,16 @@ Comportamiento API:
 
 Comportamiento UI:
 
-- abre `/dataset/lov/terms?q=Person` y aplica filtros visibles por tag y vocabulario
-- abre `/dataset/lov/vocabs/demohub` y valida metadatos, estadisticas e historial
-- valida que los recursos `/dataset/lov/vocabs/demohub/versions/<date>.n3` existen
-- valida la publicacion de `/dataset/lov/` y `/dataset/lov/api`
+- autentica en `/edition/login` cuando el flujo lo requiere
+- abre `/dataset`, `/dataset/terms` y `/dataset/vocabs/<prefix>` segun el caso
+- valida metadatos, estadisticas, historial y documentacion API sobre la publicacion actual en `/dataset`
+- mantiene checks de soporte para login y navegacion publica
+
+Nota:
+
+- la superficie UI actual se valida sobre `/dataset`
+- la superficie API automatizada mantiene compatibilidad sobre `/dataset/lov`
+- esta coexistencia queda reflejada en `test_cases.yaml` y en el reporting combinado
 
 Ejecucion manual de la suite UI:
 
@@ -187,6 +213,11 @@ Reglas:
 Artefactos esperados en experimento:
 
 - `experiments/<experiment_id>/components/ontology-hub/ontology_hub_component_validation.json`
+- `experiments/<experiment_id>/components/ontology-hub/ontology_hub_pt5_case_results.json`
+- `experiments/<experiment_id>/components/ontology-hub/ontology_hub_support_checks.json`
+- `experiments/<experiment_id>/components/ontology-hub/ontology_hub_evidence_index.json`
+- `experiments/<experiment_id>/components/ontology-hub/ontology_hub_findings.json`
+- `experiments/<experiment_id>/components/ontology-hub/ontology_hub_catalog_alignment.json`
 - `experiments/<experiment_id>/components/ontology-hub/ontology_hub_validation.json`
 - `experiments/<experiment_id>/components/ontology-hub/ui/ontology_hub_ui_validation.json`
 - `experiments/<experiment_id>/components/ontology-hub/ui/results.json`
@@ -207,6 +238,13 @@ El resultado combinado se registra en `experiment_results.json` bajo `component_
 - `suites.api`
 - `suites.ui`
 - `executed_cases`
+- `pt5_case_results`
+- `pt5_summary`
+- `support_checks`
+- `support_summary`
+- `evidence_index`
+- `findings`
+- `catalog_alignment`
 
 ## Estructura Objetivo
 

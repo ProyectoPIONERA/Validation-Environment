@@ -35,15 +35,31 @@ function resolveOntologyHubRuntime() {
         /\/$/,
         "",
       ),
-    expectedVocabularyPrefix: process.env.ONTOLOGY_HUB_EXPECTED_VOCAB || "demohub",
-    expectedVocabularyTitle: process.env.ONTOLOGY_HUB_EXPECTED_TITLE || "Demo Hub Vocabulary",
+    adminEmail: process.env.ONTOLOGY_HUB_ADMIN_EMAIL || "admin@gmail.com",
+    adminPassword: process.env.ONTOLOGY_HUB_ADMIN_PASSWORD || "admin1234",
+    expectedVocabularyPrefix: process.env.ONTOLOGY_HUB_EXPECTED_VOCAB || "s4grid",
+    expectedVocabularyTitle: process.env.ONTOLOGY_HUB_EXPECTED_TITLE || "SAREF4GRID",
     expectedSearchTerm: process.env.ONTOLOGY_HUB_EXPECTED_QUERY || "Person",
     expectedClassPrefixedName:
-      process.env.ONTOLOGY_HUB_EXPECTED_CLASS_PREFIXED_NAME || "demohub:Person",
-    expectedPrimaryTag: process.env.ONTOLOGY_HUB_EXPECTED_PRIMARY_TAG || "validationdemo",
-    expectedSecondaryTag: process.env.ONTOLOGY_HUB_EXPECTED_SECONDARY_TAG || "people",
+      process.env.ONTOLOGY_HUB_EXPECTED_CLASS_PREFIXED_NAME || "s4grid:Person",
+    expectedPrimaryTag: process.env.ONTOLOGY_HUB_EXPECTED_PRIMARY_TAG || "Catalogs",
+    expectedSecondaryTag: process.env.ONTOLOGY_HUB_EXPECTED_SECONDARY_TAG || "Environment",
     previousVersionDate: process.env.ONTOLOGY_HUB_PREVIOUS_VERSION_DATE || "2025-01-15",
     latestVersionDate: process.env.ONTOLOGY_HUB_LATEST_VERSION_DATE || "2026-03-22",
+    creationUri:
+      process.env.ONTOLOGY_HUB_CREATION_URI || "https://saref.etsi.org/saref4grid/v2.1.1/",
+    creationNamespace:
+      process.env.ONTOLOGY_HUB_CREATION_NAMESPACE || "https://saref.etsi.org/saref4grid/",
+    creationPrefix: process.env.ONTOLOGY_HUB_CREATION_PREFIX || "s4grid",
+    creationTitle:
+      process.env.ONTOLOGY_HUB_CREATION_TITLE || "SAREF4GRID Vocabulary",
+    creationDescription:
+      process.env.ONTOLOGY_HUB_CREATION_DESCRIPTION ||
+      "Vocabulary created through the Ontology Hub Playwright validation flow.",
+    creationTag: process.env.ONTOLOGY_HUB_CREATION_TAG || "Catalogs",
+    creationReview:
+      process.env.ONTOLOGY_HUB_CREATION_REVIEW || "Validated through the Playwright ontology flow.",
+    listingSearchTerm: process.env.ONTOLOGY_HUB_LISTING_QUERY || "s4grid",
   };
 }
 
