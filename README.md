@@ -51,14 +51,7 @@ Para el despliegue inicial de INESData desde cero, el flujo recomendado es `ines
 1. Clona el repositorio:
 
 ```bash
-git clone https://github.com/ProyectoPIONERA/Validation-Environment.git
-cd Validation-Environment
-```
-
-Alternativa para clonar directamente la rama de trabajo `refactor/new-framework`:
-
-```bash
-git clone --branch refactor/new-framework --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
+git clone --branch refactor/new-framework-rebased --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
 cd Validation-Environment
 ```
 
