@@ -7,6 +7,13 @@ type ChunkEvent = {
   bodySnippet?: string;
 };
 
+type UploadFailureCategory =
+  | "payload_too_large"
+  | "access_denied"
+  | "server_error"
+  | "client_error"
+  | "unknown";
+
 type ProviderFlowReport = {
   startedAt: string;
   baseUrl: string;
@@ -18,7 +25,51 @@ type ProviderFlowReport = {
   secondAttemptMessage?: string;
   chunkEvents: ChunkEvent[];
   maxRetriesDetected: boolean;
+  firstChunkErrorStatus?: number;
+  uploadFailureCategory?: UploadFailureCategory;
+  diagnosticHint?: string;
 };
+
+function classifyUploadFailure(status: number | undefined): {
+  category: UploadFailureCategory;
+  diagnosticHint?: string;
+} {
+  if (status === 413) {
+    return {
+      category: "payload_too_large",
+      diagnosticHint:
+        "The upload endpoint returned HTTP 413. This usually points to a proxy/ingress request-size limit before the connector can process the chunk.",
+    };
+  }
+
+  if (status === 403) {
+    return {
+      category: "access_denied",
+      diagnosticHint:
+        "The upload endpoint returned HTTP 403. This usually points to missing MinIO/S3 permissions for the connector user or service account.",
+    };
+  }
+
+  if (status && status >= 500) {
+    return {
+      category: "server_error",
+      diagnosticHint:
+        "The upload endpoint returned HTTP 5xx. This usually means the connector or a downstream dependency rejected the upload after the request reached the backend.",
+    };
+  }
+
+  if (status && status >= 400) {
+    return {
+      category: "client_error",
+      diagnosticHint:
+        "The upload endpoint returned HTTP 4xx. The request was rejected before the upload flow completed.",
+    };
+  }
+
+  return {
+    category: "unknown",
+  };
+}
 
 test("03 provider setup: asset creation with file upload", async ({
   page,
@@ -93,6 +144,14 @@ test("03 provider setup: asset creation with file upload", async ({
       firstMessage.includes("asset created successfully") ||
       secondMessage.includes("asset created successfully");
     const hasChunkErrors = report.chunkEvents.some((event) => event.status >= 400);
+    const firstChunkError = report.chunkEvents.find((event) => event.status >= 400);
+
+    report.firstChunkErrorStatus = firstChunkError?.status;
+    if (firstChunkError) {
+      const classification = classifyUploadFailure(firstChunkError.status);
+      report.uploadFailureCategory = classification.category;
+      report.diagnosticHint = classification.diagnosticHint;
+    }
 
     expect(report.firstAttemptMessage, "No notification was detected after creating the asset").toBeTruthy();
     expect(report.chunkEvents.length, "No upload-chunk responses were captured").toBeGreaterThan(0);

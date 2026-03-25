@@ -1,64 +1,160 @@
 source_documents:
-  - Casos oficiales PT5 normalizados para Ontology Hub
-  - Trazabilidad funcional consolidada del componente
-  - Superficie real validada sobre la instancia desplegada en el framework
+  - Official PT5 cases normalized for Ontology Hub
+  - Consolidated functional traceability for the component
+  - Real validation surface observed on the deployed framework instance
+  - E5.2-oriented methodological adjustments over the current framework baseline
+
+support_checks:
+  - id: OH-LOGIN
+    component: ontology_hub
+    case_group: support
+    description: Authenticated access to the editing area
+    type: ui
+    validation_type: support
+    dataspace_dimension: support
+    execution_mode: ui_support
+    coverage_status: automated
+    mapping_status: supporting
+    preconditions:
+      - Ontology Hub is deployed and reachable
+      - Administrator credentials are available
+    steps:
+      - Open the login route for the editing area
+      - Enter valid administrator credentials
+      - Confirm that the editing interface becomes accessible
+    expected_result: Authenticated access to the editing area
+    automation:
+      status: automated
+      mode: ui_support
+      ui_spec: validation/components/ontology_hub/ui/specs/oh_login.spec.js
+      real_flow:
+        method: MULTISTEP
+        pages:
+          - /edition/login
+          - /edition
+      notes: Supporting check to ensure the authenticated flow required by editing scenarios is still operational.
+
+  - id: OH-LIST-SEARCH
+    component: ontology_hub
+    case_group: support
+    description: Public listing and opening of a search result
+    type: ui
+    validation_type: support
+    dataspace_dimension: support
+    execution_mode: ui_support
+    coverage_status: automated
+    mapping_status: supporting
+    preconditions:
+      - Ontology Hub is deployed and reachable
+      - At least one public vocabulary is visible
+    steps:
+      - Open the public catalog
+      - Search using a known listing term
+      - Open one of the visible results
+    expected_result: The public catalog lists vocabularies and opens a search result
+    automation:
+      status: automated
+      mode: ui_support
+      ui_spec: validation/components/ontology_hub/ui/specs/oh_list_search.spec.js
+      real_flow:
+        method: MULTISTEP
+        pages:
+          - /dataset
+          - /dataset/terms
+          - /dataset/vocabs/s4grid
+      notes: Supporting check to ensure the public catalog baseline navigation remains available.
 
 test_cases:
   - id: PT5-OH-01
     component: ontology_hub
-    description: Crear entrada de vocabulario
+    case_group: pt5
+    description: Create vocabulary entry
     type: api
+    validation_type: functional
+    dataspace_dimension: publication
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - Ontology Hub desplegado y accesible
-      - Usuario con permisos de publicacion o ingestion
+      - Ontology Hub is deployed and reachable
+      - A user with publication or ingestion permissions is available
     steps:
-      - Registrar una ontologia mediante URI o repositorio
-      - Comprobar que la ontologia aparece en el catalogo
-    expected_result: La ontologia se registra y es visible en el catalogo
+      - Register an ontology by URI or repository
+      - Verify that the ontology appears in the catalog
+    expected_result: The ontology is registered and visible in the catalog
     traceability:
       - OntHub-1
       - OntHub-4
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_01_create_vocab.spec.js
+      real_flow:
+        method: MULTISTEP
+        pages:
+          - /edition/login
+          - /edition/createVocabulary
+          - /dataset/vocabs
+      notes: The current automation validates the real creation-by-URI flow through the editing interface.
 
   - id: PT5-OH-02
     component: ontology_hub
-    description: Editar entrada de vocabulario
+    case_group: pt5
+    description: Edit vocabulary entry
     type: api
+    validation_type: functional
+    dataspace_dimension: publication
+    execution_mode: manual
+    coverage_status: manual
+    mapping_status: supporting
     preconditions:
-      - Existe una ontologia registrada
-      - Usuario con permisos de edicion
+      - A registered ontology already exists
+      - A user with editing permissions is available
     steps:
-      - Modificar los metadatos de una ontologia existente
-      - Volver a consultar la ontologia
-    expected_result: Los cambios se reflejan correctamente
+      - Modify the metadata of an existing ontology
+      - Query the ontology again
+    expected_result: The changes are reflected correctly
     traceability:
       - OntHub-2
 
   - id: PT5-OH-03
     component: ontology_hub
-    description: Eliminar entrada de vocabulario
+    case_group: pt5
+    description: Delete vocabulary entry
     type: api
+    validation_type: functional
+    dataspace_dimension: publication
+    execution_mode: manual
+    coverage_status: manual
+    mapping_status: supporting
     preconditions:
-      - Existe una ontologia registrada
-      - Usuario con permisos de borrado
+      - A registered ontology already exists
+      - A user with delete permissions is available
     steps:
-      - Eliminar una ontologia registrada
-      - Intentar localizarla de nuevo en el catalogo
-    expected_result: La ontologia deja de estar disponible
+      - Delete a registered ontology
+      - Attempt to find it again in the catalog
+    expected_result: The ontology is no longer available
     traceability:
       - OntHub-3
 
   - id: PT5-OH-04
     component: ontology_hub
-    description: Gestion de etiquetas
+    case_group: pt5
+    description: Tag management
     type: ui
+    validation_type: functional
+    dataspace_dimension: curation
+    execution_mode: manual
+    coverage_status: manual
+    mapping_status: supporting
     preconditions:
-      - Existe una ontologia registrada
-      - El sistema expone gestion de etiquetas
+      - A registered ontology already exists
+      - The system exposes tag management
     steps:
-      - Crear etiquetas
-      - Editar etiquetas existentes
-      - Eliminar etiquetas
-    expected_result: Las etiquetas se gestionan conforme a lo esperado
+      - Create tags
+      - Edit existing tags
+      - Delete tags
+    expected_result: Tags are managed as expected
     traceability:
       - OntHub-8
       - OntHub-9
@@ -66,252 +162,323 @@ test_cases:
 
   - id: PT5-OH-05
     component: ontology_hub
-    description: Gestion de usuarios y roles
+    case_group: pt5
+    description: User and role management
     type: ui
+    validation_type: functional
+    dataspace_dimension: access_control
+    execution_mode: not_currently_executable
+    coverage_status: not_currently_executable
+    mapping_status: partial
     preconditions:
-      - El sistema expone gestion de usuarios y roles
-      - Existen al menos dos perfiles diferenciados
+      - The system exposes user and role management
+      - At least two differentiated profiles exist
     steps:
-      - Crear usuarios
-      - Asignar roles
-      - Validar acceso segun el rol
-    expected_result: Las opciones visibles corresponden al rol asignado
+      - Create users
+      - Assign roles
+      - Validate access according to the assigned role
+    expected_result: Visible options match the assigned role
     traceability:
       - OntHub-11-14
+    notes: Automation is postponed until the deployed environment provides a stable role and permission surface.
 
   - id: PT5-OH-06
     component: ontology_hub
-    description: Registro de acciones
+    case_group: pt5
+    description: Action logging
     type: api
+    validation_type: non_functional
+    dataspace_dimension: governance
+    execution_mode: not_currently_executable
+    coverage_status: not_currently_executable
+    mapping_status: partial
     preconditions:
-      - El sistema expone un mecanismo de auditoria o log funcional
+      - The system exposes a functional auditing or logging mechanism
     steps:
-      - Ejecutar operaciones sobre ontologias
-      - Consultar el registro de auditoria
-    expected_result: Las acciones quedan registradas para auditoria
+      - Execute ontology operations
+      - Query the audit trail
+    expected_result: Actions are recorded for auditing
     traceability:
       - OntHub-15
+    notes: The framework does not yet provide stable audit evidence that can be used as an automated PT5 case.
 
   - id: PT5-OH-07
     component: ontology_hub
-    description: Compatibilidad RDF / OWL
+    case_group: pt5
+    description: RDF / OWL compatibility
     type: api
+    validation_type: interoperability
+    dataspace_dimension: interoperability
+    execution_mode: manual
+    coverage_status: manual
+    mapping_status: supporting
     preconditions:
-      - Existe una ontologia RDF u OWL disponible para registrar
+      - An RDF or OWL ontology is available to register
     steps:
-      - Registrar una ontologia RDF u OWL
-      - Validar la compatibilidad semantica del recurso
-    expected_result: La ontologia cumple los requisitos semanticos
+      - Register an RDF or OWL ontology
+      - Validate the semantic compatibility of the resource
+    expected_result: The ontology satisfies the semantic requirements
     traceability:
       - OntHub-6
       - OntHub-7
 
   - id: PT5-OH-08
     component: ontology_hub
-    description: Busqueda de vocabularios
+    case_group: pt5
+    description: Vocabulary search
     type: api
+    validation_type: functional
+    dataspace_dimension: discovery
+    execution_mode: api
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - Ontology Hub desplegado y accesible
-      - API de busqueda disponible
+      - Ontology Hub is deployed and reachable
+      - The search API is available
     steps:
-      - Ejecutar una busqueda por texto libre
-      - Validar la respuesta devuelta por la API o la UI
-    expected_result: Resultados coherentes con la busqueda
+      - Execute a free-text search
+      - Validate the response returned by the API or UI
+    expected_result: Search results are coherent with the query
     traceability:
       - OntHub-33
-    mapping_status: mapped
     automation:
       status: automated
       mode: api
       runner_case: pt5_oh_08_term_search
       real_flow:
         method: GET
-        path: /dataset/lov/api/v2/term/search
+        path: /dataset/api/v2/term/search
         query:
           q: Person
           type: class
       seeded_fixture_dependency:
         required: true
-        vocabulary_prefix: demohub
-        tag: validationdemo
+        vocabulary_prefix: s4grid
+        tag: Catalogs
 
   - id: PT5-OH-09
     component: ontology_hub
-    description: Filtrado de vocabularios
+    case_group: pt5
+    description: Vocabulary filtering
     type: ui
+    validation_type: functional
+    dataspace_dimension: discovery
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - Existen facetas o filtros visibles en catalogo
+      - Visible facets or filters exist in the catalog
     steps:
-      - Filtrar por metadatos y etiquetas
-      - Revisar el conjunto resultante
-    expected_result: Resultados filtrados correctamente
+      - Filter by metadata and tags
+      - Review the resulting set
+    expected_result: Filtered results are correct
     traceability:
       - OntHub-34
       - OntHub-35
-    mapping_status: mapped
     automation:
       status: automated
       mode: ui
       ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_09_filters.spec.js
+      api_equivalent_runner_case: pt5_oh_09_filtered_search
       real_flow:
         method: GET
-        path: /dataset/lov/terms
+        path: /dataset/terms
         query:
           q: Person
-      notes: La UI publica expone filtros visibles por tag y vocabulario desde la vista de terminos.
+      notes: The primary evidence is UI-based over the current /dataset publication; the framework also keeps an equivalent API check over the current /dataset/api/v2 surface.
       seeded_fixture_dependency:
         required: true
-        vocabulary_prefix: demohub
-        tag: validationdemo
+        vocabulary_prefix: s4grid
+        tag: Catalogs
 
   - id: PT5-OH-10
     component: ontology_hub
-    description: Seleccion de versiones
+    case_group: pt5
+    description: Version selection
     type: ui
+    validation_type: functional
+    dataspace_dimension: discovery
+    execution_mode: ui
+    coverage_status: partial
+    mapping_status: partial
     preconditions:
-      - Existe al menos una ontologia con varias versiones
+      - At least one ontology exists with multiple versions
     steps:
-      - Consultar una ontologia con multiples versiones
-      - Seleccionar una version concreta
-    expected_result: Se muestra la version solicitada
+      - Open an ontology with multiple versions
+      - Select a specific version
+    expected_result: The requested version is displayed
     traceability:
       - OntHub-21
       - OntHub-36
-    mapping_status: partial
     automation:
       status: automated
       mode: ui_partial
       ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_10_versions.spec.js
       real_flow:
         method: GET
-        path: /dataset/lov/vocabs/demohub
-      notes: La UI expone el historial de versiones y los recursos .n3 versionados; la seleccion visual fina de versiones sigue siendo parcial.
+        path: /dataset/vocabs/s4grid
+      notes: The UI exposes version history and versioned resources, but the functional selection remains only a partial PT5 coverage.
 
   - id: PT5-OH-11
     component: ontology_hub
-    description: Visualizacion completa de ontologia
+    case_group: pt5
+    description: Complete ontology visualization
     type: ui
+    validation_type: functional
+    dataspace_dimension: visualization
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - Existe una ficha de ontologia accesible
+      - An ontology detail page is accessible
     steps:
-      - Acceder a la ficha de una ontologia
-      - Revisar metadatos, codigo y elementos graficos
-    expected_result: Metadatos, codigo y graficos visibles
+      - Open the detail page of an ontology
+      - Review metadata, code, and graphical elements
+    expected_result: Metadata, code, and graphics are visible
     traceability:
       - OntHub-17-20
-    mapping_status: mapped
     automation:
       status: automated
       mode: ui
       ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_11_vocab_detail.spec.js
       real_flow:
         method: GET
-        path: /dataset/lov/vocabs/demohub
+        path: /dataset/vocabs/s4grid
 
   - id: PT5-OH-12
     component: ontology_hub
-    description: Estadisticas de ontologia
+    case_group: pt5
+    description: Ontology statistics
     type: ui
+    validation_type: functional
+    dataspace_dimension: visualization
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - La ficha o catalogo muestra estadisticas o popularidad
+      - The detail page or catalog shows statistics or popularity
     steps:
-      - Consultar estadisticas y popularidad de una ontologia
-    expected_result: Metricas visibles conforme a lo definido
+      - Check statistics and popularity for an ontology
+    expected_result: Metrics are visible as defined
     traceability:
       - OntHub-22
       - OntHub-23
-    mapping_status: mapped
     automation:
       status: automated
       mode: ui
       ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_12_statistics.spec.js
       real_flow:
         method: GET
-        path: /dataset/lov/vocabs/demohub
+        path: /dataset/vocabs/s4grid
 
   - id: PT5-OH-13
     component: ontology_hub
-    description: Consulta SPARQL
+    case_group: pt5
+    description: SPARQL query
     type: api
+    validation_type: interoperability
+    dataspace_dimension: interoperability
+    execution_mode: api
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - La instancia expone acceso SPARQL o pagina de consulta
+      - The instance exposes SPARQL access or a query page
     steps:
-      - Ejecutar una consulta SPARQL
-      - Validar la respuesta obtenida
-    expected_result: La consulta devuelve resultados validos
+      - Execute a SPARQL query
+      - Validate the obtained response
+    expected_result: The query returns valid results
     traceability:
       - OntHub-26
-    mapping_status: mapped
     automation:
       status: automated
       mode: api
       runner_case: pt5_oh_13_sparql_access
       real_flow:
         method: GET
-        path: /dataset/lov/sparql
+        path: /dataset/sparql
         query:
-          query: ASK { GRAPH ?g { <http://example.org/demohub/Person> ?p ?o } }
-      notes: Se ejecuta una consulta SPARQL real sobre la ontologia de ejemplo sembrada por el framework.
+          query: ASK { <http://schema.org/Person> ?p ?o }
+      notes: A real SPARQL query is executed against the public SPARQL endpoint using the class URI exposed by the current seeded search result.
 
   - id: PT5-OH-14
     component: ontology_hub
-    description: Ejecucion de servicios externos
+    case_group: pt5
+    description: External service execution
     type: api
+    validation_type: integration
+    dataspace_dimension: services
+    execution_mode: api
+    coverage_status: partial
+    mapping_status: partial
     preconditions:
-      - Los servicios ontologicos externos estan desplegados
+      - External ontology services are deployed
     steps:
-      - Ejecutar un servicio ontologico como checker o patterns
-      - Revisar el resultado funcional
-    expected_result: El servicio se ejecuta correctamente
+      - Execute an ontology service such as checker or patterns
+      - Review the functional result
+    expected_result: The service executes correctly
     traceability:
       - OntHub-52
       - OntHub-53
-    mapping_status: partial
     automation:
       status: automated
       mode: api
       runner_case: pt5_oh_14_patterns_access
       real_flow:
         method: GET
-        path: /dataset/lov/patterns
-      notes: Se valida el acceso al servicio de patrones documentado en la UI; las operaciones internas del servicio siguen sin contrato publico local.
+        path: /dataset/patterns
+        query:
+          q: s4grid
+      notes: The check validates the public patterns page with a real vocabulary query; internal pattern generation operations still have no stable public contract in the framework.
 
   - id: PT5-OH-15
     component: ontology_hub
-    description: Acceso via UI y API
+    case_group: pt5
+    description: UI and API access
     type: ui
+    validation_type: integration
+    dataspace_dimension: integration
+    execution_mode: hybrid
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
-      - La instancia expone UI y documentacion API
+      - The instance exposes both UI and API documentation
     steps:
-      - Acceder a la funcionalidad equivalente desde la UI
-      - Acceder a la funcionalidad equivalente desde la API
-    expected_result: Paridad funcional entre UI y API
+      - Access the equivalent functionality through the UI
+      - Access the equivalent functionality through the API
+    expected_result: Functional parity between UI and API
     traceability:
       - OntHub-54
       - OntHub-55
-    mapping_status: mapped
     automation:
       status: automated
-      mode: ui
+      mode: hybrid
       ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_15_ui_access.spec.js
+      api_equivalent_runner_case: pt5_oh_15_ui_api_access
       real_flow:
         requests:
           - method: GET
-            path: /dataset/lov/
+            path: /dataset
           - method: GET
-            path: /dataset/lov/api
-      notes: Se valida la disponibilidad coordinada de la UI principal y de la documentacion API publicada por el componente mediante Playwright.
+            path: /dataset/api
+      notes: This PT5 case is considered automated when Playwright evidence and the component HTTP/API equivalent check converge.
 
   - id: PT5-OH-16
     component: ontology_hub
-    description: Conexion con el conector
+    case_group: pt5
+    description: Connector integration
     type: api
+    validation_type: integration
+    dataspace_dimension: integration
+    execution_mode: not_currently_executable
+    coverage_status: not_currently_executable
+    mapping_status: partial
     preconditions:
-      - Ontology Hub desplegado en el entorno PT5
-      - Conectores del dataspace disponibles
+      - Ontology Hub is deployed in the PT5 environment
+      - Dataspace connectors are available
     steps:
-      - Validar la conexion del componente con el conector
-      - Revisar la operatividad de la integracion
-    expected_result: Integracion operativa con el espacio de datos
+      - Validate the connection between the component and the connector
+      - Review the operational integration behavior
+    expected_result: Operational integration with the dataspace
     traceability:
       - OntHub-56
+    notes: Connector integration requires a more stable contractual and operational surface before it can be automated reliably in the framework.

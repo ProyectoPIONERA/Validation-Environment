@@ -1,72 +1,31 @@
 import json
 import os
 import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-import requests
 
-
-COMPONENT_KEY = "ontology-hub"
-PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "ui", "playwright.config.js")
+COMPONENT_KEY = "ai-model-hub"
+PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ai_model_hub", "ui", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent / "ui"
-PLAYWRIGHT_COMMAND = [
-    os.path.join(".", "node_modules", ".bin", "playwright"),
-    "test",
-    "--config",
-    PLAYWRIGHT_CONFIG_RELATIVE,
-    "--workers=1",
-]
+PLAYWRIGHT_COMMAND = [os.path.join(".", "node_modules", ".bin", "playwright"), "test", "--config", PLAYWRIGHT_CONFIG_RELATIVE]
+UI_VALIDATION_ENV = "AI_MODEL_HUB_ENABLE_UI_VALIDATION"
 
 UI_CASE_METADATA: Dict[str, Dict[str, Any]] = {
-    "OH-LOGIN": {
-        "case_group": "support",
-        "validation_type": "support",
-        "dataspace_dimension": "support",
-        "mapping_status": "supporting",
-        "automation_mode": "ui_support",
-        "execution_mode": "ui_support",
-        "coverage_status": "automated",
-        "expected_result": "Acceso autenticado al area de edicion",
-        "spec": "oh_login.spec.js",
-    },
-    "PT5-OH-01": {
+    "PT5-MH-01": {
         "case_group": "pt5",
         "validation_type": "functional",
-        "dataspace_dimension": "functional",
-        "mapping_status": "mapped",
-        "automation_mode": "ui",
+        "dataspace_dimension": "access",
+        "mapping_status": "partial",
+        "automation_mode": "ui_partial",
         "execution_mode": "ui",
-        "coverage_status": "automated",
-        "expected_result": "La ontologia se registra y es visible en el catalogo",
-        "spec": "pt5_oh_01_create_vocab.spec.js",
+        "coverage_status": "partial",
+        "expected_result": "The catalog loads correctly",
+        "spec": "pt5_mh_01_catalog_access.spec.js",
     },
-    "OH-LIST-SEARCH": {
-        "case_group": "support",
-        "validation_type": "support",
-        "dataspace_dimension": "support",
-        "mapping_status": "supporting",
-        "automation_mode": "ui_support",
-        "execution_mode": "ui_support",
-        "coverage_status": "automated",
-        "expected_result": "El catalogo publico lista vocabularios y abre un resultado de busqueda",
-        "spec": "oh_list_search.spec.js",
-    },
-    "PT5-OH-09": {
-        "case_group": "pt5",
-        "validation_type": "functional",
-        "dataspace_dimension": "discovery",
-        "mapping_status": "mapped",
-        "automation_mode": "ui",
-        "execution_mode": "ui",
-        "coverage_status": "automated",
-        "expected_result": "Resultados filtrados correctamente",
-        "spec": "pt5_oh_09_filters.spec.js",
-    },
-    "PT5-OH-10": {
+    "PT5-MH-04": {
         "case_group": "pt5",
         "validation_type": "functional",
         "dataspace_dimension": "discovery",
@@ -74,43 +33,36 @@ UI_CASE_METADATA: Dict[str, Dict[str, Any]] = {
         "automation_mode": "ui_partial",
         "execution_mode": "ui",
         "coverage_status": "partial",
-        "expected_result": "Se muestra la version solicitada",
-        "spec": "pt5_oh_10_versions.spec.js",
+        "expected_result": "Models are listed correctly",
+        "spec": "pt5_mh_04_model_listing.spec.js",
     },
-    "PT5-OH-11": {
+    "PT5-MH-05": {
         "case_group": "pt5",
         "validation_type": "functional",
-        "dataspace_dimension": "visualization",
-        "mapping_status": "mapped",
-        "automation_mode": "ui",
+        "dataspace_dimension": "discovery",
+        "mapping_status": "partial",
+        "automation_mode": "ui_partial",
         "execution_mode": "ui",
-        "coverage_status": "automated",
-        "expected_result": "Metadatos, codigo y graficos visibles",
-        "spec": "pt5_oh_11_vocab_detail.spec.js",
+        "coverage_status": "partial",
+        "expected_result": "Search results are coherent with the query",
+        "spec": "pt5_mh_05_search.spec.js",
     },
-    "PT5-OH-12": {
+    "PT5-MH-06": {
         "case_group": "pt5",
         "validation_type": "functional",
-        "dataspace_dimension": "visualization",
-        "mapping_status": "mapped",
-        "automation_mode": "ui",
+        "dataspace_dimension": "discovery",
+        "mapping_status": "partial",
+        "automation_mode": "ui_partial",
         "execution_mode": "ui",
-        "coverage_status": "automated",
-        "expected_result": "Metricas visibles conforme a lo definido",
-        "spec": "pt5_oh_12_statistics.spec.js",
-    },
-    "PT5-OH-15": {
-        "case_group": "pt5",
-        "validation_type": "integration",
-        "dataspace_dimension": "integration",
-        "mapping_status": "mapped",
-        "automation_mode": "ui",
-        "execution_mode": "ui",
-        "coverage_status": "automated",
-        "expected_result": "Paridad funcional entre UI y API",
-        "spec": "pt5_oh_15_ui_access.spec.js",
+        "coverage_status": "partial",
+        "expected_result": "Filters are applied correctly",
+        "spec": "pt5_mh_06_filters.spec.js",
     },
 }
+
+
+def _ui_validation_enabled() -> bool:
+    return (os.environ.get(UI_VALIDATION_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _component_dir(experiment_dir: str | None) -> str | None:
@@ -138,7 +90,7 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
         "html_report_dir": os.path.join(base_dir, "playwright-report"),
         "blob_report_dir": os.path.join(base_dir, "blob-report"),
         "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ontology_hub_ui_validation.json"),
+        "report_json": os.path.join(base_dir, "ai_model_hub_ui_validation.json"),
     }
     for path in paths.values():
         if path.endswith(".json"):
@@ -224,24 +176,6 @@ def _build_case_result(
     }
 
 
-def _filter_case_group(executed_cases: List[Dict[str, Any]], case_group: str) -> List[Dict[str, Any]]:
-    return [case for case in executed_cases if case.get("case_group") == case_group]
-
-
-def _summarize_case_list(executed_cases: List[Dict[str, Any]]) -> Dict[str, int]:
-    summary = {
-        "total": len(executed_cases),
-        "passed": 0,
-        "failed": 0,
-        "skipped": 0,
-    }
-    for case in executed_cases:
-        status = ((case.get("evaluation") or {}).get("status") or "").lower()
-        if status in summary:
-            summary[status] += 1
-    return summary
-
-
 def _build_ui_evidence_index(
     executed_cases: List[Dict[str, Any]],
     artifact_paths: Dict[str, str],
@@ -317,62 +251,57 @@ def _extract_executed_cases(report_payload: Dict[str, Any], base_url: str) -> Li
     return executed_cases
 
 
-def _load_results_summary(results_path: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    with open(results_path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-
-    stats = payload.get("stats") or {}
-    summary = {
-        "total": int(stats.get("expected", 0))
-        + int(stats.get("unexpected", 0))
-        + int(stats.get("flaky", 0))
-        + int(stats.get("skipped", 0)),
-        "passed": int(stats.get("expected", 0)),
-        "failed": int(stats.get("unexpected", 0)) + int(stats.get("flaky", 0)),
-        "skipped": int(stats.get("skipped", 0)),
+def _empty_summary() -> Dict[str, int]:
+    return {
+        "total": 0,
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
     }
-    return summary, _extract_executed_cases(payload, "")
 
 
-def _wait_for_ontology_hub_ui_ready(base_url: str, timeout: int = 120, poll_interval: int = 3) -> bool:
-    if not base_url:
-        return False
+def _disabled_suite_result(base_url: str, experiment_dir: str | None) -> Dict[str, Any]:
+    artifact_paths = _build_ui_artifact_paths(experiment_dir)
+    suite_result: Dict[str, Any] = {
+        "component": COMPONENT_KEY,
+        "suite": "ui",
+        "status": "skipped",
+        "reason": "ui_validation_disabled",
+        "timestamp": datetime.now().isoformat(),
+        "base_url": (base_url or "").rstrip("/"),
+        "summary": _empty_summary(),
+        "executed_cases": [],
+        "pt5_cases": [],
+        "support_checks": [],
+        "pt5_summary": _empty_summary(),
+        "support_summary": _empty_summary(),
+        "evidence_index": [],
+        "playwright_config": PLAYWRIGHT_CONFIG_RELATIVE,
+        "specs": [metadata["spec"] for metadata in UI_CASE_METADATA.values()],
+        "exit_code": None,
+        "error": None,
+        "artifacts": {
+            "report_json": artifact_paths["report_json"],
+            "test_results_dir": artifact_paths["output_dir"],
+            "html_report_dir": artifact_paths["html_report_dir"],
+            "blob_report_dir": artifact_paths["blob_report_dir"],
+            "json_report_file": artifact_paths["json_report_file"],
+        },
+    }
+    _write_json(artifact_paths["report_json"], suite_result)
+    return suite_result
 
-    probe_urls = [
-        f"{base_url}/dataset",
-        f"{base_url}/edition/login",
-    ]
-    deadline = time.time() + timeout
-    last_issue = "unknown"
 
-    while time.time() < deadline:
-        all_ready = True
-        for url in probe_urls:
-            try:
-                response = requests.get(url, timeout=5, allow_redirects=True)
-                if response.status_code >= 500:
-                    last_issue = f"{url} returned HTTP {response.status_code}"
-                    all_ready = False
-                    break
-            except requests.RequestException as exc:
-                last_issue = f"{url} probe failed: {exc}"
-                all_ready = False
-                break
-        if all_ready:
-            return True
-        time.sleep(poll_interval)
-
-    print(f"Ontology Hub UI readiness did not stabilize before Playwright execution: {last_issue}")
-    return False
-
-
-def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
-    started_at = datetime.now().isoformat()
+def run_ai_model_hub_ui_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
     normalized_base_url = (base_url or "").rstrip("/")
+    if not _ui_validation_enabled():
+        return _disabled_suite_result(normalized_base_url, experiment_dir)
+
+    started_at = datetime.now().isoformat()
     artifact_paths = _build_ui_artifact_paths(experiment_dir)
     env = {
         **os.environ,
-        "ONTOLOGY_HUB_BASE_URL": normalized_base_url,
+        "AI_MODEL_HUB_BASE_URL": normalized_base_url,
         "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
         "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
@@ -383,8 +312,6 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
     exit_code = None
     status = "skipped"
     try:
-        if not _wait_for_ontology_hub_ui_ready(normalized_base_url):
-            raise RuntimeError("Ontology Hub UI readiness check failed")
         result = subprocess.run(
             PLAYWRIGHT_COMMAND,
             cwd=str(PLAYWRIGHT_WORKDIR),
@@ -438,10 +365,15 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
             for case_id, metadata in UI_CASE_METADATA.items()
         ]
 
-    pt5_cases = _filter_case_group(executed_cases, "pt5")
-    support_checks = _filter_case_group(executed_cases, "support")
-    pt5_summary = _summarize_case_list(pt5_cases)
-    support_summary = _summarize_case_list(support_checks)
+    pt5_cases = list(executed_cases)
+    support_checks: List[Dict[str, Any]] = []
+    pt5_summary = {
+        "total": len(pt5_cases),
+        "passed": sum(1 for case in pt5_cases if ((case.get("evaluation") or {}).get("status") or "").lower() == "passed"),
+        "failed": sum(1 for case in pt5_cases if ((case.get("evaluation") or {}).get("status") or "").lower() == "failed"),
+        "skipped": sum(1 for case in pt5_cases if ((case.get("evaluation") or {}).get("status") or "").lower() == "skipped"),
+    }
+    support_summary = _empty_summary()
     evidence_index = _build_ui_evidence_index(executed_cases, artifact_paths)
 
     suite_result: Dict[str, Any] = {

@@ -64,6 +64,8 @@ export class PolicyCreatePage {
   }
 
   private async findPolicy(policyId: string): Promise<boolean> {
+    await this.goToFirstPage();
+
     if ((await this.policyCard(policyId).count()) > 0) {
       return true;
     }
@@ -75,6 +77,22 @@ export class PolicyCreatePage {
     }
 
     return false;
+  }
+
+  private async goToFirstPage(): Promise<void> {
+    const previousButton = this.page.locator(
+      "button.mat-paginator-navigation-previous, button[aria-label*='Previous page']",
+    ).first();
+
+    if ((await previousButton.count()) === 0) {
+      return;
+    }
+
+    while (await previousButton.isEnabled().catch(() => false)) {
+      await previousButton.click();
+      await this.page.waitForLoadState("networkidle");
+      await this.page.waitForTimeout(500);
+    }
   }
 
   private async goToNextPage(): Promise<boolean> {

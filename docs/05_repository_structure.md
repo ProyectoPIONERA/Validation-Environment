@@ -38,7 +38,8 @@ Hoy existen estas carpetas:
 Estado actual:
 
 - `ontology_hub/` es una implementación activa de referencia con validación API y UI.
-- `ai_model_hub/` y `semantic_virtualization/` siguen siendo estructura reservada.
+- `ai_model_hub/` ya existe como base de Fase 3 con `README.md`, `test_cases.yaml` y trazabilidad PT5, pero aún no tiene runners activos.
+- `semantic_virtualization/` sigue siendo estructura reservada.
 - `Level 6` puede ejecutar automáticamente validaciones de componente cuando el componente está configurado y existe runner registrado.
 
 ### `validation/shared/`

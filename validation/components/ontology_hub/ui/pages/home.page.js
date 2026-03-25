@@ -4,7 +4,7 @@ class OntologyHubHomePage {
   }
 
   async goto(baseUrl) {
-    await this.page.goto(`${baseUrl}/dataset/lov/`, { waitUntil: "networkidle" });
+    await this.page.goto(`${baseUrl}/dataset`, { waitUntil: "networkidle" });
   }
 
   async expectReady() {
@@ -17,7 +17,7 @@ class OntologyHubHomePage {
   }
 
   async gotoApiDocs() {
-    await this.page.goto(new URL("/dataset/lov/api", this.page.url()).toString(), {
+    await this.page.goto(new URL("/dataset/api", this.page.url()).toString(), {
       waitUntil: "networkidle",
     });
   }

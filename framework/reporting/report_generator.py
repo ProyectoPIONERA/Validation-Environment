@@ -87,6 +87,7 @@ class ExperimentReportGenerator:
         negotiation_metrics = data.get("negotiation_metrics.json") or []
         test_results = data.get("test_results.json") or []
         kafka_payload = data.get("kafka_metrics.json") or {}
+        ui_validation = data.get("ui_validation_summary.json") or {}
         request_metrics = self._request_metrics_from_aggregated(aggregated_payload)
         negotiation_summary = self._negotiation_metrics_from_aggregated(aggregated_payload, negotiation_metrics)
         test_summary = self._test_summary(aggregated_payload, test_results)
@@ -110,6 +111,7 @@ class ExperimentReportGenerator:
             "test_results": test_results,
             "test_summary": test_summary,
             "kafka_metrics": self._normalize_kafka_metrics(kafka_payload),
+            "ui_validation": ui_validation,
             "generated_graphs": self._graph_files(data["experiment_dir"]),
         }
         return summary
@@ -162,6 +164,21 @@ class ExperimentReportGenerator:
 
         if summary.get("negotiation_metrics"):
             lines.extend(["", "## Negotiation Latency", "", "```json", json.dumps(summary["negotiation_metrics"], indent=2), "```"])
+
+        ui_validation = summary.get("ui_validation") or {}
+        ui_summary = ui_validation.get("summary") or {}
+        if ui_validation:
+            operations = list(ui_validation.get("operations_involved") or [])
+            lines.extend([
+                "",
+                "## UI Validation",
+                f"- Suite runs: `{ui_summary.get('total', 0)}`",
+                f"- Passed: `{ui_summary.get('passed', 0)}`",
+                f"- Failed: `{ui_summary.get('failed', 0)}`",
+                f"- Skipped: `{ui_summary.get('skipped', 0)}`",
+            ])
+            if operations:
+                lines.append(f"- Operations involved: `{', '.join(operations)}`")
 
         kafka_metrics = summary.get("kafka_metrics")
         if kafka_metrics:

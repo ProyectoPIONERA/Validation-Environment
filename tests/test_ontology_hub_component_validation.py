@@ -65,14 +65,43 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("at least one search result" in item for item in result["assertions"]))
 
+    def test_evaluate_term_search_response_accepts_filtered_results_when_tag_bucket_is_empty(self):
+        payload = {
+            "total_results": 1,
+            "filters": {"vocab": "s4grid", "tag": "Catalogs"},
+            "aggregations": {
+                "vocabs": {"buckets": [{"key": "s4grid", "doc_count": 1}]},
+                "tags": {"buckets": []},
+            },
+            "results": [
+                {
+                    "prefixedName": "s4grid:Person",
+                    "vocabulary": {"prefix": "s4grid"},
+                    "uri": "http://schema.org/Person",
+                    "tags": ["Catalogs"],
+                }
+            ],
+        }
+
+        result = evaluate_term_search_response(
+            200,
+            "application/json",
+            json.dumps(payload),
+            expected_query="Person",
+            expected_vocab="s4grid",
+            expected_tag="Catalogs",
+        )
+
+        self.assertEqual(result["status"], "passed")
+
     def test_evaluate_html_page_response_passes_on_expected_markers(self):
-        body = "<!doctype html><html><body><h1>SPARQL</h1><a href='/dataset/lov/api'>API</a></body></html>"
+        body = "<!doctype html><html><body><h1>SPARQL</h1><a href='/dataset/api'>API</a></body></html>"
 
         result = evaluate_html_page_response(
             200,
             "text/html; charset=utf-8",
             body,
-            required_markers=["SPARQL", "/dataset/lov/api"],
+            required_markers=["SPARQL", "/dataset/api"],
         )
 
         self.assertEqual(result["status"], "passed")
@@ -107,19 +136,20 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
     def test_run_ontology_hub_validation_persists_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             def fake_http_get(url, timeout=20):
-                if "api/v2/term/search" in url and "tag=validationdemo" in url:
+                if "api/v2/term/search" in url and "tag=Catalogs" in url:
                     payload = {
                         "total_results": 1,
-                        "filters": {"vocab": "demohub", "tag": "validationdemo"},
+                        "filters": {"vocab": "s4grid", "tag": "Catalogs"},
                         "aggregations": {
-                            "vocabs": {"buckets": [{"key": "demohub", "doc_count": 1}]},
-                            "tags": {"buckets": [{"key": "validationdemo", "doc_count": 1}]},
+                            "vocabs": {"buckets": [{"key": "s4grid", "doc_count": 1}]},
+                            "tags": {"buckets": []},
                         },
                         "results": [
                             {
-                                "prefixedName": ["demohub:Person"],
-                                "vocabulary.prefix": ["demohub"],
-                                "uri": ["http://example.org/demohub/Person"],
+                                "prefixedName": ["s4grid:Person"],
+                                "vocabulary": {"prefix": "s4grid"},
+                                "uri": ["http://schema.org/Person"],
+                                "tags": ["Catalogs"],
                             }
                         ],
                     }
@@ -129,26 +159,27 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
                         "total_results": 1,
                         "filters": {},
                         "aggregations": {
-                            "vocabs": {"buckets": [{"key": "demohub", "doc_count": 1}]},
-                            "tags": {"buckets": [{"key": "validationdemo", "doc_count": 1}]},
+                            "vocabs": {"buckets": [{"key": "s4grid", "doc_count": 1}]},
+                            "tags": {"buckets": []},
                         },
                         "results": [
                             {
-                                "prefixedName": ["demohub:Person"],
-                                "vocabulary.prefix": ["demohub"],
-                                "uri": ["http://example.org/demohub/Person"],
+                                "prefixedName": ["s4grid:Person"],
+                                "vocabulary": {"prefix": "s4grid"},
+                                "uri": ["http://schema.org/Person"],
+                                "tags": ["Catalogs"],
                             }
                         ],
                     }
                     return 200, "application/json", json.dumps(payload)
-                if "/dataset/lov/sparql?" in url:
+                if "/dataset/sparql?" in url:
                     return 200, "application/sparql-results+json", json.dumps({"head": {}, "boolean": True})
-                if url.endswith("/dataset/lov/patterns"):
-                    return 200, "text/html", "<html><body><h1>Patterns</h1></body></html>"
-                if url.endswith("/dataset/lov/api"):
-                    return 200, "text/html", "<html><body>/dataset/lov/api/v2/term/search</body></html>"
-                if url.endswith("/dataset/lov/"):
-                    return 200, "text/html", "<html><body><a href='/dataset/lov/api'>API</a><a href='/dataset/lov/vocabs'>Vocabs</a></body></html>"
+                if url.endswith("/dataset/patterns?q=s4grid"):
+                    return 200, "text/html", "<html><body><h1>Patterns</h1><div>Selected vocabularies</div><input id='checkbox_s4grid'></body></html>"
+                if url.endswith("/dataset/api"):
+                    return 200, "text/html", "<html><body>Pionera API /api/v2/term/search /dataset/api/v2/agent/list</body></html>"
+                if url.endswith("/dataset"):
+                    return 200, "text/html", "<html><body><a href='/dataset/api'>API</a><a href='/dataset/vocabs'>Vocabs</a></body></html>"
                 raise AssertionError(f"Unexpected URL: {url}")
 
             with mock.patch("validation.components.ontology_hub.runner._http_get", side_effect=fake_http_get):
@@ -161,6 +192,11 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["summary"]["passed"], 5)
             self.assertEqual(result["summary"]["total"], 5)
+            self.assertEqual(result["pt5_summary"]["total"], 5)
+            self.assertEqual(result["pt5_summary"]["passed"], 5)
+            self.assertEqual(result["support_summary"]["total"], 0)
+            self.assertTrue(all(case["case_group"] == "pt5" for case in result["executed_cases"]))
+            self.assertEqual(len(result["evidence_index"]), 6)
             self.assertTrue(result["artifacts"]["report_json"].endswith("ontology_hub_validation.json"))
             self.assertTrue(result["artifacts"]["pt5-oh-08-response.json"].endswith("pt5-oh-08-response.json"))
             self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))

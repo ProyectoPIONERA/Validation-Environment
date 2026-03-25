@@ -16,21 +16,33 @@ from xml.etree import ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[4]
-VALIDATION_DIR = ROOT / "docs_" / "logs" / "validation"
-TSV_PATH = Path(os.environ.get("ONTOLOGY_HUB_CASES_TSV", VALIDATION_DIR / "casos_prueba_extraidos.tsv"))
-XLSX_PATH = Path(os.environ.get("ONTOLOGY_HUB_CASES_XLSX", VALIDATION_DIR / "A5.1_Casos_Prueba_v2.xlsx"))
+TSV_ENV = os.environ.get("ONTOLOGY_HUB_CASES_TSV")
+XLSX_ENV = os.environ.get("ONTOLOGY_HUB_CASES_XLSX")
+TSV_PATH = Path(TSV_ENV) if TSV_ENV else None
+XLSX_PATH = Path(XLSX_ENV) if XLSX_ENV else None
 XLSX_SHEET = "xl/worksheets/sheet4.xml"
 XML_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 
 def ensure_raw_sources_available():
-    missing = [str(path) for path in (TSV_PATH, XLSX_PATH) if not path.exists()]
+    missing = []
+    if TSV_PATH is None:
+        missing.append("ONTOLOGY_HUB_CASES_TSV")
+    elif not TSV_PATH.exists():
+        missing.append(str(TSV_PATH))
+
+    if XLSX_PATH is None:
+        missing.append("ONTOLOGY_HUB_CASES_XLSX")
+    elif not XLSX_PATH.exists():
+        missing.append(str(XLSX_PATH))
+
     if not missing:
         return
 
     print(
         "Raw Ontology Hub case sources are not available in this clone.\n"
-        "This helper is optional and only works when the local raw TSV/XLSX files are present.\n"
+        "This helper is optional and only works when raw TSV/XLSX file paths are provided through\n"
+        "the ONTOLOGY_HUB_CASES_TSV and ONTOLOGY_HUB_CASES_XLSX environment variables.\n"
         f"Missing: {', '.join(missing)}",
         file=sys.stderr,
     )

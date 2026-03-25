@@ -48,6 +48,16 @@ export class AssetCreatePage {
   }
 
   async submit(): Promise<void> {
+    const uploadProgress = this.page.getByText(/Uploading file:/i).first();
+    if ((await uploadProgress.count()) > 0) {
+      await expect(uploadProgress).toBeHidden({ timeout: 120_000 });
+    }
+
+    const blockingOverlay = this.page.locator("app-spinner .overlay").first();
+    if ((await blockingOverlay.count()) > 0) {
+      await expect(blockingOverlay).toBeHidden({ timeout: 15_000 });
+    }
+
     await this.page.getByRole("button", { name: /^Create$/ }).click();
   }
 

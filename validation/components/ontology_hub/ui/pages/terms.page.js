@@ -4,7 +4,7 @@ class OntologyHubTermsPage {
   }
 
   async goto(baseUrl, query) {
-    const url = new URL("/dataset/lov/terms", baseUrl);
+    const url = new URL("/dataset/terms", baseUrl);
     if (query) {
       url.searchParams.set("q", query);
     }

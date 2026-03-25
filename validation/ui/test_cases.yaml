@@ -1,0 +1,220 @@
+source_documents:
+  - INESData Level 6 UI validation design
+  - Stable Playwright flows in validation/ui/core
+  - Operational MinIO validation in validation/ui/ops
+
+support_checks:
+  - id: DS-UI-01
+    scope: dataspace_ui
+    case_group: support
+    description: Portal login readiness
+    type: ui
+    validation_type: support
+    dataspace_dimension: support
+    execution_mode: ui_support
+    coverage_status: automated
+    mapping_status: supporting
+    preconditions:
+      - Connector portal URL is reachable
+      - Valid connector credentials are available
+    steps:
+      - Open the connector portal
+      - Authenticate through Keycloak when required
+      - Verify that the portal shell loads correctly
+    operations:
+      - login
+      - load_portal_shell
+    expected_result: The authenticated connector shell becomes available
+    automation:
+      status: automated
+      mode: ui_support
+      ui_spec: validation/ui/core/01-login-readiness.spec.ts
+
+test_cases:
+  - id: DS-UI-03
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Provider asset creation and upload
+    type: ui
+    validation_type: functional
+    dataspace_dimension: publication
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Provider connector portal is reachable
+      - Provider credentials are available
+      - Upload storage is configured for the connector
+    steps:
+      - Create an asset through the provider portal
+      - Upload a file into the configured storage destination
+      - Verify that the creation flow finishes successfully
+    operations:
+      - create_asset
+      - upload_asset_file
+    expected_result: The asset is created successfully and the upload completes without HTTP errors
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/ui/core/03-provider-setup.spec.ts
+
+  - id: DS-UI-03B
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Provider policy creation
+    type: ui
+    validation_type: functional
+    dataspace_dimension: governance
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Provider connector portal is reachable
+      - Provider credentials are available
+    steps:
+      - Open the policy creation view
+      - Define a participant constraint
+      - Persist the policy through the UI
+    operations:
+      - create_policy
+    expected_result: The policy is created and visible in the provider portal
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/ui/core/03b-provider-policy-create.spec.ts
+
+  - id: DS-UI-03C
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Provider contract definition creation
+    type: ui
+    validation_type: functional
+    dataspace_dimension: contracts
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Provider connector portal is reachable
+      - Provider credentials are available
+      - A compatible asset and policy can be created during the flow
+    steps:
+      - Create the prerequisite asset and policy
+      - Open the contract definition view
+      - Create a contract definition that links the asset and policy
+    operations:
+      - create_contract_definition
+      - link_asset_policy
+    expected_result: The contract definition is created and listed successfully
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/ui/core/03c-provider-contract-definition-create.spec.ts
+
+  - id: DS-UI-04
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Consumer catalog listing and detail
+    type: ui
+    validation_type: functional
+    dataspace_dimension: discovery
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Consumer connector portal is reachable
+      - Consumer credentials are available
+      - The catalog view is exposed by the portal
+    steps:
+      - Open the catalog section
+      - Verify that the list renders without access errors
+      - Open a catalog detail view when available
+    operations:
+      - list_catalog
+      - open_catalog_detail
+    expected_result: The consumer catalog loads and its detail surface is reachable without API errors
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/ui/core/04-consumer-catalog.spec.ts
+
+  - id: DS-UI-05
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Consumer negotiation from catalog
+    type: ui
+    validation_type: integration
+    dataspace_dimension: contracts
+    execution_mode: ui_api
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Provider and consumer connectors are reachable
+      - Provider bootstrap data can be created through the management APIs
+    steps:
+      - Bootstrap a provider asset for negotiation
+      - Open the consumer catalog and locate the asset
+      - Negotiate the first available contract offer
+    operations:
+      - discover_asset
+      - negotiate_contract
+    expected_result: A contract negotiation completes successfully from the consumer UI
+    automation:
+      status: automated
+      mode: ui_api
+      ui_spec: validation/ui/core/05-consumer-negotiation.spec.ts
+
+  - id: DS-UI-06
+    scope: dataspace_ui
+    case_group: dataspace
+    description: Consumer transfer from contracts and history
+    type: ui
+    validation_type: integration
+    dataspace_dimension: transfer
+    execution_mode: ui_api
+    coverage_status: automated
+    mapping_status: mapped
+    preconditions:
+      - Provider and consumer connectors are reachable
+      - Provider bootstrap data can be created through the management APIs
+      - Contract negotiation can complete successfully
+    steps:
+      - Bootstrap a provider asset and negotiate it from the consumer UI
+      - Start an INESDataStore transfer from the contracts view
+      - Confirm the successful transfer in the transfer history view
+    operations:
+      - discover_asset
+      - negotiate_contract
+      - start_transfer
+      - check_transfer_history
+    expected_result: The transfer is initiated successfully and reaches a successful final state in the UI
+    automation:
+      status: automated
+      mode: ui_api
+      ui_spec: validation/ui/core/06-consumer-transfer.spec.ts
+
+ops_checks:
+  - id: DS-UI-OPS-01
+    scope: dataspace_ui
+    case_group: ops
+    description: MinIO bucket visibility from console
+    type: ui
+    validation_type: operational
+    dataspace_dimension: storage
+    execution_mode: ui_ops
+    coverage_status: automated
+    mapping_status: supporting
+    preconditions:
+      - MinIO Console is reachable
+      - Provider and consumer buckets are available
+    steps:
+      - Open the MinIO Console
+      - Inspect provider and consumer buckets
+      - Confirm that the expected objects are visible
+    operations:
+      - inspect_storage
+      - verify_bucket_visibility
+    expected_result: The MinIO Console exposes the expected buckets and objects for operational verification
+    automation:
+      status: automated
+      mode: ui_ops
+      ui_spec: validation/ui/ops/minio-bucket-visibility.spec.ts

@@ -61,6 +61,7 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             payload = _build_playwright_results_payload()
 
             def fake_subprocess_run(command, cwd=None, env=None):
+                self.assertIn("--workers=1", command)
                 self.assertIn("PLAYWRIGHT_JSON_REPORT_FILE", env)
                 with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
@@ -69,6 +70,9 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             with mock.patch(
                 "validation.components.ontology_hub.ui_runner.subprocess.run",
                 side_effect=fake_subprocess_run,
+            ), mock.patch(
+                "validation.components.ontology_hub.ui_runner._wait_for_ontology_hub_ui_ready",
+                return_value=True,
             ):
                 result = run_ontology_hub_ui_validation(
                     "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
@@ -80,6 +84,10 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             self.assertEqual(result["status"], "passed")
             self.assertEqual(result["summary"]["total"], 5)
             self.assertEqual(result["summary"]["passed"], 5)
+            self.assertEqual(result["pt5_summary"]["total"], 5)
+            self.assertEqual(result["support_summary"]["total"], 0)
+            self.assertTrue(all(case["case_group"] == "pt5" for case in result["executed_cases"]))
+            self.assertGreaterEqual(len(result["evidence_index"]), 5)
             self.assertEqual(len(result["executed_cases"]), 5)
             self.assertTrue(
                 os.path.exists(result["artifacts"]["report_json"]),
@@ -97,7 +105,25 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 "suite": "api",
                 "status": "passed",
                 "summary": {"total": 5, "passed": 5, "failed": 0, "skipped": 0},
-                "executed_cases": [{"test_case_id": "PT5-OH-08", "type": "api"}],
+                "executed_cases": [
+                    {
+                        "test_case_id": "PT5-OH-08",
+                        "type": "api",
+                        "evaluation": {"status": "passed", "assertions": []},
+                    },
+                    {
+                        "test_case_id": "PT5-OH-15",
+                        "type": "api",
+                        "case_group": "pt5",
+                        "validation_type": "integration",
+                        "dataspace_dimension": "integration",
+                        "mapping_status": "partial",
+                        "coverage_status": "partial",
+                        "execution_mode": "api",
+                        "evaluation": {"status": "passed", "assertions": []},
+                    },
+                ],
+                "evidence_index": [{"scope": "suite", "suite": "api", "artifact_name": "report_json", "path": "api.json"}],
                 "artifacts": {"report_json": os.path.join(tmpdir, "api.json")},
             }
             ui_result = {
@@ -105,7 +131,31 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 "suite": "ui",
                 "status": "passed",
                 "summary": {"total": 5, "passed": 5, "failed": 0, "skipped": 0},
-                "executed_cases": [{"test_case_id": "PT5-OH-09", "type": "ui"}],
+                "executed_cases": [
+                    {
+                        "test_case_id": "PT5-OH-15",
+                        "type": "ui",
+                        "case_group": "pt5",
+                        "validation_type": "integration",
+                        "dataspace_dimension": "integration",
+                        "mapping_status": "mapped",
+                        "coverage_status": "automated",
+                        "execution_mode": "ui",
+                        "evaluation": {"status": "passed", "assertions": []},
+                    },
+                    {
+                        "test_case_id": "OH-LOGIN",
+                        "type": "ui",
+                        "case_group": "support",
+                        "validation_type": "support",
+                        "dataspace_dimension": "support",
+                        "mapping_status": "supporting",
+                        "coverage_status": "automated",
+                        "execution_mode": "ui_support",
+                        "evaluation": {"status": "passed", "assertions": []},
+                    },
+                ],
+                "evidence_index": [{"scope": "suite", "suite": "ui", "artifact_name": "report_json", "path": "ui.json"}],
                 "artifacts": {
                     "report_json": os.path.join(tmpdir, "ui.json"),
                     "test_results_dir": os.path.join(tmpdir, "ui", "test-results"),
@@ -136,9 +186,29 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             self.assertEqual(result["summary"]["passed"], 10)
             self.assertEqual(result["suites"]["api"]["status"], "passed")
             self.assertEqual(result["suites"]["ui"]["status"], "passed")
-            self.assertEqual(len(result["executed_cases"]), 2)
+            self.assertEqual(len(result["executed_cases"]), 4)
+            self.assertEqual(result["pt5_summary"]["total"], 2)
+            self.assertEqual(result["pt5_summary"]["passed"], 2)
+            self.assertEqual(len(result["pt5_case_results"]), 2)
+            self.assertEqual(result["support_summary"]["total"], 1)
+            self.assertEqual(len(result["support_checks"]), 1)
+            self.assertEqual(result["pt5_case_results"][1]["test_case_id"], "PT5-OH-15")
+            self.assertEqual(set(result["pt5_case_results"][1]["source_suites"]), {"api", "ui"})
+            self.assertEqual(result["pt5_case_results"][1]["traceability"], ["OntHub-54", "OntHub-55"])
+            self.assertEqual(result["support_checks"][0]["traceability"], [])
+            self.assertEqual(result["catalog_alignment"]["summary"]["declared_pt5_cases"], 16)
+            self.assertEqual(result["catalog_alignment"]["summary"]["executed_pt5_cases"], 2)
+            self.assertEqual(result["catalog_alignment"]["summary"]["uncovered_pt5_cases"], 14)
+            self.assertEqual(result["catalog_alignment"]["summary"]["declared_support_checks"], 2)
+            self.assertEqual(result["catalog_alignment"]["summary"]["executed_support_checks"], 1)
+            self.assertEqual(result["catalog_alignment"]["summary"]["missing_support_checks"], 1)
             self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))
             self.assertTrue(result["artifacts"]["ui_report_json"].endswith("ui.json"))
+            self.assertTrue(os.path.exists(result["artifacts"]["pt5_case_results_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["support_checks_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["evidence_index_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["findings_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["catalog_alignment_json"]))
 
 
 if __name__ == "__main__":

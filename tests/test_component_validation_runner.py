@@ -16,6 +16,18 @@ class ComponentValidationRunnerTests(unittest.TestCase):
         self.assertEqual(results[0]["status"], "skipped")
         self.assertEqual(results[0]["reason"], "no_validator_registered")
 
+    def test_ai_model_hub_remains_opt_in_and_unregistered_by_default(self):
+        results = run_component_validations(
+            {
+                "ai-model-hub": "http://ai-model-hub.example.local",
+            }
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["component"], "ai-model-hub")
+        self.assertEqual(results[0]["status"], "skipped")
+        self.assertEqual(results[0]["reason"], "no_validator_registered")
+
     def test_registered_component_uses_configured_runner(self):
         fake_runner = mock.Mock(
             return_value={
