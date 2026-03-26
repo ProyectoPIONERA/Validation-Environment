@@ -212,6 +212,99 @@ class InesdataComponentOverridesTests(unittest.TestCase):
             ],
         )
 
+    def test_prepare_level6_local_image_builds_on_host_and_loads_into_minikube(self):
+        adapter = self._make_adapter()
+        deployer_config = {"LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "true"}
+
+        with (
+            mock.patch.object(
+                adapter,
+                "_safe_load_yaml_file",
+                return_value={"image": {"repository": "ontology-hub", "tag": "local"}},
+            ),
+            mock.patch.object(adapter, "_minikube_is_available", return_value=True),
+            mock.patch.object(adapter, "_minikube_has_image", return_value=False),
+            mock.patch.object(adapter, "_host_has_image", return_value=False),
+            mock.patch.object(adapter, "_build_ontology_hub_image_on_host") as build_mock,
+            mock.patch.object(adapter, "_load_image_into_minikube") as load_mock,
+        ):
+            result = adapter._maybe_prepare_level6_local_image(
+                "ontology-hub",
+                "/tmp/ontology-values.yaml",
+                deployer_config,
+            )
+
+        self.assertTrue(result)
+        build_mock.assert_called_once_with("ontology-hub:local", deployer_config)
+        load_mock.assert_called_once_with("minikube", "ontology-hub:local")
+
+    def test_prepare_level6_local_image_reuses_host_image_when_available(self):
+        adapter = self._make_adapter()
+        deployer_config = {"LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "true"}
+
+        with (
+            mock.patch.object(
+                adapter,
+                "_safe_load_yaml_file",
+                return_value={"image": {"repository": "ontology-hub", "tag": "local"}},
+            ),
+            mock.patch.object(adapter, "_minikube_is_available", return_value=True),
+            mock.patch.object(adapter, "_minikube_has_image", return_value=False),
+            mock.patch.object(adapter, "_host_has_image", return_value=True),
+            mock.patch.object(adapter, "_build_ontology_hub_image_on_host") as build_mock,
+            mock.patch.object(adapter, "_load_image_into_minikube") as load_mock,
+        ):
+            result = adapter._maybe_prepare_level6_local_image(
+                "ontology-hub",
+                "/tmp/ontology-values.yaml",
+                deployer_config,
+            )
+
+        self.assertTrue(result)
+        build_mock.assert_not_called()
+        load_mock.assert_called_once_with("minikube", "ontology-hub:local")
+
+    def test_wait_for_component_rollout_prefers_deployment_rollout(self):
+        infrastructure = FakeInfrastructure()
+        infrastructure.wait_for_deployment_rollout = mock.Mock(return_value=True)
+        adapter = self._make_adapter(infrastructure=infrastructure)
+        adapter._wait_for_pods_ready_by_selector = mock.Mock(return_value=True)
+
+        result = adapter._wait_for_component_rollout(
+            "demo",
+            "demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+
+        self.assertTrue(result)
+        infrastructure.wait_for_deployment_rollout.assert_called_once_with(
+            "demo",
+            "demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+        adapter._wait_for_pods_ready_by_selector.assert_not_called()
+
+    def test_wait_for_component_rollout_falls_back_to_selector_wait_when_rollout_helper_missing(self):
+        adapter = self._make_adapter()
+        adapter._wait_for_pods_ready_by_selector = mock.Mock(return_value=True)
+
+        result = adapter._wait_for_component_rollout(
+            "demo",
+            "demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+
+        self.assertTrue(result)
+        adapter._wait_for_pods_ready_by_selector.assert_called_once_with(
+            "demo",
+            "app.kubernetes.io/instance=demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

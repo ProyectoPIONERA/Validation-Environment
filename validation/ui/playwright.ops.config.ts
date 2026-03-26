@@ -18,6 +18,7 @@ export default defineConfig({
     timeout: 15 * 1000,
   },
   retries: 0,
+  workers: 1,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: htmlReportDir }],

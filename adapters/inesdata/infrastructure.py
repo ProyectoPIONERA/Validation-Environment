@@ -40,6 +40,16 @@ class INESDataInfrastructureAdapter:
             raise RuntimeError(f"{message}. Root cause: {root_cause}")
         raise RuntimeError(message)
 
+    @staticmethod
+    def _print_unique_lines(output):
+        previous = None
+        for line in (output or "").splitlines():
+            line = line.rstrip()
+            if not line or line == previous:
+                continue
+            print(line)
+            previous = line
+
     def _dataspace_name(self):
         getter = getattr(self.config, "dataspace_name", None)
         if callable(getter):
@@ -360,6 +370,35 @@ class INESDataInfrastructureAdapter:
         print("Release deployed successfully")
         return True
 
+    def wait_for_deployment_rollout(self, namespace, deployment_name, timeout_seconds=180, label=None):
+        namespace = (namespace or "").strip()
+        deployment_name = (deployment_name or "").strip()
+        if not namespace or not deployment_name:
+            return False
+
+        timeout_seconds = max(int(timeout_seconds or 180), 1)
+        rollout_label = label or f"deployment/{deployment_name}"
+        print(f"Waiting for {rollout_label} rollout...")
+
+        result = self.run(
+            f"kubectl rollout status deployment/{shlex.quote(deployment_name)} "
+            f"-n {shlex.quote(namespace)} --timeout={timeout_seconds}s",
+            capture=True,
+            check=False,
+        )
+
+        if result is None:
+            print(f"Timeout waiting for {rollout_label} rollout")
+            self.run(
+                f"kubectl get deployment {shlex.quote(deployment_name)} -n {shlex.quote(namespace)}",
+                check=False,
+            )
+            self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+            return False
+
+        self._print_unique_lines(result)
+        return True
+
     def add_helm_repos(self):
         print("\nAdding Helm repositories...")
         for name, url in self.config.HELM_REPOS.items():
@@ -518,7 +557,7 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
-    def port_forward_service(self, namespace, pattern, local_port, remote_port, quiet=False):
+    def port_forward_service(self, namespace, pattern, local_port, remote_port, quiet=False, wait_timeout=None):
         pod = self.get_pod_by_name(namespace, pattern)
 
         if not pod:
@@ -528,14 +567,27 @@ class INESDataInfrastructureAdapter:
 
         self.run(f"pkill -f 'kubectl port-forward {pod}'", check=False, silent=quiet)
 
-        subprocess.Popen(
+        process = subprocess.Popen(
             ["kubectl", "port-forward", pod, "-n", namespace, f"{local_port}:{remote_port}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        deadline = time.time() + max(float(wait_timeout or getattr(self.config, "TIMEOUT_PORT", 30)), 1.0)
 
-        time.sleep(3)
-        return True
+        while time.time() <= deadline:
+            if process.poll() is not None:
+                if not quiet:
+                    print(f"Port-forward process for '{pod}' exited before local port {local_port} became reachable")
+                return False
+
+            if self._port_is_open("127.0.0.1", local_port, connect_timeout=0.25):
+                return True
+
+            time.sleep(0.25)
+
+        if not quiet:
+            print(f"Timed out waiting for port-forward to '{pod}' on local port {local_port}")
+        return False
 
     def stop_port_forward_service(self, namespace, pattern, quiet=False):
         pod = self.get_pod_by_name(namespace, pattern)
@@ -543,16 +595,60 @@ class INESDataInfrastructureAdapter:
             return False
         return self.run(f"pkill -f 'kubectl port-forward {pod}'", check=False, silent=quiet) is not None
 
+    @staticmethod
+    def _port_is_open(host, port, connect_timeout=0.5):
+        connect_timeout = max(min(float(connect_timeout), 2.0), 0.1)
+        try:
+            with socket.create_connection((host, port), timeout=connect_timeout):
+                return True
+        except OSError:
+            return False
+
+    def _ensure_local_service_access(
+        self,
+        service_label,
+        namespace,
+        pattern,
+        local_port,
+        remote_port,
+        quiet=False,
+        probe_timeout=None,
+        wait_timeout=None,
+    ):
+        full_timeout = max(int(wait_timeout or getattr(self.config, "TIMEOUT_PORT", 30)), 1)
+        probe_timeout = max(min(int(probe_timeout or 3), full_timeout), 1)
+
+        if self.wait_for_port("127.0.0.1", local_port, timeout=probe_timeout):
+            if not quiet:
+                print(f"{service_label} accessible")
+            return True, False
+
+        if not quiet:
+            print(f"{service_label} not accessible locally after {probe_timeout}s. Creating port-forward...")
+
+        if not self.port_forward_service(
+            namespace,
+            pattern,
+            local_port,
+            remote_port,
+            quiet=quiet,
+            wait_timeout=full_timeout,
+        ):
+            if not quiet:
+                print(f"Could not establish {service_label} access")
+            return False, False
+
+        if not quiet:
+            print(f"{service_label} accessible via port-forward")
+        return True, True
+
     def wait_for_port(self, host, port, timeout=None):
         timeout = timeout or self.config.TIMEOUT_PORT
         start = time.time()
 
         while True:
-            try:
-                with socket.create_connection((host, port), timeout=2):
-                    return True
-            except OSError:
-                pass
+            if self._port_is_open(host, port, connect_timeout=0.5):
+                return True
 
             if time.time() - start > timeout:
                 return False
@@ -1091,32 +1187,42 @@ class INESDataInfrastructureAdapter:
 
     def ensure_local_infra_access(self):
         print("\nVerifying local access to PostgreSQL and Vault...")
+        full_timeout = max(int(getattr(self.config, "TIMEOUT_PORT", 30)), 1)
+        probe_timeout = max(min(3, full_timeout), 1)
 
-        if not self.wait_for_port("127.0.0.1", self.config.PORT_POSTGRES):
-            print("PostgreSQL not accessible. Creating port-forward...")
-            self.port_forward_service(self.config.NS_COMMON, "postgresql", 5432, 5432)
-            if not self.wait_for_port("127.0.0.1", self.config.PORT_POSTGRES):
-                print("Could not establish PostgreSQL access")
-                return False
-        else:
-            print("PostgreSQL accessible")
+        postgres_ok, _ = self._ensure_local_service_access(
+            "PostgreSQL",
+            self.config.NS_COMMON,
+            "postgresql",
+            self.config.PORT_POSTGRES,
+            5432,
+            probe_timeout=probe_timeout,
+            wait_timeout=full_timeout,
+        )
+        if not postgres_ok:
+            return False
 
-        if not self.wait_for_port("127.0.0.1", self.config.PORT_VAULT):
-            print("Vault not accessible. Creating port-forward...")
-            self.port_forward_service(self.config.NS_COMMON, "vault", 8200, 8200)
-            if not self.wait_for_port("127.0.0.1", self.config.PORT_VAULT):
-                print("Could not establish Vault access")
-                return False
-        else:
-            print("Vault accessible")
+        vault_ok, _ = self._ensure_local_service_access(
+            "Vault",
+            self.config.NS_COMMON,
+            "vault",
+            self.config.PORT_VAULT,
+            8200,
+            probe_timeout=probe_timeout,
+            wait_timeout=full_timeout,
+        )
+        if not vault_ok:
+            return False
 
         print("Local infrastructure OK\n")
         return True
 
-    def wait_for_registration_service_schema(self, timeout=None, poll_interval=3):
+    def wait_for_registration_service_schema(self, timeout=None, poll_interval=3, quiet=False):
         timeout = timeout or self.config.TIMEOUT_POD_WAIT
-        print("\nWaiting for registration-service schema to be ready...")
+        if not quiet:
+            print("\nWaiting for registration-service schema to be ready...")
         start = time.time()
+        next_progress = start + max(float(poll_interval) * 5, 15)
         pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
         registration_db = self.config.registration_db_name()
         sql = "SELECT to_regclass('public.edc_participant');"
@@ -1128,17 +1234,24 @@ class INESDataInfrastructureAdapter:
             )
 
             if result and result.strip() == "edc_participant":
-                print("registration-service schema ready: public.edc_participant exists")
+                if not quiet:
+                    print("registration-service schema ready: public.edc_participant exists")
                 return True
+
+            if not quiet and time.time() >= next_progress:
+                elapsed = int(time.time() - start)
+                print(f"registration-service schema not ready yet ({elapsed}s elapsed)...")
+                next_progress = time.time() + max(float(poll_interval) * 5, 15)
 
             time.sleep(poll_interval)
 
-        print("Timeout waiting for registration-service schema readiness")
-        self.run(
-            f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
-            f"-d {registration_db} -c \"\\dt public.*\"",
-            check=False,
-        )
+        if not quiet:
+            print("Timeout waiting for registration-service schema readiness")
+            self.run(
+                f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
+                f"-d {registration_db} -c \"\\dt public.*\"",
+                check=False,
+            )
         return False
 
     def wait_for_registration_service_liquibase(self, timeout=None, poll_interval=3):
@@ -1147,20 +1260,30 @@ class INESDataInfrastructureAdapter:
         namespace = self.config.namespace_demo()
         created_port_forward = False
         last_issue = None
+        next_progress = None
 
         try:
-            if not self.wait_for_port("127.0.0.1", local_port, timeout=2):
-                if self.port_forward_service(namespace, "registration-service", local_port, 8080, quiet=True):
-                    created_port_forward = True
-                else:
-                    last_issue = "temporary port-forward to registration-service actuator could not be established"
-
-            if not self.wait_for_port("127.0.0.1", local_port):
-                self._last_registration_service_liquibase_issue = last_issue or "registration-service actuator was not reachable locally"
+            local_timeout = max(int(getattr(self.config, "TIMEOUT_PORT", 30)), 1)
+            actuator_ok, created_port_forward = self._ensure_local_service_access(
+                "registration-service actuator",
+                namespace,
+                "registration-service",
+                local_port,
+                8080,
+                quiet=True,
+                probe_timeout=min(2, local_timeout),
+                wait_timeout=local_timeout,
+            )
+            if not actuator_ok:
+                self._last_registration_service_liquibase_issue = (
+                    "temporary port-forward to registration-service actuator could not be established"
+                )
                 return False
 
             endpoint = f"http://127.0.0.1:{local_port}/api/actuator/liquibase"
             start = time.time()
+            next_progress = start + max(float(poll_interval) * 5, 15)
+            print("\nWaiting for registration-service Liquibase actuator...")
 
             while time.time() - start <= timeout:
                 try:
@@ -1175,6 +1298,12 @@ class INESDataInfrastructureAdapter:
                         last_issue = f"registration-service actuator returned HTTP {response.status_code}"
                 except Exception:
                     last_issue = "registration-service actuator did not respond in time"
+
+                if time.time() >= next_progress:
+                    elapsed = int(time.time() - start)
+                    detail = f" Last issue: {last_issue}" if last_issue else ""
+                    print(f"registration-service Liquibase actuator not ready yet ({elapsed}s elapsed).{detail}")
+                    next_progress = time.time() + max(float(poll_interval) * 5, 15)
 
                 time.sleep(poll_interval)
 
@@ -1217,12 +1346,12 @@ class INESDataInfrastructureAdapter:
             })
         return snapshot
 
-    def wait_for_namespace_stability(self, namespace, duration=15, poll_interval=3):
+    def wait_for_namespace_stability(self, namespace, duration=15, poll_interval=3, timeout=None):
         """Observe namespace health during a stability window."""
         print(f"\nObserving namespace '{namespace}' stability for {duration}s...")
         last_issue = None
         stable_since = None
-        timeout = max(self.config.TIMEOUT_NAMESPACE, duration * 3)
+        timeout = max(timeout or getattr(self.config, "TIMEOUT_NAMESPACE", 90), duration * 3)
         deadline = time.time() + timeout
 
         while time.time() < deadline:
@@ -1286,6 +1415,8 @@ class INESDataInfrastructureAdapter:
 
     def verify_cluster_ready_for_level2(self):
         """Ensure Level 1 leaves a cluster stable enough for Level 2."""
+        ingress_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
+        ingress_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
         status = self.run_silent("minikube status --output=json")
         if not status:
             return False, "minikube status unavailable"
@@ -1304,20 +1435,36 @@ class INESDataInfrastructureAdapter:
         if not nodes or " Ready " not in f" {nodes} ":
             return False, "kubectl does not report a Ready node"
 
-        if not self.wait_for_pods("ingress-nginx", timeout=180):
+        if not self.wait_for_pods("ingress-nginx", timeout=ingress_ready_timeout):
             return False, "ingress-nginx pods did not become ready"
 
-        if not self.wait_for_namespace_stability("ingress-nginx", duration=10, poll_interval=3):
+        if not self.wait_for_namespace_stability(
+            "ingress-nginx",
+            duration=10,
+            poll_interval=3,
+            timeout=ingress_stability_timeout,
+        ):
             return False, "ingress-nginx namespace did not remain stable"
 
         return True, None
 
     def verify_common_services_ready_for_level3(self):
         """Ensure Level 2 leaves common services stable enough for Level 3."""
-        if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=180, require_vault_ready=True):
+        common_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
+        common_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
+        if not self.wait_for_level2_service_pods(
+            self.config.NS_COMMON,
+            timeout=common_ready_timeout,
+            require_vault_ready=True,
+        ):
             return False, "common services pods did not become ready"
 
-        if not self.wait_for_namespace_stability(self.config.NS_COMMON, duration=12, poll_interval=3):
+        if not self.wait_for_namespace_stability(
+            self.config.NS_COMMON,
+            duration=12,
+            poll_interval=3,
+            timeout=common_stability_timeout,
+        ):
             return False, "common services namespace did not remain stable"
 
         if not self.ensure_vault_unsealed():
@@ -1327,12 +1474,25 @@ class INESDataInfrastructureAdapter:
 
     def verify_dataspace_ready_for_level4(self):
         """Ensure Level 3 leaves dataspace services stable enough for Level 4."""
+        self._last_registration_service_liquibase_issue = None
         if not self.wait_for_namespace_stability(self.config.namespace_demo(), duration=12, poll_interval=3):
             return False, "dataspace namespace did not remain stable"
 
+        quick_schema_timeout = 15
+        final_schema_timeout = 105
+
+        if self.wait_for_registration_service_schema(
+            timeout=quick_schema_timeout,
+            poll_interval=3,
+            quiet=True,
+        ):
+            print("registration-service schema ready")
+            return True, None
+
+        print("registration-service schema not ready yet. Checking Liquibase actuator...")
         self.wait_for_registration_service_liquibase(timeout=60, poll_interval=3)
 
-        if not self.wait_for_registration_service_schema(timeout=120, poll_interval=3):
+        if not self.wait_for_registration_service_schema(timeout=final_schema_timeout, poll_interval=3):
             if self._last_registration_service_liquibase_issue:
                 print(
                     "Registration-service Liquibase check was inconclusive: "
@@ -1380,7 +1540,11 @@ class INESDataInfrastructureAdapter:
             self._fail("Cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
 
         print("\nEnabling ingress addon...\n")
-        self.run("minikube addons enable ingress", check=False)
+        if self.run_silent("minikube addons enable ingress") is None:
+            print(
+                "Warning: minikube reported a transient ingress addon enable failure; "
+                "verifying ingress controller readiness directly."
+            )
         self.run("kubectl get pods -n ingress-nginx", check=False)
         cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
         if not cluster_ready:

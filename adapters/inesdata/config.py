@@ -17,8 +17,8 @@ class InesdataConfig:
     }
 
     MINIKUBE_DRIVER = "docker"
-    MINIKUBE_CPUS = 4
-    MINIKUBE_MEMORY = 4400
+    MINIKUBE_CPUS = 6
+    MINIKUBE_MEMORY = 8192
     MINIKUBE_PROFILE = "minikube"
     MINIKUBE_ADDONS = ["ingress"]
     MINIKUBE_IP = "192.168.49.2"

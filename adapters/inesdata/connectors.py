@@ -49,6 +49,132 @@ class INESDataConnectorsAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    @staticmethod
+    def _reserve_local_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            return sock.getsockname()[1]
+
+    @staticmethod
+    def _should_attempt_local_fallback(exc):
+        if exc is None:
+            return False
+        message = str(exc).lower()
+        return any(
+            token in message
+            for token in (
+                "connection refused",
+                "failed to establish a new connection",
+                "name or service not known",
+                "temporary failure in name resolution",
+                "nodename nor servname provided",
+                "max retries exceeded",
+                "timed out",
+            )
+        )
+
+    def _connector_pod_name(self, connector_name, interface=False):
+        namespace = self.config.namespace_demo()
+        result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+        if not result:
+            return None
+
+        preferred = []
+        fallback = []
+        for line in result.splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+
+            pod_name = parts[0]
+            status = parts[2]
+            if not pod_name.startswith(connector_name):
+                continue
+
+            is_interface = self._is_connector_interface_pod(pod_name)
+            if interface != is_interface:
+                continue
+
+            if status == "Running":
+                preferred.append(pod_name)
+            else:
+                fallback.append(pod_name)
+
+        candidates = preferred or fallback
+        return candidates[0] if candidates else None
+
+    def _open_temporary_port_forward(self, namespace, pod_name, remote_port):
+        port_forward_service = getattr(self.infrastructure, "port_forward_service", None)
+        if not callable(port_forward_service) or not pod_name:
+            return None
+
+        local_port = self._reserve_local_port()
+        if not port_forward_service(namespace, pod_name, local_port, remote_port, quiet=True):
+            return None
+
+        return {
+            "namespace": namespace,
+            "pod_name": pod_name,
+            "local_port": local_port,
+        }
+
+    def _close_temporary_port_forward(self, port_forward_info):
+        if not port_forward_info:
+            return
+
+        stop_port_forward_service = getattr(self.infrastructure, "stop_port_forward_service", None)
+        if callable(stop_port_forward_service):
+            stop_port_forward_service(
+                port_forward_info["namespace"],
+                port_forward_info["pod_name"],
+                quiet=True,
+            )
+
+    def _start_keycloak_local_fallback(self):
+        port_forward_service = getattr(self.infrastructure, "port_forward_service", None)
+        if not callable(port_forward_service):
+            return None
+
+        local_port = getattr(self.config, "PORT_KEYCLOAK", 18081)
+        namespace = getattr(self.config, "NS_COMMON", "common-srvs")
+        if not port_forward_service(namespace, "keycloak", local_port, 8080, quiet=True):
+            return None
+
+        return f"http://127.0.0.1:{local_port}"
+
+    def _start_connector_interface_fallback(self, connector_name):
+        pod_name = self._connector_pod_name(connector_name, interface=True)
+        if not pod_name:
+            return None, None
+
+        port_forward = self._open_temporary_port_forward(
+            self.config.namespace_demo(),
+            pod_name,
+            remote_port=8080,
+        )
+        if not port_forward:
+            return None, None
+
+        url = f"http://127.0.0.1:{port_forward['local_port']}/inesdata-connector-interface/"
+        return url, port_forward
+
+    def _start_connector_management_api_fallback(self, connector_name):
+        pod_name = self._connector_pod_name(connector_name, interface=False)
+        if not pod_name:
+            return None, None
+
+        port_forward = self._open_temporary_port_forward(
+            self.config.namespace_demo(),
+            pod_name,
+            remote_port=19193,
+        )
+        if not port_forward:
+            return None, None
+
+        url = f"http://127.0.0.1:{port_forward['local_port']}/management/v3/assets/request"
+        return url, port_forward
+
     def wait_for_keycloak_admin_ready(self, timeout=120, poll_interval=3):
         print("Waiting for Keycloak admin authentication to become ready...")
         deployer_config = self.config_adapter.load_deployer_config()
@@ -63,6 +189,7 @@ class INESDataConnectorsAdapter:
         token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
         last_issue = None
         start = time.time()
+        used_local_fallback = False
 
         while time.time() - start <= timeout:
             try:
@@ -83,6 +210,12 @@ class INESDataConnectorsAdapter:
                 last_issue = f"HTTP {response.status_code}"
             except Exception as exc:
                 last_issue = str(exc)
+                if not used_local_fallback and self._should_attempt_local_fallback(exc):
+                    local_keycloak_url = self._start_keycloak_local_fallback()
+                    if local_keycloak_url:
+                        token_url = f"{local_keycloak_url}/realms/master/protocol/openid-connect/token"
+                        used_local_fallback = True
+                        continue
 
             time.sleep(poll_interval)
 
@@ -160,6 +293,17 @@ class INESDataConnectorsAdapter:
         with open(values_file, "w") as f:
             yaml.dump(values, f, sort_keys=False)
 
+    def _local_connector_image_override_path(self):
+        override_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "build",
+            "local-overrides",
+            "connector-local-overrides.yaml",
+        )
+        if os.path.isfile(override_path) and os.path.getsize(override_path) > 0:
+            return override_path
+        return None
+
     def get_deployed_connectors(self, namespace):
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not result:
@@ -189,33 +333,45 @@ class INESDataConnectorsAdapter:
         print(f"Waiting for connector to be ready: {connector_name}")
         url = self.build_connector_url(connector_name)
         host = urlparse(url).hostname
+        local_fallback = None
         if host:
             try:
                 socket.gethostbyname(host)
             except OSError as exc:
-                print(f"Connector host does not resolve locally: {host} ({exc})")
-                return False
+                local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
+                if not local_url:
+                    print(f"Connector host does not resolve locally: {host} ({exc})")
+                    return False
+                url = local_url
         start = time.time()
         last_issue = None
 
-        while True:
-            try:
-                response = requests.get(url, timeout=5)
-                if response.status_code in [200, 302]:
-                    print(f"Connector ready: {connector_name}")
-                    return True
-                last_issue = f"HTTP {response.status_code}"
-            except Exception as exc:
-                last_issue = str(exc)
+        try:
+            while True:
+                try:
+                    response = requests.get(url, timeout=5)
+                    if response.status_code in [200, 302]:
+                        print(f"Connector ready: {connector_name}")
+                        return True
+                    last_issue = f"HTTP {response.status_code}"
+                except Exception as exc:
+                    last_issue = str(exc)
+                    if not local_fallback and self._should_attempt_local_fallback(exc):
+                        local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
+                        if local_url:
+                            url = local_url
+                            continue
 
-            if time.time() - start > timeout:
-                if last_issue:
-                    print(f"Timeout waiting for connector: {connector_name} ({last_issue})")
-                else:
-                    print(f"Timeout waiting for connector: {connector_name}")
-                return False
+                if time.time() - start > timeout:
+                    if last_issue:
+                        print(f"Timeout waiting for connector: {connector_name} ({last_issue})")
+                    else:
+                        print(f"Timeout waiting for connector: {connector_name}")
+                    return False
 
-            time.sleep(3)
+                time.sleep(3)
+        finally:
+            self._close_temporary_port_forward(local_fallback)
 
     def wait_for_management_api_ready(self, connector_name, timeout=180, poll_interval=3):
         print(f"Waiting for management API to be ready: {connector_name}")
@@ -230,41 +386,75 @@ class INESDataConnectorsAdapter:
             "limit": 1,
         }
         last_issue = None
+        local_fallback = None
 
-        while time.time() - start <= timeout:
-            headers = self.get_management_api_headers(connector_name)
-            if not headers:
-                last_issue = "could not obtain management API token"
-                time.sleep(poll_interval)
-                continue
-
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=5)
-                if response.status_code == 200:
-                    print(f"Management API ready: {connector_name}")
-                    return True
-                if response.status_code == 401:
-                    last_issue = "HTTP 401"
-                    self.invalidate_management_api_token(connector_name)
+        try:
+            while time.time() - start <= timeout:
+                headers = self.get_management_api_headers(connector_name)
+                if not headers:
+                    last_issue = "could not obtain management API token"
                     time.sleep(poll_interval)
                     continue
-                last_issue = f"HTTP {response.status_code}"
-            except Exception as exc:
-                last_issue = str(exc)
 
-            time.sleep(poll_interval)
+                try:
+                    response = requests.post(url, headers=headers, json=payload, timeout=5)
+                    if response.status_code == 200:
+                        print(f"Management API ready: {connector_name}")
+                        return True
+                    if response.status_code == 401:
+                        last_issue = "HTTP 401"
+                        self.invalidate_management_api_token(connector_name)
+                        time.sleep(poll_interval)
+                        continue
+                    last_issue = f"HTTP {response.status_code}"
+                except Exception as exc:
+                    last_issue = str(exc)
+                    if not local_fallback and self._should_attempt_local_fallback(exc):
+                        local_url, local_fallback = self._start_connector_management_api_fallback(connector_name)
+                        if local_url:
+                            url = local_url
+                            continue
 
-        if last_issue:
-            print(f"Management API not ready for {connector_name}: {last_issue}")
-        else:
-            print(f"Management API not ready for {connector_name}")
-        return False
+                time.sleep(poll_interval)
+
+            if last_issue:
+                print(f"Management API not ready for {connector_name}: {last_issue}")
+            else:
+                print(f"Management API not ready for {connector_name}")
+            return False
+        finally:
+            self._close_temporary_port_forward(local_fallback)
 
     def wait_for_all_connectors(self, connectors):
         print("\nWaiting for all connectors to become ready...\n")
         for connector in connectors:
             if not self.wait_for_connector_ready(connector):
                 print(f"Connector not ready: {connector}")
+
+    def _wait_for_connector_deployments(self, connector_name, timeout=300):
+        namespace = self.config.namespace_demo()
+        rollout_waiter = getattr(self.infrastructure, "wait_for_deployment_rollout", None)
+        timeout = max(int(timeout or 300), 1)
+
+        if callable(rollout_waiter):
+            deployment_targets = [
+                (connector_name, f"connector runtime '{connector_name}'"),
+                (f"{connector_name}-inteface", f"connector interface '{connector_name}'"),
+            ]
+            for deployment_name, label in deployment_targets:
+                if not rollout_waiter(
+                    namespace,
+                    deployment_name,
+                    timeout_seconds=timeout,
+                    label=label,
+                ):
+                    return False
+            return True
+
+        wait_for_namespace_pods = getattr(self.infrastructure, "wait_for_namespace_pods", None)
+        if callable(wait_for_namespace_pods):
+            return bool(wait_for_namespace_pods(namespace, timeout=timeout))
+        return False
 
     def load_connector_credentials(self, connector_name):
         creds_file = self.config.connector_credentials_path(connector_name)
@@ -829,18 +1019,24 @@ class INESDataConnectorsAdapter:
 
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
+        values_files = [os.path.basename(values_file)]
+        override_path = self._local_connector_image_override_path()
+        if override_path:
+            values_files.append(override_path)
+            print(f"Applying local connector image overrides from {os.path.basename(override_path)}")
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
             self.config.namespace_demo(),
-            os.path.basename(values_file),
+            values_files,
             cwd=self.config.connector_dir()
         ):
             print("Error deploying connector")
             return
 
-        if not self.infrastructure.wait_for_namespace_pods(self.config.namespace_demo()):
-            print("Timeout waiting for connector pods")
+        rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+        if not self._wait_for_connector_deployments(connector_name, timeout=rollout_timeout):
+            print("Timeout waiting for connector deployment rollout")
             return
 
         print("\nCONNECTORS CREATED\n")
@@ -1020,9 +1216,9 @@ class INESDataConnectorsAdapter:
                         and self.connector_database_credentials_valid(connector)
                     ):
                         print(f"Connector already running: {connector}")
-                        print("Skipping deployment\n")
-                        continue
-                    print(f"Connector exists but is unhealthy or stale. Redeploying: {connector}")
+                        print("Recreating connector to ensure a clean Level 4 deployment")
+                    else:
+                        print(f"Connector exists but is unhealthy or stale. Recreating: {connector}")
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)

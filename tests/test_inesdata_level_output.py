@@ -19,6 +19,12 @@ class LevelOutputConfig:
     NS_COMMON = "common"
     DS_NAME = "demo"
     PORT_KEYCLOAK = 18081
+    PORT_POSTGRES = 5432
+    PORT_VAULT = 8200
+    PORT_REGISTRATION_SERVICE = 18080
+    TIMEOUT_PORT = 30
+    TIMEOUT_POD_WAIT = 120
+    TIMEOUT_NAMESPACE = 90
 
     def __init__(self, root):
         self.root = root
@@ -95,6 +101,9 @@ class LevelOutputConfigAdapter:
             "KC_PASSWORD": "secret",
         }
 
+    def get_pg_credentials(self):
+        return ("127.0.0.1", "postgres", "postgres")
+
 
 class FakeConnectorsAdapter:
     def force_clean_postgres_db(self, _db_name, _db_user):
@@ -148,6 +157,28 @@ class InesdataLevelOutputTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(rendered.count("LEVEL 1 - CLUSTER SETUP"), 1)
         self.assertEqual(rendered.count("LEVEL 1 COMPLETE"), 1)
+
+    def test_setup_cluster_warns_when_ingress_addon_enable_times_out_but_verification_passes(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.wait_for_kubernetes_ready = lambda: True
+        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(
+            side_effect=lambda command, *_args, **_kwargs: None
+            if command == "minikube addons enable ingress"
+            else ""
+        )
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.setup_cluster()
+
+        self.assertIn(
+            "Warning: minikube reported a transient ingress addon enable failure",
+            output.getvalue(),
+        )
 
     def test_deploy_infrastructure_does_not_print_complete_on_failure(self):
         infrastructure = self._make_infrastructure()
@@ -357,6 +388,178 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(result)
         infrastructure.port_forward_service.assert_called_once_with("common", "keycloak", 18081, 8080, quiet=True)
+
+    def test_ensure_local_infra_access_uses_short_probe_before_creating_port_forward(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_port = mock.Mock(side_effect=[False, True])
+        infrastructure.port_forward_service = mock.Mock(return_value=True)
+
+        result = infrastructure.ensure_local_infra_access()
+
+        self.assertTrue(result)
+        infrastructure.wait_for_port.assert_any_call("127.0.0.1", 5432, timeout=3)
+        infrastructure.wait_for_port.assert_any_call("127.0.0.1", 8200, timeout=3)
+        infrastructure.port_forward_service.assert_called_once_with(
+            "common",
+            "postgresql",
+            5432,
+            5432,
+            quiet=False,
+            wait_timeout=30,
+        )
+
+    def test_port_forward_service_waits_for_port_to_open(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"
+        infrastructure.run = mock.Mock(return_value=object())
+        process = mock.Mock()
+        process.poll.side_effect = [None, None, None]
+
+        with mock.patch(
+            "adapters.inesdata.infrastructure.subprocess.Popen",
+            return_value=process,
+        ), mock.patch.object(
+            infrastructure,
+            "_port_is_open",
+            side_effect=[False, False, True],
+        ), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+            return_value=None,
+        ):
+            result = infrastructure.port_forward_service(
+                "common",
+                "vault",
+                8200,
+                8200,
+                quiet=True,
+                wait_timeout=1,
+            )
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(process.poll.call_count, 2)
+
+    def test_port_forward_service_fails_fast_when_process_exits(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"
+        infrastructure.run = mock.Mock(return_value=object())
+        process = mock.Mock()
+        process.poll.return_value = 1
+
+        with mock.patch(
+            "adapters.inesdata.infrastructure.subprocess.Popen",
+            return_value=process,
+        ), mock.patch.object(
+            infrastructure,
+            "_port_is_open",
+            return_value=False,
+        ):
+            result = infrastructure.port_forward_service(
+                "common",
+                "vault",
+                8200,
+                8200,
+                quiet=True,
+                wait_timeout=1,
+            )
+
+        self.assertFalse(result)
+
+    def test_wait_for_registration_service_schema_quiet_probe_skips_timeout_diagnostics(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(return_value="")
+        infrastructure.run = mock.Mock(return_value=object())
+
+        with mock.patch("adapters.inesdata.infrastructure.time.sleep", return_value=None):
+            result = infrastructure.wait_for_registration_service_schema(
+                timeout=1,
+                poll_interval=0,
+                quiet=True,
+            )
+
+        self.assertFalse(result)
+        infrastructure.run.assert_not_called()
+
+    def test_wait_for_registration_service_liquibase_uses_local_service_access_helper(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._ensure_local_service_access = mock.Mock(return_value=(True, True))
+        infrastructure.stop_port_forward_service = mock.Mock(return_value=True)
+
+        with mock.patch(
+            "adapters.inesdata.infrastructure.requests.get",
+            return_value=mock.Mock(status_code=200, json=lambda: {"liquibaseBeans": {}}),
+        ):
+            result = infrastructure.wait_for_registration_service_liquibase(timeout=1, poll_interval=0)
+
+        self.assertTrue(result)
+        infrastructure._ensure_local_service_access.assert_called_once_with(
+            "registration-service actuator",
+            "demo-ns",
+            "registration-service",
+            18080,
+            8080,
+            quiet=True,
+            probe_timeout=2,
+            wait_timeout=30,
+        )
+        infrastructure.stop_port_forward_service.assert_called_once_with(
+            "demo-ns",
+            "registration-service",
+            quiet=True,
+        )
+
+    def test_wait_for_deployment_rollout_uses_kubectl_rollout_status(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run = mock.Mock(return_value='deployment "demo-app" successfully rolled out\n')
+
+        result = infrastructure.wait_for_deployment_rollout(
+            "demo-ns",
+            "demo-app",
+            timeout_seconds=240,
+            label="demo app",
+        )
+
+        self.assertTrue(result)
+        infrastructure.run.assert_called_once_with(
+            "kubectl rollout status deployment/demo-app -n demo-ns --timeout=240s",
+            capture=True,
+            check=False,
+        )
+
+    def test_verify_dataspace_ready_for_level4_skips_liquibase_when_schema_probe_passes(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.wait_for_registration_service_schema = mock.Mock(return_value=True)
+        infrastructure.wait_for_registration_service_liquibase = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_dataspace_ready_for_level4()
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        infrastructure.wait_for_registration_service_schema.assert_called_once_with(
+            timeout=15,
+            poll_interval=3,
+            quiet=True,
+        )
+        infrastructure.wait_for_registration_service_liquibase.assert_not_called()
+
+    def test_verify_dataspace_ready_for_level4_uses_quick_then_remaining_schema_timeouts(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.wait_for_registration_service_schema = mock.Mock(side_effect=[False, True])
+        infrastructure.wait_for_registration_service_liquibase = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_dataspace_ready_for_level4()
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        self.assertEqual(
+            infrastructure.wait_for_registration_service_schema.call_args_list,
+            [
+                mock.call(timeout=15, poll_interval=3, quiet=True),
+                mock.call(timeout=105, poll_interval=3),
+            ],
+        )
+        infrastructure.wait_for_registration_service_liquibase.assert_called_once_with(timeout=60, poll_interval=3)
 
     def test_wait_for_level2_service_pods_allows_pre_setup_vault_running_state(self):
         infrastructure = self._make_infrastructure()
@@ -570,6 +773,51 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertIn("Namespace 'ingress-nginx' is stable", output.getvalue())
+
+    def test_verify_cluster_ready_for_level2_uses_extended_ingress_timeouts(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(
+            side_effect=[
+                '{"Host":"Running","Kubelet":"Running","APIServer":"Running"}',
+                "minikube Ready control-plane",
+            ]
+        )
+        infrastructure.wait_for_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_cluster_ready_for_level2()
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        infrastructure.wait_for_pods.assert_called_once_with("ingress-nginx", timeout=300)
+        infrastructure.wait_for_namespace_stability.assert_called_once_with(
+            "ingress-nginx",
+            duration=10,
+            poll_interval=3,
+            timeout=180,
+        )
+
+    def test_verify_common_services_ready_for_level3_uses_extended_timeouts(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_common_services_ready_for_level3()
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        infrastructure.wait_for_level2_service_pods.assert_called_once_with(
+            "common",
+            timeout=300,
+            require_vault_ready=True,
+        )
+        infrastructure.wait_for_namespace_stability.assert_called_once_with(
+            "common",
+            duration=12,
+            poll_interval=3,
+            timeout=180,
+        )
 
     def test_wait_for_namespace_pods_ignores_keycloak_config_cli_error(self):
         infrastructure = self._make_infrastructure()

@@ -303,7 +303,18 @@ class INESDataComponentsAdapter:
             "REPO_PATRONES": "https://github.com/oeg-upm/GrOwEr.git",
         }
 
-    def _build_ontology_hub_image_in_minikube(self, profile: str, image_ref: str, deployer_config: dict):
+    def _host_has_image(self, image_ref: str) -> bool:
+        image_q = shlex.quote(image_ref)
+        return self.run_silent(f"docker image inspect {image_q}") is not None
+
+    def _load_image_into_minikube(self, profile: str, image_ref: str):
+        profile_q = shlex.quote(profile)
+        image_q = shlex.quote(image_ref)
+        print(f"\nLoading image into minikube: {image_ref}")
+        if self.run(f"minikube -p {profile_q} image load {image_q}", check=False) is None:
+            self._fail("Failed to load image into minikube", root_cause=image_ref)
+
+    def _build_ontology_hub_image_on_host(self, image_ref: str, deployer_config: dict):
         ontology_hub_dir = self._resolve_ontology_hub_source_dir(deployer_config)
         dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
         if not os.path.isfile(dockerfile_path):
@@ -324,27 +335,25 @@ class INESDataComponentsAdapter:
                 root_cause=f"Missing keys: {', '.join(missing)} (see {os.path.join(ontology_hub_dir, 'docker-compose.yml')})",
             )
 
-        profile_q = shlex.quote(profile)
         image_q = shlex.quote(image_ref)
-        ctx_q = shlex.quote(ontology_hub_dir)
         arg_flags = " ".join(
             f"--build-arg {shlex.quote(f'{k}={v}')}"
             for k, v in build_args.items()
             if (v is not None and str(v).strip() != "")
         )
 
-        print(f"\nBuilding local image in minikube: {image_ref}")
-        cmd = (
-            f"eval $(minikube -p {profile_q} docker-env) "
-            f"&& docker build -t {image_q} {arg_flags} {ctx_q}"
-        )
-        if self.run(cmd, check=False) is None:
-            self._fail("Failed to build ontology-hub image for minikube", root_cause=image_ref)
+        print(f"\nBuilding local image on host for minikube: {image_ref}")
+        cmd = f"docker build -t {image_q}"
+        if arg_flags:
+            cmd += f" {arg_flags}"
+        cmd += " -f Dockerfile ."
+        if self.run(cmd, check=False, cwd=ontology_hub_dir) is None:
+            self._fail("Failed to build ontology-hub image on host", root_cause=image_ref)
 
     def _maybe_prepare_level6_local_image(self, normalized_component: str, values_file: str, deployer_config: dict) -> bool:
         """Ensure local images referenced by a Level 5 component exist in minikube.
 
-        Returns True when a local image was built.
+        Returns True when the minikube image cache was updated.
         """
         auto_build_flag = deployer_config.get("LEVEL5_AUTO_BUILD_LOCAL_IMAGES")
         if auto_build_flag is None:
@@ -361,7 +370,11 @@ class INESDataComponentsAdapter:
         if not image_ref.lower().endswith(":local"):
             return False
 
-        profile = (deployer_config.get("MINIKUBE_PROFILE") or self.config.MINIKUBE_PROFILE or "minikube").strip() or "minikube"
+        profile = (
+            deployer_config.get("MINIKUBE_PROFILE")
+            or getattr(self.config, "MINIKUBE_PROFILE", "minikube")
+            or "minikube"
+        ).strip() or "minikube"
 
         if not self._minikube_is_available(profile):
             print(
@@ -374,7 +387,9 @@ class INESDataComponentsAdapter:
             return False
 
         if normalized_component == "ontology-hub":
-            self._build_ontology_hub_image_in_minikube(profile, image_ref, deployer_config)
+            if not self._host_has_image(image_ref):
+                self._build_ontology_hub_image_on_host(image_ref, deployer_config)
+            self._load_image_into_minikube(profile, image_ref)
             return True
 
         print(f"Local image '{image_ref}' is missing in minikube, but no auto-build recipe exists for '{normalized_component}'.")
@@ -552,6 +567,26 @@ class INESDataComponentsAdapter:
 
             time.sleep(2)
 
+    def _wait_for_component_rollout(self, namespace: str, deployment_name: str, timeout_seconds: int, label: str) -> bool:
+        rollout_waiter = getattr(self.infrastructure, "wait_for_deployment_rollout", None)
+        if callable(rollout_waiter):
+            return bool(
+                rollout_waiter(
+                    namespace,
+                    deployment_name,
+                    timeout_seconds=timeout_seconds,
+                    label=label,
+                )
+            )
+
+        selector = f"app.kubernetes.io/instance={deployment_name}"
+        return self._wait_for_pods_ready_by_selector(
+            namespace,
+            selector,
+            timeout_seconds=timeout_seconds,
+            label=label,
+        )
+
     def deploy_components(self, components):
         return self.COMPONENTS(components)
 
@@ -687,15 +722,14 @@ class INESDataComponentsAdapter:
                 )
 
             if normalized == "ontology-hub":
-                selector = f"app.kubernetes.io/instance={release_name}"
                 timeout_seconds = 1800
-                if not self._wait_for_pods_ready_by_selector(
+                if not self._wait_for_component_rollout(
                     namespace,
-                    selector,
+                    release_name,
                     timeout_seconds=timeout_seconds,
                     label=normalized,
                 ):
-                    self._fail(f"Timeout waiting for component '{normalized}' pods to become ready")
+                    self._fail(f"Timeout waiting for component '{normalized}' deployment rollout")
 
             deployed.append(normalized)
 

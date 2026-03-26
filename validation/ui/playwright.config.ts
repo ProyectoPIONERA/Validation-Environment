@@ -18,6 +18,8 @@ export default defineConfig({
     timeout: 15 * 1000,
   },
   retries: 0,
+  // These UI flows share portal state and external services; keep them sequential by default.
+  workers: 1,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: htmlReportDir }],

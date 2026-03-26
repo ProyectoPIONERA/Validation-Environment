@@ -14,6 +14,7 @@ module.exports = defineConfig({
   expect: {
     timeout: 20 * 1000,
   },
+  workers: 1,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: htmlReportDir }],
