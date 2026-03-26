@@ -230,7 +230,14 @@ class INESDataComponentsAdapter:
     def _resolve_ontology_hub_source_dir(self, deployer_config: dict) -> str:
         override = (deployer_config.get("ONTOLOGY_HUB_SOURCE_DIR") or "").strip()
         if override:
-            return os.path.abspath(override)
+            override_dir = os.path.abspath(override)
+            override_dockerfile = os.path.join(override_dir, "Dockerfile")
+            if os.path.isfile(override_dockerfile):
+                return override_dir
+            print(
+                "Warning: ONTOLOGY_HUB_SOURCE_DIR does not contain a Dockerfile "
+                f"({override_dockerfile}). Falling back to default source discovery."
+            )
 
         sources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources")
         ontology_hub_dir = os.path.join(sources_dir, "Ontology-Hub")
@@ -238,8 +245,21 @@ class INESDataComponentsAdapter:
         if os.path.isfile(dockerfile_path):
             return ontology_hub_dir
 
-        if not os.path.isdir(ontology_hub_dir):
+        should_clone = not os.path.isdir(ontology_hub_dir)
+        if not should_clone:
+            try:
+                remaining_entries = os.listdir(ontology_hub_dir)
+            except OSError:
+                remaining_entries = []
+            should_clone = len(remaining_entries) == 0
+
+        if should_clone:
             os.makedirs(sources_dir, exist_ok=True)
+            if os.path.isdir(ontology_hub_dir):
+                try:
+                    os.rmdir(ontology_hub_dir)
+                except OSError:
+                    pass
             print(f"Cloning Ontology-Hub into {ontology_hub_dir} ...")
             import subprocess
             repo_url = "https://github.com/ProyectoPIONERA/Ontology-Hub.git"

@@ -8,6 +8,7 @@ import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import adapters.inesdata.components as components_module
 from adapters.inesdata.components import INESDataComponentsAdapter
 from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
 
@@ -126,6 +127,90 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         self.assertIn("-f values-demo.yaml", command)
         self.assertIn("-f /tmp/ontology-hub-override.yaml", command)
         self.assertEqual(run.call_args.kwargs["cwd"], "/tmp/chart")
+
+    def test_resolve_ontology_hub_source_dir_falls_back_when_override_is_invalid(self):
+        adapter = self._make_adapter()
+        sources_dir = os.path.join(
+            os.path.dirname(os.path.abspath(components_module.__file__)),
+            "sources",
+            "Ontology-Hub",
+        )
+        fallback_dockerfile = os.path.join(sources_dir, "Dockerfile")
+        invalid_override = "/mnt/c/Users/avargas/ONTOLOGY_HUB/Ontology-Hub"
+        invalid_override_dockerfile = os.path.join(invalid_override, "Dockerfile")
+
+        def fake_isfile(path):
+            if path == invalid_override_dockerfile:
+                return False
+            if path == fallback_dockerfile:
+                return True
+            return False
+
+        with mock.patch("adapters.inesdata.components.os.path.isfile", side_effect=fake_isfile):
+            resolved = adapter._resolve_ontology_hub_source_dir(
+                {"ONTOLOGY_HUB_SOURCE_DIR": invalid_override}
+            )
+
+        self.assertEqual(resolved, sources_dir)
+
+    def test_resolve_ontology_hub_source_dir_prefers_valid_override(self):
+        adapter = self._make_adapter()
+        override = "/tmp/custom-ontology-hub"
+        override_dockerfile = os.path.join(override, "Dockerfile")
+
+        def fake_isfile(path):
+            return path == override_dockerfile
+
+        with mock.patch("adapters.inesdata.components.os.path.isfile", side_effect=fake_isfile):
+            resolved = adapter._resolve_ontology_hub_source_dir(
+                {"ONTOLOGY_HUB_SOURCE_DIR": override}
+            )
+
+        self.assertEqual(resolved, override)
+
+    def test_resolve_ontology_hub_source_dir_clones_when_sources_dir_exists_but_is_empty(self):
+        adapter = self._make_adapter()
+        sources_dir = os.path.join(
+            os.path.dirname(os.path.abspath(components_module.__file__)),
+            "sources",
+        )
+        ontology_hub_dir = os.path.join(sources_dir, "Ontology-Hub")
+        dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
+
+        clone_calls = []
+
+        def fake_isfile(path):
+            return path == dockerfile_path and len(clone_calls) > 0
+
+        def fake_run(args, check):
+            clone_calls.append((tuple(args), check))
+            return None
+
+        with (
+            mock.patch("adapters.inesdata.components.os.path.isdir", side_effect=lambda path: path == ontology_hub_dir),
+            mock.patch("adapters.inesdata.components.os.listdir", return_value=[]),
+            mock.patch("adapters.inesdata.components.os.makedirs"),
+            mock.patch("adapters.inesdata.components.os.rmdir"),
+            mock.patch("adapters.inesdata.components.os.path.isfile", side_effect=fake_isfile),
+            mock.patch("subprocess.run", side_effect=fake_run),
+        ):
+            resolved = adapter._resolve_ontology_hub_source_dir({})
+
+        self.assertEqual(resolved, ontology_hub_dir)
+        self.assertEqual(
+            clone_calls,
+            [
+                (
+                    (
+                        "git",
+                        "clone",
+                        "https://github.com/ProyectoPIONERA/Ontology-Hub.git",
+                        ontology_hub_dir,
+                    ),
+                    True,
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":
