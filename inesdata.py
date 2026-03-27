@@ -1288,23 +1288,29 @@ lvl_2 = INESDATA_ADAPTER.deploy_infrastructure
 lvl_3 = INESDATA_ADAPTER.deploy_dataspace
 
 
-def _validate_connectors_with_stabilization(connectors, retries=1, wait_seconds=20):
-    """Retry connector validation once after a short stabilization wait.
+def _validate_connectors_with_stabilization(connectors, retries=2, wait_seconds=20, backoff_factor=2):
+    """Retry connector validation after short stabilization waits with light backoff.
 
     This avoids false negatives immediately after rollout operations.
     """
     if validate_connectors_deployment(connectors):
         return True
 
+    retries = max(int(retries or 0), 0)
+    current_wait = max(int(wait_seconds or 0), 0)
+    backoff_factor = max(int(backoff_factor or 1), 1)
+
     for attempt in range(1, retries + 1):
         print(
             f"\nConnector validation failed (attempt {attempt}/{retries + 1}). "
-            f"Waiting {wait_seconds}s for stabilization before retry..."
+            f"Waiting {current_wait}s for stabilization before retry..."
         )
-        time.sleep(wait_seconds)
+        if current_wait > 0:
+            time.sleep(current_wait)
         if validate_connectors_deployment(connectors):
             print("Connector validation recovered after stabilization retry.")
             return True
+        current_wait *= backoff_factor
 
     return False
 

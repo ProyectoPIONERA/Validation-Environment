@@ -5,7 +5,8 @@
  */
 (function() {
 const requestName = pm.info.requestName
-const body = parseJsonResponse()
+const status = pm.response.code
+const DEFAULT_TRANSFER_START_MAX_ATTEMPTS = 8
 const DEFAULT_TRANSFER_STATUS_MAX_ATTEMPTS = 10
 const DEFAULT_TRANSFER_DESTINATION_MAX_ATTEMPTS = 5
 
@@ -59,6 +60,14 @@ function scheduleRetryOrFail(requestToRepeat, attemptVar, maxAttemptsVar, defaul
     return false
 }
 
+function isTransientTransferStartStatus(code) {
+    return [401, 403, 404, 409, 423, 429, 500, 502, 503, 504].includes(code)
+}
+
+function isTransientTransferLookupStatus(code) {
+    return [401, 403, 404, 429, 500, 502, 503, 504].includes(code)
+}
+
 function findTransferEntry(payload, transferId) {
     if (Array.isArray(payload)) {
         return payload.find(function (item) {
@@ -91,30 +100,70 @@ function readField(obj, fieldName) {
     return undefined
 }
 
-function failAuthentication(requestLabel) {
-    clearLocalVar("e2e_transfer_status_attempt")
-    clearLocalVar("e2e_transfer_destination_attempt")
-    pm.test(`${requestLabel} is authenticated`, function () {
-        pm.expect.fail(`${requestLabel} returned HTTP ${pm.response.code}`)
-    })
-    console.log(`${requestLabel} failed with authentication response: ${responseText()}`)
-    setNextRequestName(null)
-}
-
 if (requestName === "Consumer Login") {
+    const body = parseJsonResponse()
     handleLoginToken(body)
     return
 }
 const agreementId = getStoredVar("e2e_agreement_id")
+const transferId = getStoredVar("e2e_transfer_id")
 if (requestName === "Start Transfer Process" && !agreementId) {
     pm.test("Transfer start was not executed because no contract agreement is available", function () {
         pm.expect(true).to.be.true
     })
+    setNextRequestName(null)
+    return
+}
+if (["Check Transfer Status", "Resolve Current Transfer Destination"].includes(requestName) && !transferId) {
+    pm.test(`${requestName} was not executed because no transfer process identifier is available`, function () {
+        pm.expect(true).to.be.true
+    })
+    setNextRequestName(null)
+    return
+}
+if (requestName === "Start Transfer Process" && isTransientTransferStartStatus(status)) {
+    scheduleRetryOrFail(
+        "Start Transfer Process",
+        "e2e_transfer_start_attempt",
+        "e2e_transfer_start_max_attempts",
+        DEFAULT_TRANSFER_START_MAX_ATTEMPTS,
+        "Transfer start endpoint is still stabilizing",
+        "Transfer process could not be started after repeated checks",
+        `Transfer start kept returning HTTP ${status} before the retry budget was exhausted`,
+        `Start Transfer Process returned HTTP ${status}: ${responseText()}`
+    )
+    return
+}
+if (requestName === "Check Transfer Status" && isTransientTransferLookupStatus(status)) {
+    scheduleRetryOrFail(
+        "Check Transfer Status",
+        "e2e_transfer_status_attempt",
+        "e2e_transfer_status_max_attempts",
+        DEFAULT_TRANSFER_STATUS_MAX_ATTEMPTS,
+        "Current transfer status is still pending because the transfer lookup is not stable yet",
+        "Transfer status did not become visible after repeated direct lookups",
+        `Transfer ${transferId || "<unknown>"} kept returning HTTP ${status} before the retry budget was exhausted`,
+        `Check Transfer Status returned HTTP ${status} for transfer id: ${transferId || "<unknown>"}`
+    )
+    return
+}
+if (requestName === "Resolve Current Transfer Destination" && isTransientTransferLookupStatus(status)) {
+    scheduleRetryOrFail(
+        "Resolve Current Transfer Destination",
+        "e2e_transfer_destination_attempt",
+        "e2e_transfer_destination_max_attempts",
+        DEFAULT_TRANSFER_DESTINATION_MAX_ATTEMPTS,
+        "Transfer destination resolution is still pending because the transfer lookup is not stable yet",
+        "Transfer destination could not be resolved after repeated direct lookups",
+        `Transfer ${transferId || "<unknown>"} kept returning HTTP ${status} before the retry budget was exhausted`,
+        `Resolve Current Transfer Destination returned HTTP ${status} for transfer id: ${transferId || "<unknown>"}`
+    )
     return
 }
 if (!["Start Transfer Process", "Check Transfer Status", "Resolve Current Transfer Destination"].includes(requestName)) {
     assertStatus200()
 }
+const body = parseJsonResponse()
 if (!body) {
     console.log("No valid response body, skipping tests")
     return
@@ -123,6 +172,7 @@ if (body) {
     assertNoEdcError(body)
 }
 if (requestName === "Start Transfer Process") {
+    clearLocalVar("e2e_transfer_start_attempt")
     clearLocalVar("e2e_transfer_status_attempt")
     clearLocalVar("e2e_transfer_destination_attempt")
     clearLocalVar("e2e_transfer_destination_bucket")
@@ -134,24 +184,6 @@ if (requestName === "Start Transfer Process") {
     return
 }
 if (requestName === "Check Transfer Status") {
-    const transferId = getStoredVar("e2e_transfer_id")
-    if (pm.response.code === 401 || pm.response.code === 403) {
-        failAuthentication("Transfer status lookup")
-        return
-    }
-    if (pm.response.code === 404) {
-        scheduleRetryOrFail(
-            "Check Transfer Status",
-            "e2e_transfer_status_attempt",
-            "e2e_transfer_status_max_attempts",
-            DEFAULT_TRANSFER_STATUS_MAX_ATTEMPTS,
-            "Current transfer status is still pending because the transfer lookup is not visible yet",
-            "Transfer status did not become visible after repeated direct lookups",
-            `Transfer ${transferId || "<unknown>"} did not become visible through direct lookup before the retry budget was exhausted`,
-            `Current transfer status lookup returned HTTP 404 for transfer id: ${transferId || "<unknown>"}`
-        )
-        return
-    }
     assertStatus200()
     let transfer = body
     if (Array.isArray(body)) {
@@ -245,24 +277,6 @@ if (requestName === "Check Transfer Status") {
     )
 }
 if (requestName === "Resolve Current Transfer Destination") {
-    const transferId = getStoredVar("e2e_transfer_id")
-    if (pm.response.code === 401 || pm.response.code === 403) {
-        failAuthentication("Transfer destination lookup")
-        return
-    }
-    if (pm.response.code === 404) {
-        scheduleRetryOrFail(
-            "Resolve Current Transfer Destination",
-            "e2e_transfer_destination_attempt",
-            "e2e_transfer_destination_max_attempts",
-            DEFAULT_TRANSFER_DESTINATION_MAX_ATTEMPTS,
-            "Transfer destination resolution is still pending because the direct transfer lookup is not visible yet",
-            "Transfer destination could not be resolved after repeated direct lookups",
-            `Transfer ${transferId || "<unknown>"} did not become visible for destination validation through direct lookup before the retry budget was exhausted`,
-            `Current transfer destination lookup returned HTTP 404 for transfer id: ${transferId || "<unknown>"}`
-        )
-        return
-    }
     assertStatus200()
     let transfer = body
     if (Array.isArray(body)) {

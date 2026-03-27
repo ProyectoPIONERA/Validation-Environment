@@ -63,6 +63,7 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             def fake_subprocess_run(command, cwd=None, env=None):
                 self.assertIn("--workers=1", command)
                 self.assertIn("PLAYWRIGHT_JSON_REPORT_FILE", env)
+                self.assertEqual(env["ONTOLOGY_HUB_BASE_URL"], "http://ontology-hub-demo.dev.ds.dataspaceunit.upm")
                 with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
                 return subprocess.CompletedProcess(command, 0)

@@ -263,6 +263,8 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                     attempt = sum("deployer.py connector create" in item for item in calls)
                     if attempt == 1:
                         return None
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
                 return object()
 
             adapter = INESDataConnectorsAdapter(
@@ -287,15 +289,16 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
             adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
-            with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
-                handle.write("hostAliases: []\n")
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
 
             with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
-                adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 
+            self.assertTrue(created)
             create_calls = [call for call in calls if "deployer.py connector create" in call]
+            delete_calls = [call for call in calls if "deployer.py connector delete" in call]
             self.assertEqual(len(create_calls), 2)
+            self.assertEqual(len(delete_calls), 2)
 
     def test_create_connector_waits_for_runtime_and_interface_rollouts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -303,6 +306,12 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
             os.makedirs(config.repo_dir(), exist_ok=True)
             os.makedirs(config.venv_path(), exist_ok=True)
+
+            def fake_run(cmd, **_kwargs):
+                if "deployer.py connector create" in cmd:
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
 
             class RecordingInfra:
                 def __init__(self):
@@ -340,7 +349,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             infra = RecordingInfra()
 
             adapter = INESDataConnectorsAdapter(
-                run=lambda *_args, **_kwargs: object(),
+                run=fake_run,
                 run_silent=lambda *_args, **_kwargs: "",
                 auto_mode_getter=lambda: True,
                 infrastructure_adapter=infra,
@@ -352,11 +361,9 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
 
-            with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
-                handle.write("hostAliases: []\n")
+            created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 
-            adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
-
+            self.assertTrue(created)
             self.assertEqual(
                 infra.rollout_calls,
                 [
@@ -421,12 +428,65 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
             self.assertEqual(infra.host_entries, [])
 
+    def test_deploy_connectors_aborts_after_failed_recreation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            class Infra:
+                def __init__(self):
+                    self.host_entries = None
+
+                def manage_hosts_entries(self, entries):
+                    self.host_entries = entries
+                    return None
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo", "conn-b-demo"],
+                }
+            ]
+            adapter.connector_already_exists = lambda *_args, **_kwargs: True
+            adapter.connector_is_healthy = lambda *_args, **_kwargs: True
+            adapter.connector_database_credentials_valid = lambda *_args, **_kwargs: True
+            adapter.create_connector = mock.Mock(return_value=False)
+            adapter.wait_for_all_connectors = mock.Mock()
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, [])
+            adapter.create_connector.assert_called_once_with("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+            adapter.wait_for_all_connectors.assert_not_called()
+            self.assertIsNone(infra.host_entries)
+
     def test_create_connector_applies_detected_local_image_override_without_extra_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             os.makedirs(config.repo_dir(), exist_ok=True)
             open(config.repo_requirements_path(), "w", encoding="utf-8").close()
             os.makedirs(config.venv_path(), exist_ok=True)
+
+            def fake_run(cmd, **_kwargs):
+                if "deployer.py connector create" in cmd:
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
 
             class ConfigAdapterWithoutExplicitImageOverrides(ConnectorRetryConfigAdapter):
                 def load_deployer_config(self):
@@ -467,7 +527,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             infra = RecordingInfra()
 
             adapter = INESDataConnectorsAdapter(
-                run=lambda *_args, **_kwargs: object(),
+                run=fake_run,
                 run_silent=lambda *_args, **_kwargs: "",
                 auto_mode_getter=lambda: True,
                 infrastructure_adapter=infra,
@@ -479,9 +539,6 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
 
-            with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
-                handle.write("hostAliases: []\n")
-
             override_path = os.path.join(tmpdir, "connector-local-overrides.yaml")
             with open(override_path, "w", encoding="utf-8") as handle:
                 handle.write("connector:\n  image:\n    name: local/inesdata/inesdata-connector\n    tag: dev\n")
@@ -490,8 +547,9 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None),
                 mock.patch.object(adapter, "_local_connector_image_override_path", return_value=override_path),
             ):
-                adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 
+            self.assertTrue(created)
             self.assertEqual(len(infra.deploy_calls), 1)
             args, kwargs = infra.deploy_calls[0]
             self.assertEqual(args[0], "conn-a-demo-demo")

@@ -932,28 +932,19 @@ class INESDataConnectorsAdapter:
 
         print("PostgreSQL cleanup complete\n")
 
-    def create_connector(self, connector_name, connector_hostnames=None):
-        print("\n========================================")
-        print("LEVEL 4 - CREATE CONNECTOR")
-        print("========================================\n")
+    def _remove_connector_values_file(self, connector_name):
+        values_file = self.config.connector_values_file(connector_name)
+        if os.path.exists(values_file):
+            try:
+                os.remove(values_file)
+                print(f"Removed stale connector values file: {values_file}")
+            except OSError as exc:
+                print(f"Warning: could not remove stale values file {values_file}: {exc}")
+        return values_file
 
-        repo_dir = self.config.repo_dir()
-        ds_name = self._dataspace_name()
-        python_exec = self.config.python_exec()
-
-        if not os.path.exists(repo_dir):
-            print("Repository not found. Run Level 2 first")
-            return
-
-        if not os.path.exists(self.config.venv_path()):
-            print("Python environment not found. Run Level 3 first")
-            return
-
-        if not self.infrastructure.ensure_local_infra_access():
-            return
-
-        if not self.infrastructure.ensure_vault_unsealed():
-            return
+    def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec):
+        values_file = self._remove_connector_values_file(connector_name)
+        self.invalidate_management_api_token(connector_name)
 
         print(f"Cleaning connector: {connector_name}")
         self.run(f"{python_exec} deployer.py connector delete {connector_name} {ds_name}", cwd=repo_dir, check=False)
@@ -972,9 +963,36 @@ class INESDataConnectorsAdapter:
             check=False
         )
 
+        return values_file
+
+    def create_connector(self, connector_name, connector_hostnames=None):
+        print("\n========================================")
+        print("LEVEL 4 - CREATE CONNECTOR")
+        print("========================================\n")
+
+        repo_dir = self.config.repo_dir()
+        ds_name = self._dataspace_name()
+        python_exec = self.config.python_exec()
+
+        if not os.path.exists(repo_dir):
+            print("Repository not found. Run Level 2 first")
+            return False
+
+        if not os.path.exists(self.config.venv_path()):
+            print("Python environment not found. Run Level 3 first")
+            return False
+
+        if not self.infrastructure.ensure_local_infra_access():
+            return False
+
+        if not self.infrastructure.ensure_vault_unsealed():
+            return False
+
+        values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
+
         if not self.wait_for_keycloak_admin_ready():
             print("Keycloak admin API not ready for connector provisioning")
-            return
+            return False
 
         print(f"Creating connector {connector_name}...")
         create_cmd = f"{python_exec} deployer.py connector create {connector_name} {ds_name}"
@@ -985,34 +1003,37 @@ class INESDataConnectorsAdapter:
             if create_result is not None:
                 break
             if attempt < max_attempts:
-                print(f"Connector creation failed on attempt {attempt}. Retrying after Keycloak readiness check...")
+                print(
+                    f"Connector creation failed on attempt {attempt}. "
+                    "Cleaning partial state and retrying after Keycloak readiness check..."
+                )
+                values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
                 if not self.wait_for_keycloak_admin_ready():
                     print("Keycloak admin API not ready for connector provisioning retry")
-                    return
+                    return False
                 time.sleep(5)
 
         if create_result is None:
             print("Error: deployment failed")
-            return
+            return False
 
         creds_path = self.config.connector_credentials_path(connector_name)
         self.invalidate_management_api_token(connector_name)
         if not self.setup_minio_bucket(self.config.NS_COMMON, ds_name, connector_name, creds_path):
             print("Warning: MinIO configuration incomplete")
 
-        values_file = self.config.connector_values_file(connector_name)
         timeout = 10
         start = time.time()
 
         while not os.path.exists(values_file):
             if time.time() - start > timeout:
                 print("Timeout waiting for values file generation")
-                return
+                return False
             time.sleep(1)
 
         if not os.path.exists(values_file):
             print("Connector values file not found")
-            return
+            return False
 
         connector_hostnames = connector_hostnames or [connector_name]
         self.update_connector_host_aliases(values_file, connector_hostnames)
@@ -1032,14 +1053,15 @@ class INESDataConnectorsAdapter:
             cwd=self.config.connector_dir()
         ):
             print("Error deploying connector")
-            return
+            return False
 
         rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
         if not self._wait_for_connector_deployments(connector_name, timeout=rollout_timeout):
             print("Timeout waiting for connector deployment rollout")
-            return
+            return False
 
         print("\nCONNECTORS CREATED\n")
+        return True
 
     def connector_is_healthy(self, connector_name, namespace):
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
@@ -1222,7 +1244,9 @@ class INESDataConnectorsAdapter:
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)
-                self.create_connector(connector, connectors)
+                if not self.create_connector(connector, connectors):
+                    print(f"Aborting Level 4 because connector recreation failed: {connector}")
+                    return []
 
                 if not os.path.exists(values_file):
                     print(f"Values file not found: {values_file}")

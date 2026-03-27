@@ -5,6 +5,8 @@
  */
 (function() {
 const requestName = pm.info.requestName
+const status = pm.response.code
+const DEFAULT_NEGOTIATION_START_MAX_ATTEMPTS = 8
 const DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS = 5
 
 function clearLocalVar(key) {
@@ -28,8 +30,8 @@ function setNextRequestName(name) {
     }
 }
 
-function scheduleRetryOrFail(requestToRepeat, attemptVar, pendingTestName, failureTestName, failureReason, detail) {
-    const maxAttempts = readPositiveInt("e2e_negotiation_status_max_attempts", DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS)
+function scheduleRetryOrFail(requestToRepeat, attemptVar, maxAttemptsVar, defaultMaxAttempts, pendingTestName, failureTestName, failureReason, detail) {
+    const maxAttempts = readPositiveInt(maxAttemptsVar, defaultMaxAttempts)
     const attempt = readPositiveInt(attemptVar, 0) + 1
 
     if (attempt < maxAttempts) {
@@ -56,6 +58,15 @@ function scheduleRetryOrFail(requestToRepeat, attemptVar, pendingTestName, failu
     setNextRequestName(null)
     return false
 }
+
+function isTransientNegotiationStartStatus(code) {
+    return [401, 403, 404, 409, 423, 429, 500, 502, 503, 504].includes(code)
+}
+
+function isTransientNegotiationStatusStatus(code) {
+    return [401, 403, 404, 429, 500, 502, 503, 504].includes(code)
+}
+
 /**
  * Consumer authentication
  */
@@ -69,18 +80,52 @@ if (requestName === "Consumer Login") {
     return
 }
 
+if (requestName === "Start Contract Negotiation") {
+    clearLocalVar("e2e_negotiation_id")
+    clearLocalVar("e2e_agreement_id")
+    clearLocalVar("e2e_negotiation_status_attempt")
+    if (isTransientNegotiationStartStatus(status)) {
+        scheduleRetryOrFail(
+            "Start Contract Negotiation",
+            "e2e_negotiation_start_attempt",
+            "e2e_negotiation_start_max_attempts",
+            DEFAULT_NEGOTIATION_START_MAX_ATTEMPTS,
+            "Contract negotiation start is still stabilizing",
+            "Contract negotiation could not be started after repeated checks",
+            `Contract negotiation start kept returning HTTP ${status} before the retry budget was exhausted`,
+            `Start Contract Negotiation returned HTTP ${status}: ${responseText()}`
+        )
+        return
+    }
+}
+
+if (requestName === "Check Negotiation Status" && isTransientNegotiationStatusStatus(status)) {
+    const negotiationId = getStoredVar("e2e_negotiation_id")
+    scheduleRetryOrFail(
+        "Check Negotiation Status",
+        "e2e_negotiation_status_attempt",
+        "e2e_negotiation_status_max_attempts",
+        DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS,
+        "Negotiation status endpoint is still stabilizing",
+        "Negotiation status did not become available after repeated checks",
+        `Negotiation ${negotiationId || "<unknown>"} kept returning HTTP ${status} before the retry budget was exhausted`,
+        `Check Negotiation Status returned HTTP ${status}: ${responseText()}`
+    )
+    return
+}
+
 const body = parseJsonResponse()
 if (!body) {
     console.log("No valid response body, skipping tests")
     return
 }
 assertNoEdcError(body)
+
 /**
  * Contract negotiation start
  */
 if (requestName === "Start Contract Negotiation") {
-    clearLocalVar("e2e_agreement_id")
-    clearLocalVar("e2e_negotiation_status_attempt")
+    clearLocalVar("e2e_negotiation_start_attempt")
     assertCreated()
     extractAtId(body, "e2e_negotiation_id")
     return
@@ -97,6 +142,8 @@ if (requestName === "Check Negotiation Status") {
             scheduleRetryOrFail(
                 "Check Negotiation Status",
                 "e2e_negotiation_status_attempt",
+                "e2e_negotiation_status_max_attempts",
+                DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS,
                 "Current negotiation status is still pending because no negotiation entries are visible yet",
                 "Negotiation status did not become visible after repeated checks",
                 `Negotiation ${negotiationId || "<unknown>"} did not become visible in the status list before the retry budget was exhausted`,
@@ -112,6 +159,8 @@ if (requestName === "Check Negotiation Status") {
         scheduleRetryOrFail(
             "Check Negotiation Status",
             "e2e_negotiation_status_attempt",
+            "e2e_negotiation_status_max_attempts",
+            DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS,
             "Current negotiation status is still pending because the negotiation is not visible yet",
             "Negotiation status did not become visible after repeated checks",
             `Negotiation ${negotiationId || "<unknown>"} did not become visible in the status list before the retry budget was exhausted`,
@@ -156,6 +205,8 @@ if (requestName === "Check Negotiation Status") {
         scheduleRetryOrFail(
             "Check Negotiation Status",
             "e2e_negotiation_status_attempt",
+            "e2e_negotiation_status_max_attempts",
+            DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS,
             "Negotiation is finalized but the contract agreement is not visible yet",
             "Finalized negotiation did not expose a contract agreement after repeated checks",
             `Negotiation ${negotiationId || "<unknown>"} stayed FINALIZED without contractAgreementId before the retry budget was exhausted`,
@@ -165,6 +216,8 @@ if (requestName === "Check Negotiation Status") {
         scheduleRetryOrFail(
             "Check Negotiation Status",
             "e2e_negotiation_status_attempt",
+            "e2e_negotiation_status_max_attempts",
+            DEFAULT_NEGOTIATION_STATUS_MAX_ATTEMPTS,
             "Negotiation is still progressing and may not have produced a contract agreement yet",
             "Negotiation did not produce a contract agreement before the retry budget was exhausted",
             `Negotiation ${negotiationId || "<unknown>"} remained in state ${state || "unknown"} before the retry budget was exhausted`,
