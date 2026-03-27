@@ -158,6 +158,46 @@ run_cmd() {
   fi
 }
 
+minikube_has_image() {
+  local full_image="$1"
+  local repository="${full_image%%:*}"
+  local tag="${full_image##*:}"
+
+  if minikube -p "$MINIKUBE_PROFILE" image ls 2>/dev/null | grep -F "$repository" | grep -F "$tag" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if minikube -p "$MINIKUBE_PROFILE" ssh -- "docker image inspect '$full_image' >/dev/null 2>&1" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_minikube_has_image() {
+  local full_image="$1"
+  local stage="${2:-load}"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] Verify image present in minikube after $stage: $full_image"
+    return 0
+  fi
+
+  if minikube_has_image "$full_image"; then
+    return 0
+  fi
+
+  echo "Image '$full_image' is not available in minikube after $stage. Reloading..."
+  minikube -p "$MINIKUBE_PROFILE" image load "$full_image"
+
+  if minikube_has_image "$full_image"; then
+    return 0
+  fi
+
+  echo "Image '$full_image' is still unavailable in minikube after reload. Aborting deploy." >&2
+  return 1
+}
+
 TARGET_NAMESPACES=()
 
 append_unique_namespace() {
@@ -497,6 +537,7 @@ for key in "${ACTIVE_COMPONENTS[@]}"; do
   full_image="${IMAGE_BY_COMPONENT[$key]}"
   echo "$key -> $full_image"
   run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$full_image\""
+  ensure_minikube_has_image "$full_image" "initial load"
 done
 
 if [[ "$RUN_DEPLOY" -eq 0 ]]; then
@@ -566,6 +607,10 @@ fi
 
 echo
 echo "== Helm upgrade (local images) =="
+
+for key in "${ACTIVE_COMPONENTS[@]}"; do
+  ensure_minikube_has_image "${IMAGE_BY_COMPONENT[$key]}" "pre-deploy verification"
+done
 
 echo "Ensuring Vault is unsealed before Helm upgrade..."
 if ! ensure_vault_unsealed; then

@@ -1,38 +1,54 @@
 const { test, expect } = require("../fixtures");
+const { OntologyHubVocabCatalogPage } = require("../pages/vocab-catalog.page");
+const { OntologyHubVocabDetailPage } = require("../pages/vocab-detail.page");
 
 test("OH-LIST-SEARCH: public catalog lists vocabularies and opens a search result", async ({
   page,
   ontologyHubRuntime,
+  ontologyHubBootstrap,
   captureStep,
   attachJson,
 }) => {
-  await page.goto(`${ontologyHubRuntime.baseUrl}/dataset/vocabs`, { waitUntil: "networkidle" });
-  await page.locator("#searchInput").waitFor({ state: "visible" });
-  await page.locator("#SearchGrid").waitFor({ state: "visible" });
+  const autocompleteProbe = ontologyHubBootstrap.capabilities.autocompleteProbe;
 
-  const initialCount = await page.locator("#SearchGrid li").count();
-  expect(initialCount).toBeGreaterThan(0);
-  await captureStep(page, "01-vocabulary-list");
+  const catalogPage = new OntologyHubVocabCatalogPage(page);
+  const detailPage = new OntologyHubVocabDetailPage(page);
+  const query =
+    autocompleteProbe.query || ontologyHubBootstrap.prefix || ontologyHubRuntime.listingSearchTerm;
+  const targetPrefix = autocompleteProbe.prefix || ontologyHubBootstrap.prefix;
+  const targetTitle = autocompleteProbe.title || ontologyHubBootstrap.title;
+  const mode = autocompleteProbe.available ? "autocomplete" : "catalog_search_fallback";
 
-  await page.locator("#searchInput").fill(ontologyHubRuntime.listingSearchTerm);
-  await page.locator("#searchInput").press("Enter");
-  await page.waitForLoadState("networkidle");
-  await page.locator("#SearchGrid").waitFor({ state: "visible" });
+  await catalogPage.goto(ontologyHubRuntime.baseUrl, query);
+  await catalogPage.expectReady();
+  let suggestions = [];
+  let openedResult = "";
+  if (autocompleteProbe.available) {
+    await catalogPage.search(query);
+    await catalogPage.waitForSuggestions();
+    suggestions = await catalogPage.suggestionLabels();
+    expect(suggestions.length).toBeGreaterThan(0);
+    await captureStep(page, "01-vocabulary-autocomplete");
+    openedResult = await catalogPage.openSuggestion(targetPrefix);
+  } else {
+    await catalogPage.waitForResults();
+    await catalogPage.expectResultVisible(targetPrefix);
+    await captureStep(page, "01-vocabulary-catalog-search");
+    openedResult = await catalogPage.openResult(targetPrefix);
+  }
 
-  const firstResult = page.locator("#SearchGrid a[href^='/dataset/vocabs/']").first();
-  const firstResultText = ((await firstResult.textContent()) || "").trim();
-  await firstResult.click();
-
-  await expect(page).toHaveURL(new RegExp("/dataset/vocabs/[^/]+/?$"));
-  await page.locator("section#posts").getByText("Metadata", { exact: true }).waitFor({
-    state: "visible",
-  });
+  await expect(page).toHaveURL(new RegExp(`/dataset/vocabs/${targetPrefix}/?$`));
+  await detailPage.expectReady(targetPrefix, targetTitle);
   await captureStep(page, "02-opened-search-result");
 
   await attachJson("oh-list-search-report", {
-    query: ontologyHubRuntime.listingSearchTerm,
-    initialCount,
-    openedResult: firstResultText,
+    mode,
+    query,
+    suggestions,
+    openedResult,
+    targetPrefix,
+    autocompleteAvailable: autocompleteProbe.available,
+    autocompleteReason: autocompleteProbe.reason || "",
     finalUrl: page.url(),
   });
 });

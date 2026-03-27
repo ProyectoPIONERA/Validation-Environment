@@ -149,6 +149,8 @@ Comportamiento API:
 Comportamiento UI:
 
 - autentica en `/edition/login` cuando el flujo lo requiere
+- resuelve las credenciales UI desde `inesdata-deployment/components/ontology-hub/values.yaml` y `values-<dataspace>.yaml`, en `validation.ui.adminEmail` y `validation.ui.adminPassword`
+- permite sobrescribirlas por entorno con `ONTOLOGY_HUB_ADMIN_EMAIL`, `ONTOLOGY_HUB_ADMIN_PASSWORD`, `ONTOLOGY_HUB_ADMIN_EMAIL_FILE` y `ONTOLOGY_HUB_ADMIN_PASSWORD_FILE`
 - abre `/dataset`, `/dataset/terms` y `/dataset/vocabs/<prefix>` segun el caso
 - valida metadatos, estadisticas, historial y documentacion API sobre la publicacion actual en `/dataset`
 - mantiene checks de soporte para login y navegacion publica

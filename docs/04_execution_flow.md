@@ -81,6 +81,9 @@ Por tanto, `Level 6` ya no debe entenderse como “solo Newman”, sino como el 
 En la práctica:
 
 - `COMPONENTS=ontology-hub` hace que `Level 5` lo despliegue
+- para `ontology-hub`, `Level 5` usa un checkout local en `adapters/inesdata/sources/Ontology-Hub`; si no existe, lo clona automáticamente
+- `Level 5` reconstruye esa imagen en el host y la carga en minikube antes del despliegue
+- ese flujo es deliberadamente estricto: no usa overrides de `source dir` ni de imagen para `ontology-hub`
 - y hace que `Level 6` intente validarlo automáticamente
 - si el componente no tiene runner o no puede inferirse su URL, queda como `skipped` en vez de romper toda la ejecución
 

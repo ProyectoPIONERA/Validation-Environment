@@ -515,6 +515,14 @@ LOCAL_IMAGE_OVERRIDE_SKIP_PREBUILD=1
 
 `LOCAL_IMAGE_OVERRIDE_COMPONENT` es opcional: si se omite, se usa `connector-interface`. Valores permitidos: `connector`, `connector-interface`, `registration-service`, `public-portal-backend`, `public-portal-frontend`.
 
+Caso especial `ontology-hub`:
+
+- cuando `COMPONENTS=ontology-hub`, `Level 5` asegura un checkout local en `adapters/inesdata/sources/Ontology-Hub`
+- si ese checkout no existe o está vacío, el framework lo clona automáticamente desde GitHub
+- antes de desplegar el chart, el framework reconstruye siempre en el host la imagen local referenciada por el chart y después la carga en minikube
+- `Level 6` valida después exactamente ese despliegue, por lo que la iteración de integración queda acoplada al repo clonado y no a una imagen remota previa
+- este flujo no usa overrides de `source dir` ni de imagen para `ontology-hub`; el checkout canónico y la imagen local del chart son parte del contrato del framework
+
 Si solo quieres construir imágenes desde el script de build:
 
 ```bash

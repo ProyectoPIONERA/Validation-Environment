@@ -96,3 +96,4 @@ docs_/
 bugs/
 validation/components/ontology_hub/tools
 adapters/inesdata/sources/Ontology-Hub
+adapters/inesdata/sources/inesdata-connector/extensions/vocabulary-shared-retrieval/src/main/java/org/upm/inesdata/vocabulary/shared/retrieval/VocabularySharedRetrievalExtension.java

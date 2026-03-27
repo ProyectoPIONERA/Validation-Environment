@@ -475,7 +475,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.wait_for_all_connectors.assert_not_called()
             self.assertIsNone(infra.host_entries)
 
-    def test_create_connector_applies_detected_local_image_override_without_extra_config(self):
+    def test_create_connector_ignores_detected_local_image_override_during_initial_deploy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             os.makedirs(config.repo_dir(), exist_ok=True)
@@ -554,7 +554,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             args, kwargs = infra.deploy_calls[0]
             self.assertEqual(args[0], "conn-a-demo-demo")
             self.assertEqual(args[1], "demo")
-            self.assertEqual(args[2], ["values-conn-a-demo.yaml", override_path])
+            self.assertEqual(args[2], ["values-conn-a-demo.yaml"])
             self.assertEqual(kwargs["cwd"], config.connector_dir())
 
 

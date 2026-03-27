@@ -1,24 +1,34 @@
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
+from urllib import parse
 
 import requests
+
+from validation.components.ontology_hub.runner import (
+    API_SEARCH_PATH,
+    API_DOCS_PATH,
+    HOME_PATH,
+    evaluate_html_page_response,
+    evaluate_term_search_response,
+)
+from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
 
 
 COMPONENT_KEY = "ontology-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "ui", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent / "ui"
-PLAYWRIGHT_COMMAND = [
+PLAYWRIGHT_COMMAND_PREFIX = [
     os.path.join(".", "node_modules", ".bin", "playwright"),
     "test",
     "--config",
     PLAYWRIGHT_CONFIG_RELATIVE,
-    "--workers=1",
 ]
 
 UI_CASE_METADATA: Dict[str, Dict[str, Any]] = {
@@ -43,6 +53,17 @@ UI_CASE_METADATA: Dict[str, Dict[str, Any]] = {
         "coverage_status": "automated",
         "expected_result": "La ontologia se registra y es visible en el catalogo",
         "spec": "pt5_oh_01_create_vocab.spec.js",
+    },
+    "PT5-OH-02": {
+        "case_group": "pt5",
+        "validation_type": "functional",
+        "dataspace_dimension": "publication",
+        "mapping_status": "mapped",
+        "automation_mode": "ui",
+        "execution_mode": "ui",
+        "coverage_status": "automated",
+        "expected_result": "Los cambios en la ontologia se reflejan correctamente",
+        "spec": "pt5_oh_02_edit_vocab.spec.js",
     },
     "OH-LIST-SEARCH": {
         "case_group": "support",
@@ -113,14 +134,6 @@ UI_CASE_METADATA: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _component_dir(experiment_dir: str | None) -> str | None:
-    if not experiment_dir:
-        return None
-    path = os.path.join(experiment_dir, "components", COMPONENT_KEY)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def _write_json(path: str, payload: Dict[str, Any]) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
@@ -139,6 +152,8 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
         "blob_report_dir": os.path.join(base_dir, "blob-report"),
         "json_report_file": os.path.join(base_dir, "results.json"),
         "report_json": os.path.join(base_dir, "ontology_hub_ui_validation.json"),
+        "resolved_runtime_json": os.path.join(base_dir, "resolved_runtime.json"),
+        "preflight_json": os.path.join(base_dir, "preflight.json"),
     }
     for path in paths.values():
         if path.endswith(".json"):
@@ -146,6 +161,11 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
         else:
             os.makedirs(path, exist_ok=True)
     return paths
+
+
+def _build_playwright_command(worker_count: int) -> List[str]:
+    normalized_workers = worker_count if worker_count > 0 else 1
+    return [*PLAYWRIGHT_COMMAND_PREFIX, f"--workers={normalized_workers}"]
 
 
 def _iter_specs(suites: Iterable[Dict[str, Any]]) -> Iterable[Dict[str, Any]]:
@@ -277,6 +297,18 @@ def _build_ui_evidence_index(
             "artifact_name": "test_results_dir",
             "path": artifact_paths["output_dir"],
         },
+        {
+            "scope": "suite",
+            "suite": "ui",
+            "artifact_name": "resolved_runtime_json",
+            "path": artifact_paths["resolved_runtime_json"],
+        },
+        {
+            "scope": "suite",
+            "suite": "ui",
+            "artifact_name": "preflight_json",
+            "path": artifact_paths["preflight_json"],
+        },
     ]
 
     for case in executed_cases:
@@ -317,62 +349,263 @@ def _extract_executed_cases(report_payload: Dict[str, Any], base_url: str) -> Li
     return executed_cases
 
 
-def _load_results_summary(results_path: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    with open(results_path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-
-    stats = payload.get("stats") or {}
-    summary = {
-        "total": int(stats.get("expected", 0))
-        + int(stats.get("unexpected", 0))
-        + int(stats.get("flaky", 0))
-        + int(stats.get("skipped", 0)),
-        "passed": int(stats.get("expected", 0)),
-        "failed": int(stats.get("unexpected", 0)) + int(stats.get("flaky", 0)),
-        "skipped": int(stats.get("skipped", 0)),
+def _probe_request_failure(probe_id: str, url: str, blocking: bool, exc: Exception) -> Dict[str, Any]:
+    return {
+        "id": probe_id,
+        "url": url,
+        "blocking": blocking,
+        "status": "failed",
+        "http_status": None,
+        "content_type": "",
+        "assertions": [f"Probe failed: {exc}"],
     }
-    return summary, _extract_executed_cases(payload, "")
 
 
-def _wait_for_ontology_hub_ui_ready(base_url: str, timeout: int = 120, poll_interval: int = 3) -> bool:
-    if not base_url:
-        return False
+def _run_html_probe(
+    *,
+    probe_id: str,
+    url: str,
+    required_markers: List[str],
+    blocking: bool,
+    timeout: int,
+) -> Dict[str, Any]:
+    try:
+        response = requests.get(url, timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        return _probe_request_failure(probe_id, url, blocking, exc)
 
-    probe_urls = [
-        f"{base_url}/dataset",
-        f"{base_url}/edition/login",
+    evaluation = evaluate_html_page_response(
+        response.status_code,
+        response.headers.get("Content-Type", ""),
+        response.text,
+        required_markers=required_markers,
+    )
+    return {
+        "id": probe_id,
+        "url": url,
+        "blocking": blocking,
+        **evaluation,
+    }
+
+
+_LOGIN_FORM_ACTION_RE = re.compile(r"<form[^>]+action=[\"']([^\"']+)[\"']", re.IGNORECASE)
+_LOGIN_CSRF_RE = re.compile(
+    r"<input[^>]+name=[\"']_csrf[\"'][^>]+value=[\"']([^\"']*)[\"']",
+    re.IGNORECASE,
+)
+
+
+def _extract_login_form_action(body_text: str) -> str:
+    match = _LOGIN_FORM_ACTION_RE.search(body_text or "")
+    if not match:
+        return "/edition/session"
+    return match.group(1).strip() or "/edition/session"
+
+
+def _extract_login_csrf(body_text: str) -> str:
+    match = _LOGIN_CSRF_RE.search(body_text or "")
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _run_edition_auth_probe(runtime: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+    base_url = runtime["baseUrl"]
+    login_url = f"{base_url}/edition/login"
+    session = requests.Session()
+
+    try:
+        login_response = session.get(login_url, timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        probe = _probe_request_failure("edition_authentication", login_url, True, exc)
+        probe["fatal"] = True
+        return probe
+
+    login_evaluation = evaluate_html_page_response(
+        login_response.status_code,
+        login_response.headers.get("Content-Type", ""),
+        login_response.text,
+        required_markers=["email", "password", "log in it"],
+    )
+    if login_evaluation["status"] != "passed":
+        return {
+            "id": "edition_authentication",
+            "url": login_url,
+            "blocking": True,
+            "fatal": True,
+            **login_evaluation,
+        }
+
+    payload = {
+        "email": runtime["adminEmail"],
+        "password": runtime["adminPassword"],
+    }
+    csrf_token = _extract_login_csrf(login_response.text)
+    if csrf_token:
+        payload["_csrf"] = csrf_token
+
+    submit_url = parse.urljoin(base_url.rstrip("/") + "/", _extract_login_form_action(login_response.text))
+    try:
+        auth_response = session.post(
+            submit_url,
+            data=payload,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except requests.RequestException as exc:
+        probe = _probe_request_failure("edition_authentication", submit_url, True, exc)
+        probe["fatal"] = True
+        return probe
+
+    body_text = auth_response.text or ""
+    normalized_body = body_text.lower()
+    final_url = auth_response.url or submit_url
+    success = any(
+        marker in normalized_body
+        for marker in [
+            "logout",
+            "profile",
+            "createvocab",
+            'title="edition"',
+            "href=\"/edition/\"",
+            "href=\"/edition/lov/\"",
+        ]
+    )
+
+    assertions: List[str] = []
+    status = "passed"
+    if auth_response.status_code != 200:
+        status = "failed"
+        assertions.append(f"Expected HTTP 200 after login, got HTTP {auth_response.status_code}")
+    if "invalid email or password." in normalized_body:
+        status = "failed"
+        assertions.append(
+            "Las credenciales configuradas para Ontology Hub no son validas. "
+            "Revisa ONTOLOGY_HUB_ADMIN_EMAIL y ONTOLOGY_HUB_ADMIN_PASSWORD."
+        )
+    elif final_url.rstrip("/").endswith("/edition/login") and not success:
+        status = "failed"
+        assertions.append(
+            "El login volvio a /edition/login sin exponer el area de edicion esperada."
+        )
+    elif not success:
+        status = "failed"
+        assertions.append(
+            "La autenticacion no mostro los marcadores esperados del area de edicion "
+            "(Logout, Profile o createVocab)."
+        )
+
+    return {
+        "id": "edition_authentication",
+        "url": submit_url,
+        "final_url": final_url,
+        "blocking": True,
+        "fatal": True,
+        "status": status,
+        "http_status": auth_response.status_code,
+        "content_type": auth_response.headers.get("Content-Type", ""),
+        "assertions": assertions,
+        "body_excerpt": body_text[:500],
+    }
+
+
+def _run_search_api_probe(runtime: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+    query = {
+        "q": runtime["expectedSearchTerm"],
+        "type": "class",
+    }
+    url = f"{runtime['baseUrl']}{API_SEARCH_PATH}?{parse.urlencode(query)}"
+    try:
+        response = requests.get(url, timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        return _probe_request_failure("search_api", url, True, exc)
+
+    evaluation = evaluate_term_search_response(
+        response.status_code,
+        response.headers.get("Content-Type", ""),
+        response.text,
+        expected_query=runtime["expectedSearchTerm"],
+        expected_vocab=runtime["expectedVocabularyPrefix"],
+    )
+    return {
+        "id": "search_api",
+        "url": url,
+        "blocking": False,
+        **evaluation,
+    }
+
+
+def _run_ui_preflight(runtime: Dict[str, Any]) -> Dict[str, Any]:
+    timeout = runtime["preflightTimeout"]
+    base_url = runtime["baseUrl"]
+    probes = [
+        _run_html_probe(
+            probe_id="home_page",
+            url=f"{base_url}{HOME_PATH}",
+            required_markers=["/dataset/api", "/dataset/vocabs"],
+            blocking=True,
+            timeout=timeout,
+        ),
+        _run_html_probe(
+            probe_id="catalog_page",
+            url=f"{base_url}/dataset/vocabs",
+            required_markers=["search for a vocabulary"],
+            blocking=True,
+            timeout=timeout,
+        ),
+        _run_html_probe(
+            probe_id="api_docs",
+            url=f"{base_url}{API_DOCS_PATH}",
+            required_markers=["/api/v2/term/search"],
+            blocking=True,
+            timeout=timeout,
+        ),
+        _run_html_probe(
+            probe_id="edition_login",
+            url=f"{base_url}/edition/login",
+            required_markers=["email", "password", "log in it"],
+            blocking=True,
+            timeout=timeout,
+        ),
+        _run_edition_auth_probe(runtime, timeout),
+        _run_html_probe(
+            probe_id="vocabulary_detail",
+            url=f"{base_url}/dataset/vocabs/{runtime['expectedVocabularyPrefix']}",
+            required_markers=["metadata"],
+            blocking=False,
+            timeout=timeout,
+        ),
+        _run_search_api_probe(runtime, timeout),
     ]
-    deadline = time.time() + timeout
-    last_issue = "unknown"
-
-    while time.time() < deadline:
-        all_ready = True
-        for url in probe_urls:
-            try:
-                response = requests.get(url, timeout=5, allow_redirects=True)
-                if response.status_code >= 500:
-                    last_issue = f"{url} returned HTTP {response.status_code}"
-                    all_ready = False
-                    break
-            except requests.RequestException as exc:
-                last_issue = f"{url} probe failed: {exc}"
-                all_ready = False
-                break
-        if all_ready:
-            return True
-        time.sleep(poll_interval)
-
-    print(f"Ontology Hub UI readiness did not stabilize before Playwright execution: {last_issue}")
-    return False
+    blocking_failures = [probe["id"] for probe in probes if probe.get("blocking") and probe["status"] != "passed"]
+    fatal_failures = [probe["id"] for probe in probes if probe.get("fatal") and probe["status"] != "passed"]
+    ready = not blocking_failures
+    return {
+        "status": "passed" if ready else "failed",
+        "ready": ready,
+        "strict": runtime["strictPreflight"],
+        "shouldRunPlaywright": not fatal_failures and (ready or not runtime["strictPreflight"]),
+        "blocking_failures": blocking_failures,
+        "fatal_failures": fatal_failures,
+        "probes": probes,
+    }
 
 
 def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
     started_at = datetime.now().isoformat()
-    normalized_base_url = (base_url or "").rstrip("/")
+    runtime = resolve_ontology_hub_runtime(base_url=base_url)
+    normalized_base_url = runtime["baseUrl"]
     artifact_paths = _build_ui_artifact_paths(experiment_dir)
+    _write_json(artifact_paths["resolved_runtime_json"], runtime)
+
+    preflight = _run_ui_preflight(runtime)
+    _write_json(artifact_paths["preflight_json"], preflight)
+
     env = {
         **os.environ,
         "ONTOLOGY_HUB_BASE_URL": normalized_base_url,
+        "ONTOLOGY_HUB_RUNTIME_FILE": artifact_paths["resolved_runtime_json"],
+        "ONTOLOGY_HUB_UI_WORKERS": str(runtime["uiWorkers"]),
         "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
         "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
@@ -383,20 +616,22 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
     exit_code = None
     status = "skipped"
     try:
-        if not _wait_for_ontology_hub_ui_ready(normalized_base_url):
-            raise RuntimeError("Ontology Hub UI readiness check failed")
+        if not preflight["shouldRunPlaywright"]:
+            failed_ids = ", ".join(preflight["blocking_failures"]) or "unknown"
+            raise RuntimeError(f"Ontology Hub UI preflight failed: {failed_ids}")
         result = subprocess.run(
-            PLAYWRIGHT_COMMAND,
+            _build_playwright_command(runtime["uiWorkers"]),
             cwd=str(PLAYWRIGHT_WORKDIR),
             env=env,
         )
         exit_code = result.returncode
         status = "passed" if result.returncode == 0 else "failed"
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         error = {
             "type": type(exc).__name__,
             "message": str(exc),
         }
+        status = "failed" if preflight["status"] == "failed" else "skipped"
 
     if os.path.exists(artifact_paths["json_report_file"]):
         with open(artifact_paths["json_report_file"], "r", encoding="utf-8") as handle:
@@ -423,7 +658,7 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         summary = {
             "total": total_cases,
             "passed": 0,
-            "failed": 0 if status == "skipped" else total_cases,
+            "failed": total_cases if status == "failed" else 0,
             "skipped": total_cases if status == "skipped" else 0,
         }
         executed_cases = [
@@ -450,6 +685,8 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         "status": status,
         "timestamp": started_at,
         "base_url": normalized_base_url,
+        "runtime": runtime,
+        "preflight": preflight,
         "summary": summary,
         "executed_cases": executed_cases,
         "pt5_cases": pt5_cases,
@@ -458,11 +695,14 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         "support_summary": support_summary,
         "evidence_index": evidence_index,
         "playwright_config": PLAYWRIGHT_CONFIG_RELATIVE,
+        "playwright_command": _build_playwright_command(runtime["uiWorkers"]),
         "specs": [metadata["spec"] for metadata in UI_CASE_METADATA.values()],
         "exit_code": exit_code,
         "error": error,
         "artifacts": {
             "report_json": artifact_paths["report_json"],
+            "resolved_runtime_json": artifact_paths["resolved_runtime_json"],
+            "preflight_json": artifact_paths["preflight_json"],
             "test_results_dir": artifact_paths["output_dir"],
             "html_report_dir": artifact_paths["html_report_dir"],
             "blob_report_dir": artifact_paths["blob_report_dir"],

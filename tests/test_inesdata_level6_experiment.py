@@ -34,6 +34,18 @@ def _materialize_fixture_reports(experiment_dir):
     return exported
 
 
+def _build_level6_readiness_payload(status="passed", gates=None):
+    return {
+        "status": status,
+        "timestamp": "2026-03-27T00:00:00",
+        "connectors": ["conn-a", "conn-b"],
+        "timeout_seconds": 90.0,
+        "poll_interval_seconds": 3.0,
+        "total_duration_seconds": 1.25,
+        "gates": list(gates or []),
+    }
+
+
 def _build_level6_ui_results_payload():
     return {
         "stats": {
@@ -253,6 +265,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                     return_value=True,
                 ) as mock_wait_namespace,
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -320,6 +337,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -351,6 +373,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -381,6 +408,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 stored = json.load(handle)
 
             self.assertEqual(stored["status"], "completed")
+            self.assertEqual(stored["level6_readiness"]["status"], "passed")
             self.assertEqual(stored["validation_reports"], ["pair-report.json"])
             self.assertEqual(stored["storage_checks"], [])
             self.assertEqual(stored["kafka_edc_results"], [])
@@ -394,6 +422,34 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "raw_requests.jsonl")))
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "aggregated_metrics.json")))
 
+    def test_wait_for_level6_validation_ready_persists_artifact(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(inesdata, "load_deployer_config", return_value={}),
+                mock.patch.object(
+                    inesdata,
+                    "_probe_level6_management_api",
+                    return_value=(True, {"items": 1}),
+                ),
+                mock.patch.object(
+                    inesdata,
+                    "_probe_level6_catalog",
+                    return_value=(True, {"datasets": 0}),
+                ),
+            ):
+                readiness = inesdata._wait_for_level6_validation_ready(
+                    ["conn-a", "conn-b"],
+                    experiment_dir=tmpdir,
+                )
+
+            readiness_path = os.path.join(tmpdir, "level6_readiness.json")
+            self.assertEqual(readiness["status"], "passed")
+            self.assertTrue(os.path.exists(readiness_path))
+            with open(readiness_path, "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+            self.assertEqual(stored["status"], "passed")
+            self.assertEqual(len(stored["gates"]), 4)
+
     def test_level6_persists_failed_state_when_validation_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             original_isdir = os.path.isdir
@@ -402,6 +458,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -438,6 +499,49 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "raw_requests.jsonl")))
             self.assertTrue(os.path.exists(os.path.join(tmpdir, "aggregated_metrics.json")))
 
+    def test_level6_fails_when_readiness_probe_does_not_converge(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_isdir = os.path.isdir
+            failed_readiness = _build_level6_readiness_payload(
+                status="failed",
+                gates=[
+                    {
+                        "gate": "management_api_smoke:conn-a",
+                        "status": "failed",
+                        "attempts": 3,
+                        "error": "HTTP 401",
+                    }
+                ],
+            )
+            with (
+                mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
+                mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
+                mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
+                mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=failed_readiness,
+                ),
+                mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
+                mock.patch.object(inesdata, "_run_level6_kafka_benchmark", return_value=None),
+                mock.patch.object(inesdata.ExperimentStorage, "create_experiment_directory", return_value=tmpdir),
+                mock.patch.object(
+                    inesdata.os.path,
+                    "isdir",
+                    side_effect=lambda path: False if path == os.path.join(inesdata.Config.script_dir(), "validation", "ui") else original_isdir(path),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Level 6 validation readiness check failed"):
+                    inesdata.lvl_6()
+
+            with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+
+            self.assertEqual(stored["status"], "failed")
+            self.assertEqual(stored["level6_readiness"]["status"], "failed")
+            self.assertEqual(stored["level6_readiness"]["gates"][0]["gate"], "management_api_smoke:conn-a")
+
     def test_level6_collects_metrics_from_exported_newman_reports(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             original_isdir = os.path.isdir
@@ -446,6 +550,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -495,6 +604,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 ),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -625,6 +739,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -670,6 +789,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"COMPONENTS": "ontology-hub"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -741,6 +865,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -782,6 +911,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"COMPONENTS": "ontology-hub"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -823,6 +957,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 mock.patch.object(inesdata, "load_deployer_config", return_value={"LEVEL6_RUN_UI_DATASPACE": "false"}),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,
@@ -904,6 +1043,11 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 ),
                 mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
                 mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
                 mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
                 mock.patch.object(
                     inesdata.VALIDATION_ENGINE,

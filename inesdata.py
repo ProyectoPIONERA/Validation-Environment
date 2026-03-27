@@ -1872,6 +1872,7 @@ def _save_level6_experiment_state(
     connectors,
     *,
     status,
+    level6_readiness=None,
     validation_reports=None,
     newman_request_metrics=None,
     kafka_metrics=None,
@@ -1890,6 +1891,7 @@ def _save_level6_experiment_state(
         "timestamp": datetime.now().isoformat(),
         "source": "inesdata.py:level6",
         "connectors": list(connectors or []),
+        "level6_readiness": level6_readiness,
         "validation_reports": list(validation_reports or []),
         "newman_request_metrics": list(newman_request_metrics or []),
         "kafka_metrics": kafka_metrics,
@@ -2151,6 +2153,228 @@ def _wait_for_level6_keycloak_readiness() -> bool:
         return True
 
     return bool(wait_for_keycloak_admin_ready())
+
+
+def _level6_readiness_timeout_seconds():
+    deployer_config = load_deployer_config() or {}
+    raw = (
+        os.environ.get("LEVEL6_VALIDATION_READY_TIMEOUT_SECONDS")
+        or deployer_config.get("LEVEL6_VALIDATION_READY_TIMEOUT_SECONDS")
+    )
+    if raw is None:
+        return 90.0
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 90.0
+
+    return value if value > 0 else 90.0
+
+
+def _level6_readiness_poll_interval_seconds():
+    deployer_config = load_deployer_config() or {}
+    raw = (
+        os.environ.get("LEVEL6_VALIDATION_READY_POLL_INTERVAL_SECONDS")
+        or deployer_config.get("LEVEL6_VALIDATION_READY_POLL_INTERVAL_SECONDS")
+    )
+    if raw is None:
+        return 3.0
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 3.0
+
+    return value if value > 0 else 3.0
+
+
+def _build_level6_management_health_payload():
+    return {
+        "@context": {
+            "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+        },
+        "offset": 0,
+        "limit": 1,
+        "filterExpression": [],
+    }
+
+
+def _build_level6_catalog_payload(provider, consumer):
+    env_vars = VALIDATION_ENGINE.build_newman_env(provider, consumer)
+    return {
+        "@context": {
+            "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+        },
+        "@type": "CatalogRequest",
+        "counterPartyAddress": env_vars["providerProtocolAddress"],
+        "counterPartyId": provider,
+        "protocol": "dataspace-protocol-http",
+        "querySpec": {
+            "offset": 0,
+            "limit": 1,
+            "filterExpression": [],
+        },
+    }
+
+
+def _probe_level6_management_api(connector):
+    headers = INESDATA_ADAPTER.connectors.get_management_api_headers(connector)
+    if not headers:
+        return False, "could not obtain management API token"
+
+    base_url = INESDATA_ADAPTER.connectors.connector_base_url(connector)
+    response = requests.post(
+        f"{base_url}/management/v3/assets/request",
+        headers=headers,
+        json=_build_level6_management_health_payload(),
+        timeout=5,
+    )
+    if response.status_code != 200:
+        return False, f"HTTP {response.status_code}"
+
+    try:
+        body = response.json()
+    except ValueError:
+        return False, "response body is not valid JSON"
+
+    if not isinstance(body, list):
+        return False, "management response is not a JSON array"
+
+    return True, {"items": len(body)}
+
+
+def _probe_level6_catalog(provider, consumer):
+    headers = INESDATA_ADAPTER.connectors.get_management_api_headers(consumer)
+    if not headers:
+        return False, "could not obtain consumer management API token"
+
+    consumer_base_url = INESDATA_ADAPTER.connectors.connector_base_url(consumer)
+    response = requests.post(
+        f"{consumer_base_url}/management/v3/catalog/request",
+        headers=headers,
+        json=_build_level6_catalog_payload(provider, consumer),
+        timeout=10,
+    )
+    if response.status_code != 200:
+        return False, f"HTTP {response.status_code}"
+
+    try:
+        body = response.json()
+    except ValueError:
+        return False, "catalog response is not valid JSON"
+
+    if not isinstance(body, dict):
+        return False, "catalog response is not a JSON object"
+
+    datasets = body.get("dcat:dataset")
+    if datasets is None:
+        datasets = body.get("dataset")
+    if datasets is None:
+        return False, "catalog response missing dataset field"
+
+    if isinstance(datasets, list):
+        dataset_count = len(datasets)
+    elif isinstance(datasets, dict):
+        dataset_count = 1
+    else:
+        dataset_count = 0
+
+    return True, {"datasets": dataset_count}
+
+
+def _wait_for_level6_validation_ready(connectors, experiment_dir=None):
+    timeout_seconds = _level6_readiness_timeout_seconds()
+    poll_interval_seconds = _level6_readiness_poll_interval_seconds()
+    started_at = time.time()
+    deadline = started_at + timeout_seconds
+    gates = []
+
+    pending_checks = []
+    for connector in connectors or []:
+        pending_checks.append({
+            "name": f"management_api_smoke:{connector}",
+            "probe": lambda connector_name=connector: _probe_level6_management_api(connector_name),
+            "attempts": 0,
+        })
+
+    for provider, consumer in permutations(connectors or [], 2):
+        pending_checks.append({
+            "name": f"catalog_smoke:{provider}->{consumer}",
+            "probe": lambda provider_name=provider, consumer_name=consumer: _probe_level6_catalog(provider_name, consumer_name),
+            "attempts": 0,
+        })
+
+    while pending_checks and time.time() <= deadline:
+        remaining_checks = []
+        for check in pending_checks:
+            check["attempts"] += 1
+            gate_started_at = time.time()
+            try:
+                passed, detail = check["probe"]()
+            except Exception as exc:
+                passed = False
+                detail = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+
+            if passed:
+                gates.append({
+                    "gate": check["name"],
+                    "status": "passed",
+                    "attempts": check["attempts"],
+                    "duration_seconds": round(time.time() - started_at, 3),
+                    "probe_duration_seconds": round(time.time() - gate_started_at, 3),
+                    "detail": detail,
+                })
+                continue
+
+            check["last_error"] = detail
+            remaining_checks.append(check)
+
+        pending_checks = remaining_checks
+        if pending_checks and time.time() <= deadline:
+            time.sleep(poll_interval_seconds)
+
+    for check in pending_checks:
+        gates.append({
+            "gate": check["name"],
+            "status": "failed",
+            "attempts": check["attempts"],
+            "duration_seconds": round(time.time() - started_at, 3),
+            "error": check.get("last_error"),
+        })
+
+    readiness = {
+        "status": "passed" if not pending_checks else "failed",
+        "timestamp": datetime.now().isoformat(),
+        "connectors": list(connectors or []),
+        "timeout_seconds": timeout_seconds,
+        "poll_interval_seconds": poll_interval_seconds,
+        "total_duration_seconds": round(time.time() - started_at, 3),
+        "gates": gates,
+    }
+
+    if experiment_dir:
+        ExperimentStorage.save(
+            readiness,
+            experiment_dir=experiment_dir,
+            file_name="level6_readiness.json",
+        )
+
+    if readiness["status"] == "passed":
+        print(
+            "Level 6 validation readiness confirmed in "
+            f"{readiness['total_duration_seconds']}s"
+        )
+    else:
+        print(
+            "Level 6 validation readiness did not converge within "
+            f"{timeout_seconds}s"
+        )
+
+    return readiness
 
 
 def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
@@ -2460,12 +2684,14 @@ def lvl_6():
     kafka_metrics = None
     kafka_edc_results = []
     storage_checks = []
+    level6_readiness = None
     ui_results = []
     component_results = []
     _save_level6_experiment_state(
         experiment_dir,
         connectors,
         status="running",
+        level6_readiness=level6_readiness,
         validation_reports=validation_reports,
         newman_request_metrics=newman_request_metrics,
         kafka_metrics=kafka_metrics,
@@ -2485,6 +2711,26 @@ def lvl_6():
         if not _wait_for_level6_keycloak_readiness():
             raise RuntimeError("Keycloak authentication readiness check failed")
 
+        level6_readiness = _wait_for_level6_validation_ready(
+            connectors,
+            experiment_dir=experiment_dir,
+        )
+        _save_level6_experiment_state(
+            experiment_dir,
+            connectors,
+            status="running",
+            level6_readiness=level6_readiness,
+            validation_reports=validation_reports,
+            newman_request_metrics=newman_request_metrics,
+            kafka_metrics=kafka_metrics,
+            kafka_edc_results=kafka_edc_results,
+            storage_checks=storage_checks,
+            ui_results=ui_results,
+            component_results=component_results,
+        )
+        if level6_readiness.get("status") != "passed":
+            raise RuntimeError("Level 6 validation readiness check failed")
+
         VALIDATION_ENGINE.last_storage_checks = []
         validation_reports = VALIDATION_ENGINE.run_all_dataspace_tests(
             connectors,
@@ -2495,6 +2741,7 @@ def lvl_6():
             experiment_dir,
             connectors,
             status="running",
+            level6_readiness=level6_readiness,
             validation_reports=validation_reports,
             newman_request_metrics=newman_request_metrics,
             kafka_metrics=kafka_metrics,
@@ -2509,6 +2756,7 @@ def lvl_6():
             experiment_dir,
             connectors,
             status="running",
+            level6_readiness=level6_readiness,
             validation_reports=validation_reports,
             newman_request_metrics=newman_request_metrics,
             kafka_metrics=kafka_metrics,
@@ -2538,6 +2786,7 @@ def lvl_6():
                 experiment_dir,
                 connectors,
                 status="running",
+                level6_readiness=level6_readiness,
                 validation_reports=validation_reports,
                 newman_request_metrics=newman_request_metrics,
                 kafka_metrics=kafka_metrics,
@@ -2552,6 +2801,7 @@ def lvl_6():
             experiment_dir,
             connectors,
             status="running",
+            level6_readiness=level6_readiness,
             validation_reports=validation_reports,
             newman_request_metrics=newman_request_metrics,
             kafka_metrics=kafka_metrics,
@@ -2712,6 +2962,7 @@ def lvl_6():
             experiment_dir,
             connectors,
             status="completed",
+            level6_readiness=level6_readiness,
             validation_reports=validation_reports,
             newman_request_metrics=newman_request_metrics,
             kafka_metrics=kafka_metrics,
@@ -2735,6 +2986,7 @@ def lvl_6():
             experiment_dir,
             connectors,
             status="failed",
+            level6_readiness=level6_readiness,
             validation_reports=validation_reports,
             newman_request_metrics=newman_request_metrics,
             kafka_metrics=kafka_metrics,

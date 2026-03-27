@@ -2,10 +2,15 @@ const fs = require("fs");
 
 const { test: base, expect } = require("./playwright-runtime");
 const { resolveOntologyHubRuntime } = require("./runtime");
+const { ensureOntologyHubBootstrap } = require("./support/bootstrap");
 
 const test = base.extend({
   ontologyHubRuntime: async ({}, use) => {
     await use(resolveOntologyHubRuntime());
+  },
+
+  ontologyHubBootstrap: async ({ page, ontologyHubRuntime }, use) => {
+    await use(await ensureOntologyHubBootstrap(page, ontologyHubRuntime));
   },
 
   captureStep: async ({}, use, testInfo) => {

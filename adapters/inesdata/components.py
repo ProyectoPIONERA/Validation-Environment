@@ -20,6 +20,8 @@ class INESDataComponentsAdapter:
         "registration-service",
         "public-portal",
     }
+    _ONTOLOGY_HUB_REPO_URL = "https://github.com/ProyectoPIONERA/Ontology-Hub.git"
+    _ONTOLOGY_HUB_REPO_DIRNAME = "Ontology-Hub"
 
     def __init__(
         self,
@@ -228,19 +230,8 @@ class INESDataComponentsAdapter:
         return False
 
     def _resolve_ontology_hub_source_dir(self, deployer_config: dict) -> str:
-        override = (deployer_config.get("ONTOLOGY_HUB_SOURCE_DIR") or "").strip()
-        if override:
-            override_dir = os.path.abspath(override)
-            override_dockerfile = os.path.join(override_dir, "Dockerfile")
-            if os.path.isfile(override_dockerfile):
-                return override_dir
-            print(
-                "Warning: ONTOLOGY_HUB_SOURCE_DIR does not contain a Dockerfile "
-                f"({override_dockerfile}). Falling back to default source discovery."
-            )
-
         sources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources")
-        ontology_hub_dir = os.path.join(sources_dir, "Ontology-Hub")
+        ontology_hub_dir = os.path.join(sources_dir, self._ONTOLOGY_HUB_REPO_DIRNAME)
         dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
         if os.path.isfile(dockerfile_path):
             return ontology_hub_dir
@@ -262,9 +253,8 @@ class INESDataComponentsAdapter:
                     pass
             print(f"Cloning Ontology-Hub into {ontology_hub_dir} ...")
             import subprocess
-            repo_url = "https://github.com/ProyectoPIONERA/Ontology-Hub.git"
             try:
-                subprocess.run(["git", "clone", repo_url, ontology_hub_dir], check=True)
+                subprocess.run(["git", "clone", self._ONTOLOGY_HUB_REPO_URL, ontology_hub_dir], check=True)
             except Exception as exc:
                 self._fail(
                     "Could not clone Ontology-Hub repository",
@@ -274,17 +264,14 @@ class INESDataComponentsAdapter:
         if os.path.isfile(dockerfile_path):
             return ontology_hub_dir
 
-        probe_dir = os.path.abspath(self.config.script_dir())
-        for _ in range(6):
-            parent = os.path.abspath(os.path.join(probe_dir, ".."))
-            candidate = os.path.join(parent, "Ontology-Hub")
-            if os.path.isfile(os.path.join(candidate, "Dockerfile")):
-                return candidate
-            if parent == probe_dir:
-                break
-            probe_dir = parent
-
-        return os.path.join(os.path.abspath(os.path.join(self.config.script_dir(), "..")), "Ontology-Hub")
+        self._fail(
+            "Ontology-Hub source directory is not usable",
+            root_cause=(
+                f"Expected Dockerfile at: {dockerfile_path}. "
+                "Level 5 expects the canonical checkout at "
+                "adapters/inesdata/sources/Ontology-Hub."
+            ),
+        )
 
     def _ontology_hub_build_args(self, ontology_hub_dir: str) -> dict:
         compose_path = os.path.join(ontology_hub_dir, "docker-compose.yml")
@@ -321,8 +308,8 @@ class INESDataComponentsAdapter:
             self._fail(
                 "Ontology-Hub source directory not found",
                 root_cause=(
-                    f"Expected Dockerfile at: {dockerfile_path} "
-                    "(override with ONTOLOGY_HUB_SOURCE_DIR)"
+                    f"Expected Dockerfile at: {dockerfile_path}. "
+                    "The canonical checkout in adapters/inesdata/sources/Ontology-Hub is missing or incomplete."
                 ),
             )
 
@@ -350,11 +337,52 @@ class INESDataComponentsAdapter:
         if self.run(cmd, check=False, cwd=ontology_hub_dir) is None:
             self._fail("Failed to build ontology-hub image on host", root_cause=image_ref)
 
+    def _effective_component_values(self, normalized_component: str, values_file: str, deployer_config: dict) -> dict:
+        values = dict(self._safe_load_yaml_file(values_file) or {})
+        overrides = self._component_values_override_payload(normalized_component, deployer_config)
+
+        image_overrides = overrides.get("image") or {}
+        if image_overrides:
+            image_values = dict(values.get("image") or {})
+            image_values.update(image_overrides)
+            values["image"] = image_values
+
+        return values
+
     def _maybe_prepare_level6_local_image(self, normalized_component: str, values_file: str, deployer_config: dict) -> bool:
         """Ensure local images referenced by a Level 5 component exist in minikube.
 
         Returns True when the minikube image cache was updated.
         """
+        values = self._effective_component_values(normalized_component, values_file, deployer_config)
+        image_ref = self._extract_primary_image_ref(values)
+
+        profile = (
+            deployer_config.get("MINIKUBE_PROFILE")
+            or getattr(self.config, "MINIKUBE_PROFILE", "minikube")
+            or "minikube"
+        ).strip() or "minikube"
+
+        if normalized_component == "ontology-hub":
+            if not image_ref:
+                self._fail(
+                    "Ontology-Hub chart image is not declared",
+                    root_cause=f"Values file: {values_file}",
+                )
+            if not image_ref.lower().endswith(":local"):
+                self._fail(
+                    "Ontology-Hub must use a local image in Level 5/6",
+                    root_cause=f"Configured image: {image_ref}",
+                )
+            if not self._minikube_is_available(profile):
+                self._fail(
+                    "Minikube profile is not available for Ontology-Hub local image deployment",
+                    root_cause=profile,
+                )
+            self._build_ontology_hub_image_on_host(image_ref, deployer_config)
+            self._load_image_into_minikube(profile, image_ref)
+            return True
+
         auto_build_flag = deployer_config.get("LEVEL5_AUTO_BUILD_LOCAL_IMAGES")
         if auto_build_flag is None:
             auto_build_flag = deployer_config.get("LEVEL6_AUTO_BUILD_LOCAL_IMAGES")
@@ -362,19 +390,11 @@ class INESDataComponentsAdapter:
         if not self._parse_bool(auto_build_flag, default=True):
             return False
 
-        values = self._safe_load_yaml_file(values_file)
-        image_ref = self._extract_primary_image_ref(values)
         if not image_ref:
             return False
 
         if not image_ref.lower().endswith(":local"):
             return False
-
-        profile = (
-            deployer_config.get("MINIKUBE_PROFILE")
-            or getattr(self.config, "MINIKUBE_PROFILE", "minikube")
-            or "minikube"
-        ).strip() or "minikube"
 
         if not self._minikube_is_available(profile):
             print(
@@ -385,12 +405,6 @@ class INESDataComponentsAdapter:
 
         if self._minikube_has_image(profile, image_ref):
             return False
-
-        if normalized_component == "ontology-hub":
-            if not self._host_has_image(image_ref):
-                self._build_ontology_hub_image_on_host(image_ref, deployer_config)
-            self._load_image_into_minikube(profile, image_ref)
-            return True
 
         print(f"Local image '{image_ref}' is missing in minikube, but no auto-build recipe exists for '{normalized_component}'.")
         return False
@@ -465,19 +479,6 @@ class INESDataComponentsAdapter:
                     deployer_config.get("ONTOLOGY_HUB_SAMPLE_DATA_ENABLED"),
                     default=True,
                 )
-
-            image_repository = (deployer_config.get("ONTOLOGY_HUB_IMAGE_REPOSITORY") or "").strip()
-            image_tag = (deployer_config.get("ONTOLOGY_HUB_IMAGE_TAG") or "").strip()
-            image_pull_policy = (deployer_config.get("ONTOLOGY_HUB_IMAGE_PULL_POLICY") or "").strip()
-            if image_repository or image_tag or image_pull_policy:
-                image_overrides = {}
-                if image_repository:
-                    image_overrides["repository"] = image_repository
-                if image_tag:
-                    image_overrides["tag"] = image_tag
-                if image_pull_policy:
-                    image_overrides["pullPolicy"] = image_pull_policy
-                overrides["image"] = image_overrides
 
         return overrides
 

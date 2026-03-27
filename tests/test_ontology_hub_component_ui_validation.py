@@ -6,7 +6,12 @@ import unittest
 from unittest import mock
 
 from validation.components.ontology_hub.component_runner import run_ontology_hub_component_validation
-from validation.components.ontology_hub.ui_runner import run_ontology_hub_ui_validation
+from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
+from validation.components.ontology_hub.ui_runner import (
+    UI_CASE_METADATA,
+    _run_ui_preflight,
+    run_ontology_hub_ui_validation,
+)
 
 
 def _build_playwright_results_payload():
@@ -56,14 +61,109 @@ def _build_playwright_results_payload():
 
 
 class OntologyHubComponentUIValidationTests(unittest.TestCase):
+    def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_chart_values(self):
+        with mock.patch(
+            "validation.components.ontology_hub.runtime_config._parse_key_value_file",
+            return_value={
+                "DS_1_NAME": "demo",
+                "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+            },
+        ), mock.patch(
+            "validation.components.ontology_hub.runtime_config._load_chart_values",
+            return_value={
+                "validation": {
+                    "ui": {
+                        "adminEmail": "qa-admin@example.org",
+                        "adminPassword": "super-secret-password",
+                        "creationRepositoryUri": "https://github.com/example/repo.git",
+                        "creationPrimaryLanguage": "en",
+                        "creationSecondaryLanguage": "es",
+                    }
+                }
+            },
+        ):
+            runtime = resolve_ontology_hub_runtime(environ={})
+
+        self.assertEqual(runtime["adminEmail"], "qa-admin@example.org")
+        self.assertEqual(runtime["adminPassword"], "super-secret-password")
+        self.assertEqual(runtime["creationRepositoryUri"], "https://github.com/example/repo")
+        self.assertEqual(runtime["creationPrimaryLanguage"], "en")
+        self.assertEqual(runtime["creationSecondaryLanguage"], "es")
+
+    def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_secret_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            email_path = os.path.join(tmpdir, "ontology-hub-admin-email.txt")
+            password_path = os.path.join(tmpdir, "ontology-hub-admin-password.txt")
+            with open(email_path, "w", encoding="utf-8") as handle:
+                handle.write("file-admin@example.org\n")
+            with open(password_path, "w", encoding="utf-8") as handle:
+                handle.write("file-secret-password\n")
+
+            with mock.patch(
+                "validation.components.ontology_hub.runtime_config._parse_key_value_file",
+                return_value={},
+            ):
+                runtime = resolve_ontology_hub_runtime(
+                    environ={
+                        "ONTOLOGY_HUB_ADMIN_EMAIL_FILE": email_path,
+                        "ONTOLOGY_HUB_ADMIN_PASSWORD_FILE": password_path,
+                    }
+                )
+
+        self.assertEqual(runtime["adminEmail"], "file-admin@example.org")
+        self.assertEqual(runtime["adminPassword"], "file-secret-password")
+
+    def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_explicit_values_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            values_path = os.path.join(tmpdir, "custom-values.yaml")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\n".join(
+                        [
+                            "validation:",
+                            "  ui:",
+                            "    adminEmail: chart-admin@example.org",
+                            "    adminPassword: chart-secret-password",
+                            "",
+                        ]
+                    )
+                )
+
+            with mock.patch(
+                "validation.components.ontology_hub.runtime_config._parse_key_value_file",
+                return_value={
+                    "DS_1_NAME": "demo",
+                    "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+                },
+            ):
+                runtime = resolve_ontology_hub_runtime(
+                    environ={"ONTOLOGY_HUB_VALUES_FILE": values_path}
+                )
+
+        self.assertEqual(runtime["adminEmail"], "chart-admin@example.org")
+        self.assertEqual(runtime["adminPassword"], "chart-secret-password")
+
     def test_run_ontology_hub_ui_validation_persists_playwright_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             payload = _build_playwright_results_payload()
+            preflight = {
+                "status": "passed",
+                "ready": True,
+                "strict": False,
+                "shouldRunPlaywright": True,
+                "blocking_failures": [],
+                "probes": [],
+            }
 
             def fake_subprocess_run(command, cwd=None, env=None):
                 self.assertIn("--workers=1", command)
                 self.assertIn("PLAYWRIGHT_JSON_REPORT_FILE", env)
                 self.assertEqual(env["ONTOLOGY_HUB_BASE_URL"], "http://ontology-hub-demo.dev.ds.dataspaceunit.upm")
+                self.assertEqual(env["ONTOLOGY_HUB_UI_WORKERS"], "1")
+                with open(env["ONTOLOGY_HUB_RUNTIME_FILE"], "r", encoding="utf-8") as handle:
+                    runtime = json.load(handle)
+                self.assertEqual(runtime["baseUrl"], env["ONTOLOGY_HUB_BASE_URL"])
+                self.assertEqual(runtime["uiWorkers"], 1)
                 with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)
                 return subprocess.CompletedProcess(command, 0)
@@ -72,8 +172,8 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 "validation.components.ontology_hub.ui_runner.subprocess.run",
                 side_effect=fake_subprocess_run,
             ), mock.patch(
-                "validation.components.ontology_hub.ui_runner._wait_for_ontology_hub_ui_ready",
-                return_value=True,
+                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                return_value=preflight,
             ):
                 result = run_ontology_hub_ui_validation(
                     "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
@@ -90,6 +190,8 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             self.assertTrue(all(case["case_group"] == "pt5" for case in result["executed_cases"]))
             self.assertGreaterEqual(len(result["evidence_index"]), 5)
             self.assertEqual(len(result["executed_cases"]), 5)
+            self.assertEqual(result["runtime"]["uiWorkers"], 1)
+            self.assertEqual(result["preflight"], preflight)
             self.assertTrue(
                 os.path.exists(result["artifacts"]["report_json"]),
                 "Expected the synthesized UI suite report to be persisted",
@@ -98,6 +200,128 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 os.path.exists(result["artifacts"]["json_report_file"]),
                 "Expected the mocked Playwright JSON report to exist",
             )
+            self.assertTrue(os.path.exists(result["artifacts"]["resolved_runtime_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["preflight_json"]))
+
+            with open(result["artifacts"]["preflight_json"], "r", encoding="utf-8") as handle:
+                persisted_preflight = json.load(handle)
+            self.assertEqual(persisted_preflight, preflight)
+
+    def test_run_ontology_hub_ui_validation_honors_worker_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(
+            os.environ,
+            {"ONTOLOGY_HUB_UI_WORKERS": "5"},
+            clear=False,
+        ):
+            payload = _build_playwright_results_payload()
+            preflight = {
+                "status": "passed",
+                "ready": True,
+                "strict": False,
+                "shouldRunPlaywright": True,
+                "blocking_failures": [],
+                "probes": [],
+            }
+
+            def fake_subprocess_run(command, cwd=None, env=None):
+                self.assertIn("--workers=5", command)
+                self.assertEqual(env["ONTOLOGY_HUB_UI_WORKERS"], "5")
+                with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch(
+                "validation.components.ontology_hub.ui_runner.subprocess.run",
+                side_effect=fake_subprocess_run,
+            ), mock.patch(
+                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                return_value=preflight,
+            ):
+                result = run_ontology_hub_ui_validation(
+                    "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                    experiment_dir=tmpdir,
+                )
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["runtime"]["uiWorkers"], 5)
+            self.assertIn("--workers=5", result["playwright_command"])
+
+    def test_run_ontology_hub_ui_validation_fails_fast_on_blocking_preflight(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preflight = {
+                "status": "failed",
+                "ready": False,
+                "strict": True,
+                "shouldRunPlaywright": False,
+                "blocking_failures": ["catalog_page", "search_api"],
+                "fatal_failures": [],
+                "probes": [
+                    {
+                        "id": "catalog_page",
+                        "status": "failed",
+                        "blocking": True,
+                        "assertions": ["Missing expected page markers: search for a vocabulary"],
+                    }
+                ],
+            }
+
+            with mock.patch(
+                "validation.components.ontology_hub.ui_runner.subprocess.run",
+            ) as mocked_subprocess, mock.patch(
+                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                return_value=preflight,
+            ):
+                result = run_ontology_hub_ui_validation(
+                    "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                    experiment_dir=tmpdir,
+                )
+
+            mocked_subprocess.assert_not_called()
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["preflight"], preflight)
+            self.assertEqual(result["error"]["type"], "RuntimeError")
+            self.assertIn("catalog_page, search_api", result["error"]["message"])
+            self.assertEqual(result["summary"]["total"], len(UI_CASE_METADATA))
+            self.assertEqual(result["summary"]["failed"], len(UI_CASE_METADATA))
+            self.assertTrue(all(case["evaluation"]["status"] == "failed" for case in result["executed_cases"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["preflight_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["resolved_runtime_json"]))
+
+    def test_run_ui_preflight_marks_authentication_failure_as_fatal(self):
+        runtime = resolve_ontology_hub_runtime(base_url="http://ontology-hub-demo.dev.ds.dataspaceunit.upm")
+
+        with (
+            mock.patch(
+                "validation.components.ontology_hub.ui_runner._run_html_probe",
+                side_effect=[
+                    {"id": "home_page", "status": "passed", "blocking": True},
+                    {"id": "catalog_page", "status": "passed", "blocking": True},
+                    {"id": "api_docs", "status": "passed", "blocking": True},
+                    {"id": "edition_login", "status": "passed", "blocking": True},
+                    {"id": "vocabulary_detail", "status": "failed", "blocking": False},
+                ],
+            ),
+            mock.patch(
+                "validation.components.ontology_hub.ui_runner._run_edition_auth_probe",
+                return_value={
+                    "id": "edition_authentication",
+                    "status": "failed",
+                    "blocking": True,
+                    "fatal": True,
+                    "assertions": ["Las credenciales configuradas no son validas."],
+                },
+            ),
+            mock.patch(
+                "validation.components.ontology_hub.ui_runner._run_search_api_probe",
+                return_value={"id": "search_api", "status": "failed", "blocking": False},
+            ),
+        ):
+            preflight = _run_ui_preflight(runtime)
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertFalse(preflight["shouldRunPlaywright"])
+        self.assertEqual(preflight["fatal_failures"], ["edition_authentication"])
+        self.assertIn("edition_authentication", preflight["blocking_failures"])
 
     def test_run_ontology_hub_component_validation_combines_api_and_ui(self):
         with tempfile.TemporaryDirectory() as tmpdir:

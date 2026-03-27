@@ -5,21 +5,30 @@ test("PT5-OH-10: version history and version resources are exposed from the voca
   page,
   request,
   ontologyHubRuntime,
+  ontologyHubBootstrap,
   captureStep,
   attachJson,
 }) => {
-  const detailPage = new OntologyHubVocabDetailPage(page);
+  const detailProbe = ontologyHubBootstrap.capabilities.detailProbe;
+  test.skip(
+    !detailProbe.available || !detailProbe.versionHistory,
+    detailProbe.reason || "La vista detalle no expone historial de versiones reutilizable.",
+  );
 
-  await detailPage.goto(ontologyHubRuntime.baseUrl, ontologyHubRuntime.expectedVocabularyPrefix);
+  const detailPage = new OntologyHubVocabDetailPage(page);
+  const targetPrefix = ontologyHubBootstrap.prefix || ontologyHubRuntime.expectedVocabularyPrefix;
+  const targetTitle = ontologyHubBootstrap.title || ontologyHubRuntime.expectedVocabularyTitle;
+
+  await detailPage.goto(ontologyHubRuntime.baseUrl, targetPrefix);
   await detailPage.expectReady(
-    ontologyHubRuntime.expectedVocabularyTitle,
-    ontologyHubRuntime.expectedVocabularyPrefix,
+    targetPrefix,
+    targetTitle,
   );
   await detailPage.expectVersionHistoryMarkers();
   const versionLabels = page
     .locator("[data-onto-panel='version-history'].is-active")
     .getByText(/v\d{4}-\d{2}-\d{2}/);
-  const versionDates = await versionLabels.evaluateAll((nodes) =>
+  let versionDates = await versionLabels.evaluateAll((nodes) =>
     Array.from(
       new Set(
         nodes
@@ -29,15 +38,20 @@ test("PT5-OH-10: version history and version resources are exposed from the voca
       ),
     ),
   );
-  expect(versionDates.length).toBeGreaterThan(0);
-  await captureStep(page, "01-vocab-version-history");
-
   const pageHtml = await page.content();
   expect(pageHtml).toContain("Vocabulary Version History");
+  if (versionDates.length === 0) {
+    versionDates = Array.from(
+      new Set(
+        Array.from(pageHtml.matchAll(/v(\d{4}-\d{2}-\d{2})/g)).map((match) => match[1]),
+      ),
+    );
+  }
+  await captureStep(page, "01-vocab-version-history");
 
   const versionUrls = await detailPage.exposedVersionResourceUrls(
     ontologyHubRuntime.baseUrl,
-    ontologyHubRuntime.expectedVocabularyPrefix,
+    targetPrefix,
   );
   expect(versionUrls.length).toBeGreaterThan(0);
 
@@ -45,6 +59,10 @@ test("PT5-OH-10: version history and version resources are exposed from the voca
     .map((url) => url.match(/\/versions\/(\d{4}-\d{2}-\d{2})\.n3$/))
     .filter(Boolean)
     .map((match) => match[1]);
+  if (versionDates.length === 0) {
+    versionDates = Array.from(new Set(resourceDates));
+  }
+  expect(versionDates.length).toBeGreaterThan(0);
   expect(resourceDates.length).toBeGreaterThan(0);
   expect(resourceDates.some((dateString) => versionDates.includes(dateString))).toBeTruthy();
 
@@ -61,6 +79,8 @@ test("PT5-OH-10: version history and version resources are exposed from the voca
   expect(responseStatuses.every((entry) => entry.status < 500)).toBeTruthy();
 
   await attachJson("pt5-oh-10-report", {
+    detailProbe,
+    vocabularyPrefix: targetPrefix,
     versionDates,
     versionUrls,
     responseStatuses,

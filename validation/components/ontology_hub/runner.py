@@ -5,18 +5,14 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 from urllib import error, parse, request
 
+from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
 
 COMPONENT_KEY = "ontology-hub"
-DEFAULT_SEARCH_TERM = os.environ.get("ONTOLOGY_HUB_VALIDATION_QUERY", "Person")
-DEFAULT_EXPECTED_LABEL = os.environ.get("ONTOLOGY_HUB_EXPECTED_LABEL", "Person")
-DEFAULT_EXPECTED_VOCAB = os.environ.get("ONTOLOGY_HUB_EXPECTED_VOCAB", "s4grid")
-DEFAULT_EXPECTED_TAG = os.environ.get("ONTOLOGY_HUB_EXPECTED_TAG", "Catalogs")
 API_SEARCH_PATH = "/dataset/api/v2/term/search"
 SPARQL_PATH = "/dataset/sparql"
 PATTERNS_PATH = "/dataset/patterns"
 HOME_PATH = "/dataset"
 API_DOCS_PATH = "/dataset/api"
-DEFAULT_EXPECTED_CLASS_URI = os.environ.get("ONTOLOGY_HUB_EXPECTED_CLASS_URI", "http://schema.org/Person")
 
 API_CASE_METADATA: Dict[str, Dict[str, str]] = {
     "PT5-OH-08": {
@@ -566,8 +562,8 @@ def evaluate_sparql_response(
     return result
 
 
-def _run_sparql_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    sparql_query = f"ASK {{ GRAPH ?g {{ <{DEFAULT_EXPECTED_CLASS_URI}> ?p ?o }} }}"
+def _run_sparql_access_case(base_url: str, expected_class_uri: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    sparql_query = f"ASK {{ GRAPH ?g {{ <{expected_class_uri}> ?p ?o }} }}"
     request_url = f"{base_url}{SPARQL_PATH}?{parse.urlencode({'query': sparql_query})}"
     http_status, content_type, body_text = _http_get(request_url)
     evaluation = evaluate_sparql_response(http_status, content_type, body_text)
@@ -598,7 +594,8 @@ def _run_sparql_access_case(base_url: str) -> Tuple[Dict[str, Any], Dict[str, An
 
 
 def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
-    normalized_base_url = (base_url or "").rstrip("/")
+    runtime = resolve_ontology_hub_runtime(base_url=base_url)
+    normalized_base_url = runtime["baseUrl"]
     started_at = datetime.now().isoformat()
 
     executed_cases: List[Dict[str, Any]] = []
@@ -609,11 +606,11 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         test_case_id="PT5-OH-08",
         description="Busqueda de vocabularios por texto libre con contenido real indexado",
         query_params={
-            "q": DEFAULT_SEARCH_TERM,
+            "q": runtime["expectedSearchTerm"],
             "type": "class",
         },
         expected_result="La busqueda devuelve al menos un termino indexado de ejemplo, con agregaciones y contenido coherentes.",
-        expected_vocab=DEFAULT_EXPECTED_VOCAB,
+        expected_vocab=runtime["expectedVocabularyPrefix"],
     )
     executed_cases.append(pt5_oh_08)
     raw_artifacts.append(("PT5-OH-08", "pt5-oh-08-response.json", artifact_08))
@@ -623,19 +620,19 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         test_case_id="PT5-OH-09",
         description="Filtrado de vocabularios mediante vocabulario y etiqueta",
         query_params={
-            "q": DEFAULT_SEARCH_TERM,
+            "q": runtime["expectedSearchTerm"],
             "type": "class",
-            "vocab": DEFAULT_EXPECTED_VOCAB,
-            "tag": DEFAULT_EXPECTED_TAG,
+            "vocab": runtime["expectedVocabularyPrefix"],
+            "tag": runtime["expectedPrimaryTag"],
         },
         expected_result="La busqueda filtrada devuelve resultados coherentes con el vocabulario y la etiqueta de ejemplo.",
-        expected_vocab=DEFAULT_EXPECTED_VOCAB,
-        expected_tag=DEFAULT_EXPECTED_TAG,
+        expected_vocab=runtime["expectedVocabularyPrefix"],
+        expected_tag=runtime["expectedPrimaryTag"],
     )
     executed_cases.append(pt5_oh_09)
     raw_artifacts.append(("PT5-OH-09", "pt5-oh-09-response.json", artifact_09))
 
-    pt5_oh_13, artifact_13 = _run_sparql_access_case(normalized_base_url)
+    pt5_oh_13, artifact_13 = _run_sparql_access_case(normalized_base_url, runtime["expectedClassUri"])
     executed_cases.append(pt5_oh_13)
     raw_artifacts.append(("PT5-OH-13", "pt5-oh-13-response.json", artifact_13))
 
@@ -643,8 +640,8 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         base_url=normalized_base_url,
         test_case_id="PT5-OH-14",
         description="Acceso al servicio de patrones",
-        path=f"{PATTERNS_PATH}?{parse.urlencode({'q': DEFAULT_EXPECTED_VOCAB})}",
-        required_markers=["selected vocabularies", f"checkbox_{DEFAULT_EXPECTED_VOCAB}"],
+        path=f"{PATTERNS_PATH}?{parse.urlencode({'q': runtime['expectedVocabularyPrefix']})}",
+        required_markers=["selected vocabularies", f"checkbox_{runtime['expectedVocabularyPrefix']}"],
         expected_result="La pagina del servicio de patrones esta publicada y accesible.",
     )
     executed_cases.append(pt5_oh_14)
@@ -669,11 +666,12 @@ def run_ontology_hub_validation(base_url: str, experiment_dir: str | None = None
         "status": overall_status,
         "timestamp": started_at,
         "seed_expectations": {
-            "search_term": DEFAULT_SEARCH_TERM,
-            "expected_label": DEFAULT_EXPECTED_LABEL,
-            "expected_vocabulary": DEFAULT_EXPECTED_VOCAB,
-            "expected_tag": DEFAULT_EXPECTED_TAG,
+            "search_term": runtime["expectedSearchTerm"],
+            "expected_label": runtime["expectedLabel"],
+            "expected_vocabulary": runtime["expectedVocabularyPrefix"],
+            "expected_tag": runtime["expectedPrimaryTag"],
         },
+        "runtime": runtime,
         "executed_cases": executed_cases,
         "summary": summary,
         "pt5_cases": executed_cases,

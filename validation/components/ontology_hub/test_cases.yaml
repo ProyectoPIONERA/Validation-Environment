@@ -101,12 +101,12 @@ test_cases:
     component: ontology_hub
     case_group: pt5
     description: Edit vocabulary entry
-    type: api
+    type: ui
     validation_type: functional
     dataspace_dimension: publication
-    execution_mode: manual
-    coverage_status: manual
-    mapping_status: supporting
+    execution_mode: ui
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
       - A registered ontology already exists
       - A user with editing permissions is available
@@ -116,6 +116,17 @@ test_cases:
     expected_result: The changes are reflected correctly
     traceability:
       - OntHub-2
+    automation:
+      status: automated
+      mode: ui
+      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_02_edit_vocab.spec.js
+      real_flow:
+        method: MULTISTEP
+        pages:
+          - /edition/login
+          - /edition/vocabs/:prefix
+          - /dataset/vocabs/:prefix
+      notes: The framework edits the temporary vocabulary created during the workflow bootstrap to avoid modifying shared seeded resources.
 
   - id: PT5-OH-03
     component: ontology_hub

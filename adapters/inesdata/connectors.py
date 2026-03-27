@@ -1041,10 +1041,6 @@ class INESDataConnectorsAdapter:
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
         values_files = [os.path.basename(values_file)]
-        override_path = self._local_connector_image_override_path()
-        if override_path:
-            values_files.append(override_path)
-            print(f"Applying local connector image overrides from {os.path.basename(override_path)}")
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
