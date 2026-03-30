@@ -267,6 +267,61 @@ class INESDataConnectorsAdapter:
 
         return dataspaces
 
+    @staticmethod
+    def _connector_belongs_to_dataspace(connector_name, ds_name):
+        suffix = f"-{ds_name}"
+        return connector_name.endswith(suffix)
+
+    def _discover_existing_connectors(self, ds_name, namespace):
+        existing = set()
+
+        # Credentials-based detection.
+        creds_dir = os.path.join(
+            self.config.repo_dir(),
+            "deployments",
+            "DEV",
+            ds_name,
+        )
+        if os.path.isdir(creds_dir):
+            for entry in os.listdir(creds_dir):
+                if not (entry.startswith("credentials-connector-") and entry.endswith(".json")):
+                    continue
+                connector = entry[len("credentials-connector-"):-len(".json")]
+                if connector and self._connector_belongs_to_dataspace(connector, ds_name):
+                    existing.add(connector)
+
+        # Helm releases-based detection.
+        releases = self.run_silent(f"helm list -n {namespace} --no-headers")
+        if releases:
+            suffix = f"-{ds_name}"
+            for line in releases.splitlines():
+                parts = line.split()
+                if not parts:
+                    continue
+                release = parts[0]
+                if release.startswith("conn-") and release.endswith(suffix):
+                    connector = release[:-len(suffix)]
+                    if connector and self._connector_belongs_to_dataspace(connector, ds_name):
+                        existing.add(connector)
+
+        # Pod-based detection (best-effort).
+        pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+        if pods:
+            for line in pods.splitlines():
+                cols = line.split()
+                if not cols:
+                    continue
+                pod_name = cols[0]
+                if not pod_name.startswith("conn-"):
+                    continue
+                base = pod_name.rsplit("-", 1)[0]
+                if base.endswith("-inteface") or base.endswith("-interface"):
+                    base = base.rsplit("-", 1)[0]
+                if base and self._connector_belongs_to_dataspace(base, ds_name):
+                    existing.add(base)
+
+        return existing
+
     def build_connector_hostnames(self, connectors):
         deployer_config = self.config_adapter.load_deployer_config()
         ds_domain = deployer_config.get("DS_DOMAIN_BASE")
@@ -416,20 +471,23 @@ class INESDataConnectorsAdapter:
                             continue
 
                 time.sleep(poll_interval)
-
-            if last_issue:
-                print(f"Management API not ready for {connector_name}: {last_issue}")
-            else:
-                print(f"Management API not ready for {connector_name}")
-            return False
         finally:
             self._close_temporary_port_forward(local_fallback)
+
+        if last_issue:
+            print(f"Management API not ready for {connector_name}: {last_issue}")
+        else:
+            print(f"Management API not ready for {connector_name}")
+        return False
 
     def wait_for_all_connectors(self, connectors):
         print("\nWaiting for all connectors to become ready...\n")
         for connector in connectors:
             if not self.wait_for_connector_ready(connector):
                 print(f"Connector not ready: {connector}")
+                return False
+
+        return True
 
     def _wait_for_connector_deployments(self, connector_name, timeout=300):
         namespace = self.config.namespace_demo()
@@ -942,12 +1000,16 @@ class INESDataConnectorsAdapter:
                 print(f"Warning: could not remove stale values file {values_file}: {exc}")
         return values_file
 
-    def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec):
+    def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec, namespace=None):
         values_file = self._remove_connector_values_file(connector_name)
         self.invalidate_management_api_token(connector_name)
 
         print(f"Cleaning connector: {connector_name}")
         self.run(f"{python_exec} deployer.py connector delete {connector_name} {ds_name}", cwd=repo_dir, check=False)
+
+        release_name = f"{connector_name}-{ds_name}"
+        ns = namespace or self.config.namespace_demo()
+        self.run(f"helm uninstall {release_name} -n {ns}", check=False)
 
         connector_db = connector_name.replace("-", "_")
         self.force_clean_postgres_db(connector_db, connector_db)
@@ -1215,6 +1277,8 @@ class INESDataConnectorsAdapter:
             return []
 
         all_connectors = set()
+        infra_ready = False
+        vault_ready = False
 
         for ds in dataspaces:
             ds_name = ds["name"]
@@ -1224,6 +1288,22 @@ class INESDataConnectorsAdapter:
             print(f"\nDataspace: {ds_name}")
             print(f"Namespace: {namespace}")
             print(f"Connectors defined: {connectors}\n")
+
+            desired = set(connectors or [])
+            existing = self._discover_existing_connectors(ds_name, namespace)
+            stale = sorted(existing - desired)
+            if stale:
+                print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
+                if not infra_ready:
+                    if not self.infrastructure.ensure_local_infra_access():
+                        return []
+                    infra_ready = True
+                if not vault_ready:
+                    if not self.infrastructure.ensure_vault_unsealed():
+                        return []
+                    vault_ready = True
+                for stale_connector in stale:
+                    self._cleanup_connector_state(stale_connector, repo_dir, ds_name, python_exec, namespace=namespace)
 
             for connector in connectors:
                 all_connectors.add(connector)

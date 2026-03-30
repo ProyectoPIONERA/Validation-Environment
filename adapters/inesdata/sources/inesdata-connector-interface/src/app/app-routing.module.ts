@@ -46,6 +46,12 @@ export const routes: Routes = [
     loadChildren: () => import('./pages/vocabularies/vocabularies.module').then(m => m.VocabulariesModule)
   },
   {
+    path: 'ai-model-browser',
+    data: {title: 'AI Model Browser', icon: 'smart_toy'},
+    canActivate: [AuthUserGuard],
+    loadChildren: () => import('./pages/ai-model-browser/ai-model-browser.module').then(m => m.AiModelBrowserModule)
+  },
+  {
     path: 'ontologies',
     data: {title: 'Ontologies', icon: 'schema'},
     canActivate: [AuthUserGuard],

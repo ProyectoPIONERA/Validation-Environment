@@ -92,6 +92,9 @@ class InesdataAdapter:
     def deploy_connectors(self):
         return self.connectors.deploy_connectors()
 
+    def wait_for_all_connectors(self, connectors):
+        return self.connectors.wait_for_all_connectors(connectors)
+
     def get_cluster_connectors(self):
         return self.connectors.get_cluster_connectors()
 

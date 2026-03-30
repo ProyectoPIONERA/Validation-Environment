@@ -521,6 +521,7 @@ class INESDataInfrastructureAdapter:
 
             if result:
                 all_ready = True
+                observed_relevant_pod = False
                 for line in result.splitlines():
                     columns = line.split()
                     if len(columns) < 3:
@@ -535,6 +536,11 @@ class INESDataInfrastructureAdapter:
                     if status == "Completed":
                         continue
 
+                    if status == "Terminating":
+                        continue
+
+                    observed_relevant_pod = True
+
                     if status != "Running":
                         all_ready = False
                         break
@@ -545,7 +551,7 @@ class INESDataInfrastructureAdapter:
                             all_ready = False
                             break
 
-                if all_ready:
+                if all_ready and observed_relevant_pod:
                     print("\nPods ready:")
                     self.run(f"kubectl get pods -n {namespace}")
                     return True

@@ -13,6 +13,7 @@ import socket
 import shutil
 import statistics
 import re
+import shlex
 from itertools import combinations
 from itertools import permutations
 from datetime import datetime
@@ -2023,7 +2024,16 @@ def _build_level6_ui_dataspace_artifact_paths(experiment_dir, provider_connector
     return paths
 
 
-def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal_pass, experiment_dir):
+def _run_level6_ui_smoke(
+    ui_test_dir,
+    connector,
+    portal_url,
+    portal_user,
+    portal_pass,
+    experiment_dir,
+    extra_args=None,
+    extra_env=None,
+):
     artifact_paths = _build_level6_ui_artifact_paths(experiment_dir, connector)
     env = {
         **os.environ,
@@ -2035,9 +2045,13 @@ def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
         "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
     }
+    if extra_env:
+        env.update(extra_env)
     specs = list(LEVEL6_UI_SMOKE_SPECS)
     print(f"  Level 6 UI smoke profile for {connector}: {', '.join(specs)}")
     command = ["npx", "playwright", "test", *specs]
+    if extra_args:
+        command.extend(extra_args)
     error = None
     try:
         result = subprocess.run(
@@ -2074,7 +2088,14 @@ def _run_level6_ui_smoke(ui_test_dir, connector, portal_url, portal_user, portal
     return _enrich_level6_ui_result(result)
 
 
-def _run_level6_ui_dataspace(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
+def _run_level6_ui_dataspace(
+    ui_test_dir,
+    provider_connector,
+    consumer_connector,
+    experiment_dir,
+    extra_args=None,
+    extra_env=None,
+):
     artifact_paths = _build_level6_ui_dataspace_artifact_paths(
         experiment_dir,
         provider_connector,
@@ -2093,6 +2114,8 @@ def _run_level6_ui_dataspace(ui_test_dir, provider_connector, consumer_connector
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
         "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
     }
+    if extra_env:
+        env.update(extra_env)
     specs = list(LEVEL6_UI_DATASPACE_SPECS)
     print(
         f"  Level 6 UI dataspace profile for {provider_connector} -> "
@@ -2101,6 +2124,8 @@ def _run_level6_ui_dataspace(ui_test_dir, provider_connector, consumer_connector
     # These flows share the same provider/consumer pair and stress catalog propagation.
     # Running them serially in Level 6 avoids false negatives caused by concurrent UI workers.
     command = ["npx", "playwright", "test", "--workers=1", *specs]
+    if extra_args:
+        command.extend(extra_args)
     error = None
     try:
         result = subprocess.run(
@@ -3010,6 +3035,52 @@ def lvl_6():
 # LEVEL 5 - DEPLOY COMPONENTS
 # =========================================================
 
+def _maybe_seed_ai_model_hub_assets(deployed_components):
+    if not deployed_components or "ai-model-hub" not in deployed_components:
+        return
+
+    script_path = os.path.join(Config.script_dir(), "scripts", "seed_ml_assets_for_connectors.sh")
+    if not os.path.isfile(script_path):
+        print("AI Model Hub seeding skipped: seed script not found")
+        return
+
+    connectors = get_connectors_from_cluster()
+    if not connectors:
+        print("AI Model Hub seeding skipped: no running connectors detected")
+        return
+
+    namespace = InesdataConfig.namespace_demo()
+    ds_name = InesdataConfig.dataspace_name()
+    credentials_dir = os.path.join(
+        InesdataConfig.repo_dir(),
+        "deployments",
+        "DEV",
+        ds_name,
+    )
+    if not os.path.isdir(credentials_dir):
+        print(f"AI Model Hub seeding skipped: credentials directory not found ({credentials_dir})")
+        return
+
+    connectors_csv = ",".join(connectors)
+    print("\nSeeding AI Model Hub assets...")
+    print(f"  Namespace: {namespace}")
+    print(f"  Connectors: {connectors_csv}")
+
+    args = [
+        "bash",
+        script_path,
+        "--namespace",
+        namespace,
+        "--connectors",
+        connectors_csv,
+        "--credentials-dir",
+        credentials_dir,
+    ]
+    cmd = " ".join(shlex.quote(arg) for arg in args)
+    result = run(cmd, check=False)
+    if result is None or result.returncode != 0:
+        print("Warning: AI Model Hub asset seeding failed (continuing)")
+
 def lvl_5():
     """Level 5 - Deploy optional component services via Helm charts.
 
@@ -3081,6 +3152,7 @@ def lvl_5():
                 print(f"- {component}")
         print()
 
+    _maybe_seed_ai_model_hub_assets(deployed)
     return deployed
 
 
@@ -3958,15 +4030,242 @@ def run_workspace_cleanup_interactive():
         return None
 
 
+def _resolve_ui_mode():
+    while True:
+        print("\nSelect UI mode:")
+        print("1 - Normal (headless)")
+        print("2 - Live (headed)")
+        print("3 - Debug (PWDEBUG=1, headed)")
+        print("B - Back")
+        try:
+            choice = input("\nMode: ").strip().upper()
+        except EOFError:
+            print("\nNo input. Returning to previous menu.\n")
+            return None
+        if choice == "B":
+            return None
+        if choice not in {"1", "2", "3"}:
+            print("\nInvalid selection. Please try again.\n")
+            continue
+        if choice == "1":
+            return {"label": "normal", "args": [], "env": {}}
+        if choice == "2":
+            return {"label": "live", "args": ["--headed"], "env": {}}
+        return {"label": "debug", "args": ["--headed", "--debug"], "env": {"PWDEBUG": "1"}}
+
+
+def _run_ontology_hub_ui_tests(mode):
+    from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
+
+    experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    base_dir = os.path.join("experiments", experiment_id, "components", "ontology-hub", "ui")
+    output_dir = os.path.join(base_dir, "test-results")
+    html_report_dir = os.path.join(base_dir, "playwright-report")
+    blob_report_dir = os.path.join(base_dir, "blob-report")
+    json_report_file = os.path.join(base_dir, "results.json")
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(html_report_dir, exist_ok=True)
+    os.makedirs(blob_report_dir, exist_ok=True)
+
+    runtime = resolve_ontology_hub_runtime()
+    runtime_path = os.path.join(base_dir, "resolved_runtime.json")
+    with open(runtime_path, "w", encoding="utf-8") as handle:
+        json.dump(runtime, handle, indent=2, ensure_ascii=False)
+
+    env = {
+        **os.environ,
+        "ONTOLOGY_HUB_BASE_URL": runtime.get("baseUrl", ""),
+        "ONTOLOGY_HUB_RUNTIME_FILE": runtime_path,
+        "ONTOLOGY_HUB_UI_WORKERS": "1",
+        "PLAYWRIGHT_OUTPUT_DIR": output_dir,
+        "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
+        "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
+        "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
+    }
+    env.update(mode.get("env") or {})
+    cmd = [
+        "./node_modules/.bin/playwright",
+        "test",
+        "--config",
+        "../components/ontology_hub/ui/playwright.config.js",
+        "--workers=1",
+    ]
+    cmd.extend(mode.get("args") or [])
+
+    print(f"\nRunning Ontology Hub UI tests (artifacts in {base_dir})\n")
+    try:
+        subprocess.run(cmd, cwd="validation/ui", env=env)
+    finally:
+        run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+    return None
+
+
 def run_ontology_hub_ui_tests_interactive():
     """Run Ontology Hub Playwright UI tests in normal/live/debug modes."""
     while True:
         print("\n" + "="*50)
         print("ONTOLOGY HUB UI TESTS")
         print("="*50)
-        print("1 - Normal (headless)")
-        print("2 - Live (headed)")
-        print("3 - Debug (PWDEBUG=1, headed)")
+        mode = _resolve_ui_mode()
+        if mode is None:
+            return None
+        _run_ontology_hub_ui_tests(mode)
+        return None
+
+
+def _resolve_ai_model_hub_base_url():
+    deployer_config = load_deployer_config() or {}
+    ds_name = (
+        os.environ.get("UI_DATASPACE")
+        or deployer_config.get("DS_1_NAME")
+        or InesdataConfig.dataspace_name()
+        or "demo"
+    ).strip()
+    ds_domain = (
+        deployer_config.get("DS_DOMAIN_BASE")
+        or "dev.ds.dataspaceunit.upm"
+    ).strip()
+
+    chart_dir = os.path.join(
+        Config.script_dir(),
+        "inesdata-deployment",
+        "components",
+        "ai-model-hub",
+    )
+    values_path = os.path.join(chart_dir, f"values-{ds_name}.yaml")
+    if not os.path.isfile(values_path):
+        values_path = os.path.join(chart_dir, "values.yaml")
+
+    host = ""
+    if os.path.isfile(values_path):
+        with open(values_path, "r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        ingress = payload.get("ingress") or {}
+        if ingress.get("enabled") and ingress.get("host"):
+            host = str(ingress.get("host") or "").strip()
+
+    if not host and ds_name and ds_domain:
+        host = f"ai-model-hub-{ds_name}.{ds_domain}"
+
+    if not host:
+        return ""
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"http://{host}".rstrip("/")
+
+
+def _run_ai_model_hub_ui_tests(mode):
+    base_url = _resolve_ai_model_hub_base_url()
+    if not base_url:
+        print("AI Model Hub base URL could not be resolved; aborting.")
+        return None
+
+    experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    base_dir = os.path.join("experiments", experiment_id, "components", "ai-model-hub", "ui")
+    output_dir = os.path.join(base_dir, "test-results")
+    html_report_dir = os.path.join(base_dir, "playwright-report")
+    blob_report_dir = os.path.join(base_dir, "blob-report")
+    json_report_file = os.path.join(base_dir, "results.json")
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(html_report_dir, exist_ok=True)
+    os.makedirs(blob_report_dir, exist_ok=True)
+
+    env = {
+        **os.environ,
+        "AI_MODEL_HUB_ENABLE_UI_VALIDATION": "1",
+        "AI_MODEL_HUB_BASE_URL": base_url,
+        "PLAYWRIGHT_OUTPUT_DIR": output_dir,
+        "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
+        "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
+        "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
+    }
+    env.update(mode.get("env") or {})
+    cmd = [
+        "./node_modules/.bin/playwright",
+        "test",
+        "--config",
+        "../components/ai_model_hub/ui/playwright.config.js",
+    ]
+    cmd.extend(mode.get("args") or [])
+
+    print(f"\nRunning AI Model Hub UI tests (artifacts in {base_dir})\n")
+    try:
+        subprocess.run(cmd, cwd="validation/ui", env=env)
+    finally:
+        run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+    return None
+
+
+def _run_core_ui_tests(mode):
+    ui_test_dir = os.path.join(Config.script_dir(), "validation", "ui")
+    if not os.path.isdir(ui_test_dir):
+        print("Warning: validation/ui directory not found — skipping UI tests")
+        return None
+
+    connectors = get_connectors_from_cluster()
+    if not connectors:
+        print("No running connectors detected — skipping UI tests")
+        return None
+
+    experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    experiment_dir = os.path.join("experiments", experiment_id)
+
+    extra_args = mode.get("args") or []
+    extra_env = mode.get("env") or {}
+
+    for connector in connectors:
+        creds = load_connector_credentials(connector)
+        if not creds:
+            print(f"  No credentials for {connector}, skipping UI smoke tests")
+            continue
+        portal_url = build_connector_url(connector)
+        portal_user = creds.get("connector_user", {}).get("user", "")
+        portal_pass = creds.get("connector_user", {}).get("passwd", "")
+        print(f"\nRunning UI core smoke suite for {connector} ({mode['label']})...")
+        _run_level6_ui_smoke(
+            ui_test_dir,
+            connector,
+            portal_url,
+            portal_user,
+            portal_pass,
+            experiment_dir,
+            extra_args=extra_args,
+            extra_env=extra_env,
+        )
+
+    if len(connectors) < 2:
+        print("Warning: not enough connectors for UI dataspace suite — skipping")
+        return None
+
+    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
+    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
+        (connector for connector in connectors if connector != provider_connector),
+        connectors[1],
+    )
+    print(
+        f"\nRunning UI dataspace suite for {provider_connector} -> {consumer_connector} "
+        f"({mode['label']})..."
+    )
+    _run_level6_ui_dataspace(
+        ui_test_dir,
+        provider_connector,
+        consumer_connector,
+        experiment_dir,
+        extra_args=extra_args,
+        extra_env=extra_env,
+    )
+    return None
+
+
+def run_inesdata_ui_tests_interactive():
+    """Run INESData UI tests for Core/Ontology Hub/AI Model Hub with mode selection."""
+    while True:
+        print("\n" + "="*50)
+        print("INESDATA UI TESTS (Normal / Live / Debug)")
+        print("="*50)
+        print("1 - Core")
+        print("2 - Ontology Hub")
+        print("3 - AI Model Hub")
         print("B - Back")
 
         try:
@@ -3981,51 +4280,16 @@ def run_ontology_hub_ui_tests_interactive():
             print("\nInvalid selection. Please try again.\n")
             continue
 
-        from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
+        mode = _resolve_ui_mode()
+        if mode is None:
+            return None
 
-        experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-        base_dir = os.path.join("experiments", experiment_id, "components", "ontology-hub", "ui")
-        output_dir = os.path.join(base_dir, "test-results")
-        html_report_dir = os.path.join(base_dir, "playwright-report")
-        blob_report_dir = os.path.join(base_dir, "blob-report")
-        json_report_file = os.path.join(base_dir, "results.json")
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(html_report_dir, exist_ok=True)
-        os.makedirs(blob_report_dir, exist_ok=True)
-
-        runtime = resolve_ontology_hub_runtime()
-        runtime_path = os.path.join(base_dir, "resolved_runtime.json")
-        with open(runtime_path, "w", encoding="utf-8") as handle:
-            json.dump(runtime, handle, indent=2, ensure_ascii=False)
-
-        env = {
-            **os.environ,
-            "ONTOLOGY_HUB_BASE_URL": runtime.get("baseUrl", ""),
-            "ONTOLOGY_HUB_RUNTIME_FILE": runtime_path,
-            "ONTOLOGY_HUB_UI_WORKERS": "1",
-            "PLAYWRIGHT_OUTPUT_DIR": output_dir,
-            "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
-            "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
-            "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
-        }
-        cmd = [
-            "./node_modules/.bin/playwright",
-            "test",
-            "--config",
-            "../components/ontology_hub/ui/playwright.config.js",
-            "--workers=1",
-        ]
-        if choice == "2":
-            cmd.append("--headed")
+        if choice == "1":
+            _run_core_ui_tests(mode)
+        elif choice == "2":
+            _run_ontology_hub_ui_tests(mode)
         elif choice == "3":
-            cmd.append("--headed")
-            env["PWDEBUG"] = "1"
-
-        print(f"\nRunning Ontology Hub UI tests (artifacts in {base_dir})\n")
-        try:
-            subprocess.run(cmd, cwd="validation/ui", env=env)
-        finally:
-            run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+            _run_ai_model_hub_ui_tests(mode)
         return None
 
 
@@ -4099,6 +4363,7 @@ def show_menu():
     - 1-6: Run individual levels
     - B: Bootstrap local framework dependencies
     - D: Run local readiness doctor
+    - I: Run INESData UI tests (Core/Ontology Hub/AI Model Hub)
     - O: Run Ontology Hub UI tests (normal/live/debug)
     - N: Launch new framework CLI
     - C: Run workspace cleanup script
@@ -4126,6 +4391,7 @@ def show_menu():
         print("\n[Developer]")
         print("C - Cleanup Workspace")
         print("L - Build and Deploy Local Images")
+        print("I - INESData UI Tests (Normal / Live / Debug)")
         print("O - Ontology Hub UI Tests (Normal/Live/Debug)")
         print("\n[Control]")
         print("Q - Exit")
@@ -4172,6 +4438,11 @@ def show_menu():
                 run_local_images_workflow_interactive()
             except KeyboardInterrupt:
                 print("\n\nBuild and deploy local images cancelled by user\n")
+        elif choice == "I":
+            try:
+                run_inesdata_ui_tests_interactive()
+            except KeyboardInterrupt:
+                print("\n\nINESData UI tests cancelled by user\n")
         elif choice == "O":
             try:
                 run_ontology_hub_ui_tests_interactive()

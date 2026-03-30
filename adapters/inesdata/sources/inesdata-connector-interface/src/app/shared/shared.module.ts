@@ -31,6 +31,7 @@ import { MatChipsModule } from '@angular/material/chips';
 import { MatDatepickerModule } from '@angular/material/datepicker';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatTooltipModule } from '@angular/material/tooltip';
+import { MatCheckboxModule } from '@angular/material/checkbox';
 import { FooterComponent } from './components/footer/footer.component';
 import { SpinnerComponent } from './components/spinner/spinner.component';
 import { SnackBarAnimationDirective } from './directives/snackbar-animation.directive';
@@ -64,7 +65,8 @@ import { SnackBarAnimationDirective } from './directives/snackbar-animation.dire
     MatChipsModule,
     MatTooltipModule,
     MatDatepickerModule,
-    MatMenuModule
+    MatMenuModule,
+    MatCheckboxModule
   ],
   declarations: [
     NavigationComponent,
@@ -107,6 +109,7 @@ import { SnackBarAnimationDirective } from './directives/snackbar-animation.dire
     MatTooltipModule,
     MatDatepickerModule,
     MatMenuModule,
+    MatCheckboxModule,
     MatTooltipModule,
     FooterComponent,
     SnackBarAnimationDirective

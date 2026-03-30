@@ -3,7 +3,7 @@
     <mat-icon>arrow_back</mat-icon> Go back
   </button>
 
-  <mat-tab-group animationDuration="0ms" mat-stretch-tabs="false" mat-align-tabs="start" class="main-tab-group">
+  <mat-tab-group [selectedIndex]="selectedMainTabIndex" animationDuration="0ms" mat-stretch-tabs="false" mat-align-tabs="start" class="main-tab-group">
     <mat-tab label="Asset information">
       <mat-tab-group animationDuration="0ms" mat-stretch-tabs="false" mat-align-tabs="start">
         <mat-tab label="General information">

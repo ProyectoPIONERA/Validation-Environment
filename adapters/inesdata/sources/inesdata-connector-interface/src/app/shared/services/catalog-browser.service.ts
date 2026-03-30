@@ -131,24 +131,30 @@ export class CatalogBrowserService {
   private mapCatalog(catalog: any) {
     const arr = Array<DataOffer>();
     let datasets = catalog["http://www.w3.org/ns/dcat#dataset"];
+    if (!datasets) {
+      return arr;
+    }
+
     if (!Array.isArray(datasets)) {
       datasets = [datasets];
     }
 
     for (const dataset of datasets) {
-      const properties: { [key: string]: string; } = {
-				id: dataset["id"],
-				name: dataset["name"],
-				version: dataset["version"],
-				assetType: dataset["assetType"],
-				contenttype: dataset["contenttype"],
+      const properties: { [key: string]: any; } = {
+				id: this.firstDatasetValue(dataset, ['id', '@id']),
+				name: this.firstDatasetValue(dataset, ['name', 'dcterms:title', 'http://purl.org/dc/terms/title']),
+				version: this.firstDatasetValue(dataset, ['version']),
+				assetType: this.firstDatasetValue(dataset, ['assetType', 'edc:assetType', 'https://w3id.org/edc/v0.0.1/ns/assetType']),
+				contenttype: this.firstDatasetValue(dataset, ['contenttype', 'dcat:mediaType', 'http://www.w3.org/ns/dcat#mediaType']),
 				assetData: dataset["assetData"],
-				description: dataset["http://purl.org/dc/terms/description"],
-				shortDescription: dataset["shortDescription"],
-				byteSize: dataset["http://www.w3.org/ns/dcat#byteSize"],
-				format: dataset["http://purl.org/dc/terms/format"],
-				keywords: dataset["http://www.w3.org/ns/dcat#keyword"],
-        participantId: dataset["participantId"]
+				description: this.firstDatasetValue(dataset, ['http://purl.org/dc/terms/description', 'description']),
+				shortDescription: this.firstDatasetValue(dataset, ['shortDescription']),
+				byteSize: this.firstDatasetValue(dataset, ['http://www.w3.org/ns/dcat#byteSize', 'byteSize']),
+				format: this.firstDatasetValue(dataset, ['http://purl.org/dc/terms/format', 'format']),
+				keywords: dataset["http://www.w3.org/ns/dcat#keyword"] || dataset["keywords"],
+        participantId: this.firstDatasetValue(dataset, ['participantId', 'originator']),
+        storageType: this.findStorageType(dataset),
+        fileName: this.findFileName(dataset)
 			}
       const assetId = dataset["@id"];
 
@@ -170,22 +176,90 @@ export class CatalogBrowserService {
   }
 
   private findEndpointUrl(dataset: any, catalog: any) {
-    let serviceId: string;
-      if (Array.isArray(dataset['http://www.w3.org/ns/dcat#distribution'])) {
-        serviceId =  dataset['http://www.w3.org/ns/dcat#distribution'][0]['http://www.w3.org/ns/dcat#accessService']['@id'];
-      } else {
-        serviceId = dataset['http://www.w3.org/ns/dcat#distribution']['http://www.w3.org/ns/dcat#accessService']['@id'];
-      }
+    const distributions = dataset['http://www.w3.org/ns/dcat#distribution'];
+    const distributionList = Array.isArray(distributions) ? distributions : distributions ? [distributions] : [];
+    const accessService = distributionList[0]?.['http://www.w3.org/ns/dcat#accessService'];
+    const serviceId = this.resolveTextValue(accessService?.['@id']);
 
+    const services = catalog['http://www.w3.org/ns/dcat#service'];
+    const serviceList = Array.isArray(services) ? services : services ? [services] : [];
 
-      if (Array.isArray(catalog['http://www.w3.org/ns/dcat#service'])) {
-        return catalog['http://www.w3.org/ns/dcat#service'].find(service =>{
-          if (service['@id'] == serviceId) {
-            return service['http://www.w3.org/ns/dcat#endpointUrl'];
-          }
-        });
-      } else {
-        return catalog['http://www.w3.org/ns/dcat#service']['http://www.w3.org/ns/dcat#endpointUrl'];
+    if (!serviceId) {
+      return this.resolveTextValue(serviceList[0]?.['http://www.w3.org/ns/dcat#endpointUrl']);
+    }
+
+    const service = serviceList.find(candidate => candidate?.['@id'] === serviceId);
+    return this.resolveTextValue(service?.['http://www.w3.org/ns/dcat#endpointUrl']);
+  }
+
+  private findStorageType(dataset: any): string {
+    return this.resolveTextValue(dataset?.storageType)
+      || this.resolveTextValue(dataset?.['edc:dataAddressType'])
+      || '';
+  }
+
+  private findFileName(dataset: any): string {
+    const distributions = dataset?.['http://www.w3.org/ns/dcat#distribution'];
+    const distributionList = Array.isArray(distributions) ? distributions : distributions ? [distributions] : [];
+    const firstDistribution = distributionList[0] || {};
+
+    return this.resolveTextValue(firstDistribution.fileName)
+      || this.resolveTextValue(firstDistribution.filename)
+      || this.resolveTextValue(firstDistribution.keyName)
+      || this.resolveTextValue(firstDistribution.s3Key)
+      || this.resolveTextValue(dataset?.fileName)
+      || '';
+  }
+
+  private firstDatasetValue(dataset: any, keys: string[]): any {
+    for (const key of keys) {
+      const value = dataset?.[key];
+      if (value !== undefined && value !== null && value !== '') {
+        return value;
       }
+    }
+
+    return '';
+  }
+
+  private resolveTextValue(value: any): string {
+    if (value === undefined || value === null) {
+      return '';
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const resolved = this.resolveTextValue(item);
+        if (resolved) {
+          return resolved;
+        }
+      }
+      return '';
+    }
+
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return `${value}`.trim();
+    }
+
+    if (typeof value !== 'object') {
+      return '';
+    }
+
+    if (value['@value'] !== undefined) {
+      return this.resolveTextValue(value['@value']);
+    }
+
+    if (value['@id'] !== undefined && Object.keys(value).length === 1) {
+      return this.resolveTextValue(value['@id']);
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      const resolved = this.resolveTextValue(nestedValue);
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    return '';
   }
 }

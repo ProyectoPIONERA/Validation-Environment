@@ -22,6 +22,8 @@ class INESDataComponentsAdapter:
     }
     _ONTOLOGY_HUB_REPO_URL = "https://github.com/ProyectoPIONERA/Ontology-Hub.git"
     _ONTOLOGY_HUB_REPO_DIRNAME = "Ontology-Hub"
+    _AI_MODEL_HUB_REPO_URL = "https://github.com/ProyectoPIONERA/AIModelHub.git"
+    _AI_MODEL_HUB_REPO_DIRNAME = "AIModelHub"
 
     def __init__(
         self,
@@ -321,6 +323,51 @@ class INESDataComponentsAdapter:
             ),
         )
 
+    def _resolve_ai_model_hub_source_dir(self, deployer_config: dict) -> str:
+        sources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources")
+        ai_model_hub_dir = os.path.join(sources_dir, self._AI_MODEL_HUB_REPO_DIRNAME)
+        dashboard_dir = os.path.join(ai_model_hub_dir, "DataDashboard")
+        dockerfile_path = os.path.join(dashboard_dir, "Dockerfile")
+        if os.path.isfile(dockerfile_path):
+            return dashboard_dir
+
+        should_clone = not os.path.isdir(ai_model_hub_dir)
+        if not should_clone:
+            try:
+                remaining_entries = os.listdir(ai_model_hub_dir)
+            except OSError:
+                remaining_entries = []
+            should_clone = len(remaining_entries) == 0
+
+        if should_clone:
+            os.makedirs(sources_dir, exist_ok=True)
+            if os.path.isdir(ai_model_hub_dir):
+                try:
+                    os.rmdir(ai_model_hub_dir)
+                except OSError:
+                    pass
+            print(f"Cloning AI Model Hub into {ai_model_hub_dir} ...")
+            import subprocess
+            try:
+                subprocess.run(["git", "clone", self._AI_MODEL_HUB_REPO_URL, ai_model_hub_dir], check=True)
+            except Exception as exc:
+                self._fail(
+                    "Could not clone AI Model Hub repository",
+                    root_cause=str(exc),
+                )
+
+        if os.path.isfile(dockerfile_path):
+            return dashboard_dir
+
+        self._fail(
+            "AI Model Hub source directory is not usable",
+            root_cause=(
+                f"Expected Dockerfile at: {dockerfile_path}. "
+                "Level 5 expects the canonical checkout at "
+                "adapters/inesdata/sources/AIModelHub."
+            ),
+        )
+
     def _ontology_hub_build_args(self, ontology_hub_dir: str) -> dict:
         compose_path = os.path.join(ontology_hub_dir, "docker-compose.yml")
         if os.path.isfile(compose_path):
@@ -384,6 +431,24 @@ class INESDataComponentsAdapter:
         cmd += " -f Dockerfile ."
         if self.run(cmd, check=False, cwd=ontology_hub_dir) is None:
             self._fail("Failed to build ontology-hub image on host", root_cause=image_ref)
+
+    def _build_ai_model_hub_image_on_host(self, image_ref: str, deployer_config: dict):
+        dashboard_dir = self._resolve_ai_model_hub_source_dir(deployer_config)
+        dockerfile_path = os.path.join(dashboard_dir, "Dockerfile")
+        if not os.path.isfile(dockerfile_path):
+            self._fail(
+                "AI Model Hub source directory not found",
+                root_cause=(
+                    f"Expected Dockerfile at: {dockerfile_path}. "
+                    "The canonical checkout in adapters/inesdata/sources/AIModelHub is missing or incomplete."
+                ),
+            )
+
+        image_q = shlex.quote(image_ref)
+        print(f"\nBuilding local image on host for minikube: {image_ref}")
+        cmd = f"docker build -t {image_q} ."
+        if self.run(cmd, check=False, cwd=dashboard_dir) is None:
+            self._fail("Failed to build AI Model Hub image on host", root_cause=image_ref)
 
     def _effective_component_values(self, normalized_component: str, values_file: str, deployer_config: dict) -> dict:
         values = dict(self._safe_load_yaml_file(values_file) or {})
@@ -453,6 +518,11 @@ class INESDataComponentsAdapter:
 
         if self._minikube_has_image(profile, image_ref):
             return False
+
+        if normalized_component == "ai-model-hub":
+            self._build_ai_model_hub_image_on_host(image_ref, deployer_config)
+            self._load_image_into_minikube(profile, image_ref)
+            return True
 
         print(f"Local image '{image_ref}' is missing in minikube, but no auto-build recipe exists for '{normalized_component}'.")
         return False

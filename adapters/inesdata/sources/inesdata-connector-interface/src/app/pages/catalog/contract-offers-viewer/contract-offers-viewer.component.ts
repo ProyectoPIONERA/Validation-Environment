@@ -24,6 +24,7 @@ export interface ContractOffersDialogData {
   dataAddress?: any;
   isCatalogView: boolean;
   returnUrl?: string;
+  startTab?: 'details' | 'offers';
 }
 
 interface RunningTransferProcess {
@@ -53,6 +54,7 @@ export class ContractOffersViewerComponent {
   policyCards: PolicyCard[] = [];
   offers: Offer[] = [];
   data: ContractOffersDialogData= undefined;
+  selectedMainTabIndex = 0;
   private pollingHandleNegotiation?: any;
 
   constructor(@Inject('STORAGE_TYPES') public storageTypes: StorageType[],
@@ -68,6 +70,10 @@ export class ContractOffersViewerComponent {
       this.notificationService.showWarning('Asset details are no longer available. Please open it again from the list.');
       this.router.navigate(['/catalog']);
       return;
+    }
+
+    if (this.data.isCatalogView && this.data.startTab === 'offers') {
+      this.selectedMainTabIndex = 1;
     }
 
     const assetData = this.data?.properties?.assetData ?? {};
