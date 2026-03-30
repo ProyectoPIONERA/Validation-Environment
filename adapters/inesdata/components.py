@@ -194,6 +194,54 @@ class INESDataComponentsAdapter:
             return value[len("https://"):]
         return value
 
+    def _cleanup_components(self, components, namespace: str):
+        namespace = (namespace or "").strip()
+        if not namespace:
+            return
+
+        ns_q = shlex.quote(namespace)
+        print("\nCleaning previous component deployments (Level 5)...")
+
+        for component in components:
+            normalized = self._normalize_component_key(component)
+            if normalized in self._LEVEL6_EXCLUDED_KEYS:
+                continue
+
+            release_name = self._resolve_component_release_name(normalized)
+            rel_q = shlex.quote(release_name)
+
+            status = self.run_silent(f"helm status {rel_q} -n {ns_q}")
+            if status is None:
+                continue
+
+            print(f"- Removing {normalized} (release {release_name})")
+
+            pvc_pvs = []
+            pv_list = self.run_silent(
+                f"kubectl get pvc -n {ns_q} -l app.kubernetes.io/instance={rel_q} "
+                f"-o jsonpath='{{range .items[*]}}{{.spec.volumeName}}{{\"\\n\"}}{{end}}'"
+            )
+            if pv_list:
+                pvc_pvs = [line.strip() for line in pv_list.splitlines() if line.strip()]
+
+            self.run(f"helm uninstall {rel_q} -n {ns_q}", check=False)
+            self.run(
+                f"kubectl delete pvc -n {ns_q} -l app.kubernetes.io/instance={rel_q} --ignore-not-found",
+                check=False,
+            )
+            self.run(
+                f"kubectl wait --for=delete pod -n {ns_q} -l app.kubernetes.io/instance={rel_q} --timeout=5m",
+                check=False,
+            )
+
+            for pv_name in pvc_pvs:
+                pv_q = shlex.quote(pv_name)
+                reclaim = self.run_silent(
+                    f"kubectl get pv {pv_q} -o jsonpath='{{.spec.persistentVolumeReclaimPolicy}}'"
+                )
+                if reclaim and reclaim.strip().upper() == "RETAIN":
+                    self.run(f"kubectl delete pv {pv_q}", check=False)
+
     @staticmethod
     def _safe_load_yaml_file(path: str) -> dict:
         try:
@@ -635,6 +683,7 @@ class INESDataComponentsAdapter:
         namespace = self.config.namespace_demo()
 
         deployer_config = self.config_adapter.load_deployer_config() or {}
+        self._cleanup_components(components, namespace)
 
         inferred_hosts = {}
         for component in components:
