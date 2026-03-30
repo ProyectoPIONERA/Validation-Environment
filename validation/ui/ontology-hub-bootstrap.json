@@ -1,0 +1,62 @@
+{
+  "prefix": "s4grid",
+  "title": "SAREF4GRID Vocabulary",
+  "source": "existing",
+  "creationMethod": "uri",
+  "creationUri": "https://saref.etsi.org/saref4grid/v2.1.1/",
+  "creationRepositoryUri": "",
+  "creationNamespace": "https://saref.etsi.org/saref4grid/",
+  "creationPrimaryLanguage": "en",
+  "creationSecondaryLanguage": "es",
+  "creationTag": "Catalogs",
+  "creationOutcome": {
+    "created": false,
+    "duplicateByPrefix": false,
+    "duplicateByUri": false,
+    "url": ""
+  },
+  "editUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/edition/vocabs/s4grid",
+  "managedVocabulary": false,
+  "workflow": {
+    "created": false,
+    "editCompleted": false,
+    "edited": false
+  },
+  "capabilities": {
+    "publicVocabularyDetail": true,
+    "publicVocabularyDetailReason": "",
+    "publicVocabularyVersionHistory": true,
+    "publicVocabularyStatistics": true,
+    "publicTermsPage": true,
+    "publicTermsPageReason": "",
+    "publicVocabularyAutocomplete": false,
+    "publicVocabularyAutocompleteReason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid'.",
+    "publicTermSearchApi": true,
+    "publicTermSearchApiReason": "",
+    "detailProbe": {
+      "available": true,
+      "prefix": "s4grid",
+      "reason": "",
+      "versionHistory": true,
+      "statistics": true
+    },
+    "termsProbe": {
+      "available": true
+    },
+    "autocompleteProbe": {
+      "available": false,
+      "reason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid'."
+    },
+    "termApiProbe": {
+      "available": true,
+      "query": "Person",
+      "label": "Person",
+      "prefix": "s4grid",
+      "primaryTag": "Catalogs",
+      "prefixedName": "s4grid:Person",
+      "uri": "http://schema.org/Person"
+    }
+  },
+  "baseUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+  "createdAt": "2026-03-30T15:19:03.310Z"
+}

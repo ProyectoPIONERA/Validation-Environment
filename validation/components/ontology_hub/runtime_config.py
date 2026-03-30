@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict
@@ -187,7 +188,23 @@ def resolve_ontology_hub_runtime(
         or f"http://ontology-hub-{dataspace}.{ds_domain}"
     ).rstrip("/")
 
-    return {
+    explicit_creation_uri = (
+        current_env.get("ONTOLOGY_HUB_CREATION_URI")
+        or _chart_validation_value(chart_values, "validation", "ui", "creationUri")
+        or ""
+    ).strip()
+    explicit_creation_repo = (
+        current_env.get("ONTOLOGY_HUB_CREATION_REPOSITORY_URI")
+        or _chart_validation_value(chart_values, "validation", "ui", "creationRepositoryUri")
+        or ""
+    ).strip()
+    explicit_creation_prefix = (
+        current_env.get("ONTOLOGY_HUB_CREATION_PREFIX")
+        or _chart_validation_value(chart_values, "validation", "ui", "creationPrefix")
+        or ""
+    ).strip()
+
+    runtime = {
         "dataspace": dataspace,
         "dsDomain": ds_domain,
         "baseUrl": resolved_base_url,
@@ -240,20 +257,12 @@ def resolve_ontology_hub_runtime(
         "expectedSecondaryTag": current_env.get("ONTOLOGY_HUB_EXPECTED_SECONDARY_TAG") or "Environment",
         "previousVersionDate": current_env.get("ONTOLOGY_HUB_PREVIOUS_VERSION_DATE") or "2025-01-15",
         "latestVersionDate": current_env.get("ONTOLOGY_HUB_LATEST_VERSION_DATE") or "2026-03-22",
-        "creationUri": current_env.get("ONTOLOGY_HUB_CREATION_URI")
-        or _chart_validation_value(chart_values, "validation", "ui", "creationUri")
-        or "https://saref.etsi.org/saref4grid/v2.1.1/",
-        "creationRepositoryUri": _normalize_repository_uri(
-            current_env.get("ONTOLOGY_HUB_CREATION_REPOSITORY_URI")
-            or _chart_validation_value(chart_values, "validation", "ui", "creationRepositoryUri")
-            or ""
-        ),
+        "creationUri": explicit_creation_uri or "https://saref.etsi.org/saref4grid/v2.1.1/",
+        "creationRepositoryUri": _normalize_repository_uri(explicit_creation_repo),
         "creationNamespace": current_env.get("ONTOLOGY_HUB_CREATION_NAMESPACE")
         or _chart_validation_value(chart_values, "validation", "ui", "creationNamespace")
         or "https://saref.etsi.org/saref4grid/",
-        "creationPrefix": current_env.get("ONTOLOGY_HUB_CREATION_PREFIX")
-        or _chart_validation_value(chart_values, "validation", "ui", "creationPrefix")
-        or "s4grid",
+        "creationPrefix": explicit_creation_prefix or "s4grid",
         "creationTitle": current_env.get("ONTOLOGY_HUB_CREATION_TITLE")
         or _chart_validation_value(chart_values, "validation", "ui", "creationTitle")
         or "SAREF4GRID Vocabulary",
@@ -279,3 +288,19 @@ def resolve_ontology_hub_runtime(
         "strictPreflight": _env_bool(current_env, "ONTOLOGY_HUB_UI_STRICT_PREFLIGHT", False),
         "preflightTimeout": _env_int(current_env, "ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT", 120),
     }
+
+    if (
+        not explicit_creation_uri
+        and not explicit_creation_repo
+        and not explicit_creation_prefix
+        and runtime["creationPrefix"] == runtime["expectedVocabularyPrefix"]
+    ):
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        runtime["creationPrefix"] = f"{runtime['expectedVocabularyPrefix']}-fw-{timestamp}"
+        runtime["creationTitle"] = f"{runtime['creationTitle']} ({runtime['creationPrefix']})"
+        runtime["creationUri"] = ""
+        runtime["creationRepositoryUri"] = _normalize_repository_uri(
+            "https://github.com/ProyectoPIONERA/Ontology-Development-Repository-Example.git"
+        )
+
+    return runtime

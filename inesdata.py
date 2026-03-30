@@ -3958,6 +3958,77 @@ def run_workspace_cleanup_interactive():
         return None
 
 
+def run_ontology_hub_ui_tests_interactive():
+    """Run Ontology Hub Playwright UI tests in normal/live/debug modes."""
+    while True:
+        print("\n" + "="*50)
+        print("ONTOLOGY HUB UI TESTS")
+        print("="*50)
+        print("1 - Normal (headless)")
+        print("2 - Live (headed)")
+        print("3 - Debug (PWDEBUG=1, headed)")
+        print("B - Back")
+
+        try:
+            choice = input("\nSelection: ").strip().upper()
+        except EOFError:
+            print("\nNo input. Returning to main menu.\n")
+            return None
+
+        if choice == "B":
+            return None
+        if choice not in {"1", "2", "3"}:
+            print("\nInvalid selection. Please try again.\n")
+            continue
+
+        from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
+
+        experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        base_dir = os.path.join("experiments", experiment_id, "components", "ontology-hub", "ui")
+        output_dir = os.path.join(base_dir, "test-results")
+        html_report_dir = os.path.join(base_dir, "playwright-report")
+        blob_report_dir = os.path.join(base_dir, "blob-report")
+        json_report_file = os.path.join(base_dir, "results.json")
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(html_report_dir, exist_ok=True)
+        os.makedirs(blob_report_dir, exist_ok=True)
+
+        runtime = resolve_ontology_hub_runtime()
+        runtime_path = os.path.join(base_dir, "resolved_runtime.json")
+        with open(runtime_path, "w", encoding="utf-8") as handle:
+            json.dump(runtime, handle, indent=2, ensure_ascii=False)
+
+        env = {
+            **os.environ,
+            "ONTOLOGY_HUB_BASE_URL": runtime.get("baseUrl", ""),
+            "ONTOLOGY_HUB_RUNTIME_FILE": runtime_path,
+            "ONTOLOGY_HUB_UI_WORKERS": "1",
+            "PLAYWRIGHT_OUTPUT_DIR": output_dir,
+            "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
+            "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
+            "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
+        }
+        cmd = [
+            "./node_modules/.bin/playwright",
+            "test",
+            "--config",
+            "../components/ontology_hub/ui/playwright.config.js",
+            "--workers=1",
+        ]
+        if choice == "2":
+            cmd.append("--headed")
+        elif choice == "3":
+            cmd.append("--headed")
+            env["PWDEBUG"] = "1"
+
+        print(f"\nRunning Ontology Hub UI tests (artifacts in {base_dir})\n")
+        try:
+            subprocess.run(cmd, cwd="validation/ui", env=env)
+        finally:
+            run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+        return None
+
+
 def run_new_cli_interactive():
     """Launch the new framework CLI from the legacy interactive menu."""
     print("\n" + "="*50)
@@ -4028,6 +4099,7 @@ def show_menu():
     - 1-6: Run individual levels
     - B: Bootstrap local framework dependencies
     - D: Run local readiness doctor
+    - O: Run Ontology Hub UI tests (normal/live/debug)
     - N: Launch new framework CLI
     - C: Run workspace cleanup script
     - L: Build and deploy local images
@@ -4054,6 +4126,7 @@ def show_menu():
         print("\n[Developer]")
         print("C - Cleanup Workspace")
         print("L - Build and Deploy Local Images")
+        print("O - Ontology Hub UI Tests (Normal/Live/Debug)")
         print("\n[Control]")
         print("Q - Exit")
         print("="*50)
@@ -4099,6 +4172,11 @@ def show_menu():
                 run_local_images_workflow_interactive()
             except KeyboardInterrupt:
                 print("\n\nBuild and deploy local images cancelled by user\n")
+        elif choice == "O":
+            try:
+                run_ontology_hub_ui_tests_interactive()
+            except KeyboardInterrupt:
+                print("\n\nOntology Hub UI tests cancelled by user\n")
         elif choice in LEVELS:
             if choice in CONFIG_GUARDED_LEVELS and not _ensure_local_deployer_config_ready_for_levels({choice}):
                 continue
