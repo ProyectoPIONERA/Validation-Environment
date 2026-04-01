@@ -19,5 +19,5 @@ MINIO_PASSWORD=CHANGE_ME
 DS_1_NAME=demo
 DS_1_NAMESPACE=demo
 DS_1_CONNECTORS=citycouncil,company
-COMPONENTS=ontology-hub
+COMPONENTS=ontology-hub,ai-model-hub
 LEVEL6_RUN_KAFKA_EDC=false
