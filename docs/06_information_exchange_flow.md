@@ -707,6 +707,7 @@ En [negotiation_tests.js](../validation/core/tests/negotiation_tests.js) el fram
 - `INITIAL`
 - `REQUESTED`
 - `REQUESTING`
+- `VERIFYING`
 - `IN_PROGRESS`
 - `AGREED`
 - `VERIFIED`
@@ -720,6 +721,7 @@ Cómo interpretarlos:
 | `INITIAL` | la negociación existe, pero apenas ha comenzado |
 | `REQUESTED` | la negociación ha sido solicitada |
 | `REQUESTING` | el runtime está enviando o procesando la solicitud |
+| `VERIFYING` | el runtime está verificando la negociación antes de materializar el acuerdo |
 | `IN_PROGRESS` | la negociación sigue abierta y todavía no ha terminado |
 | `AGREED` | el runtime ya ha alcanzado acuerdo lógico, aunque el `contractAgreementId` todavía puede no haberse reflejado en la respuesta actual |
 | `VERIFIED` | el runtime ha verificado la negociación y puede estar a punto de materializar el acuerdo |
@@ -796,7 +798,7 @@ Sin estos tres elementos, el consumidor no tendrá nada útil que descubrir o ne
 | --- | --- | --- | --- | --- |
 | `Provider Login` | obtiene el token del proveedor y genera ids únicos E2E | `keycloakUrl`, `dataspace`, `keycloakClientId`, `provider_user`, `provider_password` | `provider_jwt`, `e2e_suffix`, `e2e_asset_id`, `e2e_policy_id`, `e2e_contract_definition_id` | `200` y `access_token` presente |
 | `Create E2E Asset` | crea el asset que luego se publicará | `provider`, `dsDomain`, `provider_jwt`, `e2e_asset_id`, `e2e_suffix` | `e2e_asset_id` | `200` y respuesta con `@id` |
-| `List E2E Assets` | comprueba que el asset creado aparece en el listado | `provider`, `dsDomain`, `provider_jwt`, `e2e_asset_id` | ninguna | `200` y el `asset_id` aparece en la respuesta |
+| `List E2E Assets` | consulta exacta del asset recien creado por `@id` | `provider`, `dsDomain`, `provider_jwt`, `e2e_asset_id` | ninguna | `200` y el `asset_id` aparece en la respuesta |
 | `Create E2E Policy` | crea la policy que regulará el acceso | `provider`, `dsDomain`, `provider_jwt`, `e2e_policy_id` | `e2e_policy_id` | `200` y respuesta con `@id` |
 | `List E2E Policies` | comprueba que la policy existe | `provider`, `dsDomain`, `provider_jwt`, `e2e_policy_id` | ninguna | `200` y la policy aparece en el listado |
 | `Create E2E Contract Definition` | une asset y policy en una oferta negociable | `provider`, `dsDomain`, `provider_jwt`, `e2e_contract_definition_id`, `e2e_policy_id`, `e2e_asset_id` | `e2e_contract_definition_id` | `200` y respuesta con `@id` |
@@ -947,7 +949,7 @@ Requests incluidas:
 | --- | --- | --- | --- | --- |
 | `Provider Login` | obtiene token y genera ids CRUD | `keycloakUrl`, `dataspace`, `keycloakClientId`, `provider_user`, `provider_password` | `provider_jwt`, `crud_suffix`, `crud_asset_id`, `crud_policy_id`, `crud_contract_definition_id` | `200` y token |
 | `Create CRUD Asset` | creación de asset CRUD | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id`, `crud_suffix` | `crud_asset_id` | `200` y `@id` |
-| `List CRUD Assets` | verificación de listado | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id` | ninguna | `200` y asset visible |
+| `List CRUD Assets` | consulta exacta del asset CRUD por `@id` | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id` | ninguna | `200` y el `asset_id` aparece en la respuesta |
 | `Create CRUD Policy` | creación de policy CRUD | `provider`, `dsDomain`, `provider_jwt`, `crud_policy_id` | `crud_policy_id` | `200` y `@id` |
 | `List CRUD Policies` | verificación de listado | `provider`, `dsDomain`, `provider_jwt`, `crud_policy_id` | ninguna | `200` y policy visible |
 | `Create CRUD Contract Definition` | creación de contract definition CRUD | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id`, `crud_policy_id`, `crud_contract_definition_id` | `crud_contract_definition_id` | `200` y `@id` |
@@ -957,7 +959,7 @@ Requests incluidas:
 | `Delete CRUD Policy` | borrado | `provider`, `dsDomain`, `provider_jwt`, `crud_policy_id` | ninguna | `200` o `204` |
 | `Verify CRUD Policy Deleted` | comprobación de borrado | `provider`, `dsDomain`, `provider_jwt`, `crud_policy_id` | ninguna | `200` y recurso ya ausente |
 | `Delete CRUD Asset` | borrado | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id` | ninguna | `200` o `204` |
-| `Verify CRUD Asset Deleted` | comprobación de borrado | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id` | ninguna | `200` y recurso ya ausente |
+| `Verify CRUD Asset Deleted` | comprobación de borrado mediante consulta exacta por `@id` | `provider`, `dsDomain`, `provider_jwt`, `crud_asset_id` | ninguna | `200` y recurso ya ausente |
 
 ## Resumen ejecutivo de cobertura actual del core
 

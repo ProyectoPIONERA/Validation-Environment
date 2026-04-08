@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from validation.components.ontology_hub.runner import (
+from validation.components.ontology_hub.integration.runner import (
     evaluate_html_page_response,
     evaluate_sparql_response,
     evaluate_term_search_response,
@@ -182,7 +182,7 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
                     return 200, "text/html", "<html><body><a href='/dataset/api'>API</a><a href='/dataset/vocabs'>Vocabs</a></body></html>"
                 raise AssertionError(f"Unexpected URL: {url}")
 
-            with mock.patch("validation.components.ontology_hub.runner._http_get", side_effect=fake_http_get):
+            with mock.patch("validation.components.ontology_hub.integration.runner._http_get", side_effect=fake_http_get):
                 result = run_ontology_hub_validation(
                     "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
                     experiment_dir=tmpdir,

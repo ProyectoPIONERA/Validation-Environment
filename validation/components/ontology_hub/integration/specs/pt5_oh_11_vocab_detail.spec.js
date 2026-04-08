@@ -1,5 +1,5 @@
-const { test } = require("../fixtures");
-const { OntologyHubVocabDetailPage } = require("../pages/vocab-detail.page");
+const { test } = require("../../ui/fixtures");
+const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
 
 test("PT5-OH-11: vocabulary detail displays metadata and descriptive sections", async ({
   page,

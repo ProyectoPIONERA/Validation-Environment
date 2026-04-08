@@ -40,7 +40,10 @@ if (requestName === "List E2E Assets") {
     assertStatus200()
     const assetId = pm.collectionVariables.get("e2e_asset_id")
     assertNotEmpty(assetId, "e2e_asset_id")
-    assertContains(responseText(), assetId, "E2E asset appears in asset list")
+    pm.test("E2E asset appears in asset lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((asset) => asset && asset["@id"] === assetId)).to.equal(true)
+    })
     return
 }
 
@@ -54,7 +57,10 @@ if (requestName === "List E2E Policies") {
     assertStatus200()
     const policyId = pm.collectionVariables.get("e2e_policy_id")
     assertNotEmpty(policyId, "e2e_policy_id")
-    assertContains(responseText(), policyId, "E2E policy appears in policy list")
+    pm.test("E2E policy appears in policy lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((policy) => policy && policy["@id"] === policyId)).to.equal(true)
+    })
     return
 }
 
@@ -68,6 +74,9 @@ if (requestName === "List E2E Contract Definitions") {
     assertStatus200()
     const contractId = pm.collectionVariables.get("e2e_contract_definition_id")
     assertNotEmpty(contractId, "e2e_contract_definition_id")
-    assertContains(responseText(), contractId, "E2E contract definition appears in list")
+    pm.test("E2E contract definition appears in lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((contract) => contract && contract["@id"] === contractId)).to.equal(true)
+    })
 }
 })(); // End of IIFE

@@ -4,14 +4,18 @@ class OntologyHubVocabDetailPage {
   }
 
   async goto(baseUrl, prefix) {
-    await this.page.goto(`${baseUrl}/dataset/vocabs/${prefix}`, { waitUntil: "domcontentloaded" });
+    await this.page.goto(`${baseUrl}/dataset/vocabs/${prefix}`, {
+      waitUntil: "commit",
+      timeout: 5000,
+    });
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   }
 
   async expectReady(prefix, titleText = "") {
     const headingLocator = this.page.getByRole("heading", { level: 1 }).first();
     let headingText = "";
     try {
-      await headingLocator.waitFor({ state: "visible", timeout: 20000 });
+      await headingLocator.waitFor({ state: "visible", timeout: 5000 });
       headingText = ((await headingLocator.textContent().catch(() => "")) || "").trim();
 
       const expectedMarkers = [prefix, titleText].filter(Boolean);
@@ -22,7 +26,7 @@ class OntologyHubVocabDetailPage {
         );
 
         if (!hasHeadingMarker) {
-          const bodyText = ((await this.page.locator("body").textContent().catch(() => "")) || "")
+          const bodyText = ((await this.page.locator("body").evaluate((node) => node.textContent || "").catch(() => "")) || "")
             .replace(/\s+/g, " ")
             .trim();
           const bodyLower = bodyText.toLowerCase();
@@ -37,7 +41,7 @@ class OntologyHubVocabDetailPage {
         }
       }
     } catch (error) {
-      const bodySnippet = ((await this.page.locator("body").textContent().catch(() => "")) || "")
+      const bodySnippet = ((await this.page.locator("body").evaluate((node) => node.textContent || "").catch(() => "")) || "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 320);
@@ -47,7 +51,7 @@ class OntologyHubVocabDetailPage {
 
     await this.page
       .getByRole("heading", { name: "Metadata", level: 2 })
-      .waitFor({ state: "visible", timeout: 20000 })
+      .waitFor({ state: "visible", timeout: 5000 })
       .catch(() => {});
 
     const prefixLocator = this.page.locator("section#post").getByText(prefix, { exact: false }).first();
@@ -69,7 +73,7 @@ class OntologyHubVocabDetailPage {
   async expectMetadataMarkers() {
     await this.page.getByText("URI", { exact: true }).waitFor({ state: "visible" });
     await this.page.getByText("Description", { exact: true }).waitFor({ state: "visible" });
-    await this.page.getByText("Tags", { exact: true }).waitFor({ state: "visible" });
+    await this.page.getByRole("heading", { name: "Tags", exact: true }).waitFor({ state: "visible" });
   }
 
   async expectStatisticsMarkers() {

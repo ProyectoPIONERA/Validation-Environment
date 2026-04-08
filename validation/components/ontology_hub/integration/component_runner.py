@@ -5,8 +5,8 @@ from typing import Any, Dict, List
 
 import yaml
 
-from validation.components.ontology_hub.runner import run_ontology_hub_validation
-from validation.components.ontology_hub.ui_runner import run_ontology_hub_ui_validation
+from validation.components.ontology_hub.integration.runner import run_ontology_hub_validation
+from validation.components.ontology_hub.integration.ui_runner import run_ontology_hub_ui_validation
 
 
 COMPONENT_KEY = "ontology-hub"

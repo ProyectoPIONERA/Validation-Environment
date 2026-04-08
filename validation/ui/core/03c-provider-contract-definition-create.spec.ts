@@ -9,6 +9,8 @@ import { AssetCreatePage } from "../components/provider/asset-create.page";
 import { PolicyCreatePage } from "../components/provider/policy-create.page";
 import { ContractDefinitionCreatePage } from "../components/provider/contract-definition-create.page";
 
+test.setTimeout(180_000);
+
 type ChunkEvent = {
   url: string;
   status: number;
@@ -195,9 +197,8 @@ test("03c provider setup: contract definition creation from the UI", async ({
 
     await contractDefinitionCreatePage.goto(portalBaseUrl);
     await contractDefinitionCreatePage.expectReady();
+    await contractDefinitionCreatePage.selectMatchingPolicies(policyId, 120_000);
     await contractDefinitionCreatePage.fillContractDefinitionId(contractDefinitionId);
-    await contractDefinitionCreatePage.selectAccessPolicy(policyId);
-    await contractDefinitionCreatePage.selectContractPolicy(policyId);
     await contractDefinitionCreatePage.addAsset(assetId);
     await captureStep(page, "06-contract-definition-form-complete");
 

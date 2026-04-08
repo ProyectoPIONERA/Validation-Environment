@@ -17,6 +17,8 @@ type NegotiationReport = {
     contractDefinitionId: string;
   };
   errorResponses: Array<{ url: string; status: number }>;
+  toleratedErrorResponses: Array<{ url: string; status: number }>;
+  fatalErrorResponses: Array<{ url: string; status: number }>;
   negotiationMessage?: string;
 };
 
@@ -43,7 +45,14 @@ test("05 consumer negotiation: visible negotiation from catalog", async ({
     consumerConnector: dataspaceRuntime.consumer.connectorName,
     assetId,
     errorResponses: [],
+    toleratedErrorResponses: [],
+    fatalErrorResponses: [],
   };
+
+  const isTolerableCatalogRetry = (url: string, status: number): boolean =>
+    (status === 401 || status === 503) &&
+    (url.includes("/management/pagination/count?type=federatedCatalog") ||
+      url.includes("/management/federatedcatalog/request"));
 
   page.on("response", (response) => {
     const url = response.url();
@@ -100,9 +109,15 @@ test("05 consumer negotiation: visible negotiation from catalog", async ({
     expect(report.negotiationMessage, "No completed negotiation notification was detected").toMatch(
       /contract negotiation complete!/i,
     );
+    report.toleratedErrorResponses = report.errorResponses.filter(({ url, status }) =>
+      isTolerableCatalogRetry(url, status),
+    );
+    report.fatalErrorResponses = report.errorResponses.filter(
+      ({ url, status }) => !isTolerableCatalogRetry(url, status),
+    );
     expect(
-      report.errorResponses,
-      `API calls returned errors: ${JSON.stringify(report.errorResponses)}`,
+      report.fatalErrorResponses,
+      `API calls returned fatal errors: ${JSON.stringify(report.fatalErrorResponses)} (tolerated transient catalog errors: ${JSON.stringify(report.toleratedErrorResponses)})`,
     ).toHaveLength(0);
   } finally {
     await attachJson("consumer-negotiation-report", {

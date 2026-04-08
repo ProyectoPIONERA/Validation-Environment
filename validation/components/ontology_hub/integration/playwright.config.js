@@ -1,6 +1,6 @@
 const path = require("path");
 
-const { defineConfig } = require("./playwright-runtime");
+const { defineConfig } = require("../ui/playwright-runtime");
 
 const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results";
 const htmlReportDir = process.env.PLAYWRIGHT_HTML_REPORT_DIR || "playwright-report";
@@ -20,6 +20,7 @@ const configuredBootstrapTimeoutMs = Number.parseInt(
   process.env.ONTOLOGY_HUB_BOOTSTRAP_TIMEOUT_MS || "120000",
   10,
 );
+const headedGpuFix = process.env.PLAYWRIGHT_HEADED_GPU_FIX === "1";
 const validationTimeoutMs =
   Number.isFinite(configuredValidationTimeoutMs) && configuredValidationTimeoutMs > 0
     ? configuredValidationTimeoutMs
@@ -35,10 +36,10 @@ const bootstrapSpecPatterns = [
 ];
 
 module.exports = defineConfig({
-  testDir: "./specs",
+  testDir: path.join(__dirname, "specs"),
   timeout: validationTimeoutMs,
   expect: {
-    timeout: 20 * 1000,
+    timeout: 5000,
   },
   workers,
   projects: [
@@ -69,5 +70,12 @@ module.exports = defineConfig({
     screenshot: "only-on-failure",
     video: "on",
     ignoreHTTPSErrors: true,
+    actionTimeout: 5000,
+    navigationTimeout: 5000,
+    launchOptions: headedGpuFix
+      ? {
+          args: ["--disable-gpu"],
+        }
+      : undefined,
   },
 });

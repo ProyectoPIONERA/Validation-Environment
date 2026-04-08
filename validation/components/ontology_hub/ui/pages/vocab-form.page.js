@@ -14,8 +14,8 @@ class OntologyHubVocabFormPage {
 
   async expectReady(prefix = "") {
     const prefixInput = this.page.locator("#inputVocabPrefix");
-    await prefixInput.waitFor({ state: "visible", timeout: 20000 });
-    await this.titleFields().first().waitFor({ state: "visible", timeout: 20000 });
+    await prefixInput.waitFor({ state: "visible", timeout: 5000 });
+    await this.titleFields().first().waitFor({ state: "visible", timeout: 5000 });
     if (prefix) {
       const currentPrefix = ((await prefixInput.inputValue().catch(() => "")) || "").trim();
       if (currentPrefix && currentPrefix !== prefix) {

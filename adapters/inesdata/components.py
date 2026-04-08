@@ -2,6 +2,7 @@ import os
 import shlex
 import tempfile
 import time
+import ipaddress
 
 import yaml
 
@@ -591,6 +592,14 @@ class INESDataComponentsAdapter:
                     "SELF_HOST_URL": base_url,
                     "BASE_URL": base_url,
                 }
+                host_alias_ip = self._resolve_ontology_hub_self_host_alias_ip(deployer_config)
+                if host_alias_ip:
+                    overrides["hostAliases"] = [
+                        {
+                            "ip": host_alias_ip,
+                            "hostnames": [host],
+                        }
+                    ]
 
             if "ONTOLOGY_HUB_SAMPLE_DATA_ENABLED" in deployer_config:
                 overrides.setdefault("sampleData", {})["enabled"] = self._parse_bool(
@@ -599,6 +608,40 @@ class INESDataComponentsAdapter:
                 )
 
         return overrides
+
+    def _resolve_ontology_hub_self_host_alias_ip(self, deployer_config: dict) -> str:
+        explicit_ip = (deployer_config.get("ONTOLOGY_HUB_SELF_HOST_ALIAS_IP") or "").strip()
+        if explicit_ip:
+            return explicit_ip if self._is_ip_address(explicit_ip) else ""
+
+        namespace = (
+            deployer_config.get("ONTOLOGY_HUB_SELF_HOST_ALIAS_SERVICE_NAMESPACE")
+            or "ingress-nginx"
+        ).strip()
+        service_name = (
+            deployer_config.get("ONTOLOGY_HUB_SELF_HOST_ALIAS_SERVICE_NAME")
+            or "ingress-nginx-controller"
+        ).strip()
+        if not namespace or not service_name:
+            return ""
+
+        svc_q = shlex.quote(service_name)
+        ns_q = shlex.quote(namespace)
+        ip = (
+            self.run_silent(
+                f"kubectl get svc {svc_q} -n {ns_q} -o jsonpath='{{.spec.clusterIP}}'"
+            )
+            or ""
+        ).strip()
+        return ip if self._is_ip_address(ip) else ""
+
+    @staticmethod
+    def _is_ip_address(value: str) -> bool:
+        try:
+            ipaddress.ip_address((value or "").strip())
+            return True
+        except ValueError:
+            return False
 
     def _write_component_values_override_file(self, chart_dir: str, normalized_component: str, deployer_config: dict):
         payload = self._component_values_override_payload(normalized_component, deployer_config)

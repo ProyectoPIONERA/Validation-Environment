@@ -8,7 +8,8 @@ class OntologyHubTermsPage {
     if (query) {
       url.searchParams.set("q", query);
     }
-    await this.page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: 5000 });
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   }
 
   async expectReady() {
@@ -17,7 +18,11 @@ class OntologyHubTermsPage {
   }
 
   async expectHealthyPage() {
-    const heading = ((await this.page.locator("h1").first().textContent().catch(() => "")) || "").trim();
+    const headingLocator = this.page.locator("h1").first();
+    const heading =
+      (await headingLocator.count().catch(() => 0)) > 0
+        ? ((await headingLocator.textContent().catch(() => "")) || "").trim()
+        : "";
     if (/404|500|oops!/i.test(heading)) {
       throw new Error(`Ontology Hub terms page failed to load: ${heading}`);
     }
@@ -33,11 +38,11 @@ class OntologyHubTermsPage {
     await this.expectHealthyPage();
     await this.page.locator(".count-items .count").first().waitFor({
       state: "attached",
-      timeout: 15000,
+      timeout: 5000,
     });
     await this.page.locator("#SearchGrid li.SearchBoxclass, #SearchGrid li").first().waitFor({
       state: "attached",
-      timeout: 15000,
+      timeout: 5000,
     });
   }
 
@@ -64,7 +69,11 @@ class OntologyHubTermsPage {
   }
 
   async currentResultCount() {
-    const countText = await this.page.locator(".count-items .count").first().textContent().catch(() => "");
+    const countLocator = this.page.locator(".count-items .count").first();
+    const countText =
+      (await countLocator.count().catch(() => 0)) > 0
+        ? await countLocator.textContent().catch(() => "")
+        : "";
     const parsed = Number(countText || "0");
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;

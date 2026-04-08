@@ -106,6 +106,59 @@ class InesdataComponentOverridesTests(unittest.TestCase):
             },
         )
 
+    def test_ontology_hub_override_payload_adds_host_alias_for_public_self_url(self):
+        adapter = self._make_adapter()
+
+        with mock.patch.object(
+            adapter,
+            "_resolve_ontology_hub_self_host_alias_ip",
+            return_value="10.102.17.235",
+        ):
+            payload = adapter._component_values_override_payload(
+                "ontology-hub",
+                {"DS_DOMAIN_BASE": "custom.ds.example.org"},
+            )
+
+        self.assertEqual(
+            payload,
+            {
+                "ingress": {
+                    "enabled": True,
+                    "host": "ontology-hub-demo.custom.ds.example.org",
+                },
+                "env": {
+                    "SELF_HOST_URL": "http://ontology-hub-demo.custom.ds.example.org",
+                    "BASE_URL": "http://ontology-hub-demo.custom.ds.example.org",
+                },
+                "hostAliases": [
+                    {
+                        "ip": "10.102.17.235",
+                        "hostnames": ["ontology-hub-demo.custom.ds.example.org"],
+                    }
+                ],
+            },
+        )
+
+    def test_resolve_ontology_hub_self_host_alias_ip_prefers_explicit_valid_ip(self):
+        adapter = self._make_adapter()
+
+        ip = adapter._resolve_ontology_hub_self_host_alias_ip(
+            {"ONTOLOGY_HUB_SELF_HOST_ALIAS_IP": "10.102.17.235"}
+        )
+
+        self.assertEqual(ip, "10.102.17.235")
+
+    def test_resolve_ontology_hub_self_host_alias_ip_reads_ingress_service_cluster_ip(self):
+        adapter = self._make_adapter()
+        adapter.run_silent = mock.Mock(return_value="10.102.17.235")
+
+        ip = adapter._resolve_ontology_hub_self_host_alias_ip({})
+
+        self.assertEqual(ip, "10.102.17.235")
+        adapter.run_silent.assert_called_once_with(
+            "kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.spec.clusterIP}'"
+        )
+
     def test_deploy_helm_release_supports_multiple_values_files(self):
         run = mock.Mock(return_value="ok")
         infra = INESDataInfrastructureAdapter(

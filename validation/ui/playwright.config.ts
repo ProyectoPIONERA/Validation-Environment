@@ -9,6 +9,7 @@ const htmlReportDir = process.env.PLAYWRIGHT_HTML_REPORT_DIR || "playwright-repo
 const blobReportDir = process.env.PLAYWRIGHT_BLOB_REPORT_DIR || "blob-report";
 const jsonReportFile =
   process.env.PLAYWRIGHT_JSON_REPORT_FILE || path.join(outputDir, "results.json");
+const headedGpuFix = process.env.PLAYWRIGHT_HEADED_GPU_FIX === "1";
 
 export default defineConfig({
   testDir: ".",
@@ -33,5 +34,10 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "on",
     ignoreHTTPSErrors: true,
+    launchOptions: headedGpuFix
+      ? {
+          args: ["--disable-gpu"],
+        }
+      : undefined,
   },
 });

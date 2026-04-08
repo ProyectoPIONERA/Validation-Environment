@@ -1,5 +1,5 @@
-const { test, expect } = require("../fixtures");
-const { gotoEdition } = require("../support/bootstrap");
+const { test, expect } = require("../../ui/fixtures");
+const { gotoEdition } = require("../../ui/support/bootstrap");
 
 test("OH-LOGIN: admin can sign in and reach the edition area", async ({
   page,

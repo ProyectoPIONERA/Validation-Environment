@@ -12,7 +12,7 @@ export class ContractDefinitionCreatePage {
 
   async goto(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/contract-definitions/create`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
@@ -25,31 +25,59 @@ export class ContractDefinitionCreatePage {
   async expectReady(): Promise<void> {
     await expect(
       this.page.locator("mat-card-title", { hasText: /Create a contract definition/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    ).toBeVisible({ timeout: 10_000 });
   }
 
   async fillContractDefinitionId(contractDefinitionId: string): Promise<void> {
     await materialInput(this.page, /^ID$/).fill(contractDefinitionId);
   }
 
-  async selectAccessPolicy(policyId: string): Promise<void> {
-    await materialSelect(this.page, /Access policy/i).click();
-    await this.page.locator("mat-option").filter({ hasText: policyId }).first().click();
-  }
+  async selectMatchingPolicies(policyId: string, timeoutMs = 120_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
 
-  async selectContractPolicy(policyId: string): Promise<void> {
-    await materialSelect(this.page, /Contract policy/i).click();
-    await this.page.locator("mat-option").filter({ hasText: policyId }).first().click();
+    while (Date.now() < deadline) {
+      attempt += 1;
+
+      if (attempt > 1) {
+        await this.page.reload({ waitUntil: "domcontentloaded", timeout: 10_000 });
+        await this.expectReady();
+      }
+
+      const accessSelected = await this.trySelectPolicyOption(/Access policy/i, policyId);
+      if (!accessSelected) {
+        await this.page.waitForTimeout(2_000);
+        continue;
+      }
+
+      const contractSelected = await this.trySelectPolicyOption(/Contract policy/i, policyId);
+      if (contractSelected) {
+        return;
+      }
+
+      await this.page.waitForTimeout(2_000);
+    }
+
+    throw new Error(
+      `Policy '${policyId}' did not become available in both contract definition selectors within ${timeoutMs}ms.`,
+    );
   }
 
   async addAsset(assetId: string): Promise<void> {
     const assetInput = this.page.locator("input[placeholder='Search assets']").first();
-    await expect(assetInput).toBeVisible({ timeout: 15_000 });
+    await expect(assetInput).toBeVisible({ timeout: 5_000 });
     await assetInput.fill(assetId);
-    await this.page.locator("mat-option").filter({ hasText: assetId }).first().click();
+    await assetInput.press("ArrowDown").catch(() => {});
+    const option = this.page
+      .locator(".cdk-overlay-pane [role='option'], .cdk-overlay-pane mat-option")
+      .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(assetId)}\\s*$`) })
+      .last();
+    await expect(option).toBeVisible({ timeout: 5_000 });
+    await option.scrollIntoViewIfNeeded().catch(() => {});
+    await option.click({ timeout: 5_000, force: true });
 
     await expect(this.page.locator("mat-chip").filter({ hasText: assetId }).first()).toBeVisible({
-      timeout: 15_000,
+      timeout: 5_000,
     });
   }
 
@@ -57,7 +85,7 @@ export class ContractDefinitionCreatePage {
     await this.page.getByRole("button", { name: /^Create$/i }).click();
   }
 
-  async waitForCreationSuccess(timeoutMs = 30_000): Promise<string> {
+  async waitForCreationSuccess(timeoutMs = 10_000): Promise<string> {
     const notification = snackBar(this.page);
     await expect(notification).toContainText(/contract definition created/i, {
       timeout: timeoutMs,
@@ -68,7 +96,7 @@ export class ContractDefinitionCreatePage {
   async expectContractDefinitionListed(
     contractDefinitionId: string,
     expectations: ContractDefinitionListExpectations = {},
-    timeoutMs = 45_000,
+    timeoutMs = 15_000,
   ): Promise<void> {
     await expect(async () => {
       const found = await this.findContractDefinition(contractDefinitionId, expectations);
@@ -78,7 +106,7 @@ export class ContractDefinitionCreatePage {
       ).toBeTruthy();
     }).toPass({
       timeout: timeoutMs,
-      intervals: [1_000, 2_000, 5_000],
+      intervals: [500, 1_000, 2_000],
     });
   }
 
@@ -113,8 +141,8 @@ export class ContractDefinitionCreatePage {
     }
 
     await nextButton.click();
-    await this.page.waitForLoadState("networkidle");
-    await this.page.waitForTimeout(500);
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
+    await this.page.waitForTimeout(200);
     return true;
   }
 
@@ -134,4 +162,28 @@ export class ContractDefinitionCreatePage {
 
     return card.first();
   }
+
+  private async trySelectPolicyOption(
+    label: string | RegExp,
+    policyId: string,
+  ): Promise<boolean> {
+    const exactPolicy = new RegExp(`^\\s*${escapeRegExp(policyId)}\\s*$`);
+
+    await materialSelect(this.page, label).click({ timeout: 5_000 });
+
+    const overlayOptions = this.page.locator(".cdk-overlay-pane [role='option'], .cdk-overlay-pane mat-option");
+    const option = overlayOptions.filter({ hasText: exactPolicy }).last();
+    if ((await option.count().catch(() => 0)) > 0) {
+      await option.scrollIntoViewIfNeeded().catch(() => {});
+      await option.click({ timeout: 5_000, force: true });
+      return true;
+    }
+
+    await this.page.keyboard.press("Escape").catch(() => {});
+    return false;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

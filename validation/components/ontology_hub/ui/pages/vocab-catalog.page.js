@@ -9,7 +9,8 @@ class OntologyHubVocabCatalogPage {
     if (query) {
       url.searchParams.set("q", query);
     }
-    await this.page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: 5000 });
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   }
 
   async expectReady() {
@@ -23,11 +24,11 @@ class OntologyHubVocabCatalogPage {
   async waitForResults() {
     await this.page.locator(".count-items .count").first().waitFor({
       state: "attached",
-      timeout: 15000,
+      timeout: 5000,
     });
     await this.resultItems().first().waitFor({
       state: "attached",
-      timeout: 15000,
+      timeout: 5000,
     });
   }
 
@@ -36,15 +37,13 @@ class OntologyHubVocabCatalogPage {
       .locator("#SearchGrid")
       .getByText(prefixOrLabel, { exact: false })
       .first()
-      .waitFor({ state: "visible", timeout: 15000 });
+      .waitFor({ state: "visible", timeout: 5000 });
   }
 
   async openResult(prefix) {
-    const target = this.page
-      .locator("#SearchGrid .prefix a")
-      .filter({ hasText: prefix })
-      .first();
-    await target.waitFor({ state: "visible", timeout: 15000 });
+    const exactPrefix = new RegExp(`^\\s*${escapeRegExp(prefix)}\\s*$`, "i");
+    const target = this.page.locator("#SearchGrid .prefix a").filter({ hasText: exactPrefix }).first();
+    await target.waitFor({ state: "visible", timeout: 5000 });
     const label = ((await target.textContent()) || "").trim();
     await target.click();
     return label;
@@ -81,7 +80,11 @@ class OntologyHubVocabCatalogPage {
   }
 
   async currentResultCount() {
-    const countText = await this.page.locator(".count-items .count").first().textContent().catch(() => "");
+    const countLocator = this.page.locator(".count-items .count").first();
+    const countText =
+      (await countLocator.count().catch(() => 0)) > 0
+        ? await countLocator.textContent().catch(() => "")
+        : "";
     const parsed = Number(countText || "0");
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
@@ -112,13 +115,19 @@ class OntologyHubVocabCatalogPage {
 
   async openSuggestion(prefix) {
     const target = prefix
-      ? this.suggestionItems().filter({ hasText: prefix }).first()
+      ? this.suggestionItems()
+          .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(prefix)}\\s*$`, "i") })
+          .first()
       : this.suggestionItems().first();
     await target.waitFor({ state: "visible" });
     const label = ((await target.textContent()) || "").trim();
     await target.click();
     return label;
   }
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 module.exports = {

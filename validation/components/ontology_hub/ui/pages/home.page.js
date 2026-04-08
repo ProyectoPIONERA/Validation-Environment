@@ -12,6 +12,29 @@ class OntologyHubHomePage {
     await this.page.locator("#searchInput").waitFor({ state: "visible" });
   }
 
+  vocabularyBubble(prefix) {
+    const escaped = String(prefix || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return this.page
+      .locator("#vis svg g.node")
+      .filter({
+        has: this.page.locator("title", {
+          hasText: new RegExp(`^\\s*${escaped}(?:\\s*-.*)?$`, "i"),
+        }),
+      })
+      .first();
+  }
+
+  async openVocabularyBubble(prefix) {
+    const bubble = this.vocabularyBubble(prefix);
+    await bubble.waitFor({ state: "visible", timeout: 5000 });
+    const circle = bubble.locator("circle").first();
+    if ((await circle.count()) > 0) {
+      await circle.click();
+      return;
+    }
+    await bubble.click();
+  }
+
   navLink(label) {
     return this.page.locator("header nav a").filter({ hasText: label }).first();
   }

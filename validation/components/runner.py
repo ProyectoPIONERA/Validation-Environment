@@ -2,14 +2,16 @@ import json
 from datetime import datetime
 from typing import Callable, Dict, List
 
-from validation.components.ontology_hub.component_runner import run_ontology_hub_component_validation
+from validation.components.ontology_hub.functional.component_runner import (
+    run_ontology_hub_component_validation as run_ontology_hub_functional_component_validation,
+)
 
 
 ComponentRunner = Callable[[str, str | None], dict]
 
 
 COMPONENT_RUNNERS: Dict[str, ComponentRunner] = {
-    "ontology-hub": run_ontology_hub_component_validation,
+    "ontology-hub": run_ontology_hub_functional_component_validation,
 }
 
 

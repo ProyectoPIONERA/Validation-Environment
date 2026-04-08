@@ -10,7 +10,7 @@ from urllib import parse
 
 import requests
 
-from validation.components.ontology_hub.runner import (
+from validation.components.ontology_hub.integration.runner import (
     API_SEARCH_PATH,
     API_DOCS_PATH,
     HOME_PATH,
@@ -21,9 +21,9 @@ from validation.components.ontology_hub.runtime_config import resolve_ontology_h
 
 
 COMPONENT_KEY = "ontology-hub"
-PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "ui", "playwright.config.js")
+PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "integration", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
-COMPONENT_UI_DIR = Path(__file__).resolve().parent / "ui"
+COMPONENT_UI_DIR = Path(__file__).resolve().parent
 PLAYWRIGHT_COMMAND_PREFIX = [
     os.path.join(".", "node_modules", ".bin", "playwright"),
     "test",

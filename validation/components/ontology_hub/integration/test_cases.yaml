@@ -26,7 +26,7 @@ support_checks:
     automation:
       status: automated
       mode: ui_support
-      ui_spec: validation/components/ontology_hub/ui/specs/oh_login.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/oh_login.spec.js
       real_flow:
         method: MULTISTEP
         pages:
@@ -55,7 +55,7 @@ support_checks:
     automation:
       status: automated
       mode: ui_support
-      ui_spec: validation/components/ontology_hub/ui/specs/oh_list_search.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/oh_list_search.spec.js
       real_flow:
         method: MULTISTEP
         pages:
@@ -88,14 +88,14 @@ test_cases:
     automation:
       status: automated
       mode: ui
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_01_create_vocab.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_01_create_vocab.spec.js
       real_flow:
         method: MULTISTEP
         pages:
           - /edition/login
           - /edition/createVocabulary
           - /dataset/vocabs
-      notes: The current automation validates the real creation-by-URI flow through the editing interface.
+      notes: The current automation validates the real creation flow from the configured source (URI or repository) through the editing interface and waits for catalog publication without any external shell initialization step.
 
   - id: PT5-OH-02
     component: ontology_hub
@@ -119,7 +119,7 @@ test_cases:
     automation:
       status: automated
       mode: ui
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_02_edit_vocab.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_02_edit_vocab.spec.js
       real_flow:
         method: MULTISTEP
         pages:
@@ -289,7 +289,7 @@ test_cases:
     automation:
       status: automated
       mode: ui
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_09_filters.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_09_filters.spec.js
       api_equivalent_runner_case: pt5_oh_09_filtered_search
       real_flow:
         method: GET
@@ -324,7 +324,7 @@ test_cases:
     automation:
       status: automated
       mode: ui_partial
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_10_versions.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_10_versions.spec.js
       real_flow:
         method: GET
         path: /dataset/vocabs/s4grid
@@ -351,7 +351,7 @@ test_cases:
     automation:
       status: automated
       mode: ui
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_11_vocab_detail.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_11_vocab_detail.spec.js
       real_flow:
         method: GET
         path: /dataset/vocabs/s4grid
@@ -377,7 +377,7 @@ test_cases:
     automation:
       status: automated
       mode: ui
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_12_statistics.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_12_statistics.spec.js
       real_flow:
         method: GET
         path: /dataset/vocabs/s4grid
@@ -463,7 +463,7 @@ test_cases:
     automation:
       status: automated
       mode: hybrid
-      ui_spec: validation/components/ontology_hub/ui/specs/pt5_oh_15_ui_access.spec.js
+      ui_spec: validation/components/ontology_hub/integration/specs/pt5_oh_15_ui_access.spec.js
       api_equivalent_runner_case: pt5_oh_15_ui_api_access
       real_flow:
         requests:

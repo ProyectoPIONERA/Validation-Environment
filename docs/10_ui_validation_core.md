@@ -312,6 +312,23 @@ Esta ejecucion se registra en `experiment_results.json` como:
 
 - `test = ui-ops-minio-console`
 
+## Troubleshooting WSL
+
+Si los tests UI se lanzan en modo `Live (headed)` bajo WSL y la ventana de Chromium/Chrome aparece en blanco, gris o sin contenido visible:
+
+1. Actualizar WSL/WSLg desde Windows:
+
+```powershell
+wsl --update
+wsl --shutdown
+```
+
+2. Volver a abrir la distro y repetir el test `Live`.
+
+Este paso ha resuelto en la practica el problema de visibilidad del navegador Playwright en WSL.
+
+Si el entorno sigue mostrando sintomas graficos extranos despues de varias modificaciones locales del framework, conviene probar tambien con una reinstalacion limpia del workspace de `Validation-Environment` antes de seguir depurando la suite.
+
 ## Limites Conocidos
 
 - La UI cubre el flujo visible de negociacion y transferencia, pero no sustituye las validaciones tecnicas de `EDR` o descarga raw.

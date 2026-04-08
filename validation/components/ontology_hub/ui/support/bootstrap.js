@@ -58,13 +58,13 @@ function loginErrorHint(runtime) {
 }
 
 function stateFilePath() {
-  const explicit = process.env.ONTOLOGY_HUB_BOOTSTRAP_STATE_FILE;
+  const explicit =
+    process.env.ONTOLOGY_HUB_INTEGRATION_STATE_FILE || process.env.ONTOLOGY_HUB_BOOTSTRAP_STATE_FILE;
   if (explicit) {
     return explicit;
   }
 
-  const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR || process.cwd();
-  return path.join(outputDir, "ontology-hub-bootstrap.json");
+  return path.resolve(__dirname, "../../integration/state/ontology-hub-bootstrap.json");
 }
 
 function readStateFile(filePath) {
@@ -156,7 +156,7 @@ async function waitForSelectedTag(page, tagLabel) {
         (node) => String(node.value || "").trim().toLowerCase() === expectedTag,
       ),
     expected,
-    { timeout: 20000 },
+    { timeout: 5000 },
   );
 }
 
@@ -177,7 +177,7 @@ async function ensureVocabularyTag(page, runtime) {
   }
 
   await page.locator(".fieldTagsAddAction").click();
-  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 20000 });
+  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 5000 });
 
   const tagPattern = new RegExp(`^\\s*${escapeRegExp(tagLabel)}\\s*$`, "i");
   let tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
@@ -192,7 +192,7 @@ async function ensureVocabularyTag(page, runtime) {
           }
           return /\/edition\/tags\/?$/.test(new URL(response.url()).pathname);
         },
-        { timeout: 20000 },
+        { timeout: 5000 },
       )
       .catch(() => null);
 
@@ -217,7 +217,7 @@ async function ensureVocabularyTag(page, runtime) {
     }
 
     tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
-    await tagOption.waitFor({ state: "visible", timeout: 20000 });
+    await tagOption.waitFor({ state: "visible", timeout: 5000 });
     created = true;
   }
 
@@ -268,11 +268,11 @@ async function submitVocabularyMetadata(page, runtime) {
         }
         return /^\/edition\/vocabs(?:\/[^/]+)?\/?$/.test(new URL(response.url()).pathname);
       },
-      { timeout: 45000 },
+      { timeout: 5000 },
     )
     .catch(() => null);
   const redirectPromise = page
-    .waitForURL(/\/dataset\/vocabs\/[^/]+\/?$/, { timeout: 45000 })
+    .waitForURL(/\/dataset\/vocabs\/[^/]+\/?$/, { timeout: 5000 })
     .then(() => true)
     .catch(() => false);
 
@@ -378,7 +378,7 @@ async function gotoEdition(page, runtime) {
   }
 
   try {
-    await page.locator(".createVocab").waitFor({ state: "visible", timeout: 20000 });
+    await page.locator(".createVocab").waitFor({ state: "visible", timeout: 5000 });
   } catch (error) {
     const formErrors = await page.locator("#formErrors").textContent().catch(() => "");
     throw new Error(
@@ -402,12 +402,12 @@ async function ensurePublicDetail(page, runtime, prefix, title) {
       });
 
       const metadata = page.locator("section#posts").getByText("Metadata", { exact: true });
-      await metadata.waitFor({ state: "visible", timeout: 20000 });
+      await metadata.waitFor({ state: "visible", timeout: 5000 });
 
       if (title) {
         await page.locator("section#post").getByText(title, { exact: false }).first().waitFor({
           state: "visible",
-          timeout: 20000,
+          timeout: 5000,
         });
       }
       return;
@@ -546,7 +546,7 @@ async function createVocabularyFromUri(page, runtime) {
     );
   }
 
-  await duplicateError.waitFor({ state: "visible", timeout: 20000 });
+  await duplicateError.waitFor({ state: "visible", timeout: 5000 });
   return {
     created: false,
     duplicateByPrefix: true,
@@ -573,32 +573,7 @@ async function createVocabularyFromRepository(page, runtime) {
     fillNamespace: false,
   });
   if (metadataContext) {
-    let saveOutcome;
-    try {
-      saveOutcome = await submitVocabularyMetadata(page, runtime);
-    } catch (error) {
-      const recoveredVocabulary = await resolveExistingVocabularyContext(
-        page,
-        runtime,
-        runtime.creationPrefix,
-        runtime.creationTitle,
-      );
-      if (recoveredVocabulary) {
-        return {
-          created: true,
-          duplicateByPrefix: false,
-          duplicateByUri: false,
-          recoveredAfterSaveError: true,
-          responseStatus: 500,
-          url: `${runtime.baseUrl}/dataset/vocabs/${encodeURIComponent(recoveredVocabulary.prefix)}`,
-          errorMessage: normalizeText(error.message),
-          repositoryUri,
-          method: "repository",
-          ...metadataContext,
-        };
-      }
-      throw error;
-    }
+    const saveOutcome = await submitVocabularyMetadata(page, runtime);
     return {
       ...saveOutcome,
       ...metadataContext,

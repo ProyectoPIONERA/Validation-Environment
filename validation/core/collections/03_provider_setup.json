@@ -75,7 +75,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 1,\n  \"filterExpression\": [\n    {\n      \"operandLeft\": \"https://w3id.org/edc/v0.0.1/ns/id\",\n      \"operator\": \"=\",\n      \"operandRight\": \"{{e2e_asset_id}}\"\n    }\n  ]\n}"
         }
       }
     },
@@ -113,7 +113,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 1,\n  \"filterExpression\": [\n    {\n      \"operandLeft\": \"id\",\n      \"operator\": \"=\",\n      \"operandRight\": \"{{e2e_policy_id}}\"\n    }\n  ]\n}"
         }
       }
     },
@@ -151,7 +151,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 50,\n  \"filterExpression\": []\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"offset\": 0,\n  \"limit\": 1,\n  \"filterExpression\": [\n    {\n      \"operandLeft\": \"id\",\n      \"operator\": \"=\",\n      \"operandRight\": \"{{e2e_contract_definition_id}}\"\n    }\n  ]\n}"
         }
       }
     }

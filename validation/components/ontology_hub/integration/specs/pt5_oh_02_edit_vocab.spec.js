@@ -1,9 +1,10 @@
-const { test } = require("../fixtures");
+// Excel traceability: Ontology Hub case 10 (Editar Ontologia), partial coverage.
+const { test } = require("../../ui/fixtures");
 const {
   editVocabularyForWorkflow,
   editVocabularyForWorkflowHttp,
-} = require("../support/flow-edit-vocab");
-const { updateOntologyHubBootstrapState } = require("../support/bootstrap");
+} = require("../../ui/support/flow-edit-vocab");
+const { updateOntologyHubBootstrapState } = require("../../ui/support/bootstrap");
 
 test.use({
   video: "off",

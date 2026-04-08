@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from validation.components.ontology_hub.component_runner import run_ontology_hub_component_validation
+from validation.components.ontology_hub.integration.component_runner import run_ontology_hub_component_validation
 from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
-from validation.components.ontology_hub.ui_runner import (
+from validation.components.ontology_hub.integration.ui_runner import (
     UI_CASE_METADATA,
     _run_ui_preflight,
     run_ontology_hub_ui_validation,
@@ -169,10 +169,10 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with mock.patch(
-                "validation.components.ontology_hub.ui_runner.subprocess.run",
+                "validation.components.ontology_hub.integration.ui_runner.subprocess.run",
                 side_effect=fake_subprocess_run,
             ), mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                "validation.components.ontology_hub.integration.ui_runner._run_ui_preflight",
                 return_value=preflight,
             ):
                 result = run_ontology_hub_ui_validation(
@@ -231,10 +231,10 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             with mock.patch(
-                "validation.components.ontology_hub.ui_runner.subprocess.run",
+                "validation.components.ontology_hub.integration.ui_runner.subprocess.run",
                 side_effect=fake_subprocess_run,
             ), mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                "validation.components.ontology_hub.integration.ui_runner._run_ui_preflight",
                 return_value=preflight,
             ):
                 result = run_ontology_hub_ui_validation(
@@ -266,9 +266,9 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
             }
 
             with mock.patch(
-                "validation.components.ontology_hub.ui_runner.subprocess.run",
+                "validation.components.ontology_hub.integration.ui_runner.subprocess.run",
             ) as mocked_subprocess, mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_ui_preflight",
+                "validation.components.ontology_hub.integration.ui_runner._run_ui_preflight",
                 return_value=preflight,
             ):
                 result = run_ontology_hub_ui_validation(
@@ -292,7 +292,7 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_html_probe",
+                "validation.components.ontology_hub.integration.ui_runner._run_html_probe",
                 side_effect=[
                     {"id": "home_page", "status": "passed", "blocking": True},
                     {"id": "catalog_page", "status": "passed", "blocking": True},
@@ -302,7 +302,7 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 ],
             ),
             mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_edition_auth_probe",
+                "validation.components.ontology_hub.integration.ui_runner._run_edition_auth_probe",
                 return_value={
                     "id": "edition_authentication",
                     "status": "failed",
@@ -312,7 +312,7 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
                 },
             ),
             mock.patch(
-                "validation.components.ontology_hub.ui_runner._run_search_api_probe",
+                "validation.components.ontology_hub.integration.ui_runner._run_search_api_probe",
                 return_value={"id": "search_api", "status": "failed", "blocking": False},
             ),
         ):
@@ -392,11 +392,11 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "validation.components.ontology_hub.component_runner.run_ontology_hub_validation",
+                    "validation.components.ontology_hub.integration.component_runner.run_ontology_hub_validation",
                     return_value=api_result,
                 ),
                 mock.patch(
-                    "validation.components.ontology_hub.component_runner.run_ontology_hub_ui_validation",
+                    "validation.components.ontology_hub.integration.component_runner.run_ontology_hub_ui_validation",
                     return_value=ui_result,
                 ),
             ):

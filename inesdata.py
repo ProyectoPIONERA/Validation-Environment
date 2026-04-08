@@ -14,9 +14,11 @@ import shutil
 import statistics
 import re
 import shlex
+from html import unescape
 from itertools import combinations
 from itertools import permutations
 from datetime import datetime
+from urllib.parse import quote, unquote
 from runtime_dependencies import ensure_runtime_dependencies
 
 
@@ -4050,8 +4052,19 @@ def _resolve_ui_mode():
         if choice == "1":
             return {"label": "normal", "args": [], "env": {}}
         if choice == "2":
-            return {"label": "live", "args": ["--headed"], "env": {}}
-        return {"label": "debug", "args": ["--headed", "--debug"], "env": {"PWDEBUG": "1"}}
+            return {
+                "label": "live",
+                "args": ["--headed"],
+                "env": {"PLAYWRIGHT_HEADED_GPU_FIX": "1"},
+            }
+        return {
+            "label": "debug",
+            "args": ["--headed", "--debug"],
+            "env": {
+                "PWDEBUG": "1",
+                "PLAYWRIGHT_HEADED_GPU_FIX": "1",
+            },
+        }
 
 
 def _run_ontology_hub_ui_tests(mode):
@@ -4087,12 +4100,519 @@ def _run_ontology_hub_ui_tests(mode):
         "./node_modules/.bin/playwright",
         "test",
         "--config",
-        "../components/ontology_hub/ui/playwright.config.js",
+        "../components/ontology_hub/integration/playwright.config.js",
         "--workers=1",
     ]
     cmd.extend(mode.get("args") or [])
 
     print(f"\nRunning Ontology Hub UI tests (artifacts in {base_dir})\n")
+    try:
+        subprocess.run(cmd, cwd="validation/ui", env=env)
+    finally:
+        run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+    return None
+
+
+def _ontology_hub_release_name():
+    return f"{Config.DS_NAME}-ontology-hub"
+
+
+def _ontology_hub_functional_reset_mode():
+    mode = (
+        os.environ.get("ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE")
+        or os.environ.get("ONTOLOGY_HUB_APP_FLOWS_RESET_MODE")
+        or "hard"
+    ).strip().lower()
+    if mode not in {"soft", "hard", "off"}:
+        return "hard"
+    return mode
+
+
+def _reset_ontology_hub_for_functional():
+    """Recreate the runtime used by the Ontology Hub functional suite on the current namespace."""
+    namespace = Config.namespace_demo()
+    release_name = _ontology_hub_release_name()
+    namespace_q = shlex.quote(namespace)
+
+    deployments = [
+        ("mongodb", f"{release_name}-mongodb", 300),
+        ("elasticsearch", f"{release_name}-elasticsearch", 300),
+        ("application", release_name, 1800),
+    ]
+
+    print("\nResetting Ontology Hub runtime before Ontology Hub Functional...\n")
+    for label, deployment_name, timeout_seconds in deployments:
+        deployment_q = shlex.quote(deployment_name)
+        if run(
+            f"kubectl rollout restart deployment/{deployment_q} -n {namespace_q}",
+            check=False,
+        ) is None:
+            print(f"Could not restart Ontology Hub {label} deployment: {deployment_name}")
+            return False
+
+        if run(
+            f"kubectl rollout status deployment/{deployment_q} -n {namespace_q} --timeout={timeout_seconds}s",
+            check=False,
+        ) is None:
+            print(f"Ontology Hub {label} did not become ready in time: {deployment_name}")
+            return False
+
+    return True
+
+
+def _extract_csrf_token(html):
+    patterns = [
+        r'name=["\']_csrf["\'][^>]*value=["\']([^"\']+)["\']',
+        r'value=["\']([^"\']+)["\'][^>]*name=["\']_csrf["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html or "", flags=re.IGNORECASE)
+        if match:
+            return unescape(match.group(1)).strip()
+    return ""
+
+
+def _strip_html(value):
+    if not value:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", value)
+    return " ".join(unescape(text).split())
+
+
+def _extract_list_items_by_class(html, class_name):
+    pattern = rf'<li[^>]*class=["\'][^"\']*\b{re.escape(class_name)}\b[^"\']*["\'][^>]*>(.*?)</li>'
+    return re.findall(pattern, html or "", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _extract_delete_targets_from_search(html, query_patterns):
+    prefixes = set()
+    for raw_prefix in re.findall(
+        r'href=["\']/dataset/vocabs/([^"\'/?#]+)["\']',
+        html or "",
+        flags=re.IGNORECASE,
+    ):
+        prefix = unquote(raw_prefix).strip()
+        if not prefix:
+            continue
+        if any(pattern.search(prefix) for pattern in query_patterns):
+            prefixes.add(prefix)
+    return prefixes
+
+
+def _ontology_hub_response_looks_broken(response):
+    if response is None:
+        return True
+
+    if getattr(response, "status_code", 0) >= 500:
+        return True
+
+    body = (getattr(response, "text", "") or "").lower()
+    markers = (
+        "500 - oops! something went wrong - 500",
+        "cannot read properties of null",
+        "typeerror:",
+        "edition.jade:",
+        "/app/app/views/edition.jade",
+    )
+    return any(marker in body for marker in markers)
+
+
+def _ontology_hub_session_login(runtime, timeout=20):
+    base_url = (runtime.get("baseUrl") or "").rstrip("/")
+    if not base_url:
+        print("Ontology Hub cleanup failed: base URL is empty.")
+        return None
+
+    session = requests.Session()
+    try:
+        login_response = session.get(f"{base_url}/edition/login", timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        print(f"Ontology Hub cleanup failed while loading login page: {exc}")
+        return None
+
+    if login_response.status_code >= 400:
+        print(f"Ontology Hub cleanup failed: login page returned {login_response.status_code}")
+        return None
+
+    csrf_token = _extract_csrf_token(login_response.text)
+    if not csrf_token:
+        print("Ontology Hub cleanup failed: could not extract CSRF token from login page.")
+        return None
+
+    payload = {
+        "_csrf": csrf_token,
+        "email": runtime.get("adminEmail", ""),
+        "password": runtime.get("adminPassword", ""),
+    }
+    try:
+        session.post(
+            f"{base_url}/edition/session",
+            data=payload,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        edition_response = session.get(f"{base_url}/edition", timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        print(f"Ontology Hub cleanup failed during login: {exc}")
+        return None
+
+    if edition_response.status_code >= 400 or "/edition/login" in edition_response.url:
+        print("Ontology Hub cleanup failed: admin login was not accepted.")
+        return None
+    if _ontology_hub_response_looks_broken(edition_response):
+        print("Ontology Hub cleanup failed: authenticated /edition page is broken.")
+        return None
+
+    return session
+
+
+def _ontology_hub_soft_cleanup_users(session, runtime, timeout=20):
+    base_url = (runtime.get("baseUrl") or "").rstrip("/")
+    target_emails = {"testing@myemail.com"}
+    try:
+        response = session.get(f"{base_url}/edition/users", timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        print(f"Ontology Hub soft cleanup failed while listing users: {exc}")
+        return None
+
+    if response.status_code >= 400:
+        print(f"Ontology Hub soft cleanup failed: /edition/users returned {response.status_code}")
+        return None
+    if _ontology_hub_response_looks_broken(response):
+        print("Ontology Hub soft cleanup failed: /edition/users rendered a broken server page.")
+        return None
+
+    csrf_token = _extract_csrf_token(response.text)
+    rows = _extract_list_items_by_class(response.text, "SearchBoxperson")
+    deleted = []
+    for row in rows:
+        email_match = re.search(r'href=["\']mailto:([^"\']+)["\']', row, flags=re.IGNORECASE)
+        action_match = re.search(r'action=["\'](/edition/users/[^"\']+)["\']', row, flags=re.IGNORECASE)
+        email = unescape(email_match.group(1)).strip() if email_match else ""
+        if email not in target_emails or not action_match or not csrf_token:
+            continue
+        try:
+            session.post(
+                f"{base_url}{action_match.group(1)}",
+                data={"_csrf": csrf_token, "_method": "DELETE"},
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            deleted.append(email)
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not delete user {email}: {exc}")
+    return deleted
+
+
+def _ontology_hub_soft_cleanup_tags(session, runtime, timeout=20):
+    base_url = (runtime.get("baseUrl") or "").rstrip("/")
+    tag_patterns = [
+        re.compile(r"^MiTag-[A-Za-z0-9_-]+$"),
+        re.compile(r"^MiTagPrueba-[A-Za-z0-9_-]+$"),
+    ]
+    try:
+        response = session.get(f"{base_url}/edition/tags", timeout=timeout, allow_redirects=True)
+    except requests.RequestException as exc:
+        print(f"Ontology Hub soft cleanup failed while listing tags: {exc}")
+        return None
+
+    if response.status_code >= 400:
+        print(f"Ontology Hub soft cleanup failed: /edition/tags returned {response.status_code}")
+        return None
+    if _ontology_hub_response_looks_broken(response):
+        print("Ontology Hub soft cleanup failed: /edition/tags rendered a broken server page.")
+        return None
+
+    csrf_token = _extract_csrf_token(response.text)
+    rows = _extract_list_items_by_class(response.text, "SearchBoxtag")
+    deleted = []
+    for row in rows:
+        label_match = re.search(r'<div[^>]*class=["\']label["\'][^>]*>(.*?)</div>', row, flags=re.IGNORECASE | re.DOTALL)
+        action_match = re.search(r'action=["\'](/edition/tags/[^"\']+)["\']', row, flags=re.IGNORECASE)
+        label = _strip_html(label_match.group(1)) if label_match else ""
+        if not label or not any(pattern.match(label) for pattern in tag_patterns) or not action_match or not csrf_token:
+            continue
+        try:
+            session.post(
+                f"{base_url}{action_match.group(1)}",
+                data={"_csrf": csrf_token, "_method": "DELETE"},
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            deleted.append(label)
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not delete tag {label}: {exc}")
+    return deleted
+
+
+def _ontology_hub_soft_cleanup_agents(session, runtime, timeout=20):
+    base_url = (runtime.get("baseUrl") or "").rstrip("/")
+    target_names = ["Testing User Admin", "Testing User"]
+    deleted = []
+    for agent_name in target_names:
+        try:
+            response = session.get(
+                f"{base_url}/dataset/agents/{quote(agent_name, safe='')}",
+                timeout=timeout,
+                allow_redirects=True,
+            )
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not open agent {agent_name}: {exc}")
+            continue
+
+        if response.status_code >= 400:
+            continue
+
+        action_match = re.search(
+            r'<form[^>]*action=["\'](/edition/agents/[^"\']+)["\'][^>]*id=["\']formDelete["\']',
+            response.text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not action_match:
+            action_match = re.search(
+                r'<form[^>]*id=["\']formDelete["\'][^>]*action=["\'](/edition/agents/[^"\']+)["\']',
+                response.text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        csrf_token = _extract_csrf_token(response.text)
+        if not action_match or not csrf_token:
+            continue
+        try:
+            session.post(
+                f"{base_url}{action_match.group(1)}",
+                data={"_csrf": csrf_token, "_method": "DELETE"},
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            deleted.append(agent_name)
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not delete agent {agent_name}: {exc}")
+    return deleted
+
+
+def _ontology_hub_soft_cleanup_vocabularies(session, runtime, timeout=20):
+    base_url = (runtime.get("baseUrl") or "").rstrip("/")
+    query_patterns = [
+        re.compile(r"^saref4grid$", re.IGNORECASE),
+        re.compile(r"^ontology-development-repository-example$", re.IGNORECASE),
+        re.compile(r"^s4grid-fw-[a-z0-9-]+$", re.IGNORECASE),
+        re.compile(r"^oh-0[34]-", re.IGNORECASE),
+    ]
+    queries = [
+        "saref4grid",
+        "s4grid",
+        "Ontology-Development-Repository-Example",
+        "ontology-development-repository-example",
+    ]
+    prefixes = {"saref4grid", "ontology-development-repository-example"}
+    for query in queries:
+        try:
+            response = session.get(
+                f"{base_url}/dataset/vocabs",
+                params={"q": query},
+                timeout=timeout,
+                allow_redirects=True,
+            )
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not search vocabularies with query '{query}': {exc}")
+            continue
+        if response.status_code >= 400:
+            continue
+        prefixes.update(_extract_delete_targets_from_search(response.text, query_patterns))
+
+    deleted = []
+    for prefix in sorted(prefixes):
+        try:
+            response = session.get(
+                f"{base_url}/dataset/vocabs/{quote(prefix, safe='')}",
+                timeout=timeout,
+                allow_redirects=True,
+            )
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not open vocabulary {prefix}: {exc}")
+            continue
+        if response.status_code >= 400:
+            continue
+        action_match = re.search(
+            r'<form[^>]*action=["\'](/edition/vocabs/[^"\']+)["\'][^>]*id=["\']formDelete["\']',
+            response.text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not action_match:
+            action_match = re.search(
+                r'<form[^>]*id=["\']formDelete["\'][^>]*action=["\'](/edition/vocabs/[^"\']+)["\']',
+                response.text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+        csrf_token = _extract_csrf_token(response.text)
+        if not action_match or not csrf_token:
+            continue
+        try:
+            session.post(
+                f"{base_url}{action_match.group(1)}",
+                data={"_csrf": csrf_token, "_method": "DELETE"},
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            deleted.append(prefix)
+        except requests.RequestException as exc:
+            print(f"Ontology Hub soft cleanup warning: could not delete vocabulary {prefix}: {exc}")
+    return deleted
+
+
+def _soft_cleanup_ontology_hub_for_functional(runtime):
+    """Delete Ontology Hub functional-suite leftovers through Ontology Hub itself, without restarting pods."""
+    session = _ontology_hub_session_login(runtime)
+    if session is None:
+        return False
+
+    print("\nCleaning Ontology Hub Functional leftovers without restarting pods...\n")
+    users = _ontology_hub_soft_cleanup_users(session, runtime)
+    agents = _ontology_hub_soft_cleanup_agents(session, runtime)
+    vocabularies = _ontology_hub_soft_cleanup_vocabularies(session, runtime)
+    tags = _ontology_hub_soft_cleanup_tags(session, runtime)
+
+    failed_sections = []
+    if users is None:
+        failed_sections.append("users")
+    if agents is None:
+        failed_sections.append("agents")
+    if vocabularies is None:
+        failed_sections.append("vocabularies")
+    if tags is None:
+        failed_sections.append("tags")
+
+    if failed_sections:
+        print("Ontology Hub soft cleanup failed in: " + ", ".join(failed_sections))
+        return False
+
+    print(
+        "Ontology Hub soft cleanup summary: "
+        f"users={len(users)}, agents={len(agents)}, vocabularies={len(vocabularies)}, tags={len(tags)}"
+    )
+    return True
+
+
+def _prepare_ontology_hub_for_functional(runtime):
+    mode = _ontology_hub_functional_reset_mode()
+    base_url = runtime.get("baseUrl", "")
+
+    if mode == "off":
+        print("\nOntology Hub Functional cleanup skipped (ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=off).\n")
+        return _wait_for_ontology_hub_preflight(base_url, timeout_seconds=60)
+
+    if mode == "hard":
+        if not _reset_ontology_hub_for_functional():
+            return False
+        return _wait_for_ontology_hub_preflight(base_url)
+
+    if not _soft_cleanup_ontology_hub_for_functional(runtime):
+        print("\nOntology Hub soft cleanup failed. Falling back to hard reset...\n")
+        if not _reset_ontology_hub_for_functional():
+            return False
+        return _wait_for_ontology_hub_preflight(base_url)
+
+    if _wait_for_ontology_hub_preflight(base_url, timeout_seconds=60):
+        return True
+
+    print("\nOntology Hub soft cleanup left the app unhealthy. Falling back to hard reset...\n")
+    if not _reset_ontology_hub_for_functional():
+        return False
+    return _wait_for_ontology_hub_preflight(base_url)
+
+
+def _wait_for_ontology_hub_preflight(base_url, timeout_seconds=180):
+    """Wait until the public and edition areas answer after a runtime reset."""
+    normalized_base_url = (base_url or "").strip().rstrip("/")
+    if not normalized_base_url:
+        print("Ontology Hub preflight skipped: base URL is empty.")
+        return False
+
+    targets = [
+        ("dataset", f"{normalized_base_url}/dataset"),
+        ("edition", f"{normalized_base_url}/edition"),
+    ]
+    deadline = time.time() + timeout_seconds
+    last_statuses = {}
+
+    print("\nWaiting for Ontology Hub HTTP preflight...\n")
+    while time.time() < deadline:
+        all_ready = True
+        for label, url in targets:
+            try:
+                response = requests.get(url, timeout=10, allow_redirects=True)
+                last_statuses[label] = str(response.status_code)
+                if _ontology_hub_response_looks_broken(response):
+                    all_ready = False
+            except requests.RequestException as exc:
+                last_statuses[label] = str(exc)
+                all_ready = False
+
+        if all_ready:
+            print(
+                "Ontology Hub preflight ready: "
+                + ", ".join(f"{label}={status}" for label, status in last_statuses.items())
+            )
+            return True
+
+        time.sleep(5)
+
+    print(
+        "Ontology Hub preflight failed: "
+        + ", ".join(f"{label}={status}" for label, status in last_statuses.items())
+    )
+    return False
+
+
+def _run_ontology_hub_ui_functional(mode):
+    from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
+
+    experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    base_dir = os.path.abspath(os.path.join(
+        "experiments",
+        experiment_id,
+        "components",
+        "ontology-hub",
+        "functional",
+    ))
+    output_dir = os.path.join(base_dir, "test-results")
+    html_report_dir = os.path.join(base_dir, "playwright-report")
+    blob_report_dir = os.path.join(base_dir, "blob-report")
+    json_report_file = os.path.join(base_dir, "results.json")
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(html_report_dir, exist_ok=True)
+    os.makedirs(blob_report_dir, exist_ok=True)
+
+    runtime = resolve_ontology_hub_runtime()
+    if not _prepare_ontology_hub_for_functional(runtime):
+        print("\nOntology Hub Functional preparation failed. Execution aborted.\n")
+        return None
+
+    runtime_path = os.path.join(base_dir, "resolved_runtime.json")
+    with open(runtime_path, "w", encoding="utf-8") as handle:
+        json.dump(runtime, handle, indent=2, ensure_ascii=False)
+
+    env = {
+        **os.environ,
+        "ONTOLOGY_HUB_BASE_URL": runtime.get("baseUrl", ""),
+        "ONTOLOGY_HUB_RUNTIME_FILE": runtime_path,
+        "ONTOLOGY_HUB_UI_WORKERS": "1",
+        "PLAYWRIGHT_OUTPUT_DIR": output_dir,
+        "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
+        "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
+        "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
+    }
+    env.update(mode.get("env") or {})
+    cmd = [
+        "./node_modules/.bin/playwright",
+        "test",
+        "--config",
+        "../components/ontology_hub/functional/playwright.config.js",
+        "--workers=1",
+    ]
+    cmd.extend(mode.get("args") or [])
+
+    print(f"\nRunning Ontology Hub Functional (artifacts in {base_dir})\n")
     try:
         subprocess.run(cmd, cwd="validation/ui", env=env)
     finally:
@@ -4109,8 +4629,28 @@ def run_ontology_hub_ui_tests_interactive():
         mode = _resolve_ui_mode()
         if mode is None:
             return None
-        _run_ontology_hub_ui_tests(mode)
-        return None
+
+        while True:
+            print("\nSelect Ontology Hub UI suite:")
+            print("1 - Ontology Hub Integration")
+            print("2 - Ontology Hub Functional")
+            print("B - Back")
+            try:
+                suite_choice = input("\nSuite: ").strip().upper()
+            except EOFError:
+                print("\nNo input. Returning to previous menu.\n")
+                return None
+
+            if suite_choice == "B":
+                return None
+            if suite_choice == "1":
+                _run_ontology_hub_ui_tests(mode)
+                return None
+            if suite_choice == "2":
+                _run_ontology_hub_ui_functional(mode)
+                return None
+
+            print("\nInvalid selection. Please try again.\n")
 
 
 def _resolve_ai_model_hub_base_url():

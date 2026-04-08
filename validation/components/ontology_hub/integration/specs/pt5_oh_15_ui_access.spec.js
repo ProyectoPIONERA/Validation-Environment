@@ -1,6 +1,6 @@
-const { test } = require("../fixtures");
-const { OntologyHubHomePage } = require("../pages/home.page");
-const { OntologyHubApiDocsPage } = require("../pages/api-docs.page");
+const { test } = require("../../ui/fixtures");
+const { OntologyHubHomePage } = require("../../ui/pages/home.page");
+const { OntologyHubApiDocsPage } = require("../../ui/pages/api-docs.page");
 
 test("PT5-OH-15: public UI and API documentation are published together", async ({
   page,

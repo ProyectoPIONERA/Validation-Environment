@@ -41,7 +41,10 @@ if (requestName === "List CRUD Assets") {
     assertStatus200()
     const assetId = pm.collectionVariables.get("crud_asset_id")
     assertNotEmpty(assetId, "crud_asset_id")
-    assertContains(responseText(), assetId, "CRUD asset appears in asset list")
+    pm.test("CRUD asset appears in asset lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((asset) => asset && asset["@id"] === assetId)).to.equal(true)
+    })
     return
 }
 
@@ -55,7 +58,10 @@ if (requestName === "List CRUD Policies") {
     assertStatus200()
     const policyId = pm.collectionVariables.get("crud_policy_id")
     assertNotEmpty(policyId, "crud_policy_id")
-    assertContains(responseText(), policyId, "CRUD policy appears in policy list")
+    pm.test("CRUD policy appears in policy lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((policy) => policy && policy["@id"] === policyId)).to.equal(true)
+    })
     return
 }
 
@@ -69,7 +75,10 @@ if (requestName === "List CRUD Contract Definitions") {
     assertStatus200()
     const contractId = pm.collectionVariables.get("crud_contract_definition_id")
     assertNotEmpty(contractId, "crud_contract_definition_id")
-    assertContains(responseText(), contractId, "CRUD contract definition appears in list")
+    pm.test("CRUD contract definition appears in lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((contract) => contract && contract["@id"] === contractId)).to.equal(true)
+    })
     return
 }
 
@@ -84,8 +93,9 @@ if (requestName === "Verify CRUD Contract Definition Deleted") {
     assertStatus200()
     const contractId = pm.collectionVariables.get("crud_contract_definition_id")
     assertNotEmpty(contractId, "crud_contract_definition_id")
-    pm.test("CRUD contract definition no longer appears in list", function () {
-        pm.expect(responseText()).to.not.include(contractId)
+    pm.test("CRUD contract definition no longer appears in lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((contract) => contract && contract["@id"] === contractId)).to.equal(false)
     })
     return
 }
@@ -101,8 +111,9 @@ if (requestName === "Verify CRUD Policy Deleted") {
     assertStatus200()
     const policyId = pm.collectionVariables.get("crud_policy_id")
     assertNotEmpty(policyId, "crud_policy_id")
-    pm.test("CRUD policy no longer appears in list", function () {
-        pm.expect(responseText()).to.not.include(policyId)
+    pm.test("CRUD policy no longer appears in lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((policy) => policy && policy["@id"] === policyId)).to.equal(false)
     })
     return
 }
@@ -118,8 +129,9 @@ if (requestName === "Verify CRUD Asset Deleted") {
     assertStatus200()
     const assetId = pm.collectionVariables.get("crud_asset_id")
     assertNotEmpty(assetId, "crud_asset_id")
-    pm.test("CRUD asset no longer appears in list", function () {
-        pm.expect(responseText()).to.not.include(assetId)
+    pm.test("CRUD asset no longer appears in lookup result", function () {
+        pm.expect(Array.isArray(body)).to.equal(true)
+        pm.expect(body.some((asset) => asset && asset["@id"] === assetId)).to.equal(false)
     })
     return
 }

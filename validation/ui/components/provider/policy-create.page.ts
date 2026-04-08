@@ -7,20 +7,20 @@ export class PolicyCreatePage {
 
   async goto(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/policies/create`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
   async gotoList(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/policies`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
   async expectReady(): Promise<void> {
     await expect(
       this.page.locator("mat-card-title", { hasText: /Create a new policy/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    ).toBeVisible({ timeout: 10_000 });
   }
 
   async fillPolicyId(policyId: string): Promise<void> {
@@ -32,12 +32,12 @@ export class PolicyCreatePage {
     await this.page.getByRole("menuitem").filter({ hasText: /^Participant ID$/i }).click();
 
     const input = this.page.locator("participant-id-select input").first();
-    await expect(input).toBeVisible({ timeout: 15_000 });
+    await expect(input).toBeVisible({ timeout: 5_000 });
     await input.fill(participantId);
     await input.press("Enter");
 
     await expect(this.page.locator("participant-id-select mat-chip").filter({ hasText: participantId })).toBeVisible({
-      timeout: 15_000,
+      timeout: 5_000,
     });
   }
 
@@ -45,7 +45,7 @@ export class PolicyCreatePage {
     await this.page.getByRole("button", { name: /^Create$/i }).click();
   }
 
-  async waitForCreationSuccess(timeoutMs = 30_000): Promise<string> {
+  async waitForCreationSuccess(timeoutMs = 10_000): Promise<string> {
     const notification = snackBar(this.page);
     await expect(notification).toContainText(/successfully created/i, {
       timeout: timeoutMs,
@@ -53,13 +53,13 @@ export class PolicyCreatePage {
     return ((await notification.textContent()) ?? "").replace(/\s+/g, " ").trim();
   }
 
-  async expectPolicyListed(policyId: string, timeoutMs = 45_000): Promise<void> {
+  async expectPolicyListed(policyId: string, timeoutMs = 15_000): Promise<void> {
     await expect(async () => {
       const found = await this.findPolicy(policyId);
       expect(found, `Policy ${policyId} is not visible in the policies list`).toBeTruthy();
     }).toPass({
       timeout: timeoutMs,
-      intervals: [1_000, 2_000, 5_000],
+      intervals: [500, 1_000, 2_000],
     });
   }
 
@@ -90,8 +90,8 @@ export class PolicyCreatePage {
 
     while (await previousButton.isEnabled().catch(() => false)) {
       await previousButton.click();
-      await this.page.waitForLoadState("networkidle");
-      await this.page.waitForTimeout(500);
+      await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
+      await this.page.waitForTimeout(200);
     }
   }
 
@@ -109,8 +109,8 @@ export class PolicyCreatePage {
     }
 
     await nextButton.click();
-    await this.page.waitForLoadState("networkidle");
-    await this.page.waitForTimeout(500);
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
+    await this.page.waitForTimeout(200);
     return true;
   }
 

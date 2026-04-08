@@ -522,6 +522,7 @@ Caso especial `ontology-hub`:
 - antes de desplegar el chart, el framework reconstruye siempre en el host la imagen local referenciada por el chart y después la carga en minikube
 - `Level 6` valida después exactamente ese despliegue, por lo que la iteración de integración queda acoplada al repo clonado y no a una imagen remota previa
 - este flujo no usa overrides de `source dir` ni de imagen para `ontology-hub`; el checkout canónico y la imagen local del chart son parte del contrato del framework
+- para troubleshooting de Playwright UI en WSL, ver `docs/10_ui_validation_core.md`, especialmente la sección `Troubleshooting WSL`
 
 Si solo quieres construir imágenes desde el script de build:
 

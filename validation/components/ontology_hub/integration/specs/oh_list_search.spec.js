@@ -1,6 +1,6 @@
-const { test, expect } = require("../fixtures");
-const { OntologyHubVocabCatalogPage } = require("../pages/vocab-catalog.page");
-const { OntologyHubVocabDetailPage } = require("../pages/vocab-detail.page");
+const { test, expect } = require("../../ui/fixtures");
+const { OntologyHubVocabCatalogPage } = require("../../ui/pages/vocab-catalog.page");
+const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
 
 test("OH-LIST-SEARCH: public catalog lists vocabularies and opens a search result", async ({
   page,

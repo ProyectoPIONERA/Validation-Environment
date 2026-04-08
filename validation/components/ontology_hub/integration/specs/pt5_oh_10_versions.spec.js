@@ -1,5 +1,5 @@
-const { test, expect } = require("../fixtures");
-const { OntologyHubVocabDetailPage } = require("../pages/vocab-detail.page");
+const { test, expect } = require("../../ui/fixtures");
+const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
 
 test("PT5-OH-10: version history and version resources are exposed from the vocabulary detail page", async ({
   page,

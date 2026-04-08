@@ -175,6 +175,7 @@ if (requestName === "Check Negotiation Status") {
             "INITIAL",
             "REQUESTED",
             "REQUESTING",
+            "VERIFYING",
             "IN_PROGRESS",
             "AGREED",
             "VERIFIED",

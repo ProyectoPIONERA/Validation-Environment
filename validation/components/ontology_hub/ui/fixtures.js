@@ -5,6 +5,12 @@ const { resolveOntologyHubRuntime } = require("./runtime");
 const { ensureOntologyHubBootstrap } = require("./support/bootstrap");
 
 const test = base.extend({
+  page: async ({ page }, use) => {
+    page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(5000);
+    await use(page);
+  },
+
   ontologyHubRuntime: async ({}, use) => {
     await use(resolveOntologyHubRuntime());
   },

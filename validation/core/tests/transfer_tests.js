@@ -8,7 +8,7 @@ const requestName = pm.info.requestName
 const status = pm.response.code
 const DEFAULT_TRANSFER_START_MAX_ATTEMPTS = 8
 const DEFAULT_TRANSFER_STATUS_MAX_ATTEMPTS = 10
-const DEFAULT_TRANSFER_DESTINATION_MAX_ATTEMPTS = 5
+const DEFAULT_TRANSFER_DESTINATION_MAX_ATTEMPTS = 10
 
 function clearLocalVar(key) {
     pm.collectionVariables.unset(key)

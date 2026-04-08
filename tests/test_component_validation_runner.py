@@ -1,10 +1,23 @@
 import unittest
 from unittest import mock
 
-from validation.components.runner import run_component_validations, summarize_component_results
+from validation.components.ontology_hub.functional.component_runner import (
+    run_ontology_hub_component_validation as run_ontology_hub_functional_component_validation,
+)
+from validation.components.runner import (
+    COMPONENT_RUNNERS,
+    run_component_validations,
+    summarize_component_results,
+)
 
 
 class ComponentValidationRunnerTests(unittest.TestCase):
+    def test_ontology_hub_uses_functional_runner_by_default(self):
+        self.assertIs(
+            COMPONENT_RUNNERS["ontology-hub"],
+            run_ontology_hub_functional_component_validation,
+        )
+
     def test_unregistered_component_is_reported_as_skipped(self):
         results = run_component_validations(
             {
