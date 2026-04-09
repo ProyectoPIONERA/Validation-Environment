@@ -20,6 +20,7 @@ import { BehaviorSubject } from 'rxjs';
 import { Router } from '@angular/router';
 import { MatSlideToggleChange } from '@angular/material/slide-toggle';
 import { NgModel } from '@angular/forms';
+import { SemanticFileValidatorService } from 'src/app/shared/services/semantic-file-validator.service';
 
 
 @Component({
@@ -38,6 +39,9 @@ export class AssetCreateComponent implements OnInit {
       }
     ]
   };
+
+  //manage the validation button for semantic files
+  showTestFileButton = false;
 
   // Dynamic forms from vocabylary variables
   vocabularies: Vocabulary[];
@@ -75,6 +79,7 @@ export class AssetCreateComponent implements OnInit {
   keywords: string = '';
   format: string = '';
   byteSize: string = '';
+  ontologyUri: string = '';
 
   // Storage information
   amazonS3DataAddress: AmazonS3DataAddress = {
@@ -87,6 +92,10 @@ export class AssetCreateComponent implements OnInit {
   };
 
   inesDataStoreAddress: InesDataStoreAddress = {
+    type: 'InesDataStore'
+  };
+
+  shaclsInesDataStoreAddress: InesDataStoreAddress = {
     type: 'InesDataStore'
   };
 
@@ -151,7 +160,8 @@ export class AssetCreateComponent implements OnInit {
     private notificationService: NotificationService,
     @Inject('STORAGE_TYPES') public storageTypes: StorageType[],
     private router: Router,
-    private loadingService: LoadingService) {
+    private loadingService: LoadingService,
+    private semanticFileValidator: SemanticFileValidatorService) {
   }
 
   async onSave() {
@@ -245,7 +255,8 @@ export class AssetCreateComponent implements OnInit {
     properties["dcterms:description"] = this.description;
     properties["dcat:byteSize"] = this.byteSize;
     properties["dcterms:format"] = this.format;
-
+    properties["ontologyUri"] = this.ontologyUri;
+    properties["shacl"] = this.shaclsInesDataStoreAddress.shaclContent || null;
     this.addKeywords(properties);
   }
 
@@ -349,9 +360,34 @@ export class AssetCreateComponent implements OnInit {
 
   setFiles(event: File[]) {
     if (event?.length > 0) {
-      this.inesDataStoreAddress.file = event[0]
+      this.inesDataStoreAddress.file = event[0];
+      this.fileRequiresValidation();
     } else {
       delete this.inesDataStoreAddress.file
+    }
+  }
+
+  async setShaclsFiles(event: File[], shaclFile:any) {
+    if (event?.length > 0) {
+      const file = event[0];
+
+      const isTxtExtension = file.name.toLowerCase().endsWith('.txt');
+      const isTxtMime = file.type === 'text/plain' || file.type === '';
+
+      if (!isTxtExtension || !isTxtMime) {
+        this.showError("Error de extensión del fichero", "Solo se permiten archivos de texto plano (.txt)");
+        delete this.shaclsInesDataStoreAddress.file;
+        delete this.shaclsInesDataStoreAddress.shaclContent;
+        shaclFile.deleteFile(0);
+        return;
+      }
+
+      this.shaclsInesDataStoreAddress.file = file;
+      this.shaclsInesDataStoreAddress.shaclContent = await file.text();
+    } else {
+      delete this.shaclsInesDataStoreAddress.file;
+      delete this.shaclsInesDataStoreAddress.shaclContent;
+
     }
   }
 
@@ -448,6 +484,28 @@ export class AssetCreateComponent implements OnInit {
   }
 
   onToggleChange(propertyName: string, event: MatSlideToggleChange): void {
-    this.httpDataAddress[propertyName] = event ? 'true' : 'false';
+    this.httpDataAddress[propertyName] = event.checked;
   }
+
+
+  async fileRequiresValidation(){
+    let isSemanticFile = false;
+
+    if(!this.inesDataStoreAddress.file){
+      return 
+    } 
+
+    await this.semanticFileValidator.isASemanticFile(this.inesDataStoreAddress.file).then(res => {
+      isSemanticFile = res
+    });
+
+    if(isSemanticFile){
+      alert("Es un archivo semantico")
+    }
+
+    alert(this.inesDataStoreAddress.file.type);
+
+  }
+
+
 }

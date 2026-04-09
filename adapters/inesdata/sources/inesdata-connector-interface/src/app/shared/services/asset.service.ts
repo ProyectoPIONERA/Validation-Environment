@@ -47,9 +47,7 @@ export class AssetService {
       }
     }
 
-    return from(lastValueFrom(this.http.post<Asset>(
-      `${this.BASE_URL}`, body
-    )));
+    return this.http.post<Asset>(`${this.BASE_URL}`, body);
   }
 
   /**
@@ -61,9 +59,9 @@ export class AssetService {
       throw new Error('Required parameter id was null or undefined when calling getAsset.');
     }
 
-    return from(lastValueFrom(this.http.get<Asset>(
+    return this.http.get<Asset>(
       `${this.BASE_URL}${environment.runtime.service.asset.get}${id}`
-    )));
+    );
   }
 
   /**
@@ -75,9 +73,9 @@ export class AssetService {
       throw new Error('Required parameter id was null or undefined when calling removeAsset.');
     }
 
-    return from(lastValueFrom(this.http.delete<Asset>(
+    return this.http.delete<Asset>(
       `${this.BASE_URL}${environment.runtime.service.asset.get}${id}`
-    )));
+    );
   }
 
   /**
@@ -94,9 +92,9 @@ export class AssetService {
       }
     }
 
-    return from(lastValueFrom(this.http.post<Array<Asset>>(
+    return this.http.post<Array<Asset>>(
       `${this.BASE_URL}${environment.runtime.service.asset.getAll}`, body
-    )).then(results => {
+    ).pipe(map(results => {
       return expandArray(results, () => new Asset());
     }));
   }
@@ -114,9 +112,9 @@ export class AssetService {
       ...querySpec
     };
 
-    return from(lastValueFrom(this.http.post<number>(
+    return this.http.post<number>(
       `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.count}`, body
-    )));
+    );
   }
 
   async uploadChunk(assetEntryDto: any, chunk: Blob, fileName: string, chunkIndex: number, totalChunks: number): Promise<any> {
@@ -177,4 +175,3 @@ export class AssetService {
     );
   }
 }
-
