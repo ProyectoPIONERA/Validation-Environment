@@ -164,6 +164,14 @@ Y para checks técnicos complementarios:
 
 ## Paso 5. Reconstruir manualmente las colecciones en Postman
 
+Si lo que necesitas es una **guía operativa exacta** con los scripts embebidos request por request y una versión compacta del flujo para reducir tiempo de ejecución, usa como referencia principal:
+
+- [validation/core/collections/postman/README.md](../validation/core/collections/postman/README.md)
+- [validation/core/collections/postman/01_environment_health.json](../validation/core/collections/postman/01_environment_health.json)
+- [validation/core/collections/postman/02_connector_management_api.json](../validation/core/collections/postman/02_connector_management_api.json)
+- [validation/core/collections/postman/03_e2e_compact.json](../validation/core/collections/postman/03_e2e_compact.json)
+- [validation/core/collections/postman/00_environment.json](../validation/core/collections/postman/00_environment.json)
+
 La forma más rápida de replicar el framework es importar directamente los JSON de [validation/core/collections](../validation/core/collections/). Aun así, para reconstrucción manual o revisión detallada, puede ser útil crear las colecciones a mano y entender qué contiene cada una.
 
 La propuesta mínima y fiel al framework actual es esta:

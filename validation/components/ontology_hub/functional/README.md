@@ -20,8 +20,10 @@ manuales externos.
 - Casos `25` a `27`: busqueda y filtros de terminos.
 
 ## Trazabilidad
-- Matriz formal: `validation/components/ontology_hub/functional/TRACEABILITY.md`
-- La matriz indica para cada caso del Excel el spec concreto y la normalizacion aplicada cuando la UI actual difiere del paso manual del Excel.
+- Matriz funcional y correlacion PT5: `docs/11_ontology_hub_validation.md`
+- El criterio general de correlacion entre hojas del Excel y automatizacion se documenta en `docs/13_test_cases.md`.
+- La numeracion de automatizacion conserva dos ids historicos al inicio:
+  `OH-APP-00` cubre el caso `1` del Excel y `OH-APP-01` cubre el caso `2`.
 
 ## Carpetas Auxiliares
 - `validation/components/ontology_hub/functional/fixtures/`: prerequisitos fijos de la suite, por ejemplo el fichero de `Themis`.
@@ -114,4 +116,4 @@ PWDEBUG=1 npx playwright test --config ../components/ontology_hub/functional/pla
 
 ## Pendientes Reales
 - La suite ya modela los 27 casos del Excel, pero no se han verificado en bloque todos los caminos destructivos sobre este despliegue concreto.
-- Algunos casos pueden fallar por comportamiento real de la aplicacion o por diferencias del entorno de demo respecto al Excel historico. Esa trazabilidad queda reflejada en `TRACEABILITY.md`.
+- Algunos casos pueden fallar por comportamiento real de la aplicacion o por diferencias del entorno de demo respecto al Excel historico. Esa trazabilidad queda reflejada en `docs/11_ontology_hub_validation.md`.

@@ -46,7 +46,7 @@ def run_ontology_hub_component_validation(base_url: str, experiment_dir: str | N
         "evidence_index": list(functional_result.get("evidence_index") or []),
         "findings": [],
         "catalog_alignment": {
-            "source_file": "validation/components/ontology_hub/functional/TRACEABILITY.md",
+            "source_file": "docs/11_ontology_hub_validation.md",
             "summary": {
                 "declared_pt5_cases": len(functional_result.get("executed_cases") or []),
                 "executed_pt5_cases": len(functional_result.get("executed_cases") or []),

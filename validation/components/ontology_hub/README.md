@@ -30,7 +30,7 @@ Esta carpeta agrupa toda la validacion de `Ontology Hub` dentro del framework.
 - Suite PT5 ejecutada por defecto para `ontology-hub` en `Level 6`.
 - Entrada desde menu: `python3 inesdata.py` -> `O - Ontology Hub UI Tests` -> modo -> `2 - Ontology Hub Functional`.
 - Documentacion: `validation/components/ontology_hub/functional/README.md`.
-- Trazabilidad: `validation/components/ontology_hub/functional/TRACEABILITY.md`.
+- Trazabilidad: `docs/11_ontology_hub_validation.md`.
 
 ## Artefactos
 

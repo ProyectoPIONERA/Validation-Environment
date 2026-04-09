@@ -99,3 +99,4 @@ adapters/inesdata/sources/Ontology-Hub
 adapters/inesdata/sources/inesdata-connector/extensions/vocabulary-shared-retrieval/src/main/java/org/upm/inesdata/vocabulary/shared/retrieval/VocabularySharedRetrievalExtension.java
 adapters/inesdata/sources/AIModelHub
 validation/components/ontology_hub/functional/generated
+docs/INVENTARIO DE ENTORNO.docx

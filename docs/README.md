@@ -45,3 +45,7 @@ En esa división por fases:
 - [08_metrics_pipeline.md](./08_metrics_pipeline.md): extracción y agregación de métricas.
 - [09_kafka_real_measurements.md](./09_kafka_real_measurements.md): benchmarking Kafka persistido.
 - [10_ui_validation_core.md](./10_ui_validation_core.md): validación UI alineada con los flujos API.
+- [11_ontology_hub_validation.md](./11_ontology_hub_validation.md): validación, cobertura y trazabilidad actual de Ontology Hub.
+- [12_local_validation_environment.md](./12_local_validation_environment.md): inventario del entorno local actual de validación.
+- [13_test_cases.md](./13_test_cases.md): criterio común para correlacionar funcionalidades, PT5, casos operativos y automatización.
+- [14_production_environment_plan.md](./14_production_environment_plan.md): plan de transición desde el entorno local actual hacia el entorno productivo.

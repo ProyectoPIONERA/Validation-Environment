@@ -3,10 +3,12 @@ const fs = require("fs");
 
 const { test, expect } = require("../../ui/fixtures");
 const { OntologyHubHomePage } = require("../../ui/pages/home.page");
+const { OntologyHubVocabCatalogPage } = require("../../ui/pages/vocab-catalog.page");
 const {
   expectHealthyPage,
   listZipEntries,
   loadRunState,
+  openVocabularyDetail,
   persistGeneratedArtifact,
   resolveThemisTestFile,
   runtimeFromCreatedVocabulary,
@@ -95,8 +97,25 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
   const prefix = created.prefix;
   const title = created.title;
 
+  const catalogPage = new OntologyHubVocabCatalogPage(page);
+  await Promise.all([
+    page.waitForURL(/\/dataset\/vocabs(?:\?|$)/, { timeout: 5000 }),
+    page.getByRole("link", { name: /vocabs/i }).first().click(),
+  ]);
+  await catalogPage.expectReady();
+  await catalogPage.search("saref4grid");
+  await catalogPage.waitForSuggestions().catch(async () => {
+    await catalogPage.waitForResults();
+  });
+  if ((await catalogPage.suggestionItems().count().catch(() => 0)) > 0) {
+    await catalogPage.openSuggestion("saref4grid");
+  } else {
+    await catalogPage.expectResultVisible("saref4grid");
+    await catalogPage.openResult(prefix);
+  }
+
   await openVocabularyDetail(page, flowRuntime, prefix, title);
-  await page.locator(".ontology-tab").filter({ hasText: /foops/i }).first().click();
+  await page.locator(".ontology-tab, a, button").filter({ hasText: /foops/i }).first().click();
   await page.locator("#foopsHeader").waitFor({ state: "visible", timeout: 5000 });
   const foopsResults = page.locator("#foops-results");
   const callFoopsButton = page.locator("#callFoopsButton");
@@ -119,6 +138,7 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
   await attachJson("23-foops-report", {
     prefix,
     title,
+    searchTerm: "saref4grid",
     url: page.url(),
   });
 });
