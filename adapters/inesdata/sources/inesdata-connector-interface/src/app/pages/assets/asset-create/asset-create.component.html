@@ -232,6 +232,18 @@
             <input [(ngModel)]="inesDataStoreAddress.folder" matInput>
           </mat-form-field>
           <app-uploader-file (filesChange)="setFiles($event)"></app-uploader-file>
+
+          <fieldset>
+            <legend>Ontology Information</legend>
+            <mat-form-field appearance="fill" style="width: 100%" class="form-field" color="accent">
+              <mat-label>URI Ontology</mat-label>
+              <input [(ngModel)]="ontologyUri" matInput>
+            </mat-form-field>
+
+            <mat-label>Shacl File</mat-label>
+            <app-uploader-file #shaclsFile (filesChange)="setShaclsFiles($event, shaclsFile)" accept="text/plain"></app-uploader-file>
+          </fieldset>
+          
         </div>
       </div>
     </mat-tab>

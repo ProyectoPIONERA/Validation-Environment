@@ -35,7 +35,7 @@ public class OntologyValidatorExtension implements ServiceExtension {
     @Override
     public void prepare() {
 
-        String allowedDomain = "http://ontology-hub-demo.dev.ds.dataspaceunit.upm";
+        String allowedDomain = "http://demo-ontology-hub.demo.svc.cluster.local";
 
         monitor.info("🧪 Registrando OntologyJsonValidator para dominio permitido: " + allowedDomain);
 
