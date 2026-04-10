@@ -2,6 +2,7 @@
 const fs = require("fs");
 
 const { test, expect } = require("../../ui/fixtures");
+const { checkMarked, clickMarked, setInputFilesMarked } = require("../../ui/support/live-marker");
 const { OntologyHubHomePage } = require("../../ui/pages/home.page");
 const { OntologyHubVocabCatalogPage } = require("../../ui/pages/vocab-catalog.page");
 const {
@@ -37,19 +38,19 @@ test("OH-APP-22: patterns page generates a zip", async ({
     throw new Error("Patterns page does not expose the 'Select All' control expected by the Excel flow.");
   }
 
-  await selectAllButton.click();
+  await clickMarked(selectAllButton);
 
   const bothOption = page.getByLabel(/both/i).first();
   if ((await bothOption.count()) > 0) {
-    await bothOption.check().catch(async () => {
-      await bothOption.click();
+    await checkMarked(bothOption).catch(async () => {
+      await clickMarked(bothOption);
     });
   }
 
   const noOption = page.getByLabel(/^no$/i).first();
   if ((await noOption.count()) > 0) {
-    await noOption.check().catch(async () => {
-      await noOption.click();
+    await checkMarked(noOption).catch(async () => {
+      await clickMarked(noOption);
     });
   }
 
@@ -59,7 +60,7 @@ test("OH-APP-22: patterns page generates a zip", async ({
   }
 
   const downloadPromise = page.waitForEvent("download", { timeout: 5000 });
-  await submitButton.click();
+  await clickMarked(submitButton);
   const download = await downloadPromise;
   const filePath = testInfo.outputPath("patterns.zip");
   await download.saveAs(filePath);
@@ -100,7 +101,7 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
   const catalogPage = new OntologyHubVocabCatalogPage(page);
   await Promise.all([
     page.waitForURL(/\/dataset\/vocabs(?:\?|$)/, { timeout: 5000 }),
-    page.getByRole("link", { name: /vocabs/i }).first().click(),
+    clickMarked(page.getByRole("link", { name: /vocabs/i }).first()),
   ]);
   await catalogPage.expectReady();
   await catalogPage.search("saref4grid");
@@ -115,7 +116,28 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
   }
 
   await openVocabularyDetail(page, flowRuntime, prefix, title);
-  await page.locator(".ontology-tab, a, button").filter({ hasText: /foops/i }).first().click();
+  const foopsTab = page.getByRole("tab", { name: /foops/i }).first();
+  await foopsTab.waitFor({ state: "visible", timeout: 5000 });
+  await foopsTab.scrollIntoViewIfNeeded();
+  await page.evaluate(() => {
+    if (typeof window.activateOntologyTab === "function") {
+      window.activateOntologyTab("foops");
+      return;
+    }
+
+    const tab = document.querySelector(".ontology-tab[data-onto-target='foops']");
+    if (tab instanceof HTMLElement) {
+      tab.click();
+    }
+  });
+  await page.waitForFunction(() => {
+    const tab = document.querySelector(".ontology-tab[data-onto-target='foops']");
+    const panel = document.querySelector(".ontology-tab-panel[data-onto-panel='foops']");
+    return (
+      tab?.getAttribute("aria-selected") === "true" &&
+      panel?.classList.contains("is-active")
+    );
+  }, { timeout: 5000 });
   await page.locator("#foopsHeader").waitFor({ state: "visible", timeout: 5000 });
   const foopsResults = page.locator("#foops-results");
   const callFoopsButton = page.locator("#callFoopsButton");
@@ -128,7 +150,7 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
     /(Reusable|Findable|Accessible|Interoperable)/i.test(bodyText);
   if (!(await foopsResults.isVisible().catch(() => false)) && !foopsAlreadyRendered) {
     await callFoopsButton.waitFor({ state: "visible", timeout: 5000 });
-    await callFoopsButton.click();
+    await clickMarked(callFoopsButton);
     await foopsResults.waitFor({ state: "visible", timeout: 5000 });
   }
   await page.locator("text=/FOOPS! FAIR VALIDATOR/i").first().waitFor({ state: "visible", timeout: 5000 });
@@ -165,9 +187,9 @@ test("OH-APP-24: Themis accepts a test file and downloads results", async ({
   await expectHealthyPage(page, `Vocabulary detail for ${prefix}`);
 
   await page.locator("#normal-button").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#normal-button").click();
+  await clickMarked(page.locator("#normal-button"));
   await page.locator("#user-options").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#user-options img[src='/img/themis.png']").first().click();
+  await clickMarked(page.locator("#user-options img[src='/img/themis.png']").first());
 
   await page.locator("#themisVocabContainer").waitFor({ state: "visible", timeout: 5000 });
   const themisSource = await resolveThemisSource(page);
@@ -175,19 +197,19 @@ test("OH-APP-24: Themis accepts a test file and downloads results", async ({
   const testFilePath = resolveThemisTestFile();
   const persistedUploadedPath = persistGeneratedArtifact(testFilePath, "excel-24-test_cases.txt", "themis");
 
-  await page.locator("#themisModeManual").check().catch(async () => {
-    await page.locator("#themisModeManual").click();
+  await checkMarked(page.locator("#themisModeManual")).catch(async () => {
+    await clickMarked(page.locator("#themisModeManual"));
   });
   await page.locator("label").filter({ hasText: /user tests/i }).first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   await page.locator("#themisUploadContainer").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#themisTestFile").setInputFiles(testFilePath);
-  await page.locator("#executeThemisButton").click();
+  await setInputFilesMarked(page.locator("#themisTestFile"), testFilePath);
+  await clickMarked(page.locator("#executeThemisButton"));
   await page.locator("#themis-results").waitFor({ state: "visible", timeout: 5000 });
   await page.locator("#themisResultsBody tr").first().waitFor({ state: "visible", timeout: 5000 });
   await page.locator("#downloadThemisButton").waitFor({ state: "visible", timeout: 5000 });
 
   const downloadPromise = page.waitForEvent("download", { timeout: 5000 });
-  await page.locator("#downloadThemisButton").click();
+  await clickMarked(page.locator("#downloadThemisButton"));
   const download = await downloadPromise;
   const outputPath = testInfo.outputPath("themis-results.txt");
   await download.saveAs(outputPath);

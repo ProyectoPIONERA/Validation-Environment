@@ -1,3 +1,5 @@
+const { clickMarked } = require("../support/live-marker");
+
 class OntologyHubVocabDetailPage {
   constructor(page) {
     this.page = page;
@@ -96,7 +98,7 @@ class OntologyHubVocabDetailPage {
   }
 
   async expectVersionHistoryMarkers() {
-    await this.page.locator(".ontology-tab").filter({ hasText: "Version History" }).first().click();
+    await clickMarked(this.page.locator(".ontology-tab").filter({ hasText: "Version History" }).first());
     await this.page.getByText("Vocabulary Version History", { exact: true }).waitFor({
       state: "visible",
     });

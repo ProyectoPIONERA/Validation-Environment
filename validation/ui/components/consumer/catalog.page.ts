@@ -1,5 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked } from "../../shared/utils/live-marker";
+
 export class CatalogPage {
   constructor(private readonly page: Page) {}
 
@@ -23,7 +25,7 @@ export class CatalogPage {
       return false;
     }
 
-    await detailButton.click();
+    await clickMarked(detailButton);
     await this.page.waitForTimeout(500);
     return true;
   }
@@ -37,7 +39,7 @@ export class CatalogPage {
       return false;
     }
 
-    await assetCard.getByRole("button", { name: /view details and contract offers/i }).click();
+    await clickMarked(assetCard.getByRole("button", { name: /view details and contract offers/i }));
     await this.page.waitForTimeout(500);
     return true;
   }
@@ -67,7 +69,7 @@ export class CatalogPage {
       return false;
     }
 
-    await nextButton.click();
+    await clickMarked(nextButton);
     await this.page.waitForLoadState("networkidle");
     await this.page.waitForTimeout(500);
     return true;

@@ -1,5 +1,7 @@
 import { Page } from "@playwright/test";
 
+import { clickMarked, fillMarked } from "../../shared/utils/live-marker";
+
 type MinioConsoleCredentials = {
   username: string;
   password: string;
@@ -28,8 +30,8 @@ export class MinioConsoleLoginPage {
       return;
     }
 
-    await usernameInput.fill(credentials.username);
-    await passwordInput.fill(credentials.password);
+    await fillMarked(usernameInput, credentials.username);
+    await fillMarked(passwordInput, credentials.password);
 
     const submitButton = this.page
       .locator("button[type='submit'], input[type='submit'], button")
@@ -38,7 +40,7 @@ export class MinioConsoleLoginPage {
 
     await Promise.all([
       this.page.waitForLoadState("networkidle"),
-      submitButton.click(),
+      clickMarked(submitButton),
     ]);
   }
 }

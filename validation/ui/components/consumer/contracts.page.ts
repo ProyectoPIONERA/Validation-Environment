@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked } from "../../shared/utils/live-marker";
 import { materialSelect, snackBar } from "../../shared/utils/selectors";
 
 export class ContractsPage {
@@ -38,13 +39,13 @@ export class ContractsPage {
     const card = this.contractCard(assetId);
     await expect(card).toBeVisible({ timeout: 30_000 });
 
-    await card.getByRole("button", { name: /^Transfer$/i }).click();
+    await clickMarked(card.getByRole("button", { name: /^Transfer$/i }));
     const dialog = this.page.getByRole("dialog", { name: /Transfer/i });
     await expect(dialog).toBeVisible({ timeout: 15_000 });
 
-    await materialSelect(this.page, "Destination").click();
-    await this.page.locator("mat-option").filter({ hasText: /InesDataStore/i }).first().click();
-    await dialog.getByRole("button", { name: /start transfer/i }).click();
+    await clickMarked(materialSelect(this.page, "Destination"));
+    await clickMarked(this.page.locator("mat-option").filter({ hasText: /InesDataStore/i }).first());
+    await clickMarked(dialog.getByRole("button", { name: /start transfer/i }));
 
     const notification = snackBar(this.page);
     await expect(notification).toContainText(/transfer initiated successfully/i, {
@@ -67,7 +68,7 @@ export class ContractsPage {
     }
 
     while (await previousButton.isEnabled().catch(() => false)) {
-      await previousButton.click();
+      await clickMarked(previousButton);
       await this.page.waitForLoadState("networkidle");
       await this.page.waitForTimeout(500);
     }
@@ -86,7 +87,7 @@ export class ContractsPage {
       return false;
     }
 
-    await nextButton.click();
+    await clickMarked(nextButton);
     await this.page.waitForLoadState("networkidle");
     await this.page.waitForTimeout(500);
     return true;

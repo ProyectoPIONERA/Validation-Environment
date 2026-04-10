@@ -591,8 +591,14 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
 
             def fake_subprocess_run(command, cwd=None, env=None):
-                with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
-                    json.dump(_build_level6_ui_results_payload(), handle)
+                payload = (
+                    _build_level6_ui_ops_results_payload()
+                    if env.get("PLAYWRIGHT_OPS_JSON_REPORT_FILE")
+                    else _build_level6_ui_results_payload()
+                )
+                output_path = env.get("PLAYWRIGHT_OPS_JSON_REPORT_FILE") or env["PLAYWRIGHT_JSON_REPORT_FILE"]
+                with open(output_path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
                 return mock.Mock(returncode=0)
 
             with (
@@ -645,7 +651,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             ):
                 inesdata.lvl_6()
 
-            self.assertEqual(mock_run.call_count, 2)
+            self.assertEqual(mock_run.call_count, 3)
 
             first_call = mock_run.call_args_list[0]
             first_command = first_call.args[0]
@@ -678,10 +684,23 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertTrue(os.path.isdir(os.path.join(tmpdir, "ui", "conn-a", "playwright-report")))
             self.assertTrue(os.path.isdir(os.path.join(tmpdir, "ui", "conn-a", "blob-report")))
 
+            ops_call = mock_run.call_args_list[2]
+            self.assertEqual(
+                ops_call.args[0],
+                [
+                    "npx",
+                    "playwright",
+                    "test",
+                    "--config",
+                    inesdata.LEVEL6_UI_OPS_CONFIG,
+                    inesdata.LEVEL6_UI_OPS_SPEC,
+                ],
+            )
+
             with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
                 stored = json.load(handle)
 
-            self.assertEqual(len(stored["ui_results"]), 2)
+            self.assertEqual(len(stored["ui_results"]), 3)
             self.assertEqual(stored["ui_results"][0]["test"], "ui-core-smoke")
             self.assertEqual(stored["ui_results"][0]["status"], "passed")
             self.assertEqual(stored["ui_results"][0]["suite"], "ui-core")
@@ -689,18 +708,24 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(stored["ui_results"][0]["summary"]["passed"], 2)
             self.assertEqual(stored["ui_results"][0]["support_checks"][0]["test_case_id"], "DS-UI-01")
             self.assertEqual(stored["ui_results"][0]["dataspace_cases"][0]["test_case_id"], "DS-UI-04")
+            self.assertEqual(stored["ui_results"][2]["test"], "ui-ops-minio-console")
+            self.assertEqual(stored["ui_results"][2]["suite"], "ui-ops")
+            self.assertEqual(stored["ui_results"][2]["ops_checks"][0]["test_case_id"], "DS-UI-OPS-01")
             self.assertEqual(stored["ui_validation"]["status"], "passed")
-            self.assertEqual(stored["ui_validation"]["summary"]["total"], 2)
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 3)
             self.assertEqual(stored["ui_validation"]["support_summary"]["passed"], 2)
             self.assertEqual(stored["ui_validation"]["dataspace_summary"]["passed"], 2)
+            self.assertEqual(stored["ui_validation"]["ops_summary"]["passed"], 1)
             self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["support_checks"]["total"], 1)
             self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["dataspace_cases"]["total"], 1)
+            self.assertEqual(stored["ui_validation"]["catalog_coverage_summary"]["ops_checks"]["total"], 1)
             self.assertEqual(
                 stored["ui_validation"]["operations_involved"],
-                ["list_catalog", "load_portal_shell", "login", "open_catalog_detail"],
+                ["inspect_storage", "list_catalog", "load_portal_shell", "login", "open_catalog_detail", "verify_bucket_visibility"],
             )
             self.assertEqual(stored["ui_validation"]["operation_summary"]["login"]["passed"], 2)
             self.assertEqual(stored["ui_validation"]["operation_summary"]["list_catalog"]["passed"], 2)
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["inspect_storage"]["passed"], 1)
             self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
             self.assertEqual(
                 stored["ui_results"][0]["artifacts"]["report_json"],
@@ -717,6 +742,14 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             original_isdir = os.path.isdir
 
             def _fake_run(command, cwd=None, env=None):
+                if env.get("PLAYWRIGHT_OPS_JSON_REPORT_FILE"):
+                    output_path = env["PLAYWRIGHT_OPS_JSON_REPORT_FILE"]
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    with open(output_path, "w", encoding="utf-8") as handle:
+                        json.dump(_build_level6_ui_ops_results_payload(), handle)
+                    self.assertEqual(env["UI_PROVIDER_CONNECTOR"], "conn-a")
+                    self.assertEqual(env["UI_CONSUMER_CONNECTOR"], "conn-b")
+                    return mock.Mock(returncode=0)
                 if command[3:] == list(inesdata.LEVEL6_UI_SMOKE_SPECS):
                     output_path = env["PLAYWRIGHT_JSON_REPORT_FILE"]
                     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -766,7 +799,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
                 stored = json.load(handle)
 
-            self.assertEqual(len(stored["ui_results"]), 3)
+            self.assertEqual(len(stored["ui_results"]), 4)
             self.assertEqual(stored["ui_results"][2]["test"], "ui-core-dataspace")
             self.assertEqual(stored["ui_results"][2]["status"], "passed")
             self.assertEqual(stored["ui_results"][2]["suite"], "ui-core-dataspace")
@@ -774,11 +807,131 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(stored["ui_results"][2]["consumer_connector"], "conn-b")
             self.assertEqual(stored["ui_results"][2]["dataspace_summary"]["passed"], 5)
             self.assertEqual(stored["ui_results"][2]["dataspace_cases"][0]["test_case_id"], "DS-UI-03")
+            self.assertEqual(stored["ui_results"][3]["test"], "ui-ops-minio-console")
+            self.assertEqual(stored["ui_results"][3]["suite"], "ui-ops")
             self.assertEqual(
                 stored["ui_results"][2]["artifacts"]["report_json"],
                 os.path.join(tmpdir, "ui-dataspace", "conn-a__conn-b", "ui_dataspace_validation.json"),
             )
             self.assertTrue(os.path.exists(stored["ui_results"][2]["artifacts"]["report_json"]))
+
+    def test_interactive_core_ui_tests_also_run_minio_ops_suite_and_persist_results(self):
+        ui_test_dir = os.path.join(inesdata.Config.script_dir(), "validation", "ui")
+        original_isdir = os.path.isdir
+        mode = {
+            "label": "Live",
+            "args": ["--headed"],
+            "env": {"PWDEBUG": "0"},
+        }
+        smoke_result_a = {
+            "test": "ui-core-smoke-conn-a",
+            "status": "passed",
+            "suite": "ui-core-smoke",
+            "portal_connector": "conn-a",
+        }
+        smoke_result_b = {
+            "test": "ui-core-smoke-conn-b",
+            "status": "passed",
+            "suite": "ui-core-smoke",
+            "portal_connector": "conn-b",
+        }
+        dataspace_result = {
+            "test": "ui-core-dataspace",
+            "status": "passed",
+            "suite": "ui-core-dataspace",
+            "provider_connector": "conn-a",
+            "consumer_connector": "conn-b",
+        }
+        ops_result = {
+            "test": "ui-ops-minio-console",
+            "status": "passed",
+            "suite": "ui-ops",
+            "provider_connector": "conn-a",
+            "consumer_connector": "conn-b",
+        }
+        aggregated_summary = {
+            "scope": "dataspace_ui",
+            "status": "passed",
+            "summary": {"total": 4, "passed": 4, "failed": 0, "skipped": 0},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(
+                    inesdata.os.path,
+                    "isdir",
+                    side_effect=lambda path: True if path == ui_test_dir else original_isdir(path),
+                ),
+                mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
+                mock.patch.object(
+                    inesdata,
+                    "load_connector_credentials",
+                    return_value={"connector_user": {"user": "demo", "passwd": "demo"}},
+                ),
+                mock.patch.object(
+                    inesdata,
+                    "build_connector_url",
+                    side_effect=lambda connector: f"http://{connector}.example.local/inesdata-connector-interface",
+                ),
+                mock.patch.object(inesdata, "_level6_ui_ops_suite_available", return_value=True),
+                mock.patch.object(inesdata.ExperimentStorage, "create_experiment_directory", return_value=tmpdir),
+                mock.patch.object(
+                    inesdata,
+                    "_aggregate_level6_ui_results",
+                    return_value=aggregated_summary,
+                ) as mock_aggregate,
+                mock.patch.object(
+                    inesdata,
+                    "_run_level6_ui_smoke",
+                    side_effect=[smoke_result_a, smoke_result_b],
+                ) as mock_smoke,
+                mock.patch.object(
+                    inesdata,
+                    "_run_level6_ui_dataspace",
+                    return_value=dataspace_result,
+                ) as mock_dataspace,
+                mock.patch.object(
+                    inesdata,
+                    "_run_level6_ui_ops",
+                    return_value=ops_result,
+                ) as mock_ops,
+            ):
+                payload = inesdata._run_core_ui_tests(mode)
+
+            self.assertEqual(mock_smoke.call_count, 2)
+            self.assertEqual(mock_dataspace.call_count, 1)
+            self.assertEqual(mock_ops.call_count, 1)
+
+            self.assertEqual(mock_smoke.call_args.kwargs["extra_args"], ["--headed"])
+            self.assertEqual(mock_smoke.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+            self.assertEqual(mock_dataspace.call_args.kwargs["extra_args"], ["--headed"])
+            self.assertEqual(mock_dataspace.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+            self.assertEqual(mock_ops.call_args.kwargs["extra_args"], ["--headed"])
+            self.assertEqual(mock_ops.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+            self.assertEqual(mock_ops.call_args.args[1], "conn-a")
+            self.assertEqual(mock_ops.call_args.args[2], "conn-b")
+            self.assertTrue(all(call.args[5] == tmpdir for call in mock_smoke.call_args_list))
+            self.assertEqual(mock_dataspace.call_args.args[3], tmpdir)
+            self.assertEqual(mock_ops.call_args.args[3], tmpdir)
+            mock_aggregate.assert_called_once()
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["mode"], "Live")
+            self.assertEqual(len(payload["ui_results"]), 4)
+            self.assertEqual(payload["ui_results"][3]["test"], "ui-ops-minio-console")
+            self.assertEqual(payload["ui_validation"]["summary"]["passed"], 4)
+
+            with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+
+            self.assertEqual(stored["source"], "inesdata.py:interactive-core-ui")
+            self.assertEqual(stored["mode"], "Live")
+            self.assertEqual(stored["connectors"], ["conn-a", "conn-b"])
+            self.assertEqual(len(stored["ui_results"]), 4)
+            self.assertEqual(stored["ui_results"][0]["test"], "ui-core-smoke-conn-a")
+            self.assertEqual(stored["ui_results"][2]["test"], "ui-core-dataspace")
+            self.assertEqual(stored["ui_results"][3]["test"], "ui-ops-minio-console")
+            self.assertEqual(stored["ui_validation"]["status"], "passed")
 
     def test_level6_runs_component_validation_by_default_when_components_are_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1001,7 +1154,7 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
                 stored = json.load(handle)
 
-            self.assertEqual(len(stored["ui_results"]), 2)
+            self.assertEqual(len(stored["ui_results"]), 3)
             self.assertEqual(stored["ui_results"][0]["status"], "skipped")
             self.assertIsNone(stored["ui_results"][0]["exit_code"])
             self.assertEqual(stored["ui_results"][0]["error"]["type"], "FileNotFoundError")
@@ -1010,10 +1163,12 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
             self.assertEqual(stored["ui_results"][0]["summary"]["total"], 2)
             self.assertEqual(stored["ui_results"][0]["support_checks"][0]["test_case_id"], "DS-UI-01")
             self.assertEqual(stored["ui_results"][0]["dataspace_cases"][0]["test_case_id"], "DS-UI-04")
+            self.assertEqual(stored["ui_results"][2]["suite"], "ui-ops")
             self.assertEqual(stored["ui_validation"]["status"], "skipped")
-            self.assertEqual(stored["ui_validation"]["summary"]["total"], 2)
-            self.assertEqual(stored["ui_validation"]["summary"]["skipped"], 2)
+            self.assertEqual(stored["ui_validation"]["summary"]["total"], 3)
+            self.assertEqual(stored["ui_validation"]["summary"]["skipped"], 3)
             self.assertEqual(stored["ui_validation"]["operation_summary"]["login"]["skipped"], 2)
+            self.assertEqual(stored["ui_validation"]["operation_summary"]["inspect_storage"]["skipped"], 1)
             self.assertTrue(os.path.exists(stored["ui_results"][0]["artifacts"]["report_json"]))
             self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
 
@@ -1153,7 +1308,76 @@ class InesdataLevel6ExperimentTests(unittest.TestCase):
                 stored["ui_results"][2]["artifacts"]["report_json"],
                 os.path.join(tmpdir, "ui-ops", "minio-console", "ui_ops_validation.json"),
             )
-            self.assertTrue(os.path.exists(stored["ui_results"][2]["artifacts"]["report_json"]))
+
+    def test_level6_can_disable_default_ui_ops_suite_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ui_test_dir = os.path.join(inesdata.Config.script_dir(), "validation", "ui")
+            original_isdir = os.path.isdir
+
+            def fake_subprocess_run(command, cwd=None, env=None):
+                with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
+                    json.dump(_build_level6_ui_results_payload(), handle)
+                return mock.Mock(returncode=0)
+
+            with (
+                mock.patch.dict(os.environ, {"LEVEL6_RUN_UI_OPS": "false"}, clear=False),
+                mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "load_deployer_config",
+                    return_value={"LEVEL6_RUN_UI_DATASPACE": "false"},
+                ),
+                mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
+                mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
+                mock.patch.object(
+                    inesdata,
+                    "_wait_for_level6_validation_ready",
+                    return_value=_build_level6_readiness_payload(),
+                ),
+                mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
+                mock.patch.object(
+                    inesdata.VALIDATION_ENGINE,
+                    "run_all_dataspace_tests",
+                    return_value=["pair-report.json"],
+                ),
+                mock.patch.object(inesdata, "_run_level6_kafka_benchmark", return_value=None),
+                mock.patch.object(
+                    inesdata,
+                    "load_connector_credentials",
+                    return_value={
+                        "connector_user": {
+                            "user": "portal-user",
+                            "passwd": "portal-pass",
+                        }
+                    },
+                ),
+                mock.patch.object(
+                    inesdata,
+                    "build_connector_url",
+                    side_effect=lambda connector: f"https://{connector}.example.local",
+                ),
+                mock.patch.object(inesdata.ExperimentStorage, "create_experiment_directory", return_value=tmpdir),
+                mock.patch.object(
+                    inesdata.os.path,
+                    "isdir",
+                    side_effect=lambda path: True if path == ui_test_dir else original_isdir(path),
+                ),
+                mock.patch.object(
+                    inesdata.subprocess,
+                    "run",
+                    side_effect=fake_subprocess_run,
+                ) as mock_run,
+            ):
+                inesdata.lvl_6()
+
+            self.assertEqual(mock_run.call_count, 2)
+
+            with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+
+            self.assertEqual(len(stored["ui_results"]), 2)
+            self.assertTrue(all(result["test"] != "ui-ops-minio-console" for result in stored["ui_results"]))
+            self.assertTrue(os.path.exists(stored["ui_results"][0]["artifacts"]["report_json"]))
             self.assertTrue(os.path.exists(stored["ui_validation"]["artifacts"]["report_json"]))
 
 

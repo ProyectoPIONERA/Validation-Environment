@@ -1,3 +1,5 @@
+const { clickMarked, fillMarked } = require("../support/live-marker");
+
 class OntologyHubVocabCatalogPage {
   constructor(page) {
     this.page = page;
@@ -45,7 +47,7 @@ class OntologyHubVocabCatalogPage {
     const target = this.page.locator("#SearchGrid .prefix a").filter({ hasText: exactPrefix }).first();
     await target.waitFor({ state: "visible", timeout: 5000 });
     const label = ((await target.textContent()) || "").trim();
-    await target.click();
+    await clickMarked(target);
     return label;
   }
 
@@ -97,8 +99,8 @@ class OntologyHubVocabCatalogPage {
   }
 
   async search(query) {
-    await this.searchInput.fill("");
-    await this.searchInput.fill(query);
+    await fillMarked(this.searchInput, "");
+    await fillMarked(this.searchInput, query);
   }
 
   async waitForSuggestions() {
@@ -121,7 +123,7 @@ class OntologyHubVocabCatalogPage {
       : this.suggestionItems().first();
     await target.waitFor({ state: "visible" });
     const label = ((await target.textContent()) || "").trim();
-    await target.click();
+    await clickMarked(target);
     return label;
   }
 }

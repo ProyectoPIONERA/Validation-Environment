@@ -1,3 +1,5 @@
+const { clickMarked } = require("../../ui/support/live-marker");
+
 function normalizeText(value) {
   return String(value || "").trim();
 }
@@ -124,7 +126,7 @@ async function openFirstCatalogResult(page) {
   const prefixLink = page.locator("#SearchGrid .prefix a").first();
   if ((await prefixLink.count()) > 0) {
     const label = normalizeText(await prefixLink.textContent());
-    await prefixLink.click();
+    await clickMarked(prefixLink);
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
     return { label, source: "prefix-link" };
   }
@@ -132,7 +134,7 @@ async function openFirstCatalogResult(page) {
   const fallback = page.locator("#SearchGrid a").first();
   if ((await fallback.count()) > 0) {
     const label = normalizeText(await fallback.textContent());
-    await fallback.click();
+    await clickMarked(fallback);
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
     return { label, source: "first-link" };
   }

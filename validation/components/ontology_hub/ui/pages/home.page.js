@@ -1,3 +1,5 @@
+const { clickMarked } = require("../support/live-marker");
+
 class OntologyHubHomePage {
   constructor(page) {
     this.page = page;
@@ -29,10 +31,10 @@ class OntologyHubHomePage {
     await bubble.waitFor({ state: "visible", timeout: 5000 });
     const circle = bubble.locator("circle").first();
     if ((await circle.count()) > 0) {
-      await circle.click();
+      await clickMarked(circle);
       return;
     }
-    await bubble.click();
+    await clickMarked(bubble);
   }
 
   navLink(label) {

@@ -1,5 +1,6 @@
 // Excel traceability: Ontology Hub cases 26 and 27.
 const { test } = require("../../ui/fixtures");
+const { clickMarked } = require("../../ui/support/live-marker");
 const { OntologyHubTermsPage } = require("../../ui/pages/terms.page");
 const { probeTermSearchApi } = require("../../ui/support/capabilities");
 const {
@@ -22,7 +23,7 @@ async function applyFacetLink(page, termsPage, groupLabel, valueLabel) {
     throw new Error(`Terms facet '${groupLabel}' with value '${valueLabel}' is not available.`);
   }
 
-  await facetLink.click();
+  await clickMarked(facetLink);
   await page.waitForLoadState("networkidle", { timeout: 5000 });
   await waitForTermsReady(page, 5000);
   await waitForTermsResults(page, 5000);

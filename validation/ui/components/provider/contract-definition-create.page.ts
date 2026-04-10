@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked, fillMarked, pressMarked } from "../../shared/utils/live-marker";
 import { materialInput, materialSelect, snackBar } from "../../shared/utils/selectors";
 
 type ContractDefinitionListExpectations = {
@@ -29,7 +30,7 @@ export class ContractDefinitionCreatePage {
   }
 
   async fillContractDefinitionId(contractDefinitionId: string): Promise<void> {
-    await materialInput(this.page, /^ID$/).fill(contractDefinitionId);
+    await fillMarked(materialInput(this.page, /^ID$/), contractDefinitionId);
   }
 
   async selectMatchingPolicies(policyId: string, timeoutMs = 120_000): Promise<void> {
@@ -66,15 +67,15 @@ export class ContractDefinitionCreatePage {
   async addAsset(assetId: string): Promise<void> {
     const assetInput = this.page.locator("input[placeholder='Search assets']").first();
     await expect(assetInput).toBeVisible({ timeout: 5_000 });
-    await assetInput.fill(assetId);
-    await assetInput.press("ArrowDown").catch(() => {});
+    await fillMarked(assetInput, assetId);
+    await pressMarked(assetInput, "ArrowDown").catch(() => {});
     const option = this.page
       .locator(".cdk-overlay-pane [role='option'], .cdk-overlay-pane mat-option")
       .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(assetId)}\\s*$`) })
       .last();
     await expect(option).toBeVisible({ timeout: 5_000 });
     await option.scrollIntoViewIfNeeded().catch(() => {});
-    await option.click({ timeout: 5_000, force: true });
+    await clickMarked(option, { timeout: 5_000, force: true });
 
     await expect(this.page.locator("mat-chip").filter({ hasText: assetId }).first()).toBeVisible({
       timeout: 5_000,
@@ -82,7 +83,7 @@ export class ContractDefinitionCreatePage {
   }
 
   async submit(): Promise<void> {
-    await this.page.getByRole("button", { name: /^Create$/i }).click();
+    await clickMarked(this.page.getByRole("button", { name: /^Create$/i }));
   }
 
   async waitForCreationSuccess(timeoutMs = 10_000): Promise<string> {
@@ -140,7 +141,7 @@ export class ContractDefinitionCreatePage {
       return false;
     }
 
-    await nextButton.click();
+    await clickMarked(nextButton);
     await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
     await this.page.waitForTimeout(200);
     return true;
@@ -169,13 +170,13 @@ export class ContractDefinitionCreatePage {
   ): Promise<boolean> {
     const exactPolicy = new RegExp(`^\\s*${escapeRegExp(policyId)}\\s*$`);
 
-    await materialSelect(this.page, label).click({ timeout: 5_000 });
+    await clickMarked(materialSelect(this.page, label), { timeout: 5_000 });
 
     const overlayOptions = this.page.locator(".cdk-overlay-pane [role='option'], .cdk-overlay-pane mat-option");
     const option = overlayOptions.filter({ hasText: exactPolicy }).last();
     if ((await option.count().catch(() => 0)) > 0) {
       await option.scrollIntoViewIfNeeded().catch(() => {});
-      await option.click({ timeout: 5_000, force: true });
+      await clickMarked(option, { timeout: 5_000, force: true });
       return true;
     }
 

@@ -239,7 +239,7 @@ en dos bloques en `Level 6`:
   - `05-consumer-negotiation.spec.ts`
   - `06-consumer-transfer.spec.ts`
 
-Además existe una suite opcional `ops` para MinIO.
+Además existe una suite `ops` para MinIO que `Level 6` ejecuta cuando esta disponible, salvo desactivacion explicita.
 
 Referencias:
 
@@ -274,7 +274,7 @@ Referencias:
 | API core | `validation/core/collections/` | salud, CRUD provider, catálogo, negociación, transferencia | activa |
 | Scripts API | `validation/core/tests/` | aserciones por colección | activa |
 | UI core | `validation/ui/core/` | shell del conector y flujo visible del dataspace | activa |
-| UI ops | `validation/ui/ops/` | comprobaciones visuales opcionales de MinIO | opcional |
+| UI ops | `validation/ui/ops/` | comprobaciones visuales de MinIO Console | activa cuando la suite existe |
 | Ontology Hub Functional | `validation/components/ontology_hub/functional/` | 27 casos operativos de la hoja `Ontology Hub` | activa en `Level 6` |
 | Ontology Hub Integration | `validation/components/ontology_hub/integration/` | PT5 normalizado del componente | complementaria |
 | AI Model Hub | `validation/components/ai_model_hub/` | primera ola PT5 parcial | no activa por defecto |

@@ -28,7 +28,7 @@ El flujo actual es:
 7. Genera métricas derivadas de los reportes de Newman.
 8. Ejecuta el benchmark Kafka y persiste `kafka_metrics.json`.
 9. Ejecuta el smoke UI estable del dataspace para cada conector.
-10. Puede ejecutar la suite UI `ops` de MinIO si `LEVEL6_RUN_UI_OPS=true`.
+10. Ejecuta la suite UI `ops` de MinIO cuando esta disponible, salvo que `LEVEL6_RUN_UI_OPS=false`.
 11. Ejecuta validaciones de componentes cuando `COMPONENTS` contiene componentes con runner registrado.
 12. Persiste `experiment_results.json` con resultados API, UI, Kafka y componentes.
 

@@ -1,5 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked } from "../../shared/utils/live-marker";
+
 const SUCCESS_STATES = new Set(["COMPLETED", "ENDED", "TERMINATED", "DEPROVISIONED"]);
 
 export class TransferHistoryPage {
@@ -62,7 +64,7 @@ export class TransferHistoryPage {
   }
 
   private async refresh(): Promise<void> {
-    await this.page.getByRole("button", { name: /refresh/i }).click();
+    await clickMarked(this.page.getByRole("button", { name: /refresh/i }));
     await this.page.waitForLoadState("networkidle");
     await this.page.waitForTimeout(500);
   }
@@ -88,7 +90,7 @@ export class TransferHistoryPage {
     }
 
     while (await previousButton.isEnabled().catch(() => false)) {
-      await previousButton.click();
+      await clickMarked(previousButton);
       await this.page.waitForLoadState("networkidle");
       await this.page.waitForTimeout(500);
     }
@@ -107,7 +109,7 @@ export class TransferHistoryPage {
       return false;
     }
 
-    await nextButton.click();
+    await clickMarked(nextButton);
     await this.page.waitForLoadState("networkidle");
     await this.page.waitForTimeout(500);
     return true;

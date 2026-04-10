@@ -1,3 +1,5 @@
+const { clickMarked, fillMarked, selectOptionMarked } = require("../support/live-marker");
+
 class OntologyHubVocabFormPage {
   constructor(page) {
     this.page = page;
@@ -51,45 +53,45 @@ class OntologyHubVocabFormPage {
       fieldKind === "titles" ? this.titleLanguageSelects() : this.descriptionLanguageSelects();
 
     if ((await selects.count()) === 0) {
-      await addButton.click();
+      await clickMarked(addButton);
     }
     if ((await selects.count()) < 2) {
-      await addButton.click();
+      await clickMarked(addButton);
     }
 
     const primary = String(primaryLanguage || "").trim().toLowerCase();
     const secondary = String(secondaryLanguage || "").trim().toLowerCase();
 
     if (primary) {
-      await selects.first().selectOption(primary);
+      await selectOptionMarked(selects.first(), primary);
     }
     if (secondary && (await selects.count()) > 1) {
-      await selects.nth(1).selectOption(secondary);
+      await selectOptionMarked(selects.nth(1), secondary);
     }
   }
 
   async ensureTitles(primaryLanguage, secondaryLanguage, primaryValue, secondaryValue) {
     await this.ensureMultilingualFields("titles", primaryLanguage, secondaryLanguage);
-    await this.titleFields().first().fill(primaryValue);
+    await fillMarked(this.titleFields().first(), primaryValue);
     if ((await this.titleFields().count()) > 1 && secondaryValue) {
-      await this.titleFields().nth(1).fill(secondaryValue);
+      await fillMarked(this.titleFields().nth(1), secondaryValue);
     }
   }
 
   async ensureDescriptions(primaryLanguage, secondaryLanguage, primaryValue, secondaryValue) {
     await this.ensureMultilingualFields("descriptions", primaryLanguage, secondaryLanguage);
-    await this.descriptionFields().first().fill(primaryValue);
+    await fillMarked(this.descriptionFields().first(), primaryValue);
     if ((await this.descriptionFields().count()) > 1 && secondaryValue) {
-      await this.descriptionFields().nth(1).fill(secondaryValue);
+      await fillMarked(this.descriptionFields().nth(1), secondaryValue);
     }
   }
 
   async setReview(reviewText) {
     const reviews = this.page.locator("textarea[name^='reviews']");
     if ((await reviews.count()) === 0) {
-      await this.page.locator(".fieldReviewAddAction").click();
+      await clickMarked(this.page.locator(".fieldReviewAddAction"));
     }
-    await this.page.locator("textarea[name^='reviews']").first().fill(reviewText);
+    await fillMarked(this.page.locator("textarea[name^='reviews']").first(), reviewText);
   }
 
   async currentTitleLanguages() {
@@ -123,7 +125,7 @@ class OntologyHubVocabFormPage {
       .then(() => true)
       .catch(() => false);
 
-    await this.saveButton.click();
+    await clickMarked(this.saveButton);
 
     const response = await Promise.race([
       responsePromise,

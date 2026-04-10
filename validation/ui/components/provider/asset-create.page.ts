@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked, fillMarked, setInputFilesMarked } from "../../shared/utils/live-marker";
 import { materialInput, materialSelect, snackBar } from "../../shared/utils/selectors";
 
 export class AssetCreatePage {
@@ -18,33 +19,33 @@ export class AssetCreatePage {
   }
 
   async fillRequiredFields(assetId: string, folderName: string): Promise<void> {
-    await materialInput(this.page, "ID").fill(assetId);
-    await materialInput(this.page, "Name").fill(`QA Asset ${assetId}`);
-    await materialInput(this.page, "Version").fill("1.0");
-    await materialInput(this.page, "Short description").fill(
+    await fillMarked(materialInput(this.page, "ID"), assetId);
+    await fillMarked(materialInput(this.page, "Name"), `QA Asset ${assetId}`);
+    await fillMarked(materialInput(this.page, "Version"), "1.0");
+    await fillMarked(materialInput(this.page, "Short description"), 
       "Validacion automatica con Playwright para subida de asset",
     );
-    await materialInput(this.page, "Keywords").fill("qa,playwright,upload");
+    await fillMarked(materialInput(this.page, "Keywords"), "qa,playwright,upload");
 
-    await materialSelect(this.page, "Asset type").click();
-    await this.page.locator("mat-option").filter({ hasText: "Dataset" }).first().click();
+    await clickMarked(materialSelect(this.page, "Asset type"));
+    await clickMarked(this.page.locator("mat-option").filter({ hasText: "Dataset" }).first());
 
     const editor = this.page.locator(".ck-editor__editable[contenteditable='true']").first();
-    await editor.click();
-    await editor.fill("Descripcion de prueba automatizada para subida de asset");
+    await clickMarked(editor);
+    await fillMarked(editor, "Descripcion de prueba automatizada para subida de asset");
 
-    await this.page.getByRole("tab", { name: "Storage information" }).click();
+    await clickMarked(this.page.getByRole("tab", { name: "Storage information" }));
     await expect(
       this.page.getByRole("tabpanel", { name: "Storage information" }),
     ).toBeVisible({ timeout: 15_000 });
 
-    await materialSelect(this.page, "Destination").click();
-    await this.page.locator("mat-option").filter({ hasText: "InesDataStore" }).first().click();
-    await materialInput(this.page, "Folder").fill(folderName);
+    await clickMarked(materialSelect(this.page, "Destination"));
+    await clickMarked(this.page.locator("mat-option").filter({ hasText: "InesDataStore" }).first());
+    await fillMarked(materialInput(this.page, "Folder"), folderName);
   }
 
   async uploadFile(filePath: string): Promise<void> {
-    await this.page.setInputFiles("input#fileDropRef", filePath);
+    await setInputFilesMarked(this.page.locator("input#fileDropRef"), filePath);
   }
 
   async submit(): Promise<void> {
@@ -58,7 +59,7 @@ export class AssetCreatePage {
       await expect(blockingOverlay).toBeHidden({ timeout: 15_000 });
     }
 
-    await this.page.getByRole("button", { name: /^Create$/ }).click();
+    await clickMarked(this.page.getByRole("button", { name: /^Create$/ }));
   }
 
   async isCreateButtonVisible(): Promise<boolean> {

@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked } from "../../shared/utils/live-marker";
 import { errorBanner } from "../../shared/utils/selectors";
 
 export class ConnectorShellPage {
@@ -15,7 +16,7 @@ export class ConnectorShellPage {
     const navTarget = this.page.locator("a, button").filter({ hasText: sectionRegex }).first();
 
     if ((await navTarget.count()) > 0) {
-      await navTarget.click();
+      await clickMarked(navTarget);
       await this.page.waitForLoadState("networkidle");
       return;
     }

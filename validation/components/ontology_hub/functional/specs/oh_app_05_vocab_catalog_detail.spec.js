@@ -6,6 +6,7 @@ const {
   openFirstCatalogResult,
   safeWaitForSuggestions,
 } = require("../support/functional");
+const { clickMarked } = require("../../ui/support/live-marker");
 const {
   downloadFirstN3,
   loadRunState,
@@ -72,11 +73,11 @@ test("OH-APP-05: vocabulary detail is visible and the .n3 can be downloaded", as
   await detailPage.expectReady(resolvedPrefix, targetTitle);
   await detailPage.expectMetadataMarkers();
   await page.getByText("Incoming Links", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
-  await page.locator(".ontology-tab").filter({ hasText: "Version History" }).first().click();
+  await clickMarked(page.locator(".ontology-tab").filter({ hasText: "Version History" }).first());
   await page.getByText("Vocabulary Version History", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
   await captureStep(page, "02-vocab-detail");
 
-  await page.locator(".ontology-tab").filter({ hasText: "General" }).first().click();
+  await clickMarked(page.locator(".ontology-tab").filter({ hasText: "General" }).first());
   const downloadInfo = await downloadFirstN3(page, testInfo, "05-vocab-download");
   await captureStep(page, "03-vocab-n3-downloaded");
 

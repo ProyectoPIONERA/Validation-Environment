@@ -63,7 +63,7 @@ Contiene la validación UI del dataspace core con Playwright:
 Sí forma parte del framework actual:
 
 - `Level 6` ejecuta un smoke UI estable por conector
-- puede ejecutar una suite `ops` opcional de MinIO Console
+- ejecuta la suite `ops` de MinIO Console cuando existe, salvo opt-out explicito
 - guarda sus artefactos dentro del experimento activo
 
 ## `framework/`

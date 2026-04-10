@@ -5,6 +5,13 @@ const { execFileSync } = require("child_process");
 const { gotoEdition } = require("../../ui/support/bootstrap");
 const { OntologyHubVocabFormPage } = require("../../ui/pages/vocab-form.page");
 const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
+const {
+  checkMarked,
+  clickMarked,
+  fillMarked,
+  selectOptionMarked,
+  setInputFilesMarked,
+} = require("../../ui/support/live-marker");
 
 const DEFAULT_URI = "https://saref.etsi.org/saref4grid/v2.1.1/";
 const DEFAULT_REPOSITORY_URI =
@@ -230,9 +237,9 @@ async function signInToEdition(page, runtime, credentials = {}) {
   await page.goto(`${runtime.baseUrl}/edition`, { waitUntil: "commit", timeout: 5000 });
   await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   if (/\/edition\/login\/?$/i.test(page.url())) {
-    await page.getByPlaceholder("Email").fill(email);
-    await page.getByPlaceholder("Password").fill(password);
-    await page.getByRole("button", { name: /log in it!?/i }).click();
+    await fillMarked(page.getByPlaceholder("Email"), email);
+    await fillMarked(page.getByPlaceholder("Password"), password);
+    await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   }
 
@@ -252,7 +259,7 @@ async function signInToEdition(page, runtime, credentials = {}) {
 async function signOut(page, runtime) {
   const logoutLink = page.getByRole("link", { name: /logout/i }).first();
   if ((await logoutLink.count()) > 0 && (await logoutLink.isVisible().catch(() => false))) {
-    await logoutLink.click();
+    await clickMarked(logoutLink);
     await page.waitForLoadState("domcontentloaded");
     return;
   }
@@ -274,21 +281,21 @@ async function ensureTagSelected(page, tagLabel) {
     return;
   }
 
-  await page.locator(".fieldTagsAddAction").click();
+  await clickMarked(page.locator(".fieldTagsAddAction"));
   await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 5000 });
 
   const tagPattern = new RegExp(`^\\s*${escapeRegExp(normalized)}\\s*$`, "i");
   let tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
 
   if ((await tagOption.count()) === 0) {
-    await page.locator("#toggleCreateTag").click();
-    await page.locator("#newTagLabel").fill(normalized);
-    await page.locator("#btnCreateTag").click();
+    await clickMarked(page.locator("#toggleCreateTag"));
+    await fillMarked(page.locator("#newTagLabel"), normalized);
+    await clickMarked(page.locator("#btnCreateTag"));
     tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
     await tagOption.waitFor({ state: "visible", timeout: 5000 });
   }
 
-  await tagOption.click();
+  await clickMarked(tagOption);
   await page.waitForFunction(
     (expectedTag) =>
       Array.from(document.querySelectorAll('#tagsUl input[name="tags[]"]')).some(
@@ -309,20 +316,20 @@ async function ensureMultilingualTextareas(page, fieldKind, primaryLanguage, sec
   const selects = page.locator(`select[name^='${fieldKind}']`);
 
   if ((await selects.count()) === 0) {
-    await addButton.click();
+    await clickMarked(addButton);
   }
   if ((await selects.count()) < 2) {
-    await addButton.click();
+    await clickMarked(addButton);
   }
 
   const primary = normalizeText(primaryLanguage).toLowerCase();
   const secondary = normalizeText(secondaryLanguage).toLowerCase();
 
   if (primary) {
-    await selects.first().selectOption(primary);
+    await selectOptionMarked(selects.first(), primary);
   }
   if (secondary && (await selects.count()) > 1) {
-    await selects.nth(1).selectOption(secondary);
+    await selectOptionMarked(selects.nth(1), secondary);
   }
 }
 
@@ -330,12 +337,12 @@ async function fillVocabularyMetadata(page, runtime) {
   const createHeader = page.getByRole("heading", { name: "Create a new Vocabulary", exact: true });
   await createHeader.waitFor({ state: "visible", timeout: 5000 });
 
-  await page.locator("#inputVocabPrefix").fill(runtime.creationPrefix);
+  await fillMarked(page.locator("#inputVocabPrefix"), runtime.creationPrefix);
   if ((await page.locator("#inputVocabUri").count()) > 0 && normalizeText(runtime.creationUri)) {
-    await page.locator("#inputVocabUri").fill(runtime.creationUri);
+    await fillMarked(page.locator("#inputVocabUri"), runtime.creationUri);
   }
   if ((await page.locator("#inputVocabNsp").count()) > 0 && normalizeText(runtime.creationNamespace)) {
-    await page.locator("#inputVocabNsp").fill(runtime.creationNamespace);
+    await fillMarked(page.locator("#inputVocabNsp"), runtime.creationNamespace);
   }
 
   await ensureMultilingualTextareas(
@@ -344,12 +351,11 @@ async function fillVocabularyMetadata(page, runtime) {
     runtime.creationPrimaryLanguage || "en",
     runtime.creationSecondaryLanguage || "es",
   );
-  await page.locator("textarea[name^='titles']").first().fill(runtime.creationTitle);
+  await fillMarked(page.locator("textarea[name^='titles']").first(), runtime.creationTitle);
   if ((await page.locator("textarea[name^='titles']").count()) > 1) {
-    await page
+    await fillMarked(page
       .locator("textarea[name^='titles']")
-      .nth(1)
-      .fill(`${runtime.creationTitle} ES`);
+      .nth(1), `${runtime.creationTitle} ES`);
   }
 
   await ensureMultilingualTextareas(
@@ -358,21 +364,20 @@ async function fillVocabularyMetadata(page, runtime) {
     runtime.creationPrimaryLanguage || "en",
     runtime.creationSecondaryLanguage || "es",
   );
-  await page.locator("textarea[name^='descriptions']").first().fill(runtime.creationDescription);
+  await fillMarked(page.locator("textarea[name^='descriptions']").first(), runtime.creationDescription);
   if ((await page.locator("textarea[name^='descriptions']").count()) > 1) {
-    await page
+    await fillMarked(page
       .locator("textarea[name^='descriptions']")
-      .nth(1)
-      .fill(`${runtime.creationDescription} ES`);
+      .nth(1), `${runtime.creationDescription} ES`);
   }
 
   await ensureTagSelected(page, runtime.creationTag || "Services");
 
   const reviews = page.locator("textarea[name^='reviews']");
   if ((await reviews.count()) === 0) {
-    await page.locator(".fieldReviewAddAction").click();
+    await clickMarked(page.locator(".fieldReviewAddAction"));
   }
-  await page.locator("textarea[name^='reviews']").first().fill(runtime.creationReview);
+  await fillMarked(page.locator("textarea[name^='reviews']").first(), runtime.creationReview);
 }
 
 async function saveVocabulary(page) {
@@ -398,10 +403,10 @@ async function saveVocabulary(page) {
 
 async function createVocabularyByUri(page, runtime) {
   await gotoEdition(page, runtime);
-  await page.locator(".createVocab").click();
+  await clickMarked(page.locator(".createVocab"));
   await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#formDialogCreateVocabFromURI input[name='uri']").fill(runtime.creationUri);
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await fillMarked(page.locator("#formDialogCreateVocabFromURI input[name='uri']"), runtime.creationUri);
+  await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
   await page.waitForLoadState("domcontentloaded");
 
   const duplicateError = normalizeText(
@@ -428,12 +433,11 @@ async function createVocabularyByUri(page, runtime) {
 
 async function createVocabularyFromRepository(page, runtime) {
   await gotoEdition(page, runtime);
-  await page.locator(".createVocab").click();
+  await clickMarked(page.locator(".createVocab"));
   await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: 5000 });
-  await page
-    .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']")
-    .fill(runtime.creationRepositoryUri);
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await fillMarked(page
+    .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']"), runtime.creationRepositoryUri);
+  await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
   await page.waitForLoadState("domcontentloaded");
 
   const visibleError = normalizeText(
@@ -463,10 +467,10 @@ async function createAgent(page, runtime, agent) {
   await page.goto(`${runtime.baseUrl}/edition/agents/new`, { waitUntil: "domcontentloaded" });
   await expectHealthyPage(page, "Create agent");
 
-  await page.locator("input[name='name']").fill(agent.name);
-  await page.locator("select[name='type']").selectOption(agent.type || "person");
-  await page.locator("input[name='prefUri']").fill(agent.prefUri);
-  await page.locator("input[type='submit'][value='Save']").click();
+  await fillMarked(page.locator("input[name='name']"), agent.name);
+  await selectOptionMarked(page.locator("select[name='type']"), agent.type || "person");
+  await fillMarked(page.locator("input[name='prefUri']"), agent.prefUri);
+  await clickMarked(page.locator("input[type='submit'][value='Save']"));
   await page.waitForLoadState("domcontentloaded");
 
   const agentDetailUrl = `${runtime.baseUrl}/dataset/agents/${encodeURIComponent(agent.name)}`;
@@ -488,16 +492,16 @@ async function createUserForAgent(page, runtime, user) {
   await page.goto(`${runtime.baseUrl}/edition/signup`, { waitUntil: "domcontentloaded" });
   await expectHealthyPage(page, "Signup");
 
-  await page.locator("#userNameAgent").fill(user.agentName);
+  await fillMarked(page.locator("#userNameAgent"), user.agentName);
   const suggestions = page.locator("ul.ui-autocomplete li");
   await suggestions.first().waitFor({ state: "visible", timeout: 5000 });
-  await suggestions.filter({ hasText: new RegExp(`^\\s*${escapeRegExp(user.agentName)}\\s*$`, "i") }).first().click();
-  await page.locator("#next:not([disabled])").click();
+  await clickMarked(suggestions.filter({ hasText: new RegExp(`^\\s*${escapeRegExp(user.agentName)}\\s*$`, "i") }).first());
+  await clickMarked(page.locator("#next:not([disabled])"));
 
-  await page.locator("#email").fill(user.email);
-  await page.locator("input[name='password']").fill(user.password);
-  await page.locator("input[name='password_confirm']").fill(user.password);
-  await page.locator("input[type='submit'][value='Submit']").click();
+  await fillMarked(page.locator("#email"), user.email);
+  await fillMarked(page.locator("input[name='password']"), user.password);
+  await fillMarked(page.locator("input[name='password_confirm']"), user.password);
+  await clickMarked(page.locator("input[type='submit'][value='Submit']"));
   await page.waitForLoadState("domcontentloaded");
 
   const formErrors = normalizeText(await safeTextContent(page.locator("#formErrors")));
@@ -537,7 +541,7 @@ async function promoteUserToAdmin(page, runtime, user) {
   if ((await promoteButton.count()) === 0) {
     throw new Error(`Could not find the Admin promotion control for '${user.email}'.`);
   }
-  await promoteButton.click();
+  await clickMarked(promoteButton);
   await page.waitForLoadState("domcontentloaded");
   await page
     .locator(".SearchBoxperson, li, article, .editionBoxSugg")
@@ -564,10 +568,10 @@ async function editAgentFromPublicDetail(page, runtime, agentName, newAgentName)
     waitUntil: "domcontentloaded",
   });
   await expectHealthyPage(page, "Agent detail");
-  await page.locator("a[href*='/edition/agents/'] img[src*='edit_grey']").click();
+  await clickMarked(page.locator("a[href*='/edition/agents/'] img[src*='edit_grey']"));
   await page.waitForLoadState("domcontentloaded");
-  await page.locator("input[name='name']").fill(newAgentName);
-  await page.locator("input[type='submit'][value='Save']").click();
+  await fillMarked(page.locator("input[name='name']"), newAgentName);
+  await clickMarked(page.locator("input[type='submit'][value='Save']"));
   await page.waitForLoadState("domcontentloaded");
   await page.goto(`${runtime.baseUrl}/dataset/agents/${encodeURIComponent(newAgentName)}`, {
     waitUntil: "domcontentloaded",
@@ -583,11 +587,11 @@ async function deleteAgentFromPublicDetail(page, runtime, agentName) {
     waitUntil: "domcontentloaded",
   });
   await expectHealthyPage(page, "Agent detail");
-  await page.locator("#agentDelete").click();
-  await page.getByRole("button", { name: "Confirm Deletion", exact: true }).click();
+  await clickMarked(page.locator("#agentDelete"));
+  await clickMarked(page.getByRole("button", { name: "Confirm Deletion", exact: true }));
   await page.waitForLoadState("domcontentloaded");
   await page.goto(`${runtime.baseUrl}/dataset/agents`, { waitUntil: "domcontentloaded" });
-  await page.locator("#searchInput").fill(agentName);
+  await fillMarked(page.locator("#searchInput"), agentName);
   await page.waitForTimeout(1000);
   const suggestions = page.locator("ul.ui-autocomplete li").filter({ hasText: new RegExp(escapeRegExp(agentName), "i") });
   if ((await suggestions.count()) > 0) {
@@ -599,8 +603,8 @@ async function createTag(page, runtime, label) {
   await gotoEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/edition/tags/new`, { waitUntil: "domcontentloaded" });
   await expectHealthyPage(page, "Create tag");
-  await page.locator("input[name='label']").fill(label);
-  await page.locator("input[type='submit'][value='Save']").click();
+  await fillMarked(page.locator("input[name='label']"), label);
+  await clickMarked(page.locator("input[type='submit'][value='Save']"));
   await page.waitForLoadState("domcontentloaded");
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   await page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: label }).first().waitFor({
@@ -614,10 +618,10 @@ async function editTag(page, runtime, currentLabel, newLabel) {
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   const row = page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: currentLabel }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
-  await row.locator("form[name='formEdit'] img").click();
+  await clickMarked(row.locator("form[name='formEdit'] img"));
   await page.waitForLoadState("domcontentloaded");
-  await page.locator("input[name='label']").fill(newLabel);
-  await page.locator("input[type='submit'][value='Save']").click();
+  await fillMarked(page.locator("input[name='label']"), newLabel);
+  await clickMarked(page.locator("input[type='submit'][value='Save']"));
   await page.waitForLoadState("domcontentloaded");
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   await page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: newLabel }).first().waitFor({
@@ -631,8 +635,8 @@ async function deleteTag(page, runtime, label) {
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   const row = page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: label }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
-  await row.locator(".removeTag").click();
-  await page.getByRole("button", { name: "Confirm Deletion", exact: true }).click();
+  await clickMarked(row.locator(".removeTag"));
+  await clickMarked(page.getByRole("button", { name: "Confirm Deletion", exact: true }));
   await page.waitForLoadState("domcontentloaded");
   const remaining = page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: label });
   if ((await remaining.count()) > 0 && (await remaining.first().isVisible().catch(() => false))) {
@@ -669,7 +673,7 @@ async function downloadFirstN3(page, testInfo, baseName, options = {}) {
       await requestDownload();
     } else {
       const downloadPromise = page.waitForEvent("download", { timeout: 5000 });
-      await link.click();
+      await clickMarked(link);
       const download = await downloadPromise;
       await download.saveAs(filePath);
       suggestedFilename = download.suggestedFilename();
@@ -710,12 +714,12 @@ async function openVersionsPage(page, runtime, prefix) {
 }
 
 async function createVersion(page, version, filePath) {
-  await page.locator(".editionIndexBoxHeader .fieldReviewAddAction").click();
+  await clickMarked(page.locator(".editionIndexBoxHeader .fieldReviewAddAction"));
   const dialog = page.locator("#dialogNewVersion");
   await dialog.waitFor({ state: "visible", timeout: 5000 });
-  await dialog.locator("tr").filter({ hasText: /Version issued Date/i }).locator("input").first().fill(version.issued);
-  await dialog.locator("tr").filter({ hasText: /Version Label/i }).locator("input, textarea").first().fill(version.name);
-  await dialog.locator("input[type='file'], input[name='file']").first().setInputFiles(filePath);
+  await fillMarked(dialog.locator("tr").filter({ hasText: /Version issued Date/i }).locator("input").first(), version.issued);
+  await fillMarked(dialog.locator("tr").filter({ hasText: /Version Label/i }).locator("input, textarea").first(), version.name);
+  await setInputFilesMarked(dialog.locator("input[type='file'], input[name='file']").first(), filePath);
   await dialog.locator("form#dialogNewVersionForm").evaluate((form) => form.submit());
   await page.waitForLoadState("domcontentloaded");
 
@@ -746,11 +750,11 @@ async function createVersion(page, version, filePath) {
 async function editVersion(page, currentVersionName, updatedVersion) {
   const versionRow = page.locator(".editionBoxSugg").filter({ hasText: currentVersionName }).first();
   await versionRow.waitFor({ state: "visible", timeout: 5000 });
-  await versionRow.locator(".imageVersionActionEdit").click();
+  await clickMarked(versionRow.locator(".imageVersionActionEdit"));
   const dialog = page.locator("#dialogEditVersion");
   await dialog.waitFor({ state: "visible", timeout: 5000 });
-  await dialog.locator("input").first().fill(updatedVersion.issued);
-  await dialog.locator("input").nth(1).fill(updatedVersion.name);
+  await fillMarked(dialog.locator("input").first(), updatedVersion.issued);
+  await fillMarked(dialog.locator("input").nth(1), updatedVersion.name);
   await dialog.locator("form#dialogEditVersionForm").evaluate((form) => form.submit());
   await page.waitForLoadState("domcontentloaded");
 
@@ -781,8 +785,8 @@ async function editVersion(page, currentVersionName, updatedVersion) {
 async function deleteVersion(page, versionName) {
   const versionRow = page.locator(".editionBoxSugg").filter({ hasText: versionName }).first();
   await versionRow.waitFor({ state: "visible", timeout: 5000 });
-  await versionRow.locator(".imageVersionActionRemove").click();
-  await page.getByRole("button", { name: "Confirm Deletion", exact: true }).click();
+  await clickMarked(versionRow.locator(".imageVersionActionRemove"));
+  await clickMarked(page.getByRole("button", { name: "Confirm Deletion", exact: true }));
   await page.waitForLoadState("domcontentloaded");
   const remaining = page.locator(".editionBoxSugg").filter({ hasText: versionName });
   if ((await remaining.count()) > 0 && (await remaining.first().isVisible().catch(() => false))) {
@@ -796,8 +800,8 @@ async function deleteVocabulary(page, runtime, prefix) {
     waitUntil: "domcontentloaded",
   });
   await expectHealthyPage(page, "Vocabulary detail");
-  await page.locator("#vocabDelete").click();
-  await page.getByRole("button", { name: "Confirm Deletion", exact: true }).click();
+  await clickMarked(page.locator("#vocabDelete"));
+  await clickMarked(page.getByRole("button", { name: "Confirm Deletion", exact: true }));
   await page.waitForLoadState("domcontentloaded");
   await page.goto(`${runtime.baseUrl}/dataset/vocabs?q=${encodeURIComponent(prefix)}`, {
     waitUntil: "domcontentloaded",

@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked, fillMarked, pressMarked } from "../../shared/utils/live-marker";
 import { materialInput, snackBar } from "../../shared/utils/selectors";
 
 export class PolicyCreatePage {
@@ -24,17 +25,17 @@ export class PolicyCreatePage {
   }
 
   async fillPolicyId(policyId: string): Promise<void> {
-    await materialInput(this.page, /^ID$/).fill(policyId);
+    await fillMarked(materialInput(this.page, /^ID$/), policyId);
   }
 
   async addParticipantIdConstraint(participantId: string): Promise<void> {
-    await this.page.locator("policy-form-add-menu button[mat-icon-button]").first().click();
-    await this.page.getByRole("menuitem").filter({ hasText: /^Participant ID$/i }).click();
+    await clickMarked(this.page.locator("policy-form-add-menu button[mat-icon-button]").first());
+    await clickMarked(this.page.getByRole("menuitem").filter({ hasText: /^Participant ID$/i }));
 
     const input = this.page.locator("participant-id-select input").first();
     await expect(input).toBeVisible({ timeout: 5_000 });
-    await input.fill(participantId);
-    await input.press("Enter");
+    await fillMarked(input, participantId);
+    await pressMarked(input, "Enter");
 
     await expect(this.page.locator("participant-id-select mat-chip").filter({ hasText: participantId })).toBeVisible({
       timeout: 5_000,
@@ -42,7 +43,7 @@ export class PolicyCreatePage {
   }
 
   async submit(): Promise<void> {
-    await this.page.getByRole("button", { name: /^Create$/i }).click();
+    await clickMarked(this.page.getByRole("button", { name: /^Create$/i }));
   }
 
   async waitForCreationSuccess(timeoutMs = 10_000): Promise<string> {
@@ -89,7 +90,7 @@ export class PolicyCreatePage {
     }
 
     while (await previousButton.isEnabled().catch(() => false)) {
-      await previousButton.click();
+      await clickMarked(previousButton);
       await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
       await this.page.waitForTimeout(200);
     }
@@ -108,7 +109,7 @@ export class PolicyCreatePage {
       return false;
     }
 
-    await nextButton.click();
+    await clickMarked(nextButton);
     await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
     await this.page.waitForTimeout(200);
     return true;

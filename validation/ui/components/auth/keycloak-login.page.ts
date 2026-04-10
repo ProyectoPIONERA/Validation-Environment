@@ -1,5 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked, fillMarked } from "../../shared/utils/live-marker";
+
 type KeycloakLoginConfig = {
   portalUser: string;
   portalPassword: string;
@@ -40,8 +42,8 @@ export class KeycloakLoginPage {
       throw new Error("Missing PORTAL_USER or PORTAL_PASSWORD for Keycloak login");
     }
 
-    await usernameInput.fill(this.config.portalUser);
-    await passwordInput.fill(this.config.portalPassword);
+    await fillMarked(usernameInput, this.config.portalUser);
+    await fillMarked(passwordInput, this.config.portalPassword);
 
     const submitButton = this.page
       .locator("#kc-login, button[type='submit'], input[type='submit']")
@@ -49,7 +51,7 @@ export class KeycloakLoginPage {
 
     await Promise.all([
       this.page.waitForLoadState("networkidle"),
-      submitButton.click(),
+      clickMarked(submitButton),
     ]);
   }
 

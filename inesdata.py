@@ -1909,6 +1909,30 @@ def _save_level6_experiment_state(
     return payload
 
 
+def _save_interactive_core_ui_experiment_state(
+    experiment_dir,
+    connectors,
+    *,
+    mode,
+    ui_results=None,
+):
+    ui_validation = _aggregate_level6_ui_results(
+        ui_results or [],
+        experiment_dir=experiment_dir,
+    )
+    payload = {
+        "status": "completed",
+        "timestamp": datetime.now().isoformat(),
+        "source": "inesdata.py:interactive-core-ui",
+        "mode": (mode or {}).get("label"),
+        "connectors": list(connectors or []),
+        "ui_results": list(ui_results or []),
+        "ui_validation": ui_validation,
+    }
+    ExperimentStorage.save(payload, experiment_dir=experiment_dir)
+    return payload
+
+
 def _run_level6_kafka_benchmark(experiment_dir):
     run_benchmark = getattr(LEVEL6_KAFKA_METRICS_COLLECTOR, "run_kafka_benchmark_experiment", None)
     if not callable(run_benchmark):
@@ -1970,6 +1994,28 @@ def _config_or_env_flag_enabled(name, default=False):
         return default
     normalized = str(raw).strip().lower()
     return normalized in {"1", "true", "yes", "on"}
+
+
+def _level6_ui_ops_suite_available(ui_test_dir):
+    spec_path = os.path.join(ui_test_dir, LEVEL6_UI_OPS_SPEC)
+    config_path = os.path.join(ui_test_dir, LEVEL6_UI_OPS_CONFIG)
+    return os.path.isfile(spec_path) and os.path.isfile(config_path)
+
+
+def _should_run_level6_ui_ops(ui_test_dir):
+    if not _level6_ui_ops_suite_available(ui_test_dir):
+        return False
+
+    if "LEVEL6_RUN_UI_OPS" in os.environ:
+        return _env_flag_enabled("LEVEL6_RUN_UI_OPS", default=False)
+
+    deployer_config = load_deployer_config() or {}
+    raw = deployer_config.get("LEVEL6_RUN_UI_OPS")
+    if raw is not None:
+        normalized = str(raw).strip().lower()
+        return normalized in {"1", "true", "yes", "on"}
+
+    return True
 
 
 def _build_level6_ui_artifact_paths(experiment_dir, connector):
@@ -2404,7 +2450,14 @@ def _wait_for_level6_validation_ready(connectors, experiment_dir=None):
     return readiness
 
 
-def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, experiment_dir):
+def _run_level6_ui_ops(
+    ui_test_dir,
+    provider_connector,
+    consumer_connector,
+    experiment_dir,
+    extra_args=None,
+    extra_env=None,
+):
     artifact_paths = _build_level6_ui_ops_artifact_paths(experiment_dir)
     env = {
         **os.environ,
@@ -2415,6 +2468,8 @@ def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, expe
         "PLAYWRIGHT_OPS_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
         "PLAYWRIGHT_OPS_JSON_REPORT_FILE": artifact_paths["json_report_file"],
     }
+    if extra_env:
+        env.update(extra_env)
     command = [
         "npx",
         "playwright",
@@ -2423,6 +2478,8 @@ def _run_level6_ui_ops(ui_test_dir, provider_connector, consumer_connector, expe
         LEVEL6_UI_OPS_CONFIG,
         LEVEL6_UI_OPS_SPEC,
     ]
+    if extra_args:
+        command.extend(extra_args)
     error = None
     try:
         result = subprocess.run(
@@ -2919,9 +2976,9 @@ def lvl_6():
                             f"{provider_connector} -> {consumer_connector}"
                         )
 
-            if _config_or_env_flag_enabled("LEVEL6_RUN_UI_OPS", default=False):
+            if _should_run_level6_ui_ops(ui_test_dir):
                 if len(connectors) < 2:
-                    print("Warning: not enough connectors for optional UI ops suite — skipping")
+                    print("Warning: not enough connectors for UI ops MinIO suite — skipping")
                     ui_results.append({
                         "test": "ui-ops-minio-console",
                         "status": "skipped",
@@ -2934,7 +2991,7 @@ def lvl_6():
                         connectors[1],
                     )
                     print(
-                        f"\nRunning optional UI ops MinIO suite for "
+                        f"\nRunning UI ops MinIO suite for "
                         f"{provider_connector} -> {consumer_connector}..."
                     )
                     ui_ops_result = _run_level6_ui_ops(
@@ -2946,14 +3003,14 @@ def lvl_6():
                     ui_results.append(ui_ops_result)
                     if ui_ops_result["status"] == "failed":
                         print(
-                            "  Warning: optional UI ops MinIO suite failed "
+                            "  Warning: UI ops MinIO suite failed "
                             f"(exit {ui_ops_result['exit_code']})"
                         )
                     elif ui_ops_result["status"] == "skipped":
                         skip_reason = (ui_ops_result.get("error") or {}).get("message", "unknown reason")
-                        print(f"  Warning: optional UI ops MinIO suite skipped ({skip_reason})")
+                        print(f"  Warning: UI ops MinIO suite skipped ({skip_reason})")
                     else:
-                        print("  Optional UI ops MinIO suite passed")
+                        print("  UI ops MinIO suite passed")
         else:
             print("Warning: validation/ui directory not found — skipping UI smoke tests")
 
@@ -4055,7 +4112,11 @@ def _resolve_ui_mode():
             return {
                 "label": "live",
                 "args": ["--headed"],
-                "env": {"PLAYWRIGHT_HEADED_GPU_FIX": "1"},
+                "env": {
+                    "PLAYWRIGHT_HEADED_GPU_FIX": "1",
+                    "PLAYWRIGHT_INTERACTION_MARKERS": "1",
+                    "PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS": "350",
+                },
             }
         return {
             "label": "debug",
@@ -4063,6 +4124,8 @@ def _resolve_ui_mode():
             "env": {
                 "PWDEBUG": "1",
                 "PLAYWRIGHT_HEADED_GPU_FIX": "1",
+                "PLAYWRIGHT_INTERACTION_MARKERS": "1",
+                "PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS": "350",
             },
         }
 
@@ -4747,11 +4810,10 @@ def _run_core_ui_tests(mode):
         print("No running connectors detected — skipping UI tests")
         return None
 
-    experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    experiment_dir = os.path.join("experiments", experiment_id)
-
+    experiment_dir = ExperimentStorage.create_experiment_directory()
     extra_args = mode.get("args") or []
     extra_env = mode.get("env") or {}
+    ui_results = []
 
     for connector in connectors:
         creds = load_connector_credentials(connector)
@@ -4762,7 +4824,7 @@ def _run_core_ui_tests(mode):
         portal_user = creds.get("connector_user", {}).get("user", "")
         portal_pass = creds.get("connector_user", {}).get("passwd", "")
         print(f"\nRunning UI core smoke suite for {connector} ({mode['label']})...")
-        _run_level6_ui_smoke(
+        ui_result = _run_level6_ui_smoke(
             ui_test_dir,
             connector,
             portal_url,
@@ -4772,10 +4834,19 @@ def _run_core_ui_tests(mode):
             extra_args=extra_args,
             extra_env=extra_env,
         )
+        if ui_result:
+            ui_results.append(ui_result)
 
     if len(connectors) < 2:
         print("Warning: not enough connectors for UI dataspace suite — skipping")
-        return None
+        payload = _save_interactive_core_ui_experiment_state(
+            experiment_dir,
+            connectors,
+            mode=mode,
+            ui_results=ui_results,
+        )
+        print(f"Interactive UI results saved to {os.path.join(experiment_dir, 'experiment_results.json')}")
+        return payload
 
     provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
     consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
@@ -4786,7 +4857,7 @@ def _run_core_ui_tests(mode):
         f"\nRunning UI dataspace suite for {provider_connector} -> {consumer_connector} "
         f"({mode['label']})..."
     )
-    _run_level6_ui_dataspace(
+    ui_result = _run_level6_ui_dataspace(
         ui_test_dir,
         provider_connector,
         consumer_connector,
@@ -4794,7 +4865,33 @@ def _run_core_ui_tests(mode):
         extra_args=extra_args,
         extra_env=extra_env,
     )
-    return None
+    if ui_result:
+        ui_results.append(ui_result)
+
+    if _level6_ui_ops_suite_available(ui_test_dir):
+        print(
+            f"\nRunning UI ops MinIO suite for {provider_connector} -> {consumer_connector} "
+            f"({mode['label']})..."
+        )
+        ui_result = _run_level6_ui_ops(
+            ui_test_dir,
+            provider_connector,
+            consumer_connector,
+            experiment_dir,
+            extra_args=extra_args,
+            extra_env=extra_env,
+        )
+        if ui_result:
+            ui_results.append(ui_result)
+
+    payload = _save_interactive_core_ui_experiment_state(
+        experiment_dir,
+        connectors,
+        mode=mode,
+        ui_results=ui_results,
+    )
+    print(f"Interactive UI results saved to {os.path.join(experiment_dir, 'experiment_results.json')}")
+    return payload
 
 
 def run_inesdata_ui_tests_interactive():

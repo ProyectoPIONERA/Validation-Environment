@@ -1,3 +1,5 @@
+const { clickMarked } = require("../support/live-marker");
+
 class OntologyHubTermsPage {
   constructor(page) {
     this.page = page;
@@ -64,7 +66,7 @@ class OntologyHubTermsPage {
   }
 
   async clickFacetLink(groupLabel, valueLabel) {
-    await this.facetLink(groupLabel, valueLabel).click();
+    await clickMarked(this.facetLink(groupLabel, valueLabel));
     await this.page.waitForLoadState("networkidle");
   }
 

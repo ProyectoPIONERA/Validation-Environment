@@ -1,5 +1,6 @@
 import { expect, Page } from "@playwright/test";
 
+import { clickMarked } from "../../shared/utils/live-marker";
 import { snackBar } from "../../shared/utils/selectors";
 
 export class ContractOffersPage {
@@ -12,14 +13,14 @@ export class ContractOffersPage {
   }
 
   async openContractOffersTab(): Promise<void> {
-    await this.page.getByRole("tab", { name: /contract offers/i }).click();
+    await clickMarked(this.page.getByRole("tab", { name: /contract offers/i }));
     await expect(this.page.getByRole("button", { name: /negotiate contract/i }).first()).toBeVisible({
       timeout: 15_000,
     });
   }
 
   async negotiateFirstOffer(): Promise<void> {
-    await this.page.getByRole("button", { name: /negotiate contract/i }).first().click();
+    await clickMarked(this.page.getByRole("button", { name: /negotiate contract/i }).first());
   }
 
   async waitForNegotiationComplete(timeoutMs = 40_000): Promise<string> {

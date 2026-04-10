@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { checkMarked, clickMarked, fillMarked, selectOptionMarked } = require("./live-marker");
 const path = require("path");
 
 const {
@@ -176,7 +177,7 @@ async function ensureVocabularyTag(page, runtime) {
     };
   }
 
-  await page.locator(".fieldTagsAddAction").click();
+  await clickMarked(page.locator(".fieldTagsAddAction"));
   await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 5000 });
 
   const tagPattern = new RegExp(`^\\s*${escapeRegExp(tagLabel)}\\s*$`, "i");
@@ -196,9 +197,9 @@ async function ensureVocabularyTag(page, runtime) {
       )
       .catch(() => null);
 
-    await page.locator("#toggleCreateTag").click();
-    await page.locator("#newTagLabel").fill(tagLabel);
-    await page.locator("#btnCreateTag").click();
+    await clickMarked(page.locator("#toggleCreateTag"));
+    await fillMarked(page.locator("#newTagLabel"), tagLabel);
+    await clickMarked(page.locator("#btnCreateTag"));
 
     const createResponse = await createResponsePromise;
     const createError = normalizeText(
@@ -222,7 +223,7 @@ async function ensureVocabularyTag(page, runtime) {
   }
 
   if (!(await hasSelectedTag(page, tagLabel))) {
-    await tagOption.click();
+    await clickMarked(tagOption);
   }
   await waitForSelectedTag(page, tagLabel);
 
@@ -244,7 +245,7 @@ async function ensureTextareaLanguages(page, fieldName, primaryLanguage, seconda
 
   if (primary && total > 0) {
     try {
-      await selectLocator.first().selectOption(primary);
+      await selectOptionMarked(selectLocator.first(), primary);
     } catch (error) {
       throw new Error(`No se pudo seleccionar el idioma '${primary}' para ${fieldName}.`);
     }
@@ -252,7 +253,7 @@ async function ensureTextareaLanguages(page, fieldName, primaryLanguage, seconda
 
   if (secondary && total > 1) {
     try {
-      await selectLocator.nth(1).selectOption(secondary);
+      await selectOptionMarked(selectLocator.nth(1), secondary);
     } catch (error) {
       throw new Error(`No se pudo seleccionar el idioma '${secondary}' para ${fieldName}.`);
     }
@@ -276,7 +277,7 @@ async function submitVocabularyMetadata(page, runtime) {
     .then(() => true)
     .catch(() => false);
 
-  await page.locator(".editionSaveButtonRight").click();
+  await clickMarked(page.locator(".editionSaveButtonRight"));
 
   const saveResponse = await saveResponsePromise;
   const { body, payload } = await readResponseJson(saveResponse);
@@ -355,9 +356,9 @@ async function gotoEdition(page, runtime) {
   await page.goto(`${runtime.baseUrl}/edition`, { waitUntil: "domcontentloaded" });
 
   if (isEditionLoginUrl(page.url())) {
-    await page.getByPlaceholder("Email").fill(runtime.adminEmail);
-    await page.getByPlaceholder("Password").fill(runtime.adminPassword);
-    await page.getByRole("button", { name: /log in it!?/i }).click();
+    await fillMarked(page.getByPlaceholder("Email"), runtime.adminEmail);
+    await fillMarked(page.getByPlaceholder("Password"), runtime.adminPassword);
+    await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
     await page.waitForLoadState("domcontentloaded");
     await page.waitForTimeout(500);
 
@@ -372,7 +373,7 @@ async function gotoEdition(page, runtime) {
   if (!isEditionUrl(page.url())) {
     const editionLink = page.getByRole("link", { name: /edition/i }).first();
     if ((await editionLink.count()) > 0) {
-      await editionLink.click();
+      await clickMarked(editionLink);
       await page.waitForLoadState("domcontentloaded");
     }
   }
@@ -425,7 +426,7 @@ async function ensurePublicDetail(page, runtime, prefix, title) {
 async function openCreateVocabularyDialog(page, runtime) {
   await gotoEdition(page, runtime);
 
-  await page.locator(".createVocab").click();
+  await clickMarked(page.locator(".createVocab"));
   await page.locator("#dialogCreateVocab").waitFor({ state: "visible" });
 }
 
@@ -446,25 +447,25 @@ async function fillVocabularyMetadataForm(page, runtime, options = {}) {
   );
 
   if (fillUri && normalizeText(runtime.creationUri)) {
-    await page.locator("#inputVocabUri").fill(runtime.creationUri);
+    await fillMarked(page.locator("#inputVocabUri"), runtime.creationUri);
   }
   if (fillNamespace && normalizeText(runtime.creationNamespace)) {
-    await page.locator("#inputVocabNsp").fill(runtime.creationNamespace);
+    await fillMarked(page.locator("#inputVocabNsp"), runtime.creationNamespace);
   }
   if (normalizeText(runtime.creationPrefix)) {
-    await page.locator("#inputVocabPrefix").fill(runtime.creationPrefix);
+    await fillMarked(page.locator("#inputVocabPrefix"), runtime.creationPrefix);
   }
 
   if ((await page.locator("textarea[name^='titles']").count()) === 0) {
-    await page.locator(".fieldWithLangAddActionTitle").click();
+    await clickMarked(page.locator(".fieldWithLangAddActionTitle"));
   }
   if ((await page.locator("textarea[name^='titles']").count()) < 2) {
-    await page.locator(".fieldWithLangAddActionTitle").click();
+    await clickMarked(page.locator(".fieldWithLangAddActionTitle"));
   }
   const titleFields = page.locator("textarea[name^='titles']");
-  await titleFields.first().fill(runtime.creationTitle);
+  await fillMarked(titleFields.first(), runtime.creationTitle);
   if ((await titleFields.count()) > 1) {
-    await titleFields.nth(1).fill(`${runtime.creationTitle} ES`);
+    await fillMarked(titleFields.nth(1), `${runtime.creationTitle} ES`);
   }
   await ensureTextareaLanguages(
     page,
@@ -474,15 +475,15 @@ async function fillVocabularyMetadataForm(page, runtime, options = {}) {
   );
 
   if ((await page.locator("textarea[name^='descriptions']").count()) === 0) {
-    await page.locator(".fieldWithLangAddActionDescription").click();
+    await clickMarked(page.locator(".fieldWithLangAddActionDescription"));
   }
   if ((await page.locator("textarea[name^='descriptions']").count()) < 2) {
-    await page.locator(".fieldWithLangAddActionDescription").click();
+    await clickMarked(page.locator(".fieldWithLangAddActionDescription"));
   }
   const descriptionFields = page.locator("textarea[name^='descriptions']");
-  await descriptionFields.first().fill(runtime.creationDescription);
+  await fillMarked(descriptionFields.first(), runtime.creationDescription);
   if ((await descriptionFields.count()) > 1) {
-    await descriptionFields.nth(1).fill(`${runtime.creationDescription} ES`);
+    await fillMarked(descriptionFields.nth(1), `${runtime.creationDescription} ES`);
   }
   await ensureTextareaLanguages(
     page,
@@ -496,9 +497,9 @@ async function fillVocabularyMetadataForm(page, runtime, options = {}) {
   }
 
   if ((await page.locator("textarea[name^='reviews']").count()) === 0) {
-    await page.locator(".fieldReviewAddAction").click();
+    await clickMarked(page.locator(".fieldReviewAddAction"));
   }
-  await page.locator("textarea[name^='reviews']").first().fill(runtime.creationReview);
+  await fillMarked(page.locator("textarea[name^='reviews']").first(), runtime.creationReview);
 
   return {
     creationUri: resolvedCreationUri || normalizeText(runtime.creationUri),
@@ -509,8 +510,8 @@ async function fillVocabularyMetadataForm(page, runtime, options = {}) {
 async function createVocabularyFromUri(page, runtime) {
   await openCreateVocabularyDialog(page, runtime);
   await page.getByText("Create Vocabulary by URI", { exact: true }).waitFor({ state: "visible" });
-  await page.locator("#formDialogCreateVocabFromURI input[name='uri']").fill(runtime.creationUri);
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await fillMarked(page.locator("#formDialogCreateVocabFromURI input[name='uri']"), runtime.creationUri);
+  await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
   await page.waitForLoadState("domcontentloaded");
 
   const duplicateError = page.locator(".alert-error").filter({
@@ -562,10 +563,9 @@ async function createVocabularyFromRepository(page, runtime) {
   await page.getByText("Create Vocabulary from Ontology Repository", { exact: true }).waitFor({
     state: "visible",
   });
-  await page
-    .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']")
-    .fill(repositoryUri);
-  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await fillMarked(page
+    .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']"), repositoryUri);
+  await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
   await page.waitForLoadState("domcontentloaded");
 
   const metadataContext = await fillVocabularyMetadataForm(page, runtime, {

@@ -293,11 +293,16 @@ Para cada conector, `Level 6` guarda evidencias en:
 
 ## Integracion de la Suite Ops en Level 6
 
-La suite de MinIO Console puede ejecutarse de forma opcional desde `Level 6` exportando:
+`Level 6` ejecuta la suite de MinIO Console automáticamente cuando:
 
-- `LEVEL6_RUN_UI_OPS=true`
+- existe `ops/minio-bucket-visibility.spec.ts`
+- existe `playwright.ops.config.ts`
 
-Cuando esta bandera esta activa, `inesdata.py` lanza:
+Para desactivarla explícitamente, exporta:
+
+- `LEVEL6_RUN_UI_OPS=false`
+
+Cuando la suite está habilitada, `inesdata.py` lanza:
 
 - `ops/minio-bucket-visibility.spec.ts`
 
@@ -307,6 +312,12 @@ Y persiste sus artefactos en:
 - `experiments/<experiment_id>/ui-ops/minio-console/playwright-report`
 - `experiments/<experiment_id>/ui-ops/minio-console/blob-report`
 - `experiments/<experiment_id>/ui-ops/minio-console/results.json`
+
+La opción interactiva `I > Core` también ejecuta esta suite automáticamente al final del bloque smoke + dataspace, respetando el mismo modo (`Normal`, `Live` o `Debug`).
+
+Igual que `Level 6`, esa ejecución interactiva persiste ahora sus artefactos bajo `experiments/<experiment_id>/` y guarda un `experiment_results.json` agregado con `ui_results` y `ui_validation`.
+
+En `Live` y `Debug`, el framework activa marcadores visuales sobre los elementos antes de las interacciones principales (`click`, `fill`, etc.) para hacer más visible el recorrido del test.
 
 Esta ejecucion se registra en `experiment_results.json` como:
 

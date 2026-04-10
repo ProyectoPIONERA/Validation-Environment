@@ -72,11 +72,17 @@ cd validation/ui
 npm run test:ops
 ```
 
-Para ejecutarla también desde `inesdata.py` Level 6, exporta:
+`Level 6` la ejecuta automáticamente cuando la suite existe en `validation/ui/ops`.
+
+Para desactivarla explícitamente desde `inesdata.py` Level 6, exporta:
 
 ```bash
-export LEVEL6_RUN_UI_OPS=true
+export LEVEL6_RUN_UI_OPS=false
 ```
+
+La opción interactiva `I > Core` también la ejecuta automáticamente al final del bloque smoke + dataspace, usando el mismo modo (`Normal`, `Live` o `Debug`).
+
+En `Live` y `Debug`, el framework activa marcadores visuales sobre los elementos antes de `click`, `fill` y otras interacciones principales para que el recorrido sea más fácil de seguir.
 
 Para omitir la suite dataspace desde `inesdata.py` Level 6, exporta:
 
@@ -127,12 +133,13 @@ Por defecto los artefactos se guardan en:
 - `validation/ui/playwright-report`
 - `validation/ui/blob-report`
 
-Cuando la ejecucion llega desde `inesdata.py` Level 6, esos directorios se redirigen automaticamente a `experiments/<experiment_id>/ui/<connector>/`.
-Ademas, `Level 6` guarda un JSON enriquecido por suite:
+Cuando la ejecucion llega desde `inesdata.py`, esos directorios se redirigen automaticamente a `experiments/<experiment_id>/ui/<connector>/`.
+Ademas, tanto `Level 6` como la opcion interactiva `I > Core` guardan un JSON enriquecido por suite:
 
 - `ui_core_validation.json`
 - `ui_ops_validation.json`
 - `ui_validation_summary.json` en la raiz del experimento
+- `experiment_results.json` en la raiz del experimento
 
 Estos artefactos separan `support_checks`, `dataspace_cases`, `ops_checks`, `evidence_index` y `catalog_alignment` sin cambiar la ejecucion nativa de Playwright.
 
