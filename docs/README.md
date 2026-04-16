@@ -49,3 +49,5 @@ En esa división por fases:
 - [12_local_validation_environment.md](./12_local_validation_environment.md): inventario del entorno local actual de validación.
 - [13_test_cases.md](./13_test_cases.md): criterio común para correlacionar funcionalidades, PT5, casos operativos y automatización.
 - [14_production_environment_plan.md](./14_production_environment_plan.md): plan de transición desde el entorno local actual hacia el entorno productivo.
+- [15_ai_model_hub_validation_plan.md](./15_ai_model_hub_validation_plan.md): guía de arranque y plan de validación de AI Model Hub dentro del framework.
+- [16_flares_linguistic_domain_context.md](./16_flares_linguistic_domain_context.md): contexto de FLARES y del dominio lingüístico para la Fase 3 de AI Model Hub.

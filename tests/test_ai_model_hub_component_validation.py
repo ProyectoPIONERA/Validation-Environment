@@ -29,8 +29,9 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
     def test_evaluate_runtime_config_response_passes_on_valid_config(self):
         body = json.dumps(
             {
-                "appTitle": "AI Model Hub",
                 "menuItems": [],
+                "healthCheckIntervalSeconds": 30,
+                "enableUserConfig": False,
             }
         )
 
@@ -38,11 +39,14 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
             200,
             "application/json",
             body,
-            required_keys=["appTitle", "menuItems"],
+            required_keys=["menuItems"],
         )
 
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["menu_items_count"], 0)
+        self.assertIsNone(result["app_title"])
+        self.assertEqual(result["health_check_interval_seconds"], 30)
+        self.assertFalse(result["enable_user_config"])
 
     def test_run_ai_model_hub_validation_persists_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -51,10 +55,11 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
                     return 200, "text/html", "<!doctype html><html><body><app-root></app-root></body></html>"
                 if url == "http://ai-model-hub.example.local/config/app-config.json":
                     payload = {
-                        "appTitle": "AI Model Hub",
                         "menuItems": [
                             {"label": "Catalog", "path": "/catalog"},
                         ],
+                        "healthCheckIntervalSeconds": 30,
+                        "enableUserConfig": False,
                     }
                     return 200, "application/json", json.dumps(payload)
                 raise AssertionError(f"Unexpected URL: {url}")
@@ -86,10 +91,11 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
                     return 200, "text/html", "<!doctype html><html><body><app-root></app-root></body></html>"
                 if url == "http://ai-model-hub.example.local/config/app-config.json":
                     payload = {
-                        "appTitle": "AI Model Hub",
                         "menuItems": [
                             {"label": "Catalog", "path": "/catalog"},
                         ],
+                        "healthCheckIntervalSeconds": 30,
+                        "enableUserConfig": False,
                     }
                     return 200, "application/json", json.dumps(payload)
                 raise AssertionError(f"Unexpected URL: {url}")

@@ -11,9 +11,13 @@ from validation.components.ai_model_hub.ui_runner import run_ai_model_hub_ui_val
 def _build_playwright_results_payload():
     spec_titles = [
         "PT5-MH-01: model catalog view is reachable from the public UI",
+        "PT5-MH-02: provider can register a local model asset with valid metadata",
+        "PT5-MH-03: provider publication becomes visible through the consumer catalog UI",
         "PT5-MH-04: model listing view renders the discovery shell",
         "PT5-MH-05: model discovery search input accepts free text queries",
         "PT5-MH-06: model discovery filter shell is available in the ML assets view",
+        "PT5-MH-07: model details view exposes functional and technical metadata",
+        "PT5-MH-08: contract negotiation from catalog registers an agreement in the consumer connector",
     ]
     return {
         "stats": {
@@ -97,11 +101,11 @@ class AIModelHubComponentUIValidationTests(unittest.TestCase):
             self.assertEqual(result["component"], "ai-model-hub")
             self.assertEqual(result["suite"], "ui")
             self.assertEqual(result["status"], "passed")
-            self.assertEqual(result["summary"]["total"], 4)
-            self.assertEqual(result["summary"]["passed"], 4)
-            self.assertEqual(result["pt5_summary"]["total"], 4)
+            self.assertEqual(result["summary"]["total"], 8)
+            self.assertEqual(result["summary"]["passed"], 8)
+            self.assertEqual(result["pt5_summary"]["total"], 8)
             self.assertEqual(result["support_summary"]["total"], 0)
-            self.assertEqual(len(result["executed_cases"]), 4)
-            self.assertGreaterEqual(len(result["evidence_index"]), 5)
+            self.assertEqual(len(result["executed_cases"]), 8)
+            self.assertGreaterEqual(len(result["evidence_index"]), 8)
             self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["json_report_file"]))

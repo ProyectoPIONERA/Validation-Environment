@@ -147,8 +147,28 @@ def evaluate_runtime_config_response(
         result["status"] = "failed"
         result["assertions"].append("Runtime configuration field 'appTitle' must be a string")
 
+    health_check_interval_seconds = payload.get("healthCheckIntervalSeconds")
+    if (
+        "healthCheckIntervalSeconds" in payload
+        and health_check_interval_seconds is not None
+        and not isinstance(health_check_interval_seconds, int)
+    ):
+        result["status"] = "failed"
+        result["assertions"].append(
+            "Runtime configuration field 'healthCheckIntervalSeconds' must be an integer"
+        )
+
+    enable_user_config = payload.get("enableUserConfig")
+    if "enableUserConfig" in payload and not isinstance(enable_user_config, bool):
+        result["status"] = "failed"
+        result["assertions"].append(
+            "Runtime configuration field 'enableUserConfig' must be a boolean"
+        )
+
     result["app_title"] = app_title
     result["menu_items_count"] = len(menu_items) if isinstance(menu_items, list) else 0
+    result["health_check_interval_seconds"] = health_check_interval_seconds
+    result["enable_user_config"] = enable_user_config
     return result
 
 
@@ -262,7 +282,7 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
         config_status,
         config_content_type,
         config_body,
-        required_keys=["appTitle", "menuItems"],
+        required_keys=["menuItems"],
     )
     config_case = _build_case_result(
         case_id="MH-BOOTSTRAP-02",
@@ -280,6 +300,8 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
             "payload_keys": config_evaluation.get("payload_keys"),
             "app_title": config_evaluation.get("app_title"),
             "menu_items_count": config_evaluation.get("menu_items_count"),
+            "health_check_interval_seconds": config_evaluation.get("health_check_interval_seconds"),
+            "enable_user_config": config_evaluation.get("enable_user_config"),
         },
         assertions=list(config_evaluation.get("assertions") or []),
     )

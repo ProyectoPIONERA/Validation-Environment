@@ -8,6 +8,20 @@ class CatalogPage {
     this.requestButton = page.locator("lib-catalog-request .btn");
     this.catalogCards = page.locator("lib-catalog-card");
     this.errorAlert = page.locator(".alert-error");
+    this.emptyStateMessage = page.locator("section").getByText(/No catalog has been requested yet/i);
+    this.requestDialog = page.locator("dialog#dashboard-dialog");
+    this.counterPartyAddressInput = this.requestDialog.locator("input[name='counterPartyAddress']");
+    this.counterPartyIdInput = this.requestDialog.locator("input[name='counterPartyId']");
+    this.requestCatalogButton = this.requestDialog.locator("button[type='submit']");
+    this.negotiationDialog = page.locator("dialog#dashboard-dialog");
+    this.offerRadioButtons = this.negotiationDialog.locator("input[type='radio']");
+    this.negotiateButton = this.negotiationDialog.locator("button").filter({ hasText: /Negotiate/i }).first();
+    this.goToContractsButton = this.negotiationDialog.locator("button, div[role='button']").filter({
+      hasText: /Go to Contracts/i,
+    });
+    this.progressTitle = this.negotiationDialog.getByRole("heading", { name: /Contract Negotiation/i });
+    this.paginationLabel = page.getByRole("button", { name: /Page \d+ of \d+/ }).first();
+    this.nextPageButton = page.getByRole("button", { name: "»" }).first();
   }
 
   async goto() {
@@ -16,6 +30,69 @@ class CatalogPage {
 
   async waitUntilReady() {
     await expect(this.root).toBeVisible();
+  }
+
+  async requestCatalogManually(counterPartyAddress, counterPartyId = "") {
+    await this.requestButton.click();
+    await expect(this.requestDialog).toBeVisible();
+    if (counterPartyId) {
+      await this.counterPartyIdInput.fill(counterPartyId);
+    }
+    await this.counterPartyAddressInput.fill(counterPartyAddress);
+    await expect(this.requestCatalogButton).toBeEnabled();
+    await this.requestCatalogButton.click();
+    await expect(this.requestDialog).toBeHidden({ timeout: 20000 });
+  }
+
+  catalogCardByText(text) {
+    return this.catalogCards.filter({ hasText: text }).first();
+  }
+
+  async findCatalogCardAcrossPages(text, maxPages = 10) {
+    const visitedPages = new Set();
+
+    for (let attempt = 0; attempt < maxPages; attempt += 1) {
+      const card = this.catalogCardByText(text);
+      if ((await card.count()) > 0) {
+        return card;
+      }
+
+      const currentPageLabel = ((await this.paginationLabel.textContent().catch(() => "")) || "").trim();
+      if (!currentPageLabel || visitedPages.has(currentPageLabel)) {
+        break;
+      }
+      visitedPages.add(currentPageLabel);
+
+      const nextDisabled = await this.nextPageButton.isDisabled().catch(() => false);
+      if (nextDisabled) {
+        break;
+      }
+
+      await this.nextPageButton.click();
+      await this.page.waitForTimeout(500);
+    }
+
+    throw new Error(`Catalog card '${text}' was not visible in the paginated catalog results`);
+  }
+
+  negotiateButtonForCard(card) {
+    return card.locator("button").filter({ hasText: /Negotiate/i }).first();
+  }
+
+  async openNegotiationForCard(card) {
+    await this.negotiateButtonForCard(card).click();
+    await expect(this.negotiationDialog).toBeVisible();
+  }
+
+  async selectFirstOffer() {
+    await expect(this.offerRadioButtons.first()).toBeVisible();
+    await this.offerRadioButtons.first().check();
+  }
+
+  async startNegotiation() {
+    await expect(this.negotiateButton).toBeVisible();
+    await expect(this.negotiateButton).toBeEnabled();
+    await this.negotiateButton.click();
   }
 }
 

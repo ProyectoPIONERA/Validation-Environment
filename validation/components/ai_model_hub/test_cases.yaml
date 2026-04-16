@@ -92,7 +92,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: publication
     execution_mode: ui
-    coverage_status: manual
+    coverage_status: partial
     mapping_status: partial
     preconditions:
       - A provider user with adequate permissions is available
@@ -113,6 +113,11 @@ test_cases:
       - MH-12
       - MH-13
     notes: The AIModelHub repository already provides a clear UI baseline for this flow, but it is not yet integrated into Validation-Environment.
+    automation:
+      status: automated
+      mode: ui_partial
+      ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_02_model_registration.spec.js
+      notes: The first Playwright slice covers provider-side local asset creation with valid metadata and validation of the resulting asset card.
 
   - id: PT5-MH-03
     component: ai_model_hub
@@ -122,7 +127,7 @@ test_cases:
     validation_type: integration
     dataspace_dimension: publication
     execution_mode: api_ui
-    coverage_status: manual
+    coverage_status: partial
     mapping_status: partial
     preconditions:
       - A local model has already been registered
@@ -135,6 +140,11 @@ test_cases:
       - MH-14
       - MH-15
     notes: Key case to validate the alignment between the component UI and the connector APIs.
+    automation:
+      status: automated
+      mode: api_ui
+      ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_03_catalog_publication.spec.js
+      notes: The first automation slice bootstraps a provider-side published asset via management API and verifies external visibility from the consumer catalog UI.
 
   - id: PT5-MH-04
     component: ai_model_hub
@@ -227,7 +237,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: visualization
     execution_mode: ui
-    coverage_status: manual
+    coverage_status: partial
     mapping_status: partial
     preconditions:
       - At least one model is visible in the catalog
@@ -239,6 +249,11 @@ test_cases:
       - MH-25
       - MH-26
     notes: Priority case to complete the first discovery coverage slice.
+    automation:
+      status: automated
+      mode: api_ui
+      ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_07_model_details.spec.js
+      notes: The first automation slice bootstraps a local consumer-side model asset via management API and validates the detailed metadata modal in ML Assets.
 
   - id: PT5-MH-08
     component: ai_model_hub
@@ -255,6 +270,7 @@ test_cases:
       - The connector contract cycle is operational
     steps:
       - Start the contract negotiation
+      - Finalize the negotiation from the consumer side
       - Confirm the creation of the contract or related agreement
     expected_result: The contract is registered
     traceability:
@@ -264,6 +280,11 @@ test_cases:
       - MH-31
       - MH-32
     notes: Last recommended case in the first wave. It already requires a minimal integration with EDC APIs in the environment.
+    automation:
+      status: automated
+      mode: api_ui
+      ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_08_contract_negotiation.spec.js
+      notes: The first automation slice publishes a provider asset, negotiates it from the consumer catalog UI and confirms the resulting agreement through the consumer management API.
 
   - id: PT5-MH-09
     component: ai_model_hub
@@ -462,3 +483,35 @@ test_cases:
     expected_result: Functional integration
     traceability:
       - MH-47
+
+functional_use_cases:
+  - id: MH-LING-01
+    component: ai_model_hub
+    case_group: functional
+    description: Linguistic domain use case with FLARES-mini
+    type: api_ui
+    validation_type: functional
+    dataspace_dimension: linguistic
+    execution_mode: api_ui_opt_in
+    coverage_status: partial
+    mapping_status: phase_3
+    preconditions:
+      - AI Model Hub, provider connector and consumer connector are deployed
+      - FLARES-mini fixture is available in the framework
+    steps:
+      - Publish FLARES-mini on demand as a provider dataset asset
+      - Discover the published dataset from the consumer catalog
+      - Negotiate the corresponding contract agreement from the consumer side
+      - Bootstrap benchmark-ready linguistic models in the consumer
+      - Load the FLARES benchmark dataset inside Model Benchmarking
+      - Capture the current inference capability as part of the suite evidence
+      - Evolve the suite towards expected linguistic validation outputs once /api/infer is available
+    expected_result: FLARES-mini can populate the dataspace on demand, reach a negotiated agreement and prepare the linguistic benchmarking flow without requiring global seeding
+    traceability:
+      - MH-LING-01
+    notes: Opt-in scaffold for Phase 3. The current automated slice covers provider publication, consumer negotiation, benchmark-ready dataset/model linkage and records that the local infer endpoint still returns 404.
+    automation:
+      status: automated
+      mode: api_ui_opt_in
+      ui_spec: validation/components/ai_model_hub/functional/specs/mh_ling_01_flares_reliability.spec.js
+      notes: Suite-specific bootstrap publishes FLARES-mini only when the linguistic functional suite is explicitly enabled, then validates catalog discovery, contract negotiation, benchmark readiness and the current infer-endpoint blocker.

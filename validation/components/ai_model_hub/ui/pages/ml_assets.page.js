@@ -12,6 +12,13 @@ class MlAssetsPage {
     this.assetCards = page.locator("article.card");
     this.filterCheckboxes = page.locator("aside input[type='checkbox']");
     this.noResultsMessage = page.locator("section p.text-sm.text-center.opacity-60");
+    this.detailsDialog = page.locator("dialog#dashboard-dialog");
+    this.detailsDialogTitle = this.detailsDialog.locator("h2.text-2xl");
+    this.detailsDialogAssetId = this.detailsDialog.getByText(/Asset ID:/i);
+    this.overviewTab = this.detailsDialog.getByRole("button", { name: "Overview" });
+    this.contractOffersTab = this.detailsDialog.getByRole("button", { name: "Contract Offers" });
+    this.rawPayloadTab = this.detailsDialog.getByRole("button", { name: "Raw Payload" });
+    this.detailsDialogCloseButton = this.detailsDialog.locator("form[method='dialog'] button").first();
   }
 
   async goto() {
@@ -26,6 +33,19 @@ class MlAssetsPage {
       this.noResultsMessage.first().waitFor({ state: "visible", timeout: 15000 }).catch(() => null),
       this.errorAlert.first().waitFor({ state: "visible", timeout: 15000 }).catch(() => null),
     ]);
+  }
+
+  cardByText(text) {
+    return this.assetCards.filter({ hasText: text }).first();
+  }
+
+  async openDetailsForCard(card) {
+    await card
+      .locator("button")
+      .filter({ has: this.page.locator("i.material-symbols-rounded", { hasText: "info" }) })
+      .first()
+      .click();
+    await expect(this.detailsDialog).toBeVisible();
   }
 }
 
