@@ -100,3 +100,9 @@ adapters/inesdata/sources/inesdata-connector/extensions/vocabulary-shared-retrie
 adapters/inesdata/sources/AIModelHub
 validation/components/ontology_hub/functional/generated
 docs/INVENTARIO DE ENTORNO.docx
+
+
+validation/components/ai_model_hub/README.md
+docs/15_ai_model_hub_validation_plan.md
+docs/16_flares_linguistic_domain_context.md
+docs/A5.2_Casos_Prueba_ copy.xlsx
