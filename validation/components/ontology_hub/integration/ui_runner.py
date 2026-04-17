@@ -24,6 +24,7 @@ COMPONENT_KEY = "ontology-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "integration", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent
+DEFAULT_EXPERIMENTS_DIR = Path(__file__).resolve().parents[4] / "experiments" / "_standalone"
 PLAYWRIGHT_COMMAND_PREFIX = [
     os.path.join(".", "node_modules", ".bin", "playwright"),
     "test",
@@ -143,7 +144,7 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
     if experiment_dir:
         base_dir = os.path.join(experiment_dir, "components", COMPONENT_KEY, "ui")
     else:
-        base_dir = str(COMPONENT_UI_DIR)
+        base_dir = os.path.join(str(DEFAULT_EXPERIMENTS_DIR), "components", COMPONENT_KEY, "ui")
 
     paths = {
         "base_dir": base_dir,

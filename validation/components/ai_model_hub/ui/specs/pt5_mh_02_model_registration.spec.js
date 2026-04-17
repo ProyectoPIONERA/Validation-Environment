@@ -1,9 +1,11 @@
 const { test, expect } = require("../fixtures");
 const { attachManagementAuthorizationRoutes } = require("../auth");
+const { waitForLocalProviderAsset } = require("../bootstrap");
 const { AssetsPage } = require("../pages/assets.page");
 
 test("PT5-MH-02: provider can register a local model asset with valid metadata", async ({
   page,
+  request,
   aiModelHubRuntime,
   captureStep,
   attachJson,
@@ -57,10 +59,22 @@ test("PT5-MH-02: provider can register a local model asset with valid metadata",
     timeout: 15000,
   });
   await expect(assetsPage.errorAlert).toHaveCount(0);
+  const managementVisibility = await waitForLocalProviderAsset(request, aiModelHubRuntime, assetId, 20, 1000);
+  const persistedAsset = managementVisibility.asset;
 
-  await assetsPage.searchInput.fill(assetId);
-  const createdCard = assetsPage.assetCards.filter({ hasText: assetId }).first();
-  await expect(createdCard).toBeVisible({ timeout: 15000 });
+  await expect.soft(persistedAsset['@id'] || persistedAsset.id).toBe(assetId);
+  await expect.soft(persistedAsset.properties.name).toBe(assetName);
+  await expect.soft(persistedAsset.properties.version).toBe(aiModelHubRuntime.modelVersion);
+  await expect.soft(persistedAsset.properties.shortDescription).toBe(aiModelHubRuntime.modelDescription);
+  await expect.soft(persistedAsset.properties.assetType).toBe('machineLearning');
+  await expect.soft(persistedAsset.properties.contenttype).toBe(aiModelHubRuntime.modelContentType);
+  await expect.soft(persistedAsset.properties['daimo:asset_kind']).toBe('model');
+  await expect.soft(persistedAsset.properties['daimo:pipeline_tag']).toBe('text-classification');
+  await expect
+    .soft(persistedAsset.properties['http://www.w3.org/ns/dcat#keyword'] || [])
+    .toContain('pt5-mh-02');
+  await expect.soft(persistedAsset.dataAddress.type).toBe('HttpData');
+  await expect.soft(persistedAsset.dataAddress.baseUrl).toBe(baseUrl);
 
   await captureStep(page, "pt5-mh-02-created-model");
   await attachJson("pt5-mh-02-state", {
@@ -71,6 +85,7 @@ test("PT5-MH-02: provider can register a local model asset with valid metadata",
     baseUrl,
     contentType: aiModelHubRuntime.modelContentType,
     mlMetadataEnabled: true,
+    managementVisibility,
     authorizedConnectors: Object.keys(connectorAuthorization),
   });
 });

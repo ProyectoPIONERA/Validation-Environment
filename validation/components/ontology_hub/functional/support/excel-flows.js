@@ -5,6 +5,7 @@ const { execFileSync } = require("child_process");
 const { gotoEdition } = require("../../ui/support/bootstrap");
 const { OntologyHubVocabFormPage } = require("../../ui/pages/vocab-form.page");
 const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
+const { probeVocabularyDetail } = require("../../ui/support/capabilities");
 const {
   checkMarked,
   clickMarked,
@@ -401,6 +402,82 @@ async function saveVocabulary(page) {
   return outcome;
 }
 
+async function confirmVisibleDialog(page, labels = [/^confirm$/i]) {
+  for (const label of labels) {
+    const button = page
+      .locator(".ui-dialog-buttonpane button, .ui-dialog-buttonset button, button")
+      .filter({ hasText: label })
+      .last();
+    if (await button.isVisible().catch(() => false)) {
+      await clickMarked(button);
+      return true;
+    }
+  }
+  return false;
+}
+
+async function runIndexAllFromEdition(page, runtime) {
+  await gotoEdition(page, runtime);
+  const indexAllForm = page.locator("form[action='/edition/indexAll']").first();
+  await indexAllForm.waitFor({ state: "visible", timeout: 5000 });
+  await clickMarked(indexAllForm.locator("button.featureLink, button[type='submit']").first());
+
+  const confirmed = await page
+    .waitForFunction(() => {
+      const buttons = Array.from(
+        document.querySelectorAll(".ui-dialog-buttonpane button, .ui-dialog-buttonset button, button"),
+      );
+      return buttons.some((node) => /confirm/i.test(String(node.textContent || "").trim()));
+    }, null, { timeout: 2500 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (confirmed) {
+    await confirmVisibleDialog(page);
+  }
+
+  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+  await expectHealthyPage(page, "Edition");
+}
+
+async function reopenVocabularyEditionAndSave(page, runtime, prefix, patch = {}) {
+  await signInToEdition(page, runtime);
+  const formPage = new OntologyHubVocabFormPage(page);
+  await formPage.gotoEdit(runtime.baseUrl, prefix);
+  await formPage.expectReady(prefix);
+
+  if (patch.title) {
+    await formPage.ensureTitles("en", "es", patch.title, `${patch.title} ES`);
+  }
+  if (patch.description) {
+    await formPage.ensureDescriptions("en", "es", patch.description, `${patch.description} ES`);
+  }
+
+  await saveVocabulary(page);
+  await openVocabularyDetail(page, runtime, prefix, patch.title || "");
+}
+
+async function waitForPublicVocabularyDetail(page, runtime, prefix, title = "") {
+  let lastReason = `Ontology Hub did not expose the public detail page for '${prefix}'.`;
+
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    const detailProbe = await probeVocabularyDetail(page.request, runtime, prefix, {
+      refresh: attempt > 1,
+    });
+    if (detailProbe.available) {
+      await openVocabularyDetail(page, runtime, prefix, title);
+      return;
+    }
+
+    lastReason = detailProbe.reason || lastReason;
+    if (attempt < 12) {
+      await page.waitForTimeout(5000);
+    }
+  }
+
+  throw new Error(lastReason);
+}
+
 async function createVocabularyByUri(page, runtime) {
   await gotoEdition(page, runtime);
   await clickMarked(page.locator(".createVocab"));
@@ -417,7 +494,14 @@ async function createVocabularyByUri(page, runtime) {
       .catch(() => ""),
   );
   if (/already exists/i.test(duplicateError)) {
-    throw new Error(`Ontology Hub rejected the URI registration because it already exists: ${duplicateError}`);
+    await waitForPublicVocabularyDetail(page, runtime, runtime.creationPrefix, runtime.creationTitle);
+    return {
+      prefix: runtime.creationPrefix,
+      title: runtime.creationTitle,
+      url: page.url(),
+      method: "uri",
+      reusedExistingImport: true,
+    };
   }
 
   await fillVocabularyMetadata(page, runtime);
@@ -524,6 +608,28 @@ async function createUserForAgent(page, runtime, user) {
   await page.getByText(user.email, { exact: false }).first().waitFor({ state: "visible", timeout: 5000 });
 
   return user;
+}
+
+async function reviewPendingUser(page, runtime, user) {
+  await gotoEdition(page, runtime);
+  const reviewForm = page.locator("#formUsers");
+  await reviewForm.waitFor({ state: "visible", timeout: 5000 });
+
+  const row = reviewForm.locator("li.editionBoxperson").filter({
+    hasText: new RegExp(`${escapeRegExp(user.agentName || "")}|${escapeRegExp(user.email || "")}`, "i"),
+  }).first();
+  await row.waitFor({ state: "visible", timeout: 5000 });
+  const checkbox = row.locator("input.checkboxUser");
+  await checkMarked(checkbox);
+  await clickMarked(reviewForm.locator("#submitUsers"));
+  await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+
+  const stillPending = reviewForm.locator("li.editionBoxperson").filter({
+    hasText: new RegExp(escapeRegExp(user.email || user.agentName || ""), "i"),
+  }).first();
+  if (await stillPending.isVisible().catch(() => false)) {
+    throw new Error(`The pending user review entry for '${user.email || user.agentName}' is still visible after save.`);
+  }
 }
 
 async function promoteUserToAdmin(page, runtime, user) {
@@ -940,9 +1046,12 @@ module.exports = {
   openVersionsPage,
   promoteUserToAdmin,
   persistGeneratedArtifact,
+  reopenVocabularyEditionAndSave,
   resolveThemisTestFile,
   REPOSITORY_VOCAB_STATE_KEY,
   resolveThemisSource,
+  reviewPendingUser,
+  runIndexAllFromEdition,
   runtimeFromCreatedVocabulary,
   saveRunState,
   saveTextArtifact,

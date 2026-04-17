@@ -28,7 +28,7 @@ Esta carpeta agrupa toda la validacion de `Ontology Hub` dentro del framework.
 
 - Proposito: reproduccion funcional de los 27 casos del Excel `docs/A5.2_Casos_Prueba_.xlsx`.
 - Suite PT5 ejecutada por defecto para `ontology-hub` en `Level 6`.
-- Entrada desde menu: `python3 inesdata.py` -> `O - Ontology Hub UI Tests` -> modo -> `2 - Ontology Hub Functional`.
+- Entrada desde menu: `python3 inesdata.py` -> `[UI Validation]` -> `O - Ontology Hub Tests` -> modo -> `2 - Ontology Hub Functional`.
 - Documentacion: `validation/components/ontology_hub/functional/README.md`.
 - Trazabilidad: `docs/11_ontology_hub_validation.md`.
 
@@ -38,4 +38,12 @@ Los artefactos de ejecucion del framework deben quedar bajo:
 
 - `Validation-Environment/experiments/`
 
-Las carpetas Playwright locales (`test-results`, `playwright-report`, `blob-report`) se mantienen solo como salida nativa para ejecuciones directas de desarrollo.
+Cuando los runners del framework se lanzan sin `experiment_dir`, la salida por
+defecto se redirige a:
+
+- `Validation-Environment/experiments/_standalone/components/ontology-hub/functional/`
+- `Validation-Environment/experiments/_standalone/components/ontology-hub/ui/`
+
+Las carpetas Playwright locales (`test-results`, `playwright-report`,
+`blob-report`) solo deben aparecer en ejecuciones Playwright directas de
+desarrollo, por ejemplo con `npx playwright test ...`.

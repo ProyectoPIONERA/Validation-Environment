@@ -2,6 +2,7 @@ const { test, expect } = require("../fixtures");
 const { attachManagementAuthorizationRoutes } = require("../auth");
 const { createLocalConsumerModelAsset, waitForLocalConsumerAsset } = require("../bootstrap");
 const { MlAssetsPage } = require("../pages/ml_assets.page");
+const { clickMarked, fillMarked } = require("../support/live-marker");
 
 test("PT5-MH-07: model details view exposes functional and technical metadata", async ({
   page,
@@ -37,7 +38,7 @@ test("PT5-MH-07: model details view exposes functional and technical metadata", 
 
   await assetsPage.goto();
   await assetsPage.waitUntilReady();
-  await assetsPage.searchInput.fill(assetName);
+  await fillMarked(assetsPage.searchInput, assetName);
 
   const card = assetsPage.cardByText(assetName);
   await expect(card).toBeVisible({ timeout: 15000 });
@@ -54,7 +55,7 @@ test("PT5-MH-07: model details view exposes functional and technical metadata", 
   await expect(assetsPage.detailsDialog).toContainText(`Libraries: ${library}`);
   await expect(assetsPage.detailsDialog).toContainText(keywords.join(", "));
 
-  await assetsPage.rawPayloadTab.click();
+  await clickMarked(assetsPage.rawPayloadTab);
   await expect(assetsPage.detailsDialog).toContainText(assetId);
   await expect(assetsPage.detailsDialog).toContainText(version);
   await expect(assetsPage.detailsDialog).toContainText("https://pionera.ai/edc/daimo#pipeline_tag");

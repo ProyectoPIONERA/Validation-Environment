@@ -34,7 +34,8 @@ manuales externos.
 ## Ejecucion desde el menu
 ```
 python3 inesdata.py
-O - Ontology Hub UI Tests (Normal/Live/Debug)
+[UI Validation]
+O - Ontology Hub Tests (Normal/Live/Debug)
 > seleccionar modo
 2 - Ontology Hub Functional
 ```

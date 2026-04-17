@@ -10,6 +10,7 @@ COMPONENT_KEY = "ai-model-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ai_model_hub", "ui", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent / "ui"
+DEFAULT_EXPERIMENTS_DIR = Path(__file__).resolve().parents[3] / "experiments" / "_standalone"
 PLAYWRIGHT_COMMAND = [os.path.join(".", "node_modules", ".bin", "playwright"), "test", "--config", PLAYWRIGHT_CONFIG_RELATIVE]
 UI_VALIDATION_ENV = "AI_MODEL_HUB_ENABLE_UI_VALIDATION"
 
@@ -126,7 +127,7 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
     if experiment_dir:
         base_dir = os.path.join(experiment_dir, "components", COMPONENT_KEY, "ui")
     else:
-        base_dir = str(COMPONENT_UI_DIR)
+        base_dir = os.path.join(str(DEFAULT_EXPERIMENTS_DIR), "components", COMPONENT_KEY, "ui")
 
     paths = {
         "base_dir": base_dir,
@@ -350,6 +351,8 @@ def run_ai_model_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
         "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
         "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
+        "PLAYWRIGHT_INTERACTION_MARKERS": os.environ.get("PLAYWRIGHT_INTERACTION_MARKERS", "1"),
+        "PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS": os.environ.get("PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS", "350"),
     }
 
     error = None

@@ -1,4 +1,5 @@
 const { expect } = require("../fixtures");
+const { checkMarked, clickMarked } = require("../support/live-marker");
 
 class ModelBenchmarkingPage {
   constructor(page, runtime) {
@@ -54,18 +55,18 @@ class ModelBenchmarkingPage {
   async selectModelByText(text) {
     const option = this.modelOptionByText(text);
     await expect(option).toBeVisible({ timeout: 20000 });
-    await option.locator("input[type='checkbox']").check();
+    await checkMarked(option.locator("input[type='checkbox']"));
   }
 
   async selectDataspaceDatasetByText(text) {
     const option = this.datasetOptionByText(text);
     await expect(option).toBeVisible({ timeout: 20000 });
-    await option.locator("input[type='radio']").check();
+    await checkMarked(option.locator("input[type='radio']"));
   }
 
   async loadSelectedDataset() {
     await expect(this.loadSelectedDatasetButton).toBeEnabled();
-    await this.loadSelectedDatasetButton.click();
+    await clickMarked(this.loadSelectedDatasetButton);
     await expect(this.datasetParseMessage).toBeVisible({ timeout: 30000 });
   }
 }

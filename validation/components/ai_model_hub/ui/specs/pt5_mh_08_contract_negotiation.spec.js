@@ -6,6 +6,7 @@ const {
   waitForConsumerCatalogAsset,
 } = require("../bootstrap");
 const { CatalogPage } = require("../pages/catalog.page");
+const { clickMarked } = require("../support/live-marker");
 
 test("PT5-MH-08: contract negotiation from catalog registers an agreement in the consumer connector", async ({
   page,
@@ -61,7 +62,7 @@ test("PT5-MH-08: contract negotiation from catalog registers an agreement in the
 
   const agreementState = await waitForConsumerAgreement(request, aiModelHubRuntime, assetId, 20, 1000);
 
-  await catalogPage.goToContractsButton.click();
+  await clickMarked(catalogPage.goToContractsButton);
   await expect(page).toHaveURL(new RegExp(`${aiModelHubRuntime.contractsPath}$`));
   await captureStep(page, "pt5-mh-08-contracts-route");
 

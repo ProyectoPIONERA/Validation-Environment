@@ -219,6 +219,47 @@ async function waitForLocalConsumerAsset(request, runtime, assetId, attempts = 1
   throw new Error(`Local consumer asset '${assetId}' did not become visible in management assets request`);
 }
 
+async function waitForLocalProviderAsset(request, runtime, assetId, attempts = 10, delayMs = 1000) {
+  const providerToken = await requestConnectorManagementToken(runtime, runtime.providerConnectorId);
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await request.post(`${runtime.providerManagementUrl}/v3/assets/request`, {
+      headers: {
+        Authorization: `Bearer ${providerToken}`,
+        "Content-Type": "application/json",
+      },
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+        },
+        offset: 0,
+        limit: 1000,
+      },
+    });
+    await ensureOk(response, "Poll provider local assets");
+
+    const body = await response.json();
+    const normalized = Array.isArray(body) ? body : [];
+    const matchingAsset = normalized.find(asset => {
+      if (!asset || typeof asset !== 'object') {
+        return false;
+      }
+      return asset['@id'] === assetId || asset.id === assetId;
+    });
+    if (matchingAsset) {
+      return {
+        assetId,
+        attempts: attempt,
+        asset: matchingAsset,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  throw new Error(`Local provider asset '${assetId}' did not become visible in management assets request`);
+}
+
 function extractAgreementAssetId(agreement) {
   if (!agreement || typeof agreement !== "object") {
     return null;
@@ -333,5 +374,6 @@ module.exports = {
   createPublishedProviderModelAsset,
   waitForConsumerCatalogAsset,
   waitForLocalConsumerAsset,
+  waitForLocalProviderAsset,
   waitForConsumerAgreement,
 };

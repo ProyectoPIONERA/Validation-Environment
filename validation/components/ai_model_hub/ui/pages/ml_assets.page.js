@@ -1,4 +1,5 @@
 const { expect } = require("../fixtures");
+const { clickMarked } = require("../support/live-marker");
 
 class MlAssetsPage {
   constructor(page, runtime) {
@@ -40,11 +41,12 @@ class MlAssetsPage {
   }
 
   async openDetailsForCard(card) {
-    await card
-      .locator("button")
-      .filter({ has: this.page.locator("i.material-symbols-rounded", { hasText: "info" }) })
-      .first()
-      .click();
+    await clickMarked(
+      card
+        .locator("button")
+        .filter({ has: this.page.locator("i.material-symbols-rounded", { hasText: "info" }) })
+        .first(),
+    );
     await expect(this.detailsDialog).toBeVisible();
   }
 }

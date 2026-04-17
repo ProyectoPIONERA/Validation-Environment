@@ -11,6 +11,8 @@ const {
   deleteRunState,
   loadRunState,
   promoteUserToAdmin,
+  reviewPendingUser,
+  runIndexAllFromEdition,
   saveRunState,
   signInToEdition,
   signOut,
@@ -50,6 +52,8 @@ test("OH-APP-15: create agent and user, then verify + USER is hidden", async ({
     email: identity.email,
     password: identity.password,
   });
+  await reviewPendingUser(page, ontologyHubRuntime, user);
+  await runIndexAllFromEdition(page, ontologyHubRuntime);
   saveRunState(AGENT_USER_STATE_KEY, {
     ...identity,
     currentAgentName: identity.agentName,

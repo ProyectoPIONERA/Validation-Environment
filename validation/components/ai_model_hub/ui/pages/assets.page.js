@@ -1,4 +1,5 @@
 const { expect } = require("../fixtures");
+const { checkMarked, clickMarked, fillMarked, selectOptionMarked } = require("../support/live-marker");
 
 class AssetCreateDialog {
   constructor(page) {
@@ -29,13 +30,13 @@ class AssetCreateDialog {
 
   async fillCommonFields({ id, name, contentType }) {
     if (id) {
-      await this.idInput.fill(id);
+      await fillMarked(this.idInput, id);
     }
     if (name) {
-      await this.nameInput.fill(name);
+      await fillMarked(this.nameInput, name);
     }
     if (contentType) {
-      await this.contentTypeInput.fill(contentType);
+      await fillMarked(this.contentTypeInput, contentType);
     }
   }
 
@@ -43,48 +44,48 @@ class AssetCreateDialog {
     const options = await this.dataTypeSelect.locator("option").allTextContents();
     const normalizedOptions = options.map((option) => option.trim());
     if (normalizedOptions.includes("HttpData")) {
-      await this.dataTypeSelect.selectOption({ label: "HttpData" });
+      await selectOptionMarked(this.dataTypeSelect, { label: "HttpData" });
     } else {
-      await this.dataTypeSelect.selectOption({ index: 0 });
+      await selectOptionMarked(this.dataTypeSelect, { index: 0 });
     }
     await expect(this.baseUrlInput).toBeVisible();
   }
 
   async fillBaseUrl(baseUrl) {
-    await this.baseUrlInput.fill(baseUrl);
+    await fillMarked(this.baseUrlInput, baseUrl);
   }
 
   async enableMlMetadataHelper() {
-    await this.enableMlMetadataToggle.check({ force: true });
+    await checkMarked(this.enableMlMetadataToggle, { force: true });
     await expect(this.mlDescriptionTextarea).toBeVisible();
     await expect(this.mlVersionInput).toBeVisible();
   }
 
   async fillMlMetadata({ description, version, assetKind, task }) {
     if (description) {
-      await this.mlDescriptionTextarea.fill(description);
+      await fillMarked(this.mlDescriptionTextarea, description);
     }
     if (version) {
-      await this.mlVersionInput.fill(version);
+      await fillMarked(this.mlVersionInput, version);
     }
     if (assetKind) {
-      await this.mlAssetKindSelect.selectOption(assetKind);
+      await selectOptionMarked(this.mlAssetKindSelect, assetKind);
     }
     if (task) {
-      await this.mlTaskSelect.selectOption(task);
+      await selectOptionMarked(this.mlTaskSelect, task);
     }
   }
 
   async addProperty(key, value) {
-    await this.propertyKeyInput.fill(key);
-    await this.propertyValueInput.fill(value);
-    await this.propertyAddButton.click();
+    await fillMarked(this.propertyKeyInput, key);
+    await fillMarked(this.propertyValueInput, value);
+    await clickMarked(this.propertyAddButton);
     await expect(this.propertyKeyInput).toHaveValue("");
     await expect(this.propertyValueInput).toHaveValue("");
   }
 
   async submit() {
-    await this.createAssetButton.click();
+    await clickMarked(this.createAssetButton);
   }
 }
 
@@ -113,16 +114,16 @@ class AssetsPage {
   }
 
   async switchToConnector(connectorName) {
-    await this.connectorDropdownButton.click();
+    await clickMarked(this.connectorDropdownButton);
     const option = this.page.locator(
       `input[name='edc-config-dropdown'][aria-label='${connectorName}']`,
     );
-    await option.click({ force: true });
+    await clickMarked(option, { force: true });
     await expect(this.connectorDropdownButton).toContainText(connectorName);
   }
 
   async openCreateAssetDialog() {
-    await this.createButtons.first().click();
+    await clickMarked(this.createButtons.first());
     const dialog = new AssetCreateDialog(this.page);
     await dialog.waitUntilReady();
     return dialog;

@@ -1,5 +1,6 @@
 const { test, expect } = require("../fixtures");
 const { MlAssetsPage } = require("../pages/ml_assets.page");
+const { fillMarked } = require("../support/live-marker");
 
 test("PT5-MH-05: model discovery search input accepts free text queries", async ({
   page,
@@ -12,7 +13,7 @@ test("PT5-MH-05: model discovery search input accepts free text queries", async 
   await assetsPage.goto();
   await assetsPage.waitUntilReady();
 
-  await assetsPage.searchInput.fill(aiModelHubRuntime.searchTerm);
+  await fillMarked(assetsPage.searchInput, aiModelHubRuntime.searchTerm);
   await captureStep(page, "pt5-mh-05-search");
 
   await expect(assetsPage.searchInput).toHaveValue(aiModelHubRuntime.searchTerm);

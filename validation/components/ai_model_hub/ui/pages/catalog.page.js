@@ -1,4 +1,5 @@
 const { expect } = require("../fixtures");
+const { checkMarked, clickMarked, fillMarked } = require("../support/live-marker");
 
 class CatalogPage {
   constructor(page, runtime) {
@@ -33,14 +34,14 @@ class CatalogPage {
   }
 
   async requestCatalogManually(counterPartyAddress, counterPartyId = "") {
-    await this.requestButton.click();
+    await clickMarked(this.requestButton);
     await expect(this.requestDialog).toBeVisible();
     if (counterPartyId) {
-      await this.counterPartyIdInput.fill(counterPartyId);
+      await fillMarked(this.counterPartyIdInput, counterPartyId);
     }
-    await this.counterPartyAddressInput.fill(counterPartyAddress);
+    await fillMarked(this.counterPartyAddressInput, counterPartyAddress);
     await expect(this.requestCatalogButton).toBeEnabled();
-    await this.requestCatalogButton.click();
+    await clickMarked(this.requestCatalogButton);
     await expect(this.requestDialog).toBeHidden({ timeout: 20000 });
   }
 
@@ -68,7 +69,7 @@ class CatalogPage {
         break;
       }
 
-      await this.nextPageButton.click();
+      await clickMarked(this.nextPageButton);
       await this.page.waitForTimeout(500);
     }
 
@@ -80,19 +81,19 @@ class CatalogPage {
   }
 
   async openNegotiationForCard(card) {
-    await this.negotiateButtonForCard(card).click();
+    await clickMarked(this.negotiateButtonForCard(card));
     await expect(this.negotiationDialog).toBeVisible();
   }
 
   async selectFirstOffer() {
     await expect(this.offerRadioButtons.first()).toBeVisible();
-    await this.offerRadioButtons.first().check();
+    await checkMarked(this.offerRadioButtons.first());
   }
 
   async startNegotiation() {
     await expect(this.negotiateButton).toBeVisible();
     await expect(this.negotiateButton).toBeEnabled();
-    await this.negotiateButton.click();
+    await clickMarked(this.negotiateButton);
   }
 }
 

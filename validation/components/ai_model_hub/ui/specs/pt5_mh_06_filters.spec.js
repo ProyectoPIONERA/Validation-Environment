@@ -1,5 +1,6 @@
 const { test, expect } = require("../fixtures");
 const { MlAssetsPage } = require("../pages/ml_assets.page");
+const { checkMarked } = require("../support/live-marker");
 
 test("PT5-MH-06: model discovery filter shell is available in the ML assets view", async ({
   page,
@@ -18,7 +19,7 @@ test("PT5-MH-06: model discovery filter shell is available in the ML assets view
   const filterCount = await assetsPage.filterCheckboxes.count();
   if (filterCount > 0) {
     const firstFilter = assetsPage.filterCheckboxes.first();
-    await firstFilter.check();
+    await checkMarked(firstFilter);
     await expect(firstFilter).toBeChecked();
     await expect(assetsPage.clearFiltersButton).toBeVisible();
   }

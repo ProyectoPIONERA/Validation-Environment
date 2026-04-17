@@ -111,7 +111,7 @@ class OntologyHubVocabFormPage {
   }
 
   async save() {
-    const signalTimeoutMs = 12000;
+    const signalTimeoutMs = 60000;
     const responsePromise = this.page
       .waitForResponse(
         (response) =>
@@ -153,6 +153,21 @@ class OntologyHubVocabFormPage {
         waitUntil: "domcontentloaded",
       });
       redirected = true;
+    } else if (!redirected) {
+      const stillProcessing = await this.page
+        .locator("#loading-div-background")
+        .isVisible()
+        .catch(() => false);
+      if (stillProcessing) {
+        await this.page
+          .locator("#loading-div-background")
+          .waitFor({ state: "hidden", timeout: 45000 })
+          .catch(() => {});
+        redirected = await this.page
+          .waitForURL(/\/dataset\/vocabs\/[^/]+\/?$/, { timeout: 5000 })
+          .then(() => true)
+          .catch(() => false);
+      }
     }
 
     return {
