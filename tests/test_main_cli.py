@@ -202,11 +202,19 @@ class DryRunAwareAdapter(FakeAdapter):
         self.dry_run = dry_run
 
 
+class TopologyAwareAdapter(FakeAdapter):
+    def __init__(self, dry_run=False, topology="local"):
+        super().__init__()
+        self.dry_run = dry_run
+        self.topology = topology
+
+
 class MainCliTests(unittest.TestCase):
     def setUp(self):
         self.fake_module = types.ModuleType("fake_adapter_module")
         self.fake_module.FakeAdapter = FakeAdapter
         self.fake_module.DryRunAwareAdapter = DryRunAwareAdapter
+        self.fake_module.TopologyAwareAdapter = TopologyAwareAdapter
         self.registry = {"fake": "fake_adapter_module:FakeAdapter"}
         self.module_patcher = mock.patch.dict(
             sys.modules,
@@ -261,6 +269,17 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "run-ok")
         self.assertEqual(result["adapter"], "FakeAdapter")
+
+    def test_build_adapter_passes_topology_when_supported(self):
+        adapter = main.build_adapter(
+            "topology",
+            adapter_registry={"topology": "fake_adapter_module:TopologyAwareAdapter"},
+            dry_run=True,
+            topology="local",
+        )
+
+        self.assertTrue(adapter.dry_run)
+        self.assertEqual(adapter.topology, "local")
 
     def test_deploy_command_dispatches_to_adapter(self):
         adapter = FakeAdapter()

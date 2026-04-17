@@ -70,6 +70,135 @@ class InesdataMenuCliTests(unittest.TestCase):
 
         mock_doctor.assert_called_once()
 
+    @mock.patch.object(inesdata, "run_connector_recovery_after_wsl_restart")
+    def test_show_menu_routes_option_r_to_connector_recovery(self, mock_recovery):
+        with mock.patch("builtins.input", side_effect=["R", "Q"]):
+            inesdata.show_menu()
+
+        mock_recovery.assert_called_once()
+
+    @mock.patch.object(inesdata, "run_ai_model_hub_ui_tests_interactive")
+    def test_show_menu_routes_option_a_to_ai_model_hub_ui_tests(self, mock_run_ai_model_hub_ui):
+        with mock.patch("builtins.input", side_effect=["A", "Q"]):
+            inesdata.show_menu()
+
+        mock_run_ai_model_hub_ui.assert_called_once()
+
+    @mock.patch.object(inesdata, "_run_ai_model_hub_ui_functional")
+    @mock.patch.object(inesdata, "_resolve_ui_mode", return_value={"label": "Normal", "args": [], "env": {}})
+    def test_run_ai_model_hub_ui_tests_interactive_routes_functional(
+        self,
+        _mock_resolve_mode,
+        mock_run_functional,
+    ):
+        with mock.patch("builtins.input", side_effect=["1"]):
+            inesdata.run_ai_model_hub_ui_tests_interactive()
+
+        mock_run_functional.assert_called_once_with({"label": "Normal", "args": [], "env": {}})
+
+    @mock.patch.object(inesdata, "_run_ai_model_hub_ui_integration")
+    @mock.patch.object(inesdata, "_resolve_ui_mode", return_value={"label": "Normal", "args": [], "env": {}})
+    def test_run_ai_model_hub_ui_tests_interactive_routes_integration(
+        self,
+        _mock_resolve_mode,
+        mock_run_integration,
+    ):
+        with mock.patch("builtins.input", side_effect=["2"]):
+            inesdata.run_ai_model_hub_ui_tests_interactive()
+
+        mock_run_integration.assert_called_once_with({"label": "Normal", "args": [], "env": {}})
+
+    @mock.patch.object(inesdata, "run_ai_model_hub_ui_tests_interactive")
+    def test_run_inesdata_ui_tests_interactive_routes_ai_model_hub_to_submenu(self, mock_run_ai_model_hub_ui):
+        with mock.patch("builtins.input", side_effect=["3"]):
+            inesdata.run_inesdata_ui_tests_interactive()
+
+        mock_run_ai_model_hub_ui.assert_called_once()
+
+    @mock.patch.object(inesdata, "run")
+    @mock.patch.object(inesdata.subprocess, "run")
+    @mock.patch.object(inesdata.Config, "script_dir")
+    @mock.patch.object(inesdata, "_resolve_ai_model_hub_base_url", return_value="http://example.test")
+    def test_run_ai_model_hub_ui_functional_uses_absolute_artifact_paths(
+        self,
+        _mock_resolve_base_url,
+        mock_script_dir,
+        mock_subprocess_run,
+        mock_run,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_script_dir.return_value = tmpdir
+            mock_subprocess_run.return_value = mock.Mock(returncode=0)
+
+            inesdata._run_ai_model_hub_ui_functional({"label": "Normal", "args": [], "env": {}})
+
+            mock_subprocess_run.assert_called_once()
+            env = mock_subprocess_run.call_args.kwargs["env"]
+            cwd = mock_subprocess_run.call_args.kwargs["cwd"]
+            base_experiments_dir = os.path.join(tmpdir, "experiments")
+
+            self.assertEqual(cwd, "validation/ui")
+            self.assertTrue(env["PLAYWRIGHT_OUTPUT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_HTML_REPORT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_BLOB_REPORT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_JSON_REPORT_FILE"].startswith(base_experiments_dir))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_OUTPUT_DIR"]))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_HTML_REPORT_DIR"]))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_BLOB_REPORT_DIR"]))
+            mock_run.assert_called_once_with("pkill -f '(chrome|chromium).*playwright' || true", check=False)
+
+    @mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True)
+    @mock.patch.object(inesdata, "_ensure_level6_connector_hosts", return_value=None)
+    @mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"])
+    @mock.patch.object(inesdata, "ensure_vault_unsealed", return_value=True)
+    @mock.patch.object(inesdata, "wait_for_vault_pod", return_value=True)
+    @mock.patch.object(inesdata, "run")
+    def test_run_connector_recovery_after_wsl_restart_restarts_detected_connectors(
+        self,
+        mock_run,
+        _mock_wait_for_vault,
+        _mock_unseal,
+        _mock_get_connectors,
+        _mock_hosts,
+        mock_validate,
+    ):
+        mock_run.return_value = mock.Mock(returncode=0)
+
+        result = inesdata.run_connector_recovery_after_wsl_restart()
+
+        self.assertTrue(result)
+        commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("kubectl rollout restart deployment/conn-a -n demo", commands)
+        self.assertIn("kubectl rollout restart deployment/conn-b -n demo", commands)
+        self.assertIn("kubectl rollout status deployment/conn-a -n demo --timeout=180s", commands)
+        self.assertIn("kubectl rollout status deployment/conn-b -n demo --timeout=180s", commands)
+        mock_validate.assert_called_once_with(["conn-a", "conn-b"])
+
+    @mock.patch.object(inesdata, "_get_connector_runtime_deployments", return_value=["conn-a"])
+    @mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=[])
+    @mock.patch.object(inesdata, "ensure_vault_unsealed", return_value=True)
+    @mock.patch.object(inesdata, "wait_for_vault_pod", return_value=True)
+    @mock.patch.object(inesdata, "_ensure_level6_connector_hosts", return_value=None)
+    @mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True)
+    @mock.patch.object(inesdata, "run")
+    def test_run_connector_recovery_after_wsl_restart_falls_back_to_deployments_when_no_pods(
+        self,
+        mock_run,
+        _mock_validate,
+        _mock_hosts,
+        _mock_wait_for_vault,
+        _mock_unseal,
+        _mock_get_connectors,
+        _mock_get_deployments,
+    ):
+        mock_run.return_value = mock.Mock(returncode=0)
+
+        result = inesdata.run_connector_recovery_after_wsl_restart()
+
+        self.assertTrue(result)
+        commands = [call.args[0] for call in mock_run.call_args_list]
+        self.assertIn("kubectl rollout restart deployment/conn-a -n demo", commands)
+
     def test_show_menu_blocks_guarded_level_when_deployer_config_is_not_ready(self):
         blocked_level = mock.Mock()
 
