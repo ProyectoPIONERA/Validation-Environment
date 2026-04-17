@@ -24,9 +24,11 @@ from framework.validation_engine import ValidationEngine
 
 ADAPTER_REGISTRY = {
     "inesdata": "adapters.inesdata.adapter:InesdataAdapter",
+    "edc": "adapters.edc.adapter:EdcAdapter",
 }
 
 SUPPORTED_COMMANDS = ("deploy", "validate", "metrics", "run")
+SUPPORTED_TOPOLOGIES = ("local",)
 
 
 def resolve_adapter_class(adapter_name, adapter_registry=None):
@@ -47,7 +49,7 @@ def resolve_adapter_class(adapter_name, adapter_registry=None):
         ) from exc
 
 
-def build_adapter(adapter_name="inesdata", adapter_registry=None, dry_run=False):
+def build_adapter(adapter_name="inesdata", adapter_registry=None, dry_run=False, topology="local"):
     """Instantiate the selected dataspace adapter."""
     adapter_class = resolve_adapter_class(adapter_name, adapter_registry=adapter_registry)
 
@@ -56,8 +58,15 @@ def build_adapter(adapter_name="inesdata", adapter_registry=None, dry_run=False)
     except (TypeError, ValueError):
         parameters = {}
 
+    kwargs = {}
     if "dry_run" in parameters:
-        return adapter_class(dry_run=dry_run)
+        kwargs["dry_run"] = dry_run
+
+    if "topology" in parameters:
+        kwargs["topology"] = topology
+
+    if kwargs:
+        return adapter_class(**kwargs)
 
     return adapter_class()
 
@@ -196,9 +205,15 @@ def build_runner(
     kafka_runtime_config=None,
     kafka_manager_cls=KafkaManager,
     baseline=False,
+    topology="local",
 ):
     """Create the experiment runner with the selected adapter."""
-    adapter = build_adapter(adapter_name, adapter_registry=adapter_registry, dry_run=dry_run)
+    adapter = build_adapter(
+        adapter_name,
+        adapter_registry=adapter_registry,
+        dry_run=dry_run,
+        topology=topology,
+    )
     validation_engine = build_validation_engine(adapter, engine_cls=validation_engine_cls)
     metrics_collector = build_metrics_collector(
         adapter,
@@ -235,14 +250,21 @@ def build_dry_run_preview(
     iterations=1,
     kafka_enabled=False,
     baseline=False,
+    topology="local",
 ):
     """Build a safe preview of what a command would execute."""
-    adapter = build_adapter(adapter_name, adapter_registry=adapter_registry, dry_run=True)
+    adapter = build_adapter(
+        adapter_name,
+        adapter_registry=adapter_registry,
+        dry_run=True,
+        topology=topology,
+    )
     preview = {
         "status": "dry-run",
         "adapter": adapter_name,
         "command": command,
         "adapter_class": type(adapter).__name__,
+        "topology": topology,
         "dry_run": getattr(adapter, "dry_run", True),
         "iterations": iterations,
         "kafka_enabled": kafka_enabled,
@@ -546,17 +568,17 @@ def create_parser(adapter_registry=None):
     parser = argparse.ArgumentParser(
         prog="python main.py",
         description="Dataspace Experimentation Framework CLI",
-        usage="python main.py list | python main.py <adapter> [command] [--dry-run] [--iterations N] [--kafka] [--baseline] | python main.py report <experiment_id> | python main.py compare <experiment_a> <experiment_b>",
+        usage="python main.py list | python main.py <adapter> [command] [--topology local] [--dry-run] [--iterations N] [--kafka] [--baseline] | python main.py report <experiment_id> | python main.py compare <experiment_a> <experiment_b>",
         epilog=(
             "Examples:\n"
-            "  python main.py inesdata deploy\n"
-            "  python main.py inesdata validate\n"
-            "  python main.py inesdata metrics\n"
-            "  python main.py inesdata metrics --kafka\n"
-            "  python main.py inesdata run\n"
-            "  python main.py inesdata run --iterations 50\n"
-            "  python main.py inesdata run --baseline\n"
-            "  python main.py inesdata run --dry-run\n"
+            "  python main.py inesdata deploy --topology local\n"
+            "  python main.py edc validate --topology local\n"
+            "  python main.py inesdata metrics --topology local\n"
+            "  python main.py inesdata metrics --topology local --kafka\n"
+            "  python main.py inesdata run --topology local\n"
+            "  python main.py inesdata run --topology local --iterations 50\n"
+            "  python main.py inesdata run --topology local --baseline\n"
+            "  python main.py inesdata run --topology local --dry-run\n"
             "  python main.py report experiment_2026-03-10_12-00-00\n"
             "  python main.py compare experiment_A experiment_B\n"
             "  python main.py list"
@@ -574,6 +596,12 @@ def create_parser(adapter_registry=None):
         help="Command to execute. Defaults to 'run'.",
     )
     parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--topology",
+        choices=SUPPORTED_TOPOLOGIES,
+        default=SUPPORTED_TOPOLOGIES[0],
+        help="Deployment topology to target (currently only 'local').",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -668,10 +696,16 @@ def main(
             iterations=args.iterations,
             kafka_enabled=args.kafka,
             baseline=args.baseline,
+            topology=args.topology,
         )
 
     try:
-        adapter = build_adapter(args.adapter, adapter_registry=registry, dry_run=False)
+        adapter = build_adapter(
+            args.adapter,
+            adapter_registry=registry,
+            dry_run=False,
+            topology=args.topology,
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -708,6 +742,7 @@ def main(
         kafka_enabled=args.kafka,
         kafka_manager_cls=kafka_manager_cls,
         baseline=args.baseline,
+        topology=args.topology,
     )
     return runner.run()
 

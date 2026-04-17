@@ -1519,6 +1519,30 @@ def get_connectors_from_cluster():
     return sorted(connectors)
 
 
+def _get_connector_runtime_deployments():
+    """Detect connector runtime deployments even when their pods are still unhealthy."""
+    namespace = Config.namespace_demo()
+    output = run(
+        f"kubectl get deployments -n {namespace} --no-headers",
+        capture=True,
+    )
+
+    if not output:
+        return []
+
+    deployments = set()
+    for line in output.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+
+        name = parts[0]
+        if name.startswith("conn-") and "interface" not in name and "inteface" not in name:
+            deployments.add(name)
+
+    return sorted(deployments)
+
+
 connector_is_healthy = INESDATA_ADAPTER.connectors.connector_is_healthy
 validate_connectors_deployment = INESDATA_ADAPTER.connectors.validate_connectors_deployment
 get_connectors_from_cluster = INESDATA_ADAPTER.get_cluster_connectors
@@ -3988,6 +4012,76 @@ def run_framework_bootstrap_interactive():
     return result.returncode
 
 
+def run_connector_recovery_after_wsl_restart():
+    """Recover Vault-backed connector runtimes after a local WSL restart."""
+    namespace = Config.namespace_demo()
+    namespace_q = shlex.quote(namespace)
+
+    print("\n" + "="*50)
+    print("CONNECTOR RECOVERY AFTER WSL RESTART")
+    print("="*50)
+    print("\nThis flow will:")
+    print("- wait for the Vault pod")
+    print("- unseal Vault if needed")
+    print("- refresh connector host entries")
+    print("- restart connector deployments")
+    print("- wait until deployments are ready again\n")
+
+    if not wait_for_vault_pod(Config.NS_COMMON, timeout=max(Config.TIMEOUT_NAMESPACE, 180)):
+        print("Vault pod not detected. Recovery aborted.\n")
+        return False
+
+    if not ensure_vault_unsealed():
+        print("Vault is sealed or unavailable. Recovery aborted.\n")
+        return False
+
+    connectors = get_connectors_from_cluster() or _get_connector_runtime_deployments()
+    if not connectors:
+        print(f"No connector runtime deployments detected in namespace '{namespace}'.\n")
+        return False
+
+    print("Connector runtimes detected:")
+    print("- " + "\n- ".join(connectors))
+    print()
+
+    hosts_ready = True
+    try:
+        _ensure_level6_connector_hosts(connectors)
+    except Exception as exc:
+        hosts_ready = False
+        print(f"Warning: connector host refresh failed ({exc})")
+        print("Continuing with deployment recovery and skipping HTTP validation.\n")
+
+    for connector in connectors:
+        deployment_q = shlex.quote(connector)
+        if run(
+            f"kubectl rollout restart deployment/{deployment_q} -n {namespace_q}",
+            check=False,
+        ) is None:
+            print(f"Could not restart connector deployment: {connector}\n")
+            return False
+
+    for connector in connectors:
+        deployment_q = shlex.quote(connector)
+        if run(
+            f"kubectl rollout status deployment/{deployment_q} -n {namespace_q} --timeout=180s",
+            check=False,
+        ) is None:
+            print(f"Connector deployment did not become ready in time: {connector}\n")
+            return False
+
+    if not hosts_ready:
+        print("Connector recovery completed, but local hostname validation was skipped.\n")
+        return True
+
+    if not validate_connectors_deployment(connectors):
+        print("Connector recovery completed with validation errors.\n")
+        return False
+
+    print("Connector recovery completed successfully.\n")
+    return True
+
+
 def run_local_images_workflow_interactive():
     """Build and deploy local images (with developer sub-options)."""
     platform_dirs = _detect_platform_dirs_from_adapter_configs()
@@ -4757,14 +4851,21 @@ def _resolve_ai_model_hub_base_url():
     return f"http://{host}".rstrip("/")
 
 
-def _run_ai_model_hub_ui_tests(mode):
+def _run_ai_model_hub_ui_functional(mode):
     base_url = _resolve_ai_model_hub_base_url()
     if not base_url:
         print("AI Model Hub base URL could not be resolved; aborting.")
         return None
 
     experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    base_dir = os.path.join("experiments", experiment_id, "components", "ai-model-hub", "ui")
+    base_dir = os.path.join(
+        Config.script_dir(),
+        "experiments",
+        experiment_id,
+        "components",
+        "ai-model-hub",
+        "ui",
+    )
     output_dir = os.path.join(base_dir, "test-results")
     html_report_dir = os.path.join(base_dir, "playwright-report")
     blob_report_dir = os.path.join(base_dir, "blob-report")
@@ -4781,6 +4882,8 @@ def _run_ai_model_hub_ui_tests(mode):
         "PLAYWRIGHT_HTML_REPORT_DIR": html_report_dir,
         "PLAYWRIGHT_BLOB_REPORT_DIR": blob_report_dir,
         "PLAYWRIGHT_JSON_REPORT_FILE": json_report_file,
+        "PLAYWRIGHT_INTERACTION_MARKERS": os.environ.get("PLAYWRIGHT_INTERACTION_MARKERS", "1"),
+        "PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS": os.environ.get("PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS", "350"),
     }
     env.update(mode.get("env") or {})
     cmd = [
@@ -4791,12 +4894,53 @@ def _run_ai_model_hub_ui_tests(mode):
     ]
     cmd.extend(mode.get("args") or [])
 
-    print(f"\nRunning AI Model Hub UI tests (artifacts in {base_dir})\n")
+    print(f"\nRunning AI Model Hub Functional UI tests (artifacts in {base_dir})\n")
     try:
         subprocess.run(cmd, cwd="validation/ui", env=env)
     finally:
         run("pkill -f '(chrome|chromium).*playwright' || true", check=False)
     return None
+
+
+def _run_ai_model_hub_ui_integration(mode):
+    print(
+        "\nAI Model Hub Integration with INESData is not implemented yet. "
+        f"No tests were run ({mode['label']}).\n"
+    )
+    return None
+
+
+def run_ai_model_hub_ui_tests_interactive():
+    """Run AI Model Hub Playwright UI tests in normal/live/debug modes."""
+    while True:
+        print("\n" + "="*50)
+        print("AI MODEL HUB UI TESTS")
+        print("="*50)
+        mode = _resolve_ui_mode()
+        if mode is None:
+            return None
+
+        while True:
+            print("\nSelect AI Model Hub UI suite:")
+            print("1 - AI Model Hub Functional")
+            print("2 - AI Model Hub Integration with INESData")
+            print("B - Back")
+            try:
+                suite_choice = input("\nSuite: ").strip().upper()
+            except EOFError:
+                print("\nNo input. Returning to previous menu.\n")
+                return None
+
+            if suite_choice == "B":
+                return None
+            if suite_choice == "1":
+                _run_ai_model_hub_ui_functional(mode)
+                return None
+            if suite_choice == "2":
+                _run_ai_model_hub_ui_integration(mode)
+                return None
+
+            print("\nInvalid selection. Please try again.\n")
 
 
 def _run_core_ui_tests(mode):
@@ -4895,10 +5039,10 @@ def _run_core_ui_tests(mode):
 
 
 def run_inesdata_ui_tests_interactive():
-    """Run INESData UI tests for Core/Ontology Hub/AI Model Hub with mode selection."""
+    """Run INESData UI tests for Core/Ontology Hub/AI Model Hub."""
     while True:
         print("\n" + "="*50)
-        print("INESDATA UI TESTS (Normal / Live / Debug)")
+        print("INESDATA UI TESTS")
         print("="*50)
         print("1 - Core")
         print("2 - Ontology Hub")
@@ -4917,16 +5061,15 @@ def run_inesdata_ui_tests_interactive():
             print("\nInvalid selection. Please try again.\n")
             continue
 
-        mode = _resolve_ui_mode()
-        if mode is None:
-            return None
-
         if choice == "1":
+            mode = _resolve_ui_mode()
+            if mode is None:
+                return None
             _run_core_ui_tests(mode)
         elif choice == "2":
-            _run_ontology_hub_ui_tests(mode)
+            run_ontology_hub_ui_tests_interactive()
         elif choice == "3":
-            _run_ai_model_hub_ui_tests(mode)
+            run_ai_model_hub_ui_tests_interactive()
         return None
 
 
@@ -5000,11 +5143,13 @@ def show_menu():
     - 1-6: Run individual levels
     - B: Bootstrap local framework dependencies
     - D: Run local readiness doctor
-    - I: Run INESData UI tests (Core/Ontology Hub/AI Model Hub)
-    - O: Run Ontology Hub UI tests (normal/live/debug)
-    - N: Launch new framework CLI
     - C: Run workspace cleanup script
+    - I: Run INESData tests (Core/Ontology Hub/AI Model Hub)
     - L: Build and deploy local images
+    - N: Launch new framework CLI
+    - O: Run Ontology Hub tests (normal/live/debug)
+    - A: Run AI Model Hub tests (normal/live/debug)
+    - R: Recover connectors after a WSL restart
     - Q: Exit application
     """
     while True:
@@ -5023,13 +5168,16 @@ def show_menu():
         print("\n[Setup]")
         print("B - Bootstrap Framework Dependencies")
         print("D - Run Framework Doctor")
+        print("R - Recover Connectors After WSL Restart")
         print("\n[Modern CLI]")
         print("N - Use new framework CLI")
         print("\n[Developer]")
         print("C - Cleanup Workspace")
         print("L - Build and Deploy Local Images")
-        print("I - INESData UI Tests (Normal / Live / Debug)")
-        print("O - Ontology Hub UI Tests (Normal/Live/Debug)")
+        print("\n[UI Validation]")
+        print("I - INESData Tests (Normal/Live/Debug)")
+        print("O - Ontology Hub Tests (Normal/Live/Debug)")
+        print("A - AI Model Hub Tests (Normal/Live/Debug)")
         print("\n[Control]")
         print("Q - Exit")
         print("="*50)
@@ -5065,6 +5213,11 @@ def show_menu():
                 run_framework_doctor()
             except KeyboardInterrupt:
                 print("\n\nFramework doctor cancelled by user\n")
+        elif choice == "R":
+            try:
+                run_connector_recovery_after_wsl_restart()
+            except KeyboardInterrupt:
+                print("\n\nConnector recovery cancelled by user\n")
         elif choice == "C":
             try:
                 run_workspace_cleanup_interactive()
@@ -5075,6 +5228,11 @@ def show_menu():
                 run_local_images_workflow_interactive()
             except KeyboardInterrupt:
                 print("\n\nBuild and deploy local images cancelled by user\n")
+        elif choice == "A":
+            try:
+                run_ai_model_hub_ui_tests_interactive()
+            except KeyboardInterrupt:
+                print("\n\nAI Model Hub UI tests cancelled by user\n")
         elif choice == "I":
             try:
                 run_inesdata_ui_tests_interactive()

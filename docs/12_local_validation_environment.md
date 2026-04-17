@@ -147,7 +147,7 @@ local y usa:
 | Connector `citycouncil` | `demo` | `inesdata-deployment/connector/values-conn-citycouncil-demo.yaml` | PostgreSQL, Keycloak, MinIO, Vault, registration-service | activo |
 | Connector `company` | `demo` | `inesdata-deployment/connector/values-conn-company-demo.yaml` | PostgreSQL, Keycloak, MinIO, Vault, registration-service | activo |
 | Ontology Hub | `demo` | `inesdata-deployment/components/ontology-hub/` | MongoDB, Elasticsearch | activo y validado |
-| AI Model Hub | `demo` | `inesdata-deployment/components/ai-model-hub/` | conectores del dataspace | desplegable, validación parcial |
+| AI Model Hub | `demo` | `inesdata-deployment/components/ai-model-hub/` | conectores del dataspace | desplegable, validación UI opt-in operativa |
 | Semantic Virtualization | n/a | no existe chart actual | n/a | gap |
 
 ### 1.8 Puntos de entrada reales
@@ -277,7 +277,7 @@ Referencias:
 | UI ops | `validation/ui/ops/` | comprobaciones visuales de MinIO Console | activa cuando la suite existe |
 | Ontology Hub Functional | `validation/components/ontology_hub/functional/` | 27 casos operativos de la hoja `Ontology Hub` | activa en `Level 6` |
 | Ontology Hub Integration | `validation/components/ontology_hub/integration/` | PT5 normalizado del componente | complementaria |
-| AI Model Hub | `validation/components/ai_model_hub/` | primera ola PT5 parcial | no activa por defecto |
+| AI Model Hub | `validation/components/ai_model_hub/` | primera ola PT5 UI (`PT5-MH-01` a `PT5-MH-08`) y scaffold funcional por dominio | activa desde menú, no activa por defecto en `Level 6` |
 
 ## 3. Modelo conceptual por capas
 
@@ -458,8 +458,8 @@ El entorno actual soporta ejecución real de pruebas y no solo diseño:
 
 ### Parcial
 
-- `AI Model Hub` desplegable y con base de validación, pero no integrado en
-  `Level 6`
+- `AI Model Hub` desplegable, con primera ola PT5 UI operativa y menú propio,
+  pero no integrado en `Level 6`
 - validación Kafka+EDC opcional
 - `Ontology Hub Integration` conservado como suite técnica, pero no como suite
   automática por defecto
