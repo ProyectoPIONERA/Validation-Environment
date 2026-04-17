@@ -9,6 +9,8 @@ dependencies {
     api(project(":extensions:vocabulary-shared-api"))
     api(project(":extensions:federated-catalog-cache-api"))
 
+    implementation("org.glassfish.jersey.media:jersey-media-multipart:2.41")
+    implementation("org.apache.jena:apache-jena-libs:5.1.0")
     implementation(libs.edc.control.plane.spi)
     implementation(libs.edc.lib.validator)
     implementation(libs.edc.transaction.spi)

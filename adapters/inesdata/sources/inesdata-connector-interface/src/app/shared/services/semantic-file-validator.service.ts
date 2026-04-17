@@ -1,51 +1,42 @@
 import { Injectable } from "@angular/core";
-import { rdfParser } from "rdf-parse";
-import { Readable } from "readable-stream";
-
+import * as $rdf from "rdflib";
 
 @Injectable({
-    providedIn: 'root'
+  providedIn: "root",
 })
-export class SemanticFileValidatorService{
-    private readonly RDF_MIME_TYPES = [
-        'text/turtle',
-        'application/rdf+xml',
-        'application/n-triples',
-        'application/n-quads',
-        'application/ld+json',
-        'application/rdf+json',
-        'text/n3'
-    ];
+export class SemanticFileValidatorService {
 
-    constructor(private rdfParser: RdfParser, private readable: Readable)
-    {
+  // Formatos soportados por rdflib en navegador
+  private readonly FORMATS = [
+    "text/turtle",             // Turtle
+    "application/rdf+xml",     // RDF/XML
+    "application/ld+json",     // JSON-LD
+    "text/n3"                  // Notation3
+  ];
 
-    }
+  private readonly BASE_IRI = "urn:semantic-file:"; // identificador ficticio
 
-    async isASemanticFile(file: File): Promise<boolean> {
+  constructor() {}
+
+  async isASemanticFile(file: File): Promise<boolean> {
+    try {
+      const text = await file.text();
+      const store = $rdf.graph();
+
+      for (const format of this.FORMATS) {
         try {
-            const text = await file.text();              // ✅ siempre leemos el contenido
-            const stream = Readable.from([text]);
-
-            const quadStream = rdfParser.parse(stream, {
-            contentType: file.type || 'application/octet-stream',
-            path: file.name
-            });
-
-            return await new Promise<boolean>((resolve) => {
-            quadStream.on('data', () => {
-                quadStream.destroy();
-                resolve(true);                           // ✅ detectado
-            });
-
-            quadStream.on('error', () => resolve(false)); // ✅ no es RDF
-            quadStream.on('end', () => resolve(false));   // ✅ no se detectó RDF
-            });
-
+          // Intentamos parsear en cada formato conocido
+          $rdf.parse(text, store, this.BASE_IRI, format);
+          return true; // ✅ El archivo contiene RDF válido
         } catch (e) {
-            return false; // ✅ archivo ilegible, no es RDF
+          // fallo → probar siguiente formato
         }
-    }
+      }
 
-    
+      return false; // ❌ Ningún formato RDF lo pudo interpretar
+
+    } catch {
+      return false; // ❌ error leyendo archivo → no es semántico
+    }
+  }
 }

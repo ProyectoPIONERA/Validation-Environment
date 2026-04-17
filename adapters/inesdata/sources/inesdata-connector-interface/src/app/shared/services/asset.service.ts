@@ -13,7 +13,7 @@
 
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, from, lastValueFrom } from 'rxjs';
+import { Observable, from, lastValueFrom, map, switchMap } from 'rxjs';
 
 import { expandArray, Asset, EDC_CONTEXT, JSON_LD_DEFAULT_CONTEXT } from '@think-it-labs/edc-connector-client';
 import { AssetInput,  QuerySpec } from "../models/edc-connector-entities"
@@ -28,6 +28,7 @@ export class AssetService {
   private readonly BASE_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.baseUrl}`;
   private readonly UPLOAD_CHUNK_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.uploadChunk}`;
   private readonly FINALIZE_UPLOAD_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.finalizeUpload}`;
+  private readonly TEST_RDF_ASSET = `${environment.runtime.managementApiUrl}/validation/rdf_asset`;
 
   constructor(private http: HttpClient) {
   }
@@ -94,8 +95,8 @@ export class AssetService {
 
     return this.http.post<Array<Asset>>(
       `${this.BASE_URL}${environment.runtime.service.asset.getAll}`, body
-    ).pipe(map(results => {
-      return expandArray(results, () => new Asset());
+    ).pipe(switchMap((results: Array<Asset>) => {
+      return from(expandArray(results, () => new Asset()));
     }));
   }
 
@@ -174,4 +175,23 @@ export class AssetService {
       this.http.post(`${this.FINALIZE_UPLOAD_URL}`, formData)
     );
   }
+
+  testRdfAsset(ontologyUrl: string, 
+                  shaclUrl: string,
+                      rdfFile: File,    
+                        format: string): Observable<any> {
+
+    const formData = new FormData();
+    formData.append('ontologyUrl', ontologyUrl);
+    formData.append('shaclUrl', shaclUrl);
+    formData.append('rdf', rdfFile);
+    formData.append('format', format);
+
+    return this.http.post(
+      this.TEST_RDF_ASSET,
+      formData
+    );
+  }
+
+
 }
