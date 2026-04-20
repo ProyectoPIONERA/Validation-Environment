@@ -10,7 +10,7 @@ export const environment = {
     managementApiUrl: '',
     catalogUrl: '',
     sharedUrl: "",
-    ontologyUrl: "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset",
+    ontologyUrl: "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
     participantId: "",
     storageAccount: '',
     storageExplorerLinkTemplate: '',

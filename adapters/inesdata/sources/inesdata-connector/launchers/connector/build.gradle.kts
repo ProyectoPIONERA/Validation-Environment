@@ -129,6 +129,9 @@ dependencies {
     // Observability
     implementation(libs.edc.api.observability)
 
+    // Ontology Validator
+    implementation(project(":extensions:ontology-validator"))
+
     // Vulnerabilities
     implementation(libs.google.protobuf)
     implementation(libs.jetty.http)
