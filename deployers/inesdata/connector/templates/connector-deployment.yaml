@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    service: {{ .Values.connector.name }}
+  name: {{ .Values.connector.name }}
+spec:
+  replicas: {{ .Values.connector.replicas }}
+  selector:
+    matchLabels:
+      service: {{ .Values.connector.name }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        service: {{ .Values.connector.name }}
+    spec:
+      {{- with .Values.hostAliases }}
+      hostAliases:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Values.connector.name }}
+          image: {{ .Values.connector.image.name }}:{{ .Values.connector.image.tag }}
+          env:
+            - name: EDC_FS_CONFIG
+              value: {{ .Values.connector.configuration.configFilePath }}
+            - name: EDC_VAULT
+              value: {{ .Values.connector.configuration.vaultPath }}
+            - name: JVM_ARGS
+              value: "{{ .Values.connector.jvmArgs }}"
+          ports:
+            - containerPort: 19191
+              protocol: TCP
+            - containerPort: 19192
+              protocol: TCP
+            - containerPort: 19193
+              protocol: TCP
+            - containerPort: 19194
+              protocol: TCP
+            - containerPort: 19195
+              protocol: TCP
+            - containerPort: 19196
+              protocol: TCP
+            - containerPort: 19291
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: "/opt/connector/config"
+              readOnly: true
+{{- if eq .Values.connector.environment "pro" }}
+            - name: tls-cacerts
+              mountPath: /opt/connector/tls-cacerts
+{{- end }}
+      initContainers:
+        - name: init-db
+          image: {{ .Values.connector.image.name }}:{{ .Values.connector.image.tag }}
+          env:
+            - name: PGUSER
+              value: {{ .Values.services.db.user }}
+            - name: PGPASSWORD
+              value: {{ .Values.services.db.password }}
+            - name: PGHOST
+              value: {{ .Values.services.db.hostname }}
+          command: ["/bin/sh"]
+          args: ["-c", "bash /initdb/initdb.sh \"{{ .Values.services.db.user }}\" \"{{ .Values.services.db.password }}\" /opt/connector/resources "]
+          volumeMounts:
+            - name: init-db
+              mountPath: "/initdb"
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .Values.connector.name }}-config
+        - name: init-db
+          configMap:
+            name: {{ .Values.connector.name }}-initdb
+{{- if eq .Values.connector.environment "pro" }}
+        - name: tls-cacerts
+          secret:
+            secretName: common-tls-cacerts
+{{- end }}
+      restartPolicy: Always

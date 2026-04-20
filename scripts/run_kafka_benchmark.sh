@@ -136,8 +136,8 @@ find_python() {
     echo "$REPO_ROOT/.venv/bin/python"
     return 0
   fi
-  if [[ -x "$REPO_ROOT/inesdata-deployment/.venv/bin/python" ]]; then
-    echo "$REPO_ROOT/inesdata-deployment/.venv/bin/python"
+  if [[ -x "$REPO_ROOT/deployers/inesdata/.venv/bin/python" ]]; then
+    echo "$REPO_ROOT/deployers/inesdata/.venv/bin/python"
     return 0
   fi
   command -v python3 >/dev/null 2>&1 && { command -v python3; return 0; }

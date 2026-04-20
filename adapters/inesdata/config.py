@@ -2,12 +2,20 @@ import json
 import os
 import shutil
 
+from deployers.infrastructure.lib.config_loader import load_layered_deployer_config
+from deployers.infrastructure.lib.paths import (
+    legacy_deployer_artifact_dir,
+    resolve_shared_artifact_dir,
+    shared_artifact_dir,
+    use_shared_deployer_artifacts,
+)
+
 
 class InesdataConfig:
     """Centralized INESData technical configuration."""
 
-    REPO_URL = "https://github.com/ProyectoPIONERA/inesdata-deployment.git"
-    REPO_DIR = "inesdata-deployment"
+    REPO_DIR = os.path.join("deployers", "inesdata")
+    ADAPTER_NAME = "inesdata"
     DS_NAME = "demo"
     NS_COMMON = "common-srvs"
 
@@ -45,19 +53,118 @@ class InesdataConfig:
 
     @classmethod
     def common_dir(cls):
-        return os.path.join(cls.repo_dir(), "common")
+        return resolve_shared_artifact_dir("common", required_file="Chart.yaml")
 
     @classmethod
     def values_path(cls):
+        if cls.use_shared_deployer_artifacts():
+            return os.path.join(cls.shared_runtime_dir("common"), "values.yaml")
         return os.path.join(cls.common_dir(), "values.yaml")
 
     @classmethod
+    def common_values_source_path(cls):
+        return os.path.join(cls.common_dir(), "values.yaml")
+
+    @classmethod
+    def ensure_common_values_file(cls):
+        values_path = cls.values_path()
+        if not cls.use_shared_deployer_artifacts():
+            return values_path
+
+        source_path = cls.common_values_source_path()
+        if not os.path.exists(values_path) and os.path.exists(source_path):
+            os.makedirs(os.path.dirname(values_path), exist_ok=True)
+            shutil.copy2(source_path, values_path)
+        return values_path
+
+    @classmethod
     def deployer_config_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", cls.ADAPTER_NAME, "deployer.config")
+
+    @classmethod
+    def deployer_config_example_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", cls.ADAPTER_NAME, "deployer.config.example")
+
+    @classmethod
+    def infrastructure_deployer_config_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", "infrastructure", "deployer.config")
+
+    @classmethod
+    def infrastructure_deployer_config_example_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", "infrastructure", "deployer.config.example")
+
+    @classmethod
+    def legacy_deployer_config_path(cls):
         return os.path.join(cls.repo_dir(), "deployer.config")
 
     @classmethod
     def vault_keys_path(cls):
+        if cls.use_shared_deployer_artifacts():
+            return cls.vault_keys_runtime_path()
         return os.path.join(cls.common_dir(), "init-keys-vault.json")
+
+    @classmethod
+    def vault_keys_runtime_path(cls):
+        return str(shared_artifact_dir("common", "init-keys-vault.json"))
+
+    @classmethod
+    def adapter_runtime_vault_keys_path(cls):
+        return os.path.join(cls.shared_runtime_dir("common"), "init-keys-vault.json")
+
+    @classmethod
+    def legacy_vault_keys_path(cls):
+        return str(legacy_deployer_artifact_dir("inesdata", "common", "init-keys-vault.json"))
+
+    @classmethod
+    def ensure_vault_keys_file(cls):
+        vault_keys_path = cls.vault_keys_path()
+        if not cls.use_shared_deployer_artifacts():
+            return vault_keys_path
+
+        if os.path.exists(vault_keys_path):
+            return vault_keys_path
+
+        candidate_paths = [
+            cls.adapter_runtime_vault_keys_path(),
+            cls.legacy_vault_keys_path(),
+        ]
+        for legacy_path in candidate_paths:
+            if not os.path.exists(legacy_path):
+                continue
+            os.makedirs(os.path.dirname(vault_keys_path), exist_ok=True)
+            shutil.copy2(legacy_path, vault_keys_path)
+            break
+        return vault_keys_path
+
+    @classmethod
+    def adapter_name(cls):
+        return str(getattr(cls, "ADAPTER_NAME", "inesdata") or "inesdata").strip().lower()
+
+    @classmethod
+    def use_shared_deployer_artifacts(cls):
+        return use_shared_deployer_artifacts()
+
+    @classmethod
+    def deployment_environment_name(cls):
+        adapter = INESDataConfigAdapter(cls)
+        config = adapter.load_deployer_config()
+        environment = str(config.get("ENVIRONMENT", "DEV")).strip().upper()
+        return environment or "DEV"
+
+    @classmethod
+    def deployment_runtime_dir(cls):
+        return os.path.join(
+            cls.script_dir(),
+            "deployers",
+            cls.adapter_name(),
+            "deployments",
+            cls.deployment_environment_name(),
+            cls.dataspace_name(),
+        )
+
+    @classmethod
+    def shared_runtime_dir(cls, *parts):
+        return os.path.join(cls.deployment_runtime_dir(), "shared", *parts)
 
     @classmethod
     def venv_path(cls):
@@ -95,11 +202,34 @@ class InesdataConfig:
 
     @classmethod
     def registration_service_dir(cls):
-        return os.path.join(cls.repo_dir(), "dataspace", "registration-service")
+        return resolve_shared_artifact_dir("dataspace", "registration-service", required_file="Chart.yaml")
 
     @classmethod
     def registration_values_file(cls):
-        return os.path.join(cls.registration_service_dir(), f"values-{cls.dataspace_name()}.yaml")
+        values_name = f"values-{cls.dataspace_name()}.yaml"
+        if cls.use_shared_deployer_artifacts():
+            return os.path.join(cls.shared_runtime_dir("dataspace", "registration-service"), values_name)
+        return os.path.join(cls.registration_service_dir(), values_name)
+
+    @classmethod
+    def legacy_registration_service_dir(cls):
+        return str(legacy_deployer_artifact_dir("inesdata", "dataspace", "registration-service"))
+
+    @classmethod
+    def legacy_registration_values_file(cls):
+        return os.path.join(cls.legacy_registration_service_dir(), f"values-{cls.dataspace_name()}.yaml")
+
+    @classmethod
+    def ensure_registration_values_file(cls, refresh=False):
+        values_file = cls.registration_values_file()
+        if not cls.use_shared_deployer_artifacts():
+            return values_file
+
+        source_file = cls.legacy_registration_values_file()
+        if (refresh or not os.path.exists(values_file)) and os.path.exists(source_file):
+            os.makedirs(os.path.dirname(values_file), exist_ok=True)
+            shutil.copy2(source_file, values_file)
+        return values_file
 
     @classmethod
     def registration_db_name(cls):
@@ -172,40 +302,42 @@ class INESDataConfigAdapter:
         self.config = config_cls or InesdataConfig
 
     def copy_local_deployer_config(self):
-        local_config = os.path.join(self.config.script_dir(), "deployer.config")
-        repo_config = self.config.deployer_config_path()
+        local_config = self.config.deployer_config_path()
+        repo_config = self.config.legacy_deployer_config_path()
 
         if not os.path.exists(local_config):
-            print("Local deployer.config not found. Skipping copy.")
+            print(f"Local INESData deployer.config not found: {local_config}. Skipping copy.")
             return False
 
+        if os.path.abspath(local_config) == os.path.abspath(repo_config):
+            return True
+
         try:
+            os.makedirs(os.path.dirname(repo_config), exist_ok=True)
             shutil.copy2(local_config, repo_config)
-            print("Local deployer.config copied into repository\n")
+            print("Local INESData deployer.config copied into repository\n")
             return True
         except Exception as e:
             print(f"Error copying deployer.config: {e}")
             return False
 
+    def _infrastructure_deployer_config_path(self):
+        resolver = getattr(self.config, "infrastructure_deployer_config_path", None)
+        if callable(resolver):
+            return resolver()
+        script_dir = getattr(self.config, "script_dir", None)
+        if callable(script_dir):
+            return os.path.join(script_dir(), "deployers", "infrastructure", "deployer.config")
+        return ""
+
     def load_deployer_config(self):
-        config_path = self.config.deployer_config_path()
-        values = {}
-
-        try:
-            with open(config_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and "=" in line and not line.startswith("#"):
-                        key, value = line.split("=", 1)
-                        values[key.strip()] = value.strip()
-        except FileNotFoundError:
-            print(f"Error: Configuration file not found: {config_path}")
-            return values
-        except IOError as e:
-            print(f"Error reading configuration file: {e}")
-            return values
-
-        return values
+        adapter_config_path = self.config.deployer_config_path()
+        return load_layered_deployer_config(
+            [
+                self._infrastructure_deployer_config_path(),
+                adapter_config_path,
+            ]
+        )
 
     @staticmethod
     def _resolve_optional_path(base_dir, raw_path):

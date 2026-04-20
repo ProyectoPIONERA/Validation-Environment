@@ -8,8 +8,9 @@ ROOT_REQUIREMENTS="$ROOT_DIR/requirements.txt"
 ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 UI_DIR="$ROOT_DIR/validation/ui"
 UI_PACKAGE_JSON="$UI_DIR/package.json"
-DEPLOYER_CONFIG="$ROOT_DIR/deployer.config"
-DEPLOYER_CONFIG_EXAMPLE="$ROOT_DIR/deployer.config.example"
+DEPLOYER_CONFIG_DIR="$ROOT_DIR/deployers/inesdata"
+DEPLOYER_CONFIG="$DEPLOYER_CONFIG_DIR/deployer.config"
+DEPLOYER_CONFIG_EXAMPLE="$DEPLOYER_CONFIG_DIR/deployer.config.example"
 
 WITH_SYSTEM_DEPS=false
 SKIP_PLAYWRIGHT=false
@@ -37,7 +38,7 @@ Options:
   --skip-playwright         Skip Playwright browser installation
   --skip-root-node          Skip 'npm install' in the repo root
   --skip-ui-node            Skip 'npm install' in validation/ui
-  --skip-deployer-config    Do not create deployer.config from the example file
+  --skip-deployer-config    Do not create deployers/inesdata/deployer.config from the example file
   -h, --help                Show this help
 EOF
 }
@@ -132,13 +133,14 @@ else
 fi
 
 if [[ "$SKIP_DEPLOYER_CONFIG_INIT" == false ]]; then
+  mkdir -p "$DEPLOYER_CONFIG_DIR"
   if [[ ! -f "$DEPLOYER_CONFIG" && -f "$DEPLOYER_CONFIG_EXAMPLE" ]]; then
-    log "Creating deployer.config from deployer.config.example"
+    log "Creating deployers/inesdata/deployer.config from deployers/inesdata/deployer.config.example"
     cp "$DEPLOYER_CONFIG_EXAMPLE" "$DEPLOYER_CONFIG"
   elif [[ -f "$DEPLOYER_CONFIG" ]]; then
-    log "Reusing existing deployer.config"
+    log "Reusing existing deployers/inesdata/deployer.config"
   else
-    log "deployer.config.example not found; skipping deployer.config initialization"
+    log "deployers/inesdata/deployer.config.example not found; skipping deployer config initialization"
   fi
 else
   log "Skipping deployer.config initialization"
@@ -147,5 +149,5 @@ fi
 log "Bootstrap completed"
 log "Next steps:"
 log "  1. Activate the root environment: source .venv/bin/activate"
-log "  2. Review deployer.config if needed"
-log "  3. Run: python3 inesdata.py"
+log "  2. Review deployers/inesdata/deployer.config if needed"
+log "  3. Run: python3 main.py menu"

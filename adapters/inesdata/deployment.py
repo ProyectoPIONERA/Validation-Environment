@@ -1,4 +1,6 @@
 import os
+import shlex
+import shutil
 
 import requests
 import yaml
@@ -34,6 +36,159 @@ class INESDataDeploymentAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    def _dataspace_namespace(self):
+        namespace_getter = getattr(self.config, "namespace_demo", None)
+        if callable(namespace_getter):
+            namespace = namespace_getter()
+            if namespace:
+                return namespace
+        return self._dataspace_name()
+
+    def _dataspace_runtime_dir(self):
+        runtime_dir_getter = getattr(self.config, "deployment_runtime_dir", None)
+        if callable(runtime_dir_getter):
+            return runtime_dir_getter()
+        return os.path.join(
+            self.config.repo_dir(),
+            "deployments",
+            "DEV",
+            self._dataspace_name(),
+        )
+
+    def _adapter_name(self):
+        adapter_name_getter = getattr(self.config, "adapter_name", None)
+        if callable(adapter_name_getter):
+            adapter_name = adapter_name_getter()
+            if adapter_name:
+                return str(adapter_name).strip().lower()
+        return str(getattr(self.config, "ADAPTER_NAME", "inesdata") or "inesdata").strip().lower()
+
+    def _safe_remove_runtime_dir(self, runtime_dir):
+        if not runtime_dir:
+            return False
+
+        script_dir_getter = getattr(self.config, "script_dir", None)
+        if not callable(script_dir_getter):
+            return False
+
+        deployments_root = os.path.abspath(
+            os.path.join(script_dir_getter(), "deployers", self._adapter_name(), "deployments")
+        )
+        runtime_root = os.path.abspath(runtime_dir)
+        if runtime_root == deployments_root or not runtime_root.startswith(deployments_root + os.sep):
+            print(f"Skipping runtime cleanup outside managed deployments root: {runtime_dir}")
+            return False
+
+        if os.path.exists(runtime_root):
+            shutil.rmtree(runtime_root)
+            print(f"Removed generated dataspace runtime artifacts: {runtime_root}")
+            return True
+        return False
+
+    def _validate_recreate_namespace(self, namespace):
+        normalized = str(namespace or "").strip()
+        forbidden = {
+            "",
+            "default",
+            "kube-system",
+            "kube-public",
+            "kube-node-lease",
+            "components",
+            str(getattr(self.config, "NS_COMMON", "common-srvs") or "common-srvs").strip(),
+        }
+        if normalized in forbidden:
+            raise RuntimeError(
+                f"Refusing to recreate dataspace in protected namespace '{normalized}'. "
+                "Use an isolated dataspace namespace."
+            )
+        return normalized
+
+    def _wait_for_namespace_deleted(self, namespace, timeout=120, poll_interval=3):
+        deadline = time.time() + timeout
+        namespace_q = shlex.quote(namespace)
+        while time.time() <= deadline:
+            output = self.run_silent(f"kubectl get namespace {namespace_q} --no-headers")
+            if not output:
+                return True
+            time.sleep(poll_interval)
+        return False
+
+    def build_recreate_dataspace_plan(self):
+        ds_name = self._dataspace_name()
+        namespace = self._dataspace_namespace()
+        helm_release = self.config.helm_release_rs()
+        return {
+            "status": "planned",
+            "adapter": self._adapter_name(),
+            "dataspace": ds_name,
+            "namespace": namespace,
+            "runtime_dir": self._dataspace_runtime_dir(),
+            "helm_releases": [helm_release],
+            "actions": [
+                "uninstall_dataspace_helm_releases",
+                "delete_dataspace_namespace",
+                "delete_dataspace_bootstrap_state",
+                "remove_generated_runtime_artifacts",
+                "run_level_3_again",
+            ],
+            "preserves_shared_services": True,
+            "shared_services_namespace": getattr(self.config, "NS_COMMON", "common-srvs"),
+            "invalidates_level_4_connectors": True,
+        }
+
+    def _cleanup_dataspace_before_recreate(self):
+        ds_name = self._dataspace_name()
+        namespace = self._validate_recreate_namespace(self._dataspace_namespace())
+        helm_release = self.config.helm_release_rs()
+        repo_dir = self.config.repo_dir()
+        python_exec = self.config.python_exec()
+        runtime_dir = self._dataspace_runtime_dir()
+
+        print("\nCleaning existing dataspace Kubernetes resources...")
+        self.run(
+            f"helm uninstall {shlex.quote(helm_release)} -n {shlex.quote(namespace)}",
+            check=False,
+        )
+        self.run(
+            f"kubectl delete namespace {shlex.quote(namespace)} --ignore-not-found=true",
+            check=False,
+        )
+        if not self._wait_for_namespace_deleted(namespace):
+            raise RuntimeError(f"Timed out waiting for namespace '{namespace}' to be deleted")
+
+        print("\nCleaning existing dataspace bootstrap state...")
+        bootstrap_script = os.path.join(repo_dir, "bootstrap.py")
+        if os.path.exists(bootstrap_script):
+            self.run(
+                f"{shlex.quote(python_exec)} bootstrap.py dataspace delete {shlex.quote(ds_name)}",
+                cwd=repo_dir,
+                check=False,
+            )
+        else:
+            print(f"Bootstrap script not found at {bootstrap_script}; skipping bootstrap delete.")
+
+        self._safe_remove_runtime_dir(runtime_dir)
+
+    def recreate_dataspace(self, confirm_dataspace=None):
+        ds_name = self._dataspace_name()
+        if str(confirm_dataspace or "").strip() != ds_name:
+            raise RuntimeError(
+                f"Dataspace recreation requires explicit confirmation with the exact dataspace name '{ds_name}'."
+            )
+
+        plan = self.build_recreate_dataspace_plan()
+        print("\n========================================")
+        print("RECREATE DATASPACE")
+        print("========================================")
+        print(f"Adapter: {plan['adapter']}")
+        print(f"Dataspace: {plan['dataspace']}")
+        print(f"Namespace: {plan['namespace']}")
+        print("Shared services will be preserved.")
+        print("Level 4 connectors for this dataspace will be invalidated.\n")
+
+        self._cleanup_dataspace_before_recreate()
+        return self.deploy_dataspace()
+
     def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None):
         if minikube_ip is None:
             minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
@@ -61,29 +216,47 @@ class INESDataDeploymentAdapter:
 
     def wait_for_keycloak_admin_ready(self, kc_url, kc_user, kc_password, timeout=120, poll_interval=3):
         print("Waiting for Keycloak admin authentication to become ready...")
-        token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
+        token_urls = [f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"]
+        local_port_forward_started = False
         last_issue = None
+        last_connectivity_issue = None
         start = time.time()
 
         while time.time() - start <= timeout:
-            try:
-                response = requests.post(
-                    token_url,
-                    data={
-                        "grant_type": "password",
-                        "client_id": "admin-cli",
-                        "username": kc_user,
-                        "password": kc_password,
-                    },
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    timeout=5,
-                )
-                if response.status_code == 200 and response.json().get("access_token"):
-                    print("Keycloak admin authentication is ready")
-                    return True
-                last_issue = f"HTTP {response.status_code}"
-            except Exception as exc:
-                last_issue = str(exc)
+            for token_url in list(token_urls):
+                try:
+                    response = requests.post(
+                        token_url,
+                        data={
+                            "grant_type": "password",
+                            "client_id": "admin-cli",
+                            "username": kc_user,
+                            "password": kc_password,
+                        },
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        timeout=5,
+                    )
+                    if response.status_code == 200 and response.json().get("access_token"):
+                        print("Keycloak admin authentication is ready")
+                        return True
+                    last_issue = f"HTTP {response.status_code}"
+                except Exception as exc:
+                    last_issue = str(exc)
+                    last_connectivity_issue = last_issue
+
+            if last_connectivity_issue and not local_port_forward_started:
+                keycloak_port = getattr(self.config, "PORT_KEYCLOAK", 18081)
+                if self.infrastructure.port_forward_service(
+                    self.config.NS_COMMON,
+                    "keycloak",
+                    keycloak_port,
+                    8080,
+                    quiet=True,
+                ):
+                    local_port_forward_started = True
+                    token_urls.append(
+                        f"http://127.0.0.1:{keycloak_port}/realms/master/protocol/openid-connect/token"
+                    )
 
             time.sleep(poll_interval)
 
@@ -95,7 +268,7 @@ class INESDataDeploymentAdapter:
 
     def restart_registration_service(self):
         deployment_name = f"{self._dataspace_name()}-registration-service"
-        namespace = self.config.namespace_demo()
+        namespace = self._dataspace_namespace()
 
         print("\nRestarting registration-service deployment to pick up the recreated database credentials...")
         if self.run(
@@ -173,11 +346,14 @@ class INESDataDeploymentAdapter:
             print("Creating Python environment...")
             self.run("python3 -m venv .venv", cwd=repo_dir)
 
-        print("Ensuring INESData Python dependencies...")
+        runtime_label = getattr(self.config, "RUNTIME_LABEL", "INESData")
+        quiet_requirements = bool(getattr(self.config, "QUIET_REQUIREMENTS_INSTALL", False))
+        print(f"Ensuring {runtime_label} Python dependencies...")
         ensure_python_requirements(
             python_exec,
             self.config.repo_requirements_path(),
-            label="INESData runtime",
+            label=f"{runtime_label} runtime",
+            quiet=quiet_requirements,
         )
 
         print("Cleaning previous databases...")
@@ -189,10 +365,24 @@ class INESDataDeploymentAdapter:
         connectors.force_clean_postgres_db(self.config.webportal_db_name(), self.config.webportal_db_user())
 
         print("Creating dataspace...")
-        if self.run(f"{python_exec} deployer.py dataspace create {ds_name}", cwd=repo_dir) is None:
+        quiet_deployer_output = bool(getattr(self.config, "QUIET_SENSITIVE_DEPLOYER_OUTPUT", False))
+        create_result = self.run(
+            f"{python_exec} bootstrap.py dataspace create {ds_name}",
+            cwd=repo_dir,
+            capture=quiet_deployer_output,
+            silent=quiet_deployer_output,
+        )
+        if create_result is None:
             self._fail("Error creating dataspace")
+        if quiet_deployer_output:
+            print("Dataspace bootstrap completed; sensitive deployer output suppressed")
 
-        values_file = self.config.registration_values_file()
+        ensure_values_file = getattr(self.config, "ensure_registration_values_file", None)
+        values_file = (
+            ensure_values_file(refresh=True)
+            if callable(ensure_values_file)
+            else self.config.registration_values_file()
+        )
         if not os.path.exists(values_file):
             self._fail("Registration service values file not found")
 
@@ -204,7 +394,7 @@ class INESDataDeploymentAdapter:
         if not self.infrastructure.deploy_helm_release(
             self.config.helm_release_rs(),
             self.config.namespace_demo(),
-            os.path.basename(values_file),
+            values_file,
             cwd=self.config.registration_service_dir()
         ):
             self._fail("Error deploying registration-service")

@@ -1,0 +1,36 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.connector.name }}-dashboard
+  labels:
+    validation-environment-adapter: edc
+spec:
+  replicas: {{ default 1 .Values.dashboard.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.connector.name }}-dashboard
+  template:
+    metadata:
+      annotations:
+        checksum/dashboard-config: {{ toJson .Values.dashboard.runtime | sha256sum | quote }}
+      labels:
+        app: {{ .Values.connector.name }}-dashboard
+        validation-environment-adapter: edc
+    spec:
+      containers:
+        - name: dashboard
+          image: "{{ .Values.dashboard.image.name }}:{{ .Values.dashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: dashboard-config
+              mountPath: /usr/share/nginx/html/edc-dashboard/config
+              readOnly: true
+      volumes:
+        - name: dashboard-config
+          configMap:
+            name: {{ .Values.connector.name }}-dashboard-config
+{{- end }}

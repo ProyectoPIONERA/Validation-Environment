@@ -8,6 +8,7 @@ COUNT="${COUNT:-8}"
 CONNECTORS_CSV="${CONNECTORS_CSV:-conn-citycouncil-demo,conn-company-demo}"
 CREDENTIALS_DIR="${CREDENTIALS_DIR:-$ROOT_DIR/inesdata-testing/deployments/DEV/demo}"
 KEYCLOAK_TOKEN_URL="${KEYCLOAK_TOKEN_URL:-}"
+DEPLOYER_CONFIG_FILE="${DEPLOYER_CONFIG_FILE:-$ROOT_DIR/deployers/inesdata/deployer.config}"
 VOCABULARY_ID="${VOCABULARY_ID:-JS_Pionera_Daimo}"
 VOCABULARY_NAME="${VOCABULARY_NAME:-JS Metadata Daimo}"
 VOCABULARY_CATEGORY="${VOCABULARY_CATEGORY:-machineLearning}"
@@ -24,7 +25,7 @@ Options:
   --count <n>                 Number of assets per connector (default: 8)
   --connectors <csv>          Connectors list (default: conn-citycouncil-demo,conn-company-demo)
   --credentials-dir <path>    Folder containing credentials-connector-<name>.json
-  --keycloak-token-url <url>  Token endpoint. If omitted, read from deployer.config
+  --keycloak-token-url <url>  Token endpoint. If omitted, read from deployers/inesdata/deployer.config
   --vocabulary-id <id>        Vocabulary ID used in assetData (default: JS_Pionera_Daimo)
   --vocabulary-name <name>    Vocabulary display name (default: JS Metadata Daimo)
   --vocabulary-category <cat> Vocabulary category (default: machineLearning)
@@ -129,7 +130,7 @@ resolve_vocabulary_schema_file() {
 }
 
 if [[ -z "$KEYCLOAK_TOKEN_URL" ]]; then
-  cfg_file="$ROOT_DIR/deployer.config"
+  cfg_file="$DEPLOYER_CONFIG_FILE"
   if [[ ! -f "$cfg_file" ]]; then
     echo "Missing deployer config: $cfg_file" >&2
     exit 1
@@ -140,7 +141,7 @@ if [[ -z "$KEYCLOAK_TOKEN_URL" ]]; then
     kc_base="$(sed -n 's/^KC_INTERNAL_URL=//p' "$cfg_file" | tail -n1)"
   fi
   if [[ -z "$kc_base" ]]; then
-    echo "Could not resolve KC_URL/KC_INTERNAL_URL from deployer.config" >&2
+    echo "Could not resolve KC_URL/KC_INTERNAL_URL from $cfg_file" >&2
     exit 1
   fi
   if [[ "$kc_base" != http* ]]; then
@@ -309,7 +310,7 @@ EOF
 seed_connector_assets() {
   local connector="$1"
   local creds_file="$CREDENTIALS_DIR/credentials-connector-$connector.json"
-  local fallback_creds_file="$ROOT_DIR/inesdata-deployment/deployments/DEV/$NAMESPACE/credentials-connector-$connector.json"
+  local fallback_creds_file="$ROOT_DIR/deployers/inesdata/deployments/DEV/$NAMESPACE/credentials-connector-$connector.json"
   local mgmt_url="http://127.0.0.1:19193/management"
   local pf_pid=""
 

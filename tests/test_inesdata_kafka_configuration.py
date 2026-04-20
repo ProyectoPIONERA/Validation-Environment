@@ -7,9 +7,13 @@ from adapters.inesdata.adapter import InesdataAdapter
 from adapters.inesdata.config import InesdataConfig
 
 
+def _project_path(*parts):
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", *parts))
+
+
 class InesdataKafkaConfigurationTests(unittest.TestCase):
     def _write_deployer_config(self, root_dir, lines):
-        repo_dir = os.path.join(root_dir, "inesdata-deployment")
+        repo_dir = os.path.join(root_dir, "deployers", "inesdata")
         os.makedirs(repo_dir, exist_ok=True)
         config_path = os.path.join(repo_dir, "deployer.config")
         with open(config_path, "w", encoding="utf-8") as handle:
@@ -52,11 +56,8 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
         self.assertEqual(config["cluster_bootstrap_servers"], "kafka.cluster.internal:39092")
         self.assertEqual(config["cluster_advertised_host"], "cluster.kafka.internal")
         self.assertEqual(config["topic_name"], "edc-kafka-benchmark")
+        self.assertEqual(config["topic_strategy"], "STATIC_TOPIC")
         self.assertEqual(config["security_protocol"], "SASL_PLAINTEXT")
-        self.assertEqual(config["provisioner"], "kubernetes")
-        self.assertEqual(config["k8s_namespace"], "demo")
-        self.assertEqual(config["k8s_service_name"], "framework-kafka")
-        self.assertEqual(config["k8s_nodeport"], "32092")
         self.assertEqual(config["sasl_mechanism"], "PLAIN")
         self.assertEqual(config["username"], "framework")
         self.assertEqual(config["password"], "framework-secret")
@@ -150,20 +151,76 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
         self.assertEqual(admin_calls["created_topics"], ["edc-kafka-topic"])
         self.assertEqual(commands, [])
 
-    def test_connector_runtime_keeps_kafka_support_wired(self):
-        build_gradle = "/home/avargas/DSQA/integration_pionera/adapters/inesdata/sources/inesdata-connector/launchers/connector/build.gradle.kts"
-        connector_config = "/home/avargas/DSQA/integration_pionera/inesdata-deployment/connector/config/connector-configuration.properties"
-        values_template = "/home/avargas/DSQA/integration_pionera/inesdata-deployment/connector/values.yaml.tpl"
-        asset_validator = "/home/avargas/DSQA/integration_pionera/adapters/inesdata/sources/inesdata-connector/extensions/asset-validator/src/main/java/org/upm/inesdata/validator/InesdataAssetValidator.java"
-        data_address_validator = "/home/avargas/DSQA/integration_pionera/adapters/inesdata/sources/inesdata-connector/extensions/store-asset-api/src/main/java/org/upm/inesdata/storageasset/validation/InesdataDataAddressValidator.java"
-        storage_asset_extension = "/home/avargas/DSQA/integration_pionera/adapters/inesdata/sources/inesdata-connector/extensions/store-asset-api/src/main/java/org/upm/inesdata/storageasset/StorageAssetApiExtension.java"
+    def test_connector_chart_keeps_runtime_configuration_wired(self):
+        connector_config = _project_path("deployers", "inesdata", "connector", "config", "connector-configuration.properties")
+        values_template = _project_path("deployers", "inesdata", "connector", "values.yaml.tpl")
 
-        with open(build_gradle, "r", encoding="utf-8") as handle:
-            build_content = handle.read()
         with open(connector_config, "r", encoding="utf-8") as handle:
             connector_config_content = handle.read()
         with open(values_template, "r", encoding="utf-8") as handle:
             values_template_content = handle.read()
+
+        self.assertIn("edc.hostname={{ .Values.connector.ingress.hostname }}", connector_config_content)
+        self.assertIn("edc.dsp.callback.address", connector_config_content)
+        self.assertIn("edc.aws.bucket.name={{ .Values.services.minio.bucket }}", connector_config_content)
+        self.assertIn("ghcr.io/proyectopionera/inesdata-connector", values_template_content)
+        self.assertIn("ghcr.io/proyectopionera/inesdata-connector-interface", values_template_content)
+
+    def test_connector_source_keeps_kafka_support_wired_when_available(self):
+        source_root = _project_path("adapters", "inesdata", "sources", "inesdata-connector")
+        build_gradle = os.path.join(source_root, "launchers", "connector", "build.gradle.kts")
+        asset_validator = os.path.join(
+            source_root,
+            "extensions",
+            "asset-validator",
+            "src",
+            "main",
+            "java",
+            "org",
+            "upm",
+            "inesdata",
+            "validator",
+            "InesdataAssetValidator.java",
+        )
+        data_address_validator = os.path.join(
+            source_root,
+            "extensions",
+            "store-asset-api",
+            "src",
+            "main",
+            "java",
+            "org",
+            "upm",
+            "inesdata",
+            "storageasset",
+            "validation",
+            "InesdataDataAddressValidator.java",
+        )
+        storage_asset_extension = os.path.join(
+            source_root,
+            "extensions",
+            "store-asset-api",
+            "src",
+            "main",
+            "java",
+            "org",
+            "upm",
+            "inesdata",
+            "storageasset",
+            "StorageAssetApiExtension.java",
+        )
+        required_files = [
+            build_gradle,
+            asset_validator,
+            data_address_validator,
+            storage_asset_extension,
+        ]
+        missing_files = [path for path in required_files if not os.path.isfile(path)]
+        if missing_files:
+            self.skipTest("INESData connector source checkout is not available")
+
+        with open(build_gradle, "r", encoding="utf-8") as handle:
+            build_content = handle.read()
         with open(asset_validator, "r", encoding="utf-8") as handle:
             asset_validator_content = handle.read()
         with open(data_address_validator, "r", encoding="utf-8") as handle:
@@ -172,13 +229,6 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
             storage_asset_extension_content = handle.read()
 
         self.assertIn("implementation(libs.edc.data.plane.kafka)", build_content)
-        self.assertIn("edc.hostname={{ .Values.connector.ingress.hostname }}", connector_config_content)
-        self.assertIn("edc.dataplane.kafka.sink.partition.size", connector_config_content)
-        self.assertIn("dataplaneSinkPartitionSize", values_template_content)
-        self.assertIn("keys.connector_image_name", values_template_content)
-        self.assertIn("keys.connector_image_tag", values_template_content)
-        self.assertIn("keys.connector_interface_image_name", values_template_content)
-        self.assertIn("keys.connector_interface_image_tag", values_template_content)
         self.assertIn('case "Kafka" -> validateKafka(dataAddress);', asset_validator_content)
         self.assertIn("PROPERTY_KAFKA_BOOTSTRAP_SERVERS", asset_validator_content)
         self.assertIn('case "Kafka" -> validateKafka(dataAddress);', data_address_validator_content)

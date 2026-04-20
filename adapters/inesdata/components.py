@@ -6,6 +6,7 @@ import ipaddress
 
 import yaml
 
+from deployers.infrastructure.lib.paths import shared_artifact_roots
 from .config import INESDataConfigAdapter, InesdataConfig
 
 
@@ -74,8 +75,7 @@ class INESDataComponentsAdapter:
         return f"http://{value}"
 
     def _component_chart_roots(self):
-        repo_dir = self.config.repo_dir()
-        return [os.path.join(repo_dir, "components")]
+        return shared_artifact_roots("components")
 
     def _refresh_platform_repo_once(self):
         if self._attempted_platform_repo_refresh:
@@ -88,7 +88,7 @@ class INESDataComponentsAdapter:
             return
 
         repo_q = shlex.quote(repo_dir)
-        print("Refreshing platform repository (git pull) to discover component charts...")
+        print("Refreshing INESData deployer artifacts repository (git pull) to discover component charts...")
         self.run(f"git -C {repo_q} fetch --all --prune", check=False)
         self.run(f"git -C {repo_q} pull --ff-only", check=False)
 
@@ -139,17 +139,17 @@ class INESDataComponentsAdapter:
 
         if not charts:
             self._fail(
-                "No deployable component charts discovered in the platform repo",
+                "No deployable component charts discovered in deployer artifacts",
                 root_cause=(
-                    "Expected Helm charts under: inesdata-deployment/components/* (Chart.yaml). "
-                    "Update the inesdata-deployment clone (git pull) or re-run Level 2."
+                    "Expected Helm charts under deployers/shared/components or deployers/inesdata/components. "
+                    "Verify that the deployer artifacts are present in this repository checkout."
                 ),
             )
 
         available = ", ".join(sorted(charts)) or "(none)"
         self._fail(
             f"Unknown component '{component_key}'. "
-            f"Deployable components discovered in platform repo: {available}"
+            f"Deployable components discovered in deployer artifacts: {available}"
         )
 
     def _resolve_component_values_file(self, chart_dir: str, ds_name: str, namespace: str) -> str:
@@ -517,13 +517,13 @@ class INESDataComponentsAdapter:
             )
             return False
 
-        if self._minikube_has_image(profile, image_ref):
-            return False
-
         if normalized_component == "ai-model-hub":
             self._build_ai_model_hub_image_on_host(image_ref, deployer_config)
             self._load_image_into_minikube(profile, image_ref)
             return True
+
+        if self._minikube_has_image(profile, image_ref):
+            return False
 
         print(f"Local image '{image_ref}' is missing in minikube, but no auto-build recipe exists for '{normalized_component}'.")
         return False

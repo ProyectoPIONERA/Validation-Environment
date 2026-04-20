@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    service: {{ .Values.connector.name }}-interface
+  name: {{ .Values.connector.name }}-inteface
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: {{ .Values.connector.name }}-interface
+  template:
+    metadata:
+      labels:
+        service: {{ .Values.connector.name }}-interface
+    spec:
+      containers:
+        - env:
+            - name: APP_THEME
+              value: theme-1
+            - name: CATALOG_URL
+              value: {{ .Values.connector.ingress.protocol }}://{{ .Values.connector.ingress.hostname }}/management/federatedcatalog
+            - name: MANAGEMENT_API_URL
+              value: {{ .Values.connector.ingress.protocol }}://{{ .Values.connector.ingress.hostname }}/management
+            - name: SHARED_URL
+              value: {{ .Values.connector.ingress.protocol }}://{{ .Values.connector.ingress.hostname }}/shared
+            - name: ONTOLOGY_URL
+              value: {{ .Values.connectorInterface.ontologyHub.url | quote }}
+            - name: PARTICIPANT_ID
+              value: {{ .Values.connector.name }}
+            - name: OAUTH2_ALLOWED_URLS
+              value: {{ .Values.connector.ingress.protocol }}://{{ .Values.connector.ingress.hostname }},http://{{ .Values.connector.name }}:19193
+            - name: OAUTH2_CLIENT_ID
+              value: {{ .Values.connectorInterface.oauth2.client }}
+            - name: OAUTH2_ISSUER
+              value: {{ .Values.services.keycloak.protocol }}://{{ .Values.services.keycloak.external }}/realms/{{ .Values.connector.dataspace }}
+            - name: OAUTH2_REDIRECT_PATH
+              value: /inesdata-connector-interface
+            - name: OAUTH2_RESPONSE_TYPE
+              value: {{ .Values.connectorInterface.oauth2.type }}
+            - name: OAUTH2_SCOPE
+              value: {{ .Values.connectorInterface.oauth2.scope }}
+            - name: OAUTH2_SHOW_DEBUG_INFO
+              value: "false"
+          image: {{ .Values.connectorInterface.image.name }}:{{ .Values.connectorInterface.image.tag }}
+          name: {{ .Values.connector.name }}-interface
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+      restartPolicy: Always

@@ -1,11 +1,13 @@
 """Stable INESData adapter facade import path."""
 
+import json
 import os
 import shlex
 import socket
 import subprocess
 
 from .config import INESDataConfigAdapter, InesdataConfig
+from .components import INESDataComponentsAdapter
 from .connectors import INESDataConnectorsAdapter
 from .deployment import INESDataDeploymentAdapter
 from .infrastructure import INESDataInfrastructureAdapter
@@ -77,6 +79,14 @@ class InesdataAdapter:
             config_adapter=self.config_adapter,
             config_cls=self.config,
         )
+        self.components = INESDataComponentsAdapter(
+            run=run,
+            run_silent=run_silent,
+            auto_mode_getter=auto_mode_getter,
+            infrastructure_adapter=self.infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
         self.deployment.connectors_adapter = self.connectors
         self.connectors.deployment_adapter = self.deployment
 
@@ -88,6 +98,12 @@ class InesdataAdapter:
 
     def deploy_dataspace(self):
         return self.deployment.deploy_dataspace()
+
+    def build_recreate_dataspace_plan(self):
+        return self.deployment.build_recreate_dataspace_plan()
+
+    def recreate_dataspace(self, confirm_dataspace=None):
+        return self.deployment.recreate_dataspace(confirm_dataspace=confirm_dataspace)
 
     def deploy_connectors(self):
         return self.connectors.deploy_connectors()
@@ -109,6 +125,242 @@ class InesdataAdapter:
 
     def cleanup_test_entities(self, connector_name):
         return self.connectors.cleanup_test_entities(connector_name)
+
+    def _preview_common_services(self):
+        namespace = self.config.NS_COMMON
+        pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
+        ignored_hook_pod = getattr(self.infrastructure, "_is_ignored_transient_hook_pod", None)
+        services = {
+            "keycloak": {"pod": None, "status": "missing", "ready": False},
+            "minio": {"pod": None, "status": "missing", "ready": False},
+            "postgresql": {"pod": None, "status": "missing", "ready": False},
+            "vault": {"pod": None, "status": "missing", "ready": False},
+        }
+        prefixes = {
+            "keycloak": "common-srvs-keycloak-",
+            "minio": "common-srvs-minio-",
+            "postgresql": "common-srvs-postgresql-",
+            "vault": "common-srvs-vault-",
+        }
+
+        for line in pod_output.splitlines():
+            columns = line.split()
+            if len(columns) < 3:
+                continue
+
+            pod_name = columns[0]
+            ready = columns[1]
+            status = columns[2]
+
+            if callable(ignored_hook_pod) and ignored_hook_pod(namespace, pod_name):
+                continue
+
+            for service_name, prefix in prefixes.items():
+                if not pod_name.startswith(prefix):
+                    continue
+
+                ready_flag = False
+                if "/" in ready:
+                    ready_current, ready_total = ready.split("/", 1)
+                    ready_flag = status == "Running" and ready_current == ready_total
+
+                candidate = {
+                    "pod": pod_name,
+                    "status": status,
+                    "ready": ready_flag,
+                }
+                current = services[service_name]
+                if current["pod"] is None or candidate["ready"] or (
+                    not current["ready"]
+                    and candidate["status"] == "Running"
+                    and current["status"] != "Running"
+                ):
+                    services[service_name] = candidate
+                break
+
+        vault_state = {
+            "pod": services["vault"]["pod"],
+            "initialized": None,
+            "sealed": None,
+            "ready": False,
+        }
+        if services["vault"]["pod"]:
+            raw_status = self.run_silent(
+                f"kubectl exec {services['vault']['pod']} -n {namespace} -- vault status -format=json"
+            )
+            if raw_status:
+                try:
+                    payload = json.loads(raw_status)
+                except json.JSONDecodeError:
+                    payload = None
+                if payload:
+                    vault_state["initialized"] = bool(payload.get("initialized"))
+                    vault_state["sealed"] = bool(payload.get("sealed"))
+                    vault_state["ready"] = vault_state["initialized"] and not vault_state["sealed"]
+
+        issues = []
+        for service_name, state in services.items():
+            if not state["pod"]:
+                issues.append(f"{service_name} pod not found in namespace {namespace}")
+            elif not state["ready"] and service_name != "vault":
+                issues.append(f"{service_name} pod is not ready (status={state['status']})")
+
+        if services["vault"]["pod"] and not vault_state["ready"]:
+            issues.append("Vault is present but not initialized/unsealed")
+
+        ready = (
+            services["keycloak"]["ready"]
+            and services["minio"]["ready"]
+            and services["postgresql"]["ready"]
+            and services["vault"]["pod"] is not None
+            and vault_state["ready"]
+        )
+        return {
+            "status": "ready" if ready else "missing",
+            "action": "reuse" if ready else "deploy_infrastructure",
+            "namespace": namespace,
+            "services": services,
+            "vault": vault_state,
+            "issues": issues,
+        }
+
+    def _preview_dataspace(self):
+        namespace = self.config.namespace_demo()
+        registration_pod = self.infrastructure.get_pod_by_name(namespace, "registration-service")
+        pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
+        pod_names = []
+        for line in pod_output.splitlines():
+            columns = line.split()
+            if columns:
+                pod_names.append(columns[0])
+
+        schema_ready = False
+        if registration_pod:
+            schema_ready = bool(
+                self.infrastructure.wait_for_registration_service_schema(
+                    timeout=1,
+                    poll_interval=1,
+                    quiet=True,
+                )
+            )
+
+        issues = []
+        if not pod_names:
+            issues.append(f"No pods detected in namespace {namespace}")
+        if not registration_pod:
+            issues.append("registration-service pod not found")
+        elif not schema_ready:
+            issues.append("registration-service schema is not ready yet")
+
+        ready = bool(pod_names) and bool(registration_pod) and schema_ready
+        return {
+            "status": "ready" if ready else "missing",
+            "action": "reuse" if ready else "deploy_dataspace",
+            "dataspace": self.config_adapter.primary_dataspace_name(),
+            "namespace": namespace,
+            "registration_service_pod": registration_pod,
+            "schema_ready": schema_ready,
+            "pod_count": len(pod_names),
+            "issues": issues,
+        }
+
+    def _preview_connectors(self):
+        configured_connectors = []
+        loader = getattr(self.connectors, "load_dataspace_connectors", None)
+        if callable(loader):
+            dataspaces = loader() or []
+            for dataspace in dataspaces:
+                configured_connectors.extend(list(dataspace.get("connectors") or []))
+
+        configured_connectors = list(dict.fromkeys(configured_connectors))
+        cluster_connectors = set(self.get_cluster_connectors() or [])
+        connector_entries = []
+        all_ready = True
+        for connector in configured_connectors:
+            ready = connector in cluster_connectors
+            connector_entries.append(
+                {
+                    "name": connector,
+                    "portal_url": self.build_connector_url(connector),
+                    "status": "ready" if ready else "missing",
+                    "issues": [] if ready else ["connector runtime pod not found in dataspace namespace"],
+                }
+            )
+            all_ready = all_ready and ready
+
+        return {
+            "status": "ready" if all_ready else "missing",
+            "action": "reuse" if all_ready else "deploy_connectors",
+            "namespace": self.config.namespace_demo(),
+            "connectors": connector_entries,
+            "issues": [] if all_ready else ["One or more INESData connectors are not present in the cluster"],
+        }
+
+    def _preview_components(self):
+        config = self.config_adapter.load_deployer_config() or {}
+        raw = str(config.get("COMPONENTS", "") or "").strip()
+        configured = [token.strip() for token in raw.split(",") if token.strip()]
+        if not configured:
+            return {
+                "status": "not-applicable",
+                "action": "skip",
+                "components": [],
+                "issues": [],
+            }
+
+        try:
+            inferred_urls = self.components.infer_component_urls(configured)
+        except Exception as exc:
+            inferred_urls = {}
+            issues = [str(exc)]
+        else:
+            issues = []
+
+        component_entries = []
+        for component in configured:
+            normalized = str(component).strip()
+            component_entries.append(
+                {
+                    "name": normalized,
+                    "url": inferred_urls.get(normalized),
+                    "status": "planned",
+                }
+            )
+
+        return {
+            "status": "planned",
+            "action": "deploy_components",
+            "components": component_entries,
+            "issues": issues,
+        }
+
+    def preview_deploy(self):
+        common_services = self._preview_common_services()
+        dataspace = self._preview_dataspace()
+        connectors = self._preview_connectors()
+        components = self._preview_components()
+
+        if common_services["status"] != "ready":
+            status = "shared-services-required"
+            next_step = "Deploy or repair the shared common services before running the INESData deployment."
+        elif dataspace["status"] != "ready":
+            status = "dataspace-required"
+            next_step = "Deploy or repair the dataspace services before running the INESData connector deployment."
+        elif connectors["status"] != "ready":
+            status = "connectors-required"
+            next_step = "Deploy or repair the INESData connectors before relying on this dataspace."
+        else:
+            status = "ready"
+            next_step = "The local shared foundation and the INESData dataspace are ready."
+
+        return {
+            "status": status,
+            "shared_common_services": common_services,
+            "shared_dataspace": dataspace,
+            "connectors": connectors,
+            "components": components,
+            "next_step": next_step,
+        }
 
     def _kafka_runtime_config(self):
         loader = getattr(self.config_adapter, "kafka_runtime_config", None)
@@ -295,7 +547,7 @@ class InesdataAdapter:
     def describe(self) -> str:
         return (
             "InesdataAdapter encapsulates Kubernetes, Helm, Vault, MinIO, "
-            "connector and inesdata-deployment logic for INESData."
+            "connector and deployers/inesdata logic for INESData."
         )
 
 

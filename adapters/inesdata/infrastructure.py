@@ -781,6 +781,18 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
+    def _read_vault_status(self, pod_name, namespace):
+        status_json = self.run_silent(
+            f"kubectl exec {pod_name} -n {namespace} -- vault status -format=json"
+        )
+        if not status_json:
+            return None, "vault status unavailable"
+
+        try:
+            return json.loads(status_json), None
+        except json.JSONDecodeError as exc:
+            return None, f"invalid vault status: {exc}"
+
     def setup_vault(self, namespace=None):
         namespace = namespace or self.config.NS_COMMON
         print("\nConfiguring Vault...")
@@ -793,21 +805,22 @@ class INESDataInfrastructureAdapter:
         if not self.wait_for_pod_running(pod_name, namespace):
             return False
 
-        status_json = self.run_silent(f"kubectl exec {pod_name} -n {namespace} -- vault status -format=json")
+        vault_file_path = self.config.vault_keys_path()
+        status_data, status_error = self._read_vault_status(pod_name, namespace)
         initialized = False
         sealed = True
 
-        if status_json:
-            try:
-                data = json.loads(status_json)
-                initialized = data.get("initialized", False)
-                sealed = data.get("sealed", True)
-                print(f"Vault status: initialized={initialized}, sealed={sealed}")
-            except Exception as e:
-                print(f"Error parsing Vault status: {e}")
-                return False
-
-        vault_file_path = self.config.vault_keys_path()
+        if status_data:
+            initialized = status_data.get("initialized", False)
+            sealed = status_data.get("sealed", True)
+            print(f"Vault status: initialized={initialized}, sealed={sealed}")
+        elif os.path.exists(vault_file_path):
+            print(f"Vault status temporarily unavailable ({status_error}); reusing existing keys")
+            initialized = True
+            sealed = True
+        else:
+            print(f"Could not get Vault status: {status_error}")
+            return False
 
         if not initialized:
             print("Vault not initialized. Running init...")
@@ -830,6 +843,11 @@ class INESDataInfrastructureAdapter:
                 return False
         else:
             print("Vault already initialized")
+
+        if initialized:
+            ensure_vault_keys_file = getattr(self.config, "ensure_vault_keys_file", None)
+            if callable(ensure_vault_keys_file):
+                vault_file_path = ensure_vault_keys_file()
 
         try:
             with open(vault_file_path, "r") as f:
@@ -887,15 +905,14 @@ class INESDataInfrastructureAdapter:
         else:
             print("KV v2 engine already enabled")
 
-        final_status_json = self.run_silent(f"kubectl exec {pod_name} -n {namespace} -- vault status -format=json")
-        if not final_status_json:
-            print("Error: Could not get final Vault status")
+        final_status, final_status_error = self._read_vault_status(pod_name, namespace)
+        if not final_status:
+            print(f"Error: Could not get final Vault status: {final_status_error}")
             return False
 
         try:
-            status_data = json.loads(final_status_json)
-            initialized = status_data.get("initialized", False)
-            sealed = status_data.get("sealed", True)
+            initialized = final_status.get("initialized", False)
+            sealed = final_status.get("sealed", True)
             print("\nVault final status:")
             print(f"  Initialized: {initialized}")
             print(f"  Sealed: {sealed}\n")
@@ -912,19 +929,25 @@ class INESDataInfrastructureAdapter:
             print("Vault pod not found")
             return False
 
-        status = self.run_silent(f"kubectl exec {pod} -n {self.config.NS_COMMON} -- vault status -format=json")
-        if not status:
-            print("Could not get Vault status")
-            return False
+        data, status_error = self._read_vault_status(pod, self.config.NS_COMMON)
+        if not data:
+            ensure_vault_keys_file = getattr(self.config, "ensure_vault_keys_file", None)
+            vault_keys_path = ensure_vault_keys_file() if callable(ensure_vault_keys_file) else self.config.vault_keys_path()
+            if not os.path.exists(vault_keys_path):
+                print(f"Could not get Vault status: {status_error}")
+                return False
+            print(f"Vault status temporarily unavailable ({status_error}); trying existing unseal key")
+            data = {"initialized": True, "sealed": True}
 
-        data = json.loads(status)
         if not data.get("initialized"):
             print("Vault not initialized")
             return False
 
         if data.get("sealed"):
             print("Vault sealed. Running unseal...")
-            with open(self.config.vault_keys_path()) as f:
+            ensure_vault_keys_file = getattr(self.config, "ensure_vault_keys_file", None)
+            vault_keys_path = ensure_vault_keys_file() if callable(ensure_vault_keys_file) else self.config.vault_keys_path()
+            with open(vault_keys_path) as f:
                 keys = json.load(f)
             unseal_key = keys["unseal_keys_hex"][0]
             unseal_result = self.run(
@@ -939,25 +962,19 @@ class INESDataInfrastructureAdapter:
 
         deadline = time.time() + max(int(timeout), 1)
         while time.time() <= deadline:
-            final_status = self.run_silent(
-                f"kubectl exec {pod} -n {self.config.NS_COMMON} -- vault status -format=json"
-            )
-            if final_status:
-                try:
-                    final_data = json.loads(final_status)
-                except json.JSONDecodeError:
-                    final_data = None
-                if final_data and final_data.get("initialized") and not final_data.get("sealed"):
-                    print("Vault ready and unsealed")
-                    return True
+            final_data, _ = self._read_vault_status(pod, self.config.NS_COMMON)
+            if final_data and final_data.get("initialized") and not final_data.get("sealed"):
+                print("Vault ready and unsealed")
+                return True
             time.sleep(max(poll_interval, 1))
 
         print("Vault did not become ready and unsealed in time")
         return False
 
     def sync_vault_token_to_deployer_config(self):
-        vault_json_path = self.config.vault_keys_path()
-        config_path = self.config.deployer_config_path()
+        ensure_vault_keys_file = getattr(self.config, "ensure_vault_keys_file", None)
+        vault_json_path = ensure_vault_keys_file() if callable(ensure_vault_keys_file) else self.config.vault_keys_path()
+        config_path = self._vault_token_deployer_config_path()
 
         print("\nSynchronizing Vault token with deployer config...")
 
@@ -1017,6 +1034,14 @@ class INESDataInfrastructureAdapter:
         print("Vault token synchronized\n")
         return True
 
+    def _vault_token_deployer_config_path(self):
+        infrastructure_config_path = getattr(self.config, "infrastructure_deployer_config_path", None)
+        if callable(infrastructure_config_path):
+            candidate = infrastructure_config_path()
+            if os.path.exists(candidate):
+                return candidate
+        return self.config.deployer_config_path()
+
     def show_correspondence_table(self, values, config):
         rows = []
 
@@ -1069,7 +1094,8 @@ class INESDataInfrastructureAdapter:
         return values
 
     def sync_common_values(self):
-        values_path = self.config.values_path()
+        ensure_values_file = getattr(self.config, "ensure_common_values_file", None)
+        values_path = ensure_values_file() if callable(ensure_values_file) else self.config.values_path()
         config_path = self.config.deployer_config_path()
         ds_name = self._dataspace_name()
 
@@ -1567,12 +1593,17 @@ class INESDataInfrastructureAdapter:
         common_dir = self.config.common_dir()
         values_path = self.config.values_path()
 
-        if not os.path.exists(repo_dir):
-            print("Cloning repository...")
-            self.run(f"git clone {self.config.REPO_URL}", cwd=self.config.script_dir())
-            self.config_adapter.copy_local_deployer_config()
-        else:
-            print("Repository exists")
+        if not os.path.isdir(repo_dir):
+            self._fail(
+                "Missing INESData deployer artifacts",
+                root_cause=(
+                    f"Expected {repo_dir}. The framework no longer clones "
+                    "the legacy deployment repository automatically; deployers/inesdata must be part "
+                    "of this repository checkout."
+                ),
+            )
+
+        print("INESData deployer artifacts found")
 
         self.config_adapter.copy_local_deployer_config()
 

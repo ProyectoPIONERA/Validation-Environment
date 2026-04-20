@@ -312,6 +312,32 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         build_mock.assert_called_once_with("ontology-hub:local", deployer_config)
         load_mock.assert_called_once_with("minikube", "ontology-hub:local")
 
+    def test_prepare_level6_local_image_rebuilds_ai_model_hub_even_when_cached_in_minikube(self):
+        adapter = self._make_adapter()
+        deployer_config = {"LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "true"}
+
+        with (
+            mock.patch.object(
+                adapter,
+                "_safe_load_yaml_file",
+                return_value={"image": {"repository": "eclipse-edc/data-dashboard", "tag": "local"}},
+            ),
+            mock.patch.object(adapter, "_minikube_is_available", return_value=True),
+            mock.patch.object(adapter, "_minikube_has_image", return_value=True) as has_image_mock,
+            mock.patch.object(adapter, "_build_ai_model_hub_image_on_host") as build_mock,
+            mock.patch.object(adapter, "_load_image_into_minikube") as load_mock,
+        ):
+            result = adapter._maybe_prepare_level6_local_image(
+                "ai-model-hub",
+                "/tmp/ai-model-hub-values.yaml",
+                deployer_config,
+            )
+
+        self.assertTrue(result)
+        has_image_mock.assert_not_called()
+        build_mock.assert_called_once_with("eclipse-edc/data-dashboard:local", deployer_config)
+        load_mock.assert_called_once_with("minikube", "eclipse-edc/data-dashboard:local")
+
     def test_prepare_level6_local_image_fails_when_ontology_hub_chart_does_not_use_local_tag(self):
         adapter = self._make_adapter()
         deployer_config = {"LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "true"}

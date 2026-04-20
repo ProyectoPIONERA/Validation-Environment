@@ -10,8 +10,8 @@ MANIFESTS_DIR="${MANIFESTS_DIR:-/tmp/inesdata-manifests}"
 OVERRIDES_DIR="$ADAPTER_DIR/build/local-overrides"
 
 DEFAULT_PLATFORM_DIR="$ROOT_DIR/inesdata-testing"
-if [[ ! -d "$DEFAULT_PLATFORM_DIR/dataspace" && -d "$ROOT_DIR/inesdata-deployment/dataspace" ]]; then
-  DEFAULT_PLATFORM_DIR="$ROOT_DIR/inesdata-deployment"
+if [[ ! -d "$DEFAULT_PLATFORM_DIR/dataspace" && -d "$ROOT_DIR/deployers/inesdata/dataspace" ]]; then
+  DEFAULT_PLATFORM_DIR="$ROOT_DIR/deployers/inesdata"
 fi
 
 PLATFORM_DIR="${PLATFORM_DIR:-$DEFAULT_PLATFORM_DIR}"
@@ -40,7 +40,7 @@ Usage: local_build_load_deploy.sh [--apply] [--manifest <path>] [--platform-dir 
 Options:
   --apply                     Execute build/load/deploy actions (default is dry-run).
   --manifest <path>           Use an existing build manifest TSV.
-  --platform-dir <path>       Path to local platform repo (default: ./inesdata-testing; fallback: ./inesdata-deployment).
+  --platform-dir <path>       Path to local INESData deployer artifacts (default: ./deployers/inesdata).
   --namespace <name>          Kubernetes namespace and dataspace name (default: demo).
   --minikube-profile <name>   Minikube profile name (default: minikube).
   --skip-build                Skip image build, use provided/latest manifest.

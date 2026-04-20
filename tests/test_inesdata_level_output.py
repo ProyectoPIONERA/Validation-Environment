@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -202,6 +203,23 @@ class InesdataLevelOutputTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(rendered.count("LEVEL 2 - DEPLOY COMMON SERVICES"), 1)
         self.assertNotIn("LEVEL 2 COMPLETE", rendered)
+
+    def test_deploy_infrastructure_fails_without_cloning_legacy_repository(self):
+        shutil.rmtree(self.config.repo_dir())
+        run = mock.Mock(return_value=object())
+        infrastructure = INESDataInfrastructureAdapter(
+            run=run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_wsl_docker_config = lambda: True
+
+        with self.assertRaisesRegex(RuntimeError, "no longer clones the legacy deployment repository"):
+            infrastructure.deploy_infrastructure()
+
+        self.assertFalse(any("git clone" in call.args[0] for call in run.call_args_list))
 
     def test_setup_vault_reuses_existing_keys_when_status_is_temporarily_unavailable(self):
         infrastructure = self._make_infrastructure()

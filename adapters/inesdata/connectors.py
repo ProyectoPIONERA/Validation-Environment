@@ -783,22 +783,22 @@ class INESDataConnectorsAdapter:
             print("\nConnector Credentials:")
             connector_user = creds.get("connector_user", {})
             print(f"  User: {connector_user.get('user', 'N/A')}")
-            print(f"  Password: {connector_user.get('passwd', 'N/A')}")
+            print(f"  Password: {'***REDACTED***' if connector_user.get('passwd') else 'N/A'}")
 
             print("\nDatabase Credentials:")
             db_creds = creds.get("database", {})
             print(f"  Database: {db_creds.get('name', 'N/A')}")
             print(f"  User: {db_creds.get('user', 'N/A')}")
-            print(f"  Password: {db_creds.get('passwd', 'N/A')}")
+            print(f"  Password: {'***REDACTED***' if db_creds.get('passwd') else 'N/A'}")
             print(f"  Host: {pg_host}")
             print(f"  DSN: postgresql://{pg_host}:5432/{db_creds.get('name', 'N/A')}")
 
             print("\nMinIO Credentials:")
             minio_creds = creds.get("minio", {})
             print(f"  User: {minio_creds.get('user', 'N/A')}")
-            print(f"  Password: {minio_creds.get('passwd', 'N/A')}")
-            print(f"  Access Key: {minio_creds.get('access_key', 'N/A')}")
-            print(f"  Secret Key: {minio_creds.get('secret_key', 'N/A')}")
+            print(f"  Password: {'***REDACTED***' if minio_creds.get('passwd') else 'N/A'}")
+            print(f"  Access Key: {'***REDACTED***' if minio_creds.get('access_key') else 'N/A'}")
+            print(f"  Secret Key: {'***REDACTED***' if minio_creds.get('secret_key') else 'N/A'}")
             if minio_hostname:
                 print(f"  API URL: http://{minio_hostname}")
             if domain_base:
@@ -831,11 +831,16 @@ class INESDataConnectorsAdapter:
 
         self.run(f"{mc} mc alias set minio {minio_endpoint} {minio_admin_user} {minio_admin_pass}", silent=True)
         self.run(f"{mc} mc mb minio/{ds_name}-{connector_name}", check=False)
-        self.run(f"{mc} mc admin user add minio {connector_name} {minio_creds.get('passwd')}", silent=True)
+        self.run(
+            f"{mc} mc admin user add minio {connector_name} {minio_creds.get('passwd')}",
+            capture=True,
+            silent=True,
+        )
         self.run(
             f"{mc} mc admin user svcacct add minio {connector_name} "
             f"--access-key {minio_creds.get('access_key')} --secret-key {minio_creds.get('secret_key')}",
-            silent=True
+            capture=True,
+            silent=True,
         )
 
         # Attach S3 policy to connector user (required for upload permissions) - FIX for BUG-001
@@ -1005,7 +1010,7 @@ class INESDataConnectorsAdapter:
         self.invalidate_management_api_token(connector_name)
 
         print(f"Cleaning connector: {connector_name}")
-        self.run(f"{python_exec} deployer.py connector delete {connector_name} {ds_name}", cwd=repo_dir, check=False)
+        self.run(f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}", cwd=repo_dir, check=False)
 
         release_name = f"{connector_name}-{ds_name}"
         ns = namespace or self.config.namespace_demo()
@@ -1057,7 +1062,7 @@ class INESDataConnectorsAdapter:
             return False
 
         print(f"Creating connector {connector_name}...")
-        create_cmd = f"{python_exec} deployer.py connector create {connector_name} {ds_name}"
+        create_cmd = f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
         create_result = None
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
@@ -1213,6 +1218,29 @@ class INESDataConnectorsAdapter:
 
         print("\nAll connectors reachable\n")
         return True
+
+    def validate_connectors_with_stabilization(self, connectors, retries=2, wait_seconds=20, backoff_factor=2):
+        """Retry connector validation after short stabilization waits with light backoff."""
+        if self.validate_connectors_deployment(connectors):
+            return True
+
+        retries = max(int(retries or 0), 0)
+        current_wait = max(int(wait_seconds or 0), 0)
+        backoff_factor = max(int(backoff_factor or 1), 1)
+
+        for attempt in range(1, retries + 1):
+            print(
+                f"\nConnector validation failed (attempt {attempt}/{retries + 1}). "
+                f"Waiting {current_wait}s for stabilization before retry..."
+            )
+            if current_wait > 0:
+                time.sleep(current_wait)
+            if self.validate_connectors_deployment(connectors):
+                print("Connector validation recovered after stabilization retry.")
+                return True
+            current_wait *= backoff_factor
+
+        return False
 
     def show_connector_logs(self):
         namespace = self.config.namespace_demo()
