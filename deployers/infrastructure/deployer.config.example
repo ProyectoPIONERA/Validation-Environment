@@ -1,0 +1,34 @@
+# Common local infrastructure configuration shared by deployers.
+# Copy this file to deployers/infrastructure/deployer.config and keep secrets out of Git.
+
+ENVIRONMENT=DEV
+
+# Keycloak
+KC_URL=http://keycloak-admin.dev.ed.dataspaceunit.upm
+KC_INTERNAL_URL=http://keycloak.dev.ed.dataspaceunit.upm
+KC_USER=admin
+KC_PASSWORD=change-me
+
+# PostgreSQL
+PG_HOST=localhost
+PG_USER=postgres
+PG_PASSWORD=change-me
+
+# MinIO
+MINIO_HOSTNAME=minio.dev.ed.dataspaceunit.upm
+MINIO_USER=admin
+MINIO_PASSWORD=change-me
+MINIO_ENDPOINT=http://127.0.0.1:9000
+MINIO_ADMIN_USER=admin
+MINIO_ADMIN_PASS=change-me
+
+# Vault
+VAULT_URL=http://127.0.0.1:8200
+VT_URL=http://127.0.0.1:8200
+VT_TOKEN=
+
+# Shared local domain
+DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm
+
+# Local tooling
+MINIKUBE_PROFILE=minikube
