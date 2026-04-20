@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-import inesdata
 from framework.experiment_storage import ExperimentStorage
 from framework.metrics_collector import MetricsCollector
+from validation.orchestration.runner import Level6Runtime, run_level6
 
 
 class KafkaBenchmarkSmokeTests(unittest.TestCase):
@@ -84,35 +84,69 @@ class KafkaBenchmarkSmokeTests(unittest.TestCase):
         self.assertIn("docker unavailable", stored["kafka_benchmark"]["reason"])
 
     def test_level6_persists_kafka_metrics_into_experiment_state(self):
-        original_isdir = os.path.isdir
         with tempfile.TemporaryDirectory() as tmpdir:
-            with (
-                mock.patch.object(inesdata.NEWMAN_EXECUTOR, "is_available", return_value=True),
-                mock.patch.object(inesdata, "get_connectors_from_cluster", return_value=["conn-a", "conn-b"]),
-                mock.patch.object(inesdata, "validate_connectors_deployment", return_value=True),
-                mock.patch.object(inesdata, "ensure_all_minio_policies", return_value=None),
-                mock.patch.object(inesdata.VALIDATION_ENGINE, "run_all_dataspace_tests", return_value=[]),
-                mock.patch.object(
-                    inesdata.LEVEL6_KAFKA_METRICS_COLLECTOR,
-                    "run_kafka_benchmark_experiment",
-                    return_value={
-                        "kafka_benchmark": {
-                            "status": "completed",
-                            "run_index": 1,
-                            "average_latency_ms": 8.5,
-                        },
-                        "broker_source": "external",
-                        "bootstrap_servers": "localhost:19092",
-                    },
-                ) as mock_kafka,
-                mock.patch.object(inesdata.ExperimentStorage, "create_experiment_directory", return_value=tmpdir),
-                mock.patch.object(
-                    inesdata.os.path,
-                    "isdir",
-                    side_effect=lambda path: False if path == os.path.join(inesdata.Config.script_dir(), "validation", "ui") else original_isdir(path),
-                ),
-            ):
-                inesdata.lvl_6()
+            kafka_payload = {
+                "kafka_benchmark": {
+                    "status": "completed",
+                    "run_index": 1,
+                    "average_latency_ms": 8.5,
+                },
+                "broker_source": "external",
+                "bootstrap_servers": "localhost:19092",
+            }
+            mock_kafka = mock.Mock(return_value=kafka_payload)
+            validation_engine = mock.Mock()
+            validation_engine.last_storage_checks = []
+            validation_engine.run_all_dataspace_tests.return_value = []
+            metrics_collector = mock.Mock()
+            metrics_collector.collect_experiment_newman_metrics.return_value = []
+
+            def save_experiment_state(experiment_dir, connectors, **kwargs):
+                payload = {
+                    "status": kwargs.get("status"),
+                    "connectors": list(connectors or []),
+                    "kafka_metrics": kwargs.get("kafka_metrics"),
+                    "newman_request_metrics": list(kwargs.get("newman_request_metrics") or []),
+                    "storage_checks": list(kwargs.get("storage_checks") or []),
+                    "ui_results": list(kwargs.get("ui_results") or []),
+                    "component_results": list(kwargs.get("component_results") or []),
+                }
+                ExperimentStorage.save(payload, experiment_dir=experiment_dir)
+                return payload
+
+            class FakeExperimentStorage(ExperimentStorage):
+                @classmethod
+                def create_experiment_directory(cls):
+                    return tmpdir
+
+            runtime = Level6Runtime(
+                newman_executor=mock.Mock(is_available=mock.Mock(return_value=True)),
+                ensure_connectors_ready=mock.Mock(return_value=["conn-a", "conn-b"]),
+                ensure_connector_hosts=mock.Mock(return_value=None),
+                validate_connectors_deployment=mock.Mock(return_value=True),
+                ensure_all_minio_policies=mock.Mock(return_value=None),
+                wait_for_keycloak_readiness=mock.Mock(return_value=True),
+                wait_for_validation_ready=mock.Mock(return_value={"status": "passed", "gates": []}),
+                validation_engine=validation_engine,
+                metrics_collector=metrics_collector,
+                experiment_storage=FakeExperimentStorage,
+                save_experiment_state=save_experiment_state,
+                should_run_kafka_edc_validation=mock.Mock(return_value=False),
+                run_kafka_edc_validation=mock.Mock(return_value=[]),
+                run_kafka_benchmark=mock_kafka,
+                should_run_ui_dataspace=mock.Mock(return_value=False),
+                should_run_ui_ops=mock.Mock(return_value=False),
+                should_run_component_validation=mock.Mock(return_value=False),
+                run_component_validations=mock.Mock(return_value=[]),
+                script_dir=mock.Mock(return_value=tmpdir),
+                load_connector_credentials=mock.Mock(return_value=None),
+                build_connector_url=mock.Mock(return_value=""),
+                run_ui_smoke=mock.Mock(return_value={}),
+                run_ui_dataspace=mock.Mock(return_value={}),
+                run_ui_ops=mock.Mock(return_value={}),
+            )
+
+            run_level6(runtime)
 
             with open(os.path.join(tmpdir, "experiment_results.json"), "r", encoding="utf-8") as handle:
                 stored = json.load(handle)

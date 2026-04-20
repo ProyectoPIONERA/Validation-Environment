@@ -1,0 +1,138 @@
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from validation.ui import interactive_menu
+
+
+class FakeInteractiveAdapter:
+    def get_cluster_connectors(self):
+        return ["conn-a", "conn-b"]
+
+    def load_connector_credentials(self, connector):
+        return {
+            "connector_user": {
+                "user": f"{connector}-user",
+                "passwd": "secret",
+            }
+        }
+
+    def build_connector_url(self, connector):
+        return f"http://{connector}.example.test/interface"
+
+    def load_deployer_config(self):
+        return {
+            "DS_1_NAME": "demo",
+            "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+        }
+
+
+class UiInteractiveMenuTests(unittest.TestCase):
+    @mock.patch.object(interactive_menu, "_run_ai_model_hub_ui_functional")
+    @mock.patch.object(interactive_menu, "_resolve_ui_mode", return_value={"label": "Normal", "args": [], "env": {}})
+    def test_run_ai_model_hub_ui_tests_interactive_routes_functional(
+        self,
+        _mock_resolve_mode,
+        mock_run_functional,
+    ):
+        with mock.patch("builtins.input", side_effect=["1"]):
+            interactive_menu.run_ai_model_hub_ui_tests_interactive()
+
+        mock_run_functional.assert_called_once_with({"label": "Normal", "args": [], "env": {}})
+
+    @mock.patch.object(interactive_menu, "run_ai_model_hub_ui_tests_interactive")
+    def test_run_inesdata_ui_tests_interactive_routes_ai_model_hub_to_submenu(self, mock_run_ai_model_hub_ui):
+        with mock.patch("builtins.input", side_effect=["3"]):
+            interactive_menu.run_inesdata_ui_tests_interactive()
+
+        mock_run_ai_model_hub_ui.assert_called_once()
+
+    @mock.patch.object(interactive_menu, "_cleanup_playwright_processes")
+    @mock.patch.object(interactive_menu.subprocess, "run")
+    @mock.patch.object(interactive_menu, "project_root")
+    @mock.patch.object(interactive_menu, "_resolve_ai_model_hub_base_url", return_value="http://example.test")
+    def test_run_ai_model_hub_ui_functional_uses_absolute_artifact_paths(
+        self,
+        _mock_resolve_base_url,
+        mock_project_root,
+        mock_subprocess_run,
+        _mock_cleanup,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_root.return_value = Path(tmpdir)
+            mock_subprocess_run.return_value = mock.Mock(returncode=0)
+
+            interactive_menu._run_ai_model_hub_ui_functional({"label": "Normal", "args": [], "env": {}})
+
+            mock_subprocess_run.assert_called_once()
+            env = mock_subprocess_run.call_args.kwargs["env"]
+            cwd = mock_subprocess_run.call_args.kwargs["cwd"]
+            base_experiments_dir = os.path.join(tmpdir, "experiments")
+
+            self.assertEqual(cwd, os.path.join(tmpdir, "validation", "ui"))
+            self.assertTrue(env["PLAYWRIGHT_OUTPUT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_HTML_REPORT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_BLOB_REPORT_DIR"].startswith(base_experiments_dir))
+            self.assertTrue(env["PLAYWRIGHT_JSON_REPORT_FILE"].startswith(base_experiments_dir))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_OUTPUT_DIR"]))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_HTML_REPORT_DIR"]))
+            self.assertTrue(os.path.isdir(env["PLAYWRIGHT_BLOB_REPORT_DIR"]))
+
+    def test_run_core_ui_tests_routes_smoke_dataspace_and_ops_suites(self):
+        mode = {"label": "Live", "args": ["--headed"], "env": {"PWDEBUG": "0"}}
+        smoke_result_a = {"test": "ui-core-smoke", "status": "passed"}
+        smoke_result_b = {"test": "ui-core-smoke", "status": "passed"}
+        dataspace_result = {"test": "ui-core-dataspace", "status": "passed"}
+        ops_result = {"test": "ui-ops-minio-console", "status": "passed"}
+
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            interactive_menu.ExperimentStorage,
+            "create_experiment_directory",
+            return_value=tmpdir,
+        ), mock.patch.object(
+            interactive_menu.ExperimentStorage,
+            "save",
+            return_value=None,
+        ), mock.patch.object(
+            interactive_menu,
+            "_level6_ui_ops_suite_available",
+            return_value=True,
+        ), mock.patch.object(
+            interactive_menu,
+            "_aggregate_level6_ui_results",
+            return_value={"summary": {"passed": 4}},
+        ) as mock_aggregate, mock.patch.object(
+            interactive_menu,
+            "_run_level6_ui_smoke",
+            side_effect=[smoke_result_a, smoke_result_b],
+        ) as mock_smoke, mock.patch.object(
+            interactive_menu,
+            "_run_level6_ui_dataspace",
+            return_value=dataspace_result,
+        ) as mock_dataspace, mock.patch.object(
+            interactive_menu,
+            "_run_level6_ui_ops",
+            return_value=ops_result,
+        ) as mock_ops:
+            payload = interactive_menu._run_core_ui_tests(mode, adapter=FakeInteractiveAdapter())
+
+        self.assertEqual(mock_smoke.call_count, 2)
+        self.assertEqual(mock_dataspace.call_count, 1)
+        self.assertEqual(mock_ops.call_count, 1)
+        self.assertEqual(mock_smoke.call_args.kwargs["extra_args"], ["--headed"])
+        self.assertEqual(mock_smoke.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        self.assertEqual(mock_dataspace.call_args.kwargs["extra_args"], ["--headed"])
+        self.assertEqual(mock_dataspace.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        self.assertEqual(mock_ops.call_args.kwargs["extra_args"], ["--headed"])
+        self.assertEqual(mock_ops.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        mock_aggregate.assert_called_once()
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["mode"], "Live")
+        self.assertEqual(len(payload["ui_results"]), 4)
+        self.assertEqual(payload["ui_results"][3]["test"], "ui-ops-minio-console")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -26,11 +26,24 @@ ensure_runtime_dependencies(
     requirements_path=os.path.join(os.path.dirname(__file__), "requirements.txt"),
     module_names=("yaml", "requests", "tabulate", "ruamel.yaml", "minio", "kafka"),
     label="legacy INESData entrypoint",
+    module_requirements={
+        "yaml": "PyYAML",
+        "requests": "requests",
+        "tabulate": "tabulate",
+        "ruamel.yaml": "ruamel.yaml",
+        "minio": "minio",
+        "kafka": "kafka-python",
+    },
 )
 
 import yaml
 import requests
 import main as framework_cli
+from deployers.infrastructure.lib.paths import (
+    legacy_deployer_artifact_dir,
+    resolve_shared_artifact_dir,
+    use_shared_deployer_artifacts,
+)
 from tabulate import tabulate
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
@@ -41,6 +54,13 @@ from framework.transfer_storage_verifier import TransferStorageVerifier
 from framework.validation_engine import ValidationEngine
 from framework.metrics_collector import MetricsCollector
 from adapters.inesdata import InesdataAdapter, InesdataConfig
+from validation.orchestration import components as level6_components
+from validation.orchestration import hosts as level6_hosts
+from validation.orchestration import kafka as level6_kafka
+from validation.orchestration import readiness as level6_readiness
+from validation.orchestration.runner import Level6Runtime, run_level6 as run_level6_validation
+from validation.orchestration import state as level6_state
+from validation.orchestration import ui as level6_ui
 
 
 
@@ -52,8 +72,8 @@ class Config:
     """Centralized technical configuration."""
 
     # Deployment
-    REPO_URL = "https://github.com/ProyectoPIONERA/inesdata-deployment.git"
-    REPO_DIR = "inesdata-deployment"
+    REPO_DIR = os.path.join("deployers", "inesdata")
+    ADAPTER_NAME = "inesdata"
     DS_NAME = "demo"
     NS_COMMON = "common-srvs"
 
@@ -95,19 +115,99 @@ class Config:
 
     @classmethod
     def common_dir(cls):
-        return os.path.join(cls.repo_dir(), "common")
+        return resolve_shared_artifact_dir("common", required_file="Chart.yaml")
 
     @classmethod
     def values_path(cls):
+        if cls.use_shared_deployer_artifacts():
+            return os.path.join(cls.shared_runtime_dir("common"), "values.yaml")
         return os.path.join(cls.common_dir(), "values.yaml")
 
     @classmethod
+    def common_values_source_path(cls):
+        return os.path.join(cls.common_dir(), "values.yaml")
+
+    @classmethod
+    def ensure_common_values_file(cls):
+        values_path = cls.values_path()
+        if not cls.use_shared_deployer_artifacts():
+            return values_path
+
+        source_path = cls.common_values_source_path()
+        if not os.path.exists(values_path) and os.path.exists(source_path):
+            os.makedirs(os.path.dirname(values_path), exist_ok=True)
+            shutil.copy2(source_path, values_path)
+        return values_path
+
+    @classmethod
     def deployer_config_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", cls.ADAPTER_NAME, "deployer.config")
+
+    @classmethod
+    def deployer_config_example_path(cls):
+        return os.path.join(cls.script_dir(), "deployers", cls.ADAPTER_NAME, "deployer.config.example")
+
+    @classmethod
+    def legacy_deployer_config_path(cls):
         return os.path.join(cls.repo_dir(), "deployer.config")
 
     @classmethod
     def vault_keys_path(cls):
+        if cls.use_shared_deployer_artifacts():
+            return cls.vault_keys_runtime_path()
         return os.path.join(cls.common_dir(), "init-keys-vault.json")
+
+    @classmethod
+    def vault_keys_runtime_path(cls):
+        return os.path.join(cls.shared_runtime_dir("common"), "init-keys-vault.json")
+
+    @classmethod
+    def legacy_vault_keys_path(cls):
+        return str(legacy_deployer_artifact_dir("inesdata", "common", "init-keys-vault.json"))
+
+    @classmethod
+    def ensure_vault_keys_file(cls):
+        vault_keys_path = cls.vault_keys_path()
+        if not cls.use_shared_deployer_artifacts():
+            return vault_keys_path
+
+        if os.path.exists(vault_keys_path):
+            return vault_keys_path
+
+        legacy_path = cls.legacy_vault_keys_path()
+        if os.path.exists(legacy_path):
+            os.makedirs(os.path.dirname(vault_keys_path), exist_ok=True)
+            shutil.copy2(legacy_path, vault_keys_path)
+        return vault_keys_path
+
+    @classmethod
+    def adapter_name(cls):
+        return str(getattr(cls, "ADAPTER_NAME", "inesdata") or "inesdata").strip().lower()
+
+    @classmethod
+    def use_shared_deployer_artifacts(cls):
+        return use_shared_deployer_artifacts()
+
+    @classmethod
+    def deployment_environment_name(cls):
+        config = load_deployer_config() if "load_deployer_config" in globals() else {}
+        environment = str((config or {}).get("ENVIRONMENT", "DEV")).strip().upper()
+        return environment or "DEV"
+
+    @classmethod
+    def deployment_runtime_dir(cls):
+        return os.path.join(
+            cls.script_dir(),
+            "deployers",
+            cls.adapter_name(),
+            "deployments",
+            cls.deployment_environment_name(),
+            cls.DS_NAME,
+        )
+
+    @classmethod
+    def shared_runtime_dir(cls, *parts):
+        return os.path.join(cls.deployment_runtime_dir(), "shared", *parts)
 
     @classmethod
     def venv_path(cls):
@@ -131,14 +231,34 @@ class Config:
 
     @classmethod
     def registration_service_dir(cls):
-        return os.path.join(cls.repo_dir(), "dataspace", "registration-service")
+        return resolve_shared_artifact_dir("dataspace", "registration-service", required_file="Chart.yaml")
 
     @classmethod
     def registration_values_file(cls):
-        return os.path.join(
-            cls.registration_service_dir(),
-            f"values-{cls.DS_NAME}.yaml"
-        )
+        values_name = f"values-{cls.DS_NAME}.yaml"
+        if cls.use_shared_deployer_artifacts():
+            return os.path.join(cls.shared_runtime_dir("dataspace", "registration-service"), values_name)
+        return os.path.join(cls.registration_service_dir(), values_name)
+
+    @classmethod
+    def legacy_registration_service_dir(cls):
+        return str(legacy_deployer_artifact_dir("inesdata", "dataspace", "registration-service"))
+
+    @classmethod
+    def legacy_registration_values_file(cls):
+        return os.path.join(cls.legacy_registration_service_dir(), f"values-{cls.DS_NAME}.yaml")
+
+    @classmethod
+    def ensure_registration_values_file(cls, refresh=False):
+        values_file = cls.registration_values_file()
+        if not cls.use_shared_deployer_artifacts():
+            return values_file
+
+        source_file = cls.legacy_registration_values_file()
+        if (refresh or not os.path.exists(values_file)) and os.path.exists(source_file):
+            os.makedirs(os.path.dirname(values_file), exist_ok=True)
+            shutil.copy2(source_file, values_file)
+        return values_file
 
     @classmethod
     def registration_db_name(cls):
@@ -805,7 +925,7 @@ def create_connectors(connector_name):
     print(f"Cleaning connector: {connector_name}")
 
     run(
-        f"{python_exec} deployer.py connector delete {connector_name} {ds_name}",
+        f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}",
         cwd=repo_dir,
         check=False
     )
@@ -833,7 +953,7 @@ def create_connectors(connector_name):
     print(f"Creating connector {connector_name}...")
 
     if run(
-        f"{python_exec} deployer.py connector create {connector_name} {ds_name}",
+        f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}",
         cwd=repo_dir
     ) is None:
         print("Error: deployment failed")
@@ -897,20 +1017,23 @@ def create_connectors(connector_name):
 
 def copy_local_deployer_config():
     """
-    Replace repository deployer.config with the local deployer.config
-    located next to this script.
+    Replace repository deployer.config with the INESData deployer config.
     """
 
-    local_config = os.path.join(Config.script_dir(), "deployer.config")
-    repo_config = Config.deployer_config_path()
+    local_config = Config.deployer_config_path()
+    repo_config = Config.legacy_deployer_config_path()
 
     if not os.path.exists(local_config):
-        print("Local deployer.config not found. Skipping copy.")
+        print(f"Local INESData deployer.config not found: {local_config}. Skipping copy.")
         return False
 
+    if os.path.abspath(local_config) == os.path.abspath(repo_config):
+        return True
+
     try:
+        os.makedirs(os.path.dirname(repo_config), exist_ok=True)
         shutil.copy2(local_config, repo_config)
-        print("Local deployer.config copied into repository\n")
+        print("Local INESData deployer.config copied into repository\n")
         return True
 
     except Exception as e:
@@ -1292,30 +1415,13 @@ lvl_3 = INESDATA_ADAPTER.deploy_dataspace
 
 
 def _validate_connectors_with_stabilization(connectors, retries=2, wait_seconds=20, backoff_factor=2):
-    """Retry connector validation after short stabilization waits with light backoff.
-
-    This avoids false negatives immediately after rollout operations.
-    """
-    if validate_connectors_deployment(connectors):
-        return True
-
-    retries = max(int(retries or 0), 0)
-    current_wait = max(int(wait_seconds or 0), 0)
-    backoff_factor = max(int(backoff_factor or 1), 1)
-
-    for attempt in range(1, retries + 1):
-        print(
-            f"\nConnector validation failed (attempt {attempt}/{retries + 1}). "
-            f"Waiting {current_wait}s for stabilization before retry..."
-        )
-        if current_wait > 0:
-            time.sleep(current_wait)
-        if validate_connectors_deployment(connectors):
-            print("Connector validation recovered after stabilization retry.")
-            return True
-        current_wait *= backoff_factor
-
-    return False
+    """Legacy wrapper for connector stabilization now owned by the INESData adapter."""
+    return INESDATA_ADAPTER.connectors.validate_connectors_with_stabilization(
+        connectors,
+        retries=retries,
+        wait_seconds=wait_seconds,
+        backoff_factor=backoff_factor,
+    )
 
 
 def lvl_4():
@@ -1909,28 +2015,23 @@ def _save_level6_experiment_state(
     component_results=None,
     error=None,
 ):
-    ui_validation = _aggregate_level6_ui_results(
-        ui_results or [],
-        experiment_dir=experiment_dir,
+    return level6_state.save_level6_experiment_state(
+        experiment_dir,
+        connectors,
+        status=status,
+        experiment_storage=ExperimentStorage,
+        aggregate_ui_results=_aggregate_level6_ui_results,
+        source="inesdata.py:level6",
+        level6_readiness=level6_readiness,
+        validation_reports=validation_reports,
+        newman_request_metrics=newman_request_metrics,
+        kafka_metrics=kafka_metrics,
+        kafka_edc_results=kafka_edc_results,
+        storage_checks=storage_checks,
+        ui_results=ui_results,
+        component_results=component_results,
+        error=error,
     )
-    payload = {
-        "status": status,
-        "timestamp": datetime.now().isoformat(),
-        "source": "inesdata.py:level6",
-        "connectors": list(connectors or []),
-        "level6_readiness": level6_readiness,
-        "validation_reports": list(validation_reports or []),
-        "newman_request_metrics": list(newman_request_metrics or []),
-        "kafka_metrics": kafka_metrics,
-        "kafka_edc_results": list(kafka_edc_results or []),
-        "storage_checks": list(storage_checks or []),
-        "ui_results": list(ui_results or []),
-        "ui_validation": ui_validation,
-        "component_results": list(component_results or []),
-        "error": error,
-    }
-    ExperimentStorage.save(payload, experiment_dir=experiment_dir)
-    return payload
 
 
 def _save_interactive_core_ui_experiment_state(
@@ -1940,21 +2041,15 @@ def _save_interactive_core_ui_experiment_state(
     mode,
     ui_results=None,
 ):
-    ui_validation = _aggregate_level6_ui_results(
-        ui_results or [],
-        experiment_dir=experiment_dir,
+    return level6_state.save_interactive_core_ui_experiment_state(
+        experiment_dir,
+        connectors,
+        mode=mode,
+        experiment_storage=ExperimentStorage,
+        aggregate_ui_results=_aggregate_level6_ui_results,
+        source="inesdata.py:interactive-core-ui",
+        ui_results=ui_results,
     )
-    payload = {
-        "status": "completed",
-        "timestamp": datetime.now().isoformat(),
-        "source": "inesdata.py:interactive-core-ui",
-        "mode": (mode or {}).get("label"),
-        "connectors": list(connectors or []),
-        "ui_results": list(ui_results or []),
-        "ui_validation": ui_validation,
-    }
-    ExperimentStorage.save(payload, experiment_dir=experiment_dir)
-    return payload
 
 
 def _run_level6_kafka_benchmark(experiment_dir):
@@ -1985,19 +2080,10 @@ LEVEL6_KAFKA_EDC_VALIDATOR = KafkaEdcValidationSuite(
 )
 
 
-LEVEL6_UI_SMOKE_SPECS = (
-    os.path.join("core", "01-login-readiness.spec.ts"),
-    os.path.join("core", "04-consumer-catalog.spec.ts"),
-)
-LEVEL6_UI_DATASPACE_SPECS = (
-    os.path.join("core", "03-provider-setup.spec.ts"),
-    os.path.join("core", "03b-provider-policy-create.spec.ts"),
-    os.path.join("core", "03c-provider-contract-definition-create.spec.ts"),
-    os.path.join("core", "05-consumer-negotiation.spec.ts"),
-    os.path.join("core", "06-consumer-transfer.spec.ts"),
-)
-LEVEL6_UI_OPS_SPEC = os.path.join("ops", "minio-bucket-visibility.spec.ts")
-LEVEL6_UI_OPS_CONFIG = "playwright.ops.config.ts"
+LEVEL6_UI_SMOKE_SPECS = level6_ui.LEVEL6_UI_SMOKE_SPECS
+LEVEL6_UI_DATASPACE_SPECS = level6_ui.LEVEL6_UI_DATASPACE_SPECS
+LEVEL6_UI_OPS_SPEC = level6_ui.LEVEL6_UI_OPS_SPEC
+LEVEL6_UI_OPS_CONFIG = level6_ui.LEVEL6_UI_OPS_CONFIG
 
 
 def _env_flag_enabled(name, default=False):
@@ -2021,9 +2107,7 @@ def _config_or_env_flag_enabled(name, default=False):
 
 
 def _level6_ui_ops_suite_available(ui_test_dir):
-    spec_path = os.path.join(ui_test_dir, LEVEL6_UI_OPS_SPEC)
-    config_path = os.path.join(ui_test_dir, LEVEL6_UI_OPS_CONFIG)
-    return os.path.isfile(spec_path) and os.path.isfile(config_path)
+    return level6_ui.ui_ops_suite_available(ui_test_dir)
 
 
 def _should_run_level6_ui_ops(ui_test_dir):
@@ -2043,57 +2127,19 @@ def _should_run_level6_ui_ops(ui_test_dir):
 
 
 def _build_level6_ui_artifact_paths(experiment_dir, connector):
-    base_dir = os.path.join(experiment_dir, "ui", connector)
-    paths = {
-        "base_dir": base_dir,
-        "output_dir": os.path.join(base_dir, "test-results"),
-        "html_report_dir": os.path.join(base_dir, "playwright-report"),
-        "blob_report_dir": os.path.join(base_dir, "blob-report"),
-        "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ui_core_validation.json"),
-    }
-    for path in paths.values():
-        if path.endswith(".json"):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        else:
-            os.makedirs(path, exist_ok=True)
-    return paths
+    return level6_ui.build_ui_artifact_paths(experiment_dir, connector)
 
 
 def _build_level6_ui_ops_artifact_paths(experiment_dir):
-    base_dir = os.path.join(experiment_dir, "ui-ops", "minio-console")
-    paths = {
-        "base_dir": base_dir,
-        "output_dir": os.path.join(base_dir, "test-results"),
-        "html_report_dir": os.path.join(base_dir, "playwright-report"),
-        "blob_report_dir": os.path.join(base_dir, "blob-report"),
-        "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ui_ops_validation.json"),
-    }
-    for path in paths.values():
-        if path.endswith(".json"):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        else:
-            os.makedirs(path, exist_ok=True)
-    return paths
+    return level6_ui.build_ui_ops_artifact_paths(experiment_dir)
 
 
 def _build_level6_ui_dataspace_artifact_paths(experiment_dir, provider_connector, consumer_connector):
-    base_dir = os.path.join(experiment_dir, "ui-dataspace", f"{provider_connector}__{consumer_connector}")
-    paths = {
-        "base_dir": base_dir,
-        "output_dir": os.path.join(base_dir, "test-results"),
-        "html_report_dir": os.path.join(base_dir, "playwright-report"),
-        "blob_report_dir": os.path.join(base_dir, "blob-report"),
-        "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ui_dataspace_validation.json"),
-    }
-    for path in paths.values():
-        if path.endswith(".json"):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        else:
-            os.makedirs(path, exist_ok=True)
-    return paths
+    return level6_ui.build_ui_dataspace_artifact_paths(
+        experiment_dir,
+        provider_connector,
+        consumer_connector,
+    )
 
 
 def _run_level6_ui_smoke(
@@ -2106,58 +2152,19 @@ def _run_level6_ui_smoke(
     extra_args=None,
     extra_env=None,
 ):
-    artifact_paths = _build_level6_ui_artifact_paths(experiment_dir, connector)
-    env = {
-        **os.environ,
-        "PORTAL_BASE_URL": portal_url,
-        "PORTAL_USER": portal_user,
-        "PORTAL_PASSWORD": portal_pass,
-        "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
-        "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
-        "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
-        "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
-    }
-    if extra_env:
-        env.update(extra_env)
-    specs = list(LEVEL6_UI_SMOKE_SPECS)
-    print(f"  Level 6 UI smoke profile for {connector}: {', '.join(specs)}")
-    command = ["npx", "playwright", "test", *specs]
-    if extra_args:
-        command.extend(extra_args)
-    error = None
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ui_test_dir,
-            env=env,
-        )
-        status = "passed" if result.returncode == 0 else "failed"
-        exit_code = result.returncode
-    except OSError as exc:
-        status = "skipped"
-        exit_code = None
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-        }
-
-    result = {
-        "connector": connector,
-        "test": "ui-core-smoke",
-        "status": status,
-        "exit_code": exit_code,
-        "portal_url": portal_url,
-        "specs": specs,
-        "artifacts": {
-            "test_results_dir": artifact_paths["output_dir"],
-            "html_report_dir": artifact_paths["html_report_dir"],
-            "blob_report_dir": artifact_paths["blob_report_dir"],
-            "json_report_file": artifact_paths["json_report_file"],
-            "report_json": artifact_paths["report_json"],
-        },
-        "error": error,
-    }
-    return _enrich_level6_ui_result(result)
+    return level6_ui.run_ui_smoke(
+        ui_test_dir,
+        connector,
+        portal_url,
+        portal_user,
+        portal_pass,
+        experiment_dir,
+        subprocess_module=subprocess,
+        enrich_result=_enrich_level6_ui_result,
+        environment=os.environ,
+        extra_args=extra_args,
+        extra_env=extra_env,
+    )
 
 
 def _run_level6_ui_dataspace(
@@ -2168,70 +2175,17 @@ def _run_level6_ui_dataspace(
     extra_args=None,
     extra_env=None,
 ):
-    artifact_paths = _build_level6_ui_dataspace_artifact_paths(
-        experiment_dir,
+    return level6_ui.run_ui_dataspace(
+        ui_test_dir,
         provider_connector,
         consumer_connector,
+        experiment_dir,
+        subprocess_module=subprocess,
+        enrich_result=_enrich_level6_ui_result,
+        environment=os.environ,
+        extra_args=extra_args,
+        extra_env=extra_env,
     )
-    env = {
-        **os.environ,
-        "UI_PROVIDER_CONNECTOR": provider_connector,
-        "UI_CONSUMER_CONNECTOR": consumer_connector,
-        # Level 6 validates the end-to-end publication flow, not upload stress limits.
-        # A smaller default fixture keeps the UI upload deterministic on shared clusters
-        # while still exercising the real storage/upload path.
-        "PORTAL_TEST_FILE_MB": os.environ.get("PORTAL_TEST_FILE_MB") or "10",
-        "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
-        "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
-        "PLAYWRIGHT_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
-        "PLAYWRIGHT_JSON_REPORT_FILE": artifact_paths["json_report_file"],
-    }
-    if extra_env:
-        env.update(extra_env)
-    specs = list(LEVEL6_UI_DATASPACE_SPECS)
-    print(
-        f"  Level 6 UI dataspace profile for {provider_connector} -> "
-        f"{consumer_connector}: {', '.join(specs)}"
-    )
-    # These flows share the same provider/consumer pair and stress catalog propagation.
-    # Running them serially in Level 6 avoids false negatives caused by concurrent UI workers.
-    command = ["npx", "playwright", "test", "--workers=1", *specs]
-    if extra_args:
-        command.extend(extra_args)
-    error = None
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ui_test_dir,
-            env=env,
-        )
-        status = "passed" if result.returncode == 0 else "failed"
-        exit_code = result.returncode
-    except OSError as exc:
-        status = "skipped"
-        exit_code = None
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-        }
-
-    result = {
-        "provider_connector": provider_connector,
-        "consumer_connector": consumer_connector,
-        "test": "ui-core-dataspace",
-        "status": status,
-        "exit_code": exit_code,
-        "specs": specs,
-        "artifacts": {
-            "test_results_dir": artifact_paths["output_dir"],
-            "html_report_dir": artifact_paths["html_report_dir"],
-            "blob_report_dir": artifact_paths["blob_report_dir"],
-            "json_report_file": artifact_paths["json_report_file"],
-            "report_json": artifact_paths["report_json"],
-        },
-        "error": error,
-    }
-    return _enrich_level6_ui_result(result)
 
 
 def _wait_for_level6_keycloak_readiness() -> bool:
@@ -2287,191 +2241,41 @@ def _level6_readiness_poll_interval_seconds():
 
 
 def _build_level6_management_health_payload():
-    return {
-        "@context": {
-            "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
-        },
-        "offset": 0,
-        "limit": 1,
-        "filterExpression": [],
-    }
+    return level6_readiness.build_management_health_payload()
 
 
 def _build_level6_catalog_payload(provider, consumer):
-    env_vars = VALIDATION_ENGINE.build_newman_env(provider, consumer)
-    return {
-        "@context": {
-            "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
-        },
-        "@type": "CatalogRequest",
-        "counterPartyAddress": env_vars["providerProtocolAddress"],
-        "counterPartyId": provider,
-        "protocol": "dataspace-protocol-http",
-        "querySpec": {
-            "offset": 0,
-            "limit": 1,
-            "filterExpression": [],
-        },
-    }
+    return level6_readiness.build_catalog_payload(provider, consumer, VALIDATION_ENGINE)
 
 
 def _probe_level6_management_api(connector):
-    headers = INESDATA_ADAPTER.connectors.get_management_api_headers(connector)
-    if not headers:
-        return False, "could not obtain management API token"
-
-    base_url = INESDATA_ADAPTER.connectors.connector_base_url(connector)
-    response = requests.post(
-        f"{base_url}/management/v3/assets/request",
-        headers=headers,
-        json=_build_level6_management_health_payload(),
-        timeout=5,
+    return level6_readiness.probe_management_api(
+        connector,
+        connectors_adapter=INESDATA_ADAPTER.connectors,
+        requests_module=requests,
     )
-    if response.status_code != 200:
-        return False, f"HTTP {response.status_code}"
-
-    try:
-        body = response.json()
-    except ValueError:
-        return False, "response body is not valid JSON"
-
-    if not isinstance(body, list):
-        return False, "management response is not a JSON array"
-
-    return True, {"items": len(body)}
 
 
 def _probe_level6_catalog(provider, consumer):
-    headers = INESDATA_ADAPTER.connectors.get_management_api_headers(consumer)
-    if not headers:
-        return False, "could not obtain consumer management API token"
-
-    consumer_base_url = INESDATA_ADAPTER.connectors.connector_base_url(consumer)
-    response = requests.post(
-        f"{consumer_base_url}/management/v3/catalog/request",
-        headers=headers,
-        json=_build_level6_catalog_payload(provider, consumer),
-        timeout=10,
+    return level6_readiness.probe_catalog(
+        provider,
+        consumer,
+        connectors_adapter=INESDATA_ADAPTER.connectors,
+        validation_engine=VALIDATION_ENGINE,
+        requests_module=requests,
     )
-    if response.status_code != 200:
-        return False, f"HTTP {response.status_code}"
-
-    try:
-        body = response.json()
-    except ValueError:
-        return False, "catalog response is not valid JSON"
-
-    if not isinstance(body, dict):
-        return False, "catalog response is not a JSON object"
-
-    datasets = body.get("dcat:dataset")
-    if datasets is None:
-        datasets = body.get("dataset")
-    if datasets is None:
-        return False, "catalog response missing dataset field"
-
-    if isinstance(datasets, list):
-        dataset_count = len(datasets)
-    elif isinstance(datasets, dict):
-        dataset_count = 1
-    else:
-        dataset_count = 0
-
-    return True, {"datasets": dataset_count}
 
 
 def _wait_for_level6_validation_ready(connectors, experiment_dir=None):
-    timeout_seconds = _level6_readiness_timeout_seconds()
-    poll_interval_seconds = _level6_readiness_poll_interval_seconds()
-    started_at = time.time()
-    deadline = started_at + timeout_seconds
-    gates = []
-
-    pending_checks = []
-    for connector in connectors or []:
-        pending_checks.append({
-            "name": f"management_api_smoke:{connector}",
-            "probe": lambda connector_name=connector: _probe_level6_management_api(connector_name),
-            "attempts": 0,
-        })
-
-    for provider, consumer in permutations(connectors or [], 2):
-        pending_checks.append({
-            "name": f"catalog_smoke:{provider}->{consumer}",
-            "probe": lambda provider_name=provider, consumer_name=consumer: _probe_level6_catalog(provider_name, consumer_name),
-            "attempts": 0,
-        })
-
-    while pending_checks and time.time() <= deadline:
-        remaining_checks = []
-        for check in pending_checks:
-            check["attempts"] += 1
-            gate_started_at = time.time()
-            try:
-                passed, detail = check["probe"]()
-            except Exception as exc:
-                passed = False
-                detail = {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                }
-
-            if passed:
-                gates.append({
-                    "gate": check["name"],
-                    "status": "passed",
-                    "attempts": check["attempts"],
-                    "duration_seconds": round(time.time() - started_at, 3),
-                    "probe_duration_seconds": round(time.time() - gate_started_at, 3),
-                    "detail": detail,
-                })
-                continue
-
-            check["last_error"] = detail
-            remaining_checks.append(check)
-
-        pending_checks = remaining_checks
-        if pending_checks and time.time() <= deadline:
-            time.sleep(poll_interval_seconds)
-
-    for check in pending_checks:
-        gates.append({
-            "gate": check["name"],
-            "status": "failed",
-            "attempts": check["attempts"],
-            "duration_seconds": round(time.time() - started_at, 3),
-            "error": check.get("last_error"),
-        })
-
-    readiness = {
-        "status": "passed" if not pending_checks else "failed",
-        "timestamp": datetime.now().isoformat(),
-        "connectors": list(connectors or []),
-        "timeout_seconds": timeout_seconds,
-        "poll_interval_seconds": poll_interval_seconds,
-        "total_duration_seconds": round(time.time() - started_at, 3),
-        "gates": gates,
-    }
-
-    if experiment_dir:
-        ExperimentStorage.save(
-            readiness,
-            experiment_dir=experiment_dir,
-            file_name="level6_readiness.json",
-        )
-
-    if readiness["status"] == "passed":
-        print(
-            "Level 6 validation readiness confirmed in "
-            f"{readiness['total_duration_seconds']}s"
-        )
-    else:
-        print(
-            "Level 6 validation readiness did not converge within "
-            f"{timeout_seconds}s"
-        )
-
-    return readiness
+    return level6_readiness.wait_for_validation_ready(
+        connectors,
+        timeout_seconds=_level6_readiness_timeout_seconds(),
+        poll_interval_seconds=_level6_readiness_poll_interval_seconds(),
+        probe_management_api_fn=_probe_level6_management_api,
+        probe_catalog_fn=_probe_level6_catalog,
+        experiment_storage=ExperimentStorage,
+        experiment_dir=experiment_dir,
+    )
 
 
 def _run_level6_ui_ops(
@@ -2482,63 +2286,17 @@ def _run_level6_ui_ops(
     extra_args=None,
     extra_env=None,
 ):
-    artifact_paths = _build_level6_ui_ops_artifact_paths(experiment_dir)
-    env = {
-        **os.environ,
-        "UI_PROVIDER_CONNECTOR": provider_connector,
-        "UI_CONSUMER_CONNECTOR": consumer_connector,
-        "PLAYWRIGHT_OPS_OUTPUT_DIR": artifact_paths["output_dir"],
-        "PLAYWRIGHT_OPS_HTML_REPORT_DIR": artifact_paths["html_report_dir"],
-        "PLAYWRIGHT_OPS_BLOB_REPORT_DIR": artifact_paths["blob_report_dir"],
-        "PLAYWRIGHT_OPS_JSON_REPORT_FILE": artifact_paths["json_report_file"],
-    }
-    if extra_env:
-        env.update(extra_env)
-    command = [
-        "npx",
-        "playwright",
-        "test",
-        "--config",
-        LEVEL6_UI_OPS_CONFIG,
-        LEVEL6_UI_OPS_SPEC,
-    ]
-    if extra_args:
-        command.extend(extra_args)
-    error = None
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ui_test_dir,
-            env=env,
-        )
-        status = "passed" if result.returncode == 0 else "failed"
-        exit_code = result.returncode
-    except OSError as exc:
-        status = "skipped"
-        exit_code = None
-        error = {
-            "type": type(exc).__name__,
-            "message": str(exc),
-        }
-
-    result = {
-        "test": "ui-ops-minio-console",
-        "status": status,
-        "exit_code": exit_code,
-        "provider_connector": provider_connector,
-        "consumer_connector": consumer_connector,
-        "specs": [LEVEL6_UI_OPS_SPEC],
-        "playwright_config": LEVEL6_UI_OPS_CONFIG,
-        "artifacts": {
-            "test_results_dir": artifact_paths["output_dir"],
-            "html_report_dir": artifact_paths["html_report_dir"],
-            "blob_report_dir": artifact_paths["blob_report_dir"],
-            "json_report_file": artifact_paths["json_report_file"],
-            "report_json": artifact_paths["report_json"],
-        },
-        "error": error,
-    }
-    return _enrich_level6_ui_result(result)
+    return level6_ui.run_ui_ops(
+        ui_test_dir,
+        provider_connector,
+        consumer_connector,
+        experiment_dir,
+        subprocess_module=subprocess,
+        enrich_result=_enrich_level6_ui_result,
+        environment=os.environ,
+        extra_args=extra_args,
+        extra_env=extra_env,
+    )
 
 
 def _enrich_level6_ui_result(result):
@@ -2640,51 +2398,40 @@ def _aggregate_level6_ui_results(ui_results, experiment_dir):
 
 
 def _configured_optional_components():
-    deployer_config = load_deployer_config() or {}
-    raw = (deployer_config.get("COMPONENTS") or "").strip()
-    if not raw:
-        return []
-    return [token.strip().lower().replace("_", "-") for token in raw.split(",") if token.strip()]
+    return level6_components.configured_optional_components(load_deployer_config() or {})
 
 
 def _should_run_level6_kafka_edc_validation():
-    return _config_or_env_flag_enabled("LEVEL6_RUN_KAFKA_EDC", default=False)
+    return level6_kafka.should_run_kafka_edc_validation(
+        flag_enabled=_config_or_env_flag_enabled,
+    )
 
 
 def _run_level6_kafka_edc_validation(connectors, experiment_dir):
-    if len(connectors) < 2:
-        return [
-            {
-                "status": "skipped",
-                "reason": "not_enough_connectors",
-                "timestamp": datetime.now().isoformat(),
-            }
-        ]
-
-    results = LEVEL6_KAFKA_EDC_VALIDATOR.run_all(connectors, experiment_dir=experiment_dir) or []
-    ExperimentStorage.save_kafka_edc_results_json(results, experiment_dir)
-    return results
+    return level6_kafka.run_kafka_edc_validation(
+        connectors,
+        experiment_dir,
+        validator=LEVEL6_KAFKA_EDC_VALIDATOR,
+        experiment_storage=ExperimentStorage,
+    )
 
 
 def _should_run_level6_component_validation():
     components = _configured_optional_components()
-    if not components:
-        return False
-
-    raw = os.environ.get("LEVEL6_RUN_COMPONENT_VALIDATION")
-    if raw is None:
-        return True
-
-    return _env_flag_enabled("LEVEL6_RUN_COMPONENT_VALIDATION", default=True)
+    return level6_components.should_run_component_validation(
+        components,
+        env=os.environ,
+        env_flag_enabled=_env_flag_enabled,
+    )
 
 
 def _run_level6_component_validations(experiment_dir):
-    from adapters.inesdata.components import INESDataComponentsAdapter
-    from validation.components.runner import run_component_validations
-
     components = _configured_optional_components()
     if not components:
         return []
+
+    from adapters.inesdata.components import INESDataComponentsAdapter
+    from validation.components.runner import run_component_validations
 
     components_adapter = INESDataComponentsAdapter(
         run=run,
@@ -2694,54 +2441,30 @@ def _run_level6_component_validations(experiment_dir):
         config_adapter=INESDATA_ADAPTER.config_adapter,
         config_cls=InesdataConfig,
     )
-    component_urls = components_adapter.infer_component_urls(components)
-
-    results = run_component_validations(component_urls, experiment_dir=experiment_dir)
-    resolved_components = {result.get("component") for result in results}
-    for component in components:
-        if component not in resolved_components:
-            results.append(
-                {
-                    "component": component,
-                    "status": "skipped",
-                    "reason": "component_url_not_inferred",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-    return results
+    return level6_components.run_component_validations(
+        components,
+        infer_component_urls=components_adapter.infer_component_urls,
+        run_component_validations_fn=run_component_validations,
+        experiment_dir=experiment_dir,
+    )
 
 
 def _connector_hosts_resolve(connectors):
-    unresolved = []
-    domain = Config.ds_domain_base()
-    if not domain:
-        return unresolved
-
-    for connector in connectors or []:
-        host = f"{connector}.{domain}"
-        try:
-            socket.gethostbyname(host)
-        except OSError:
-            unresolved.append(host)
-
-    return unresolved
+    return level6_hosts.connector_hosts_resolve(
+        connectors,
+        domain=Config.ds_domain_base(),
+        resolver=socket.gethostbyname,
+    )
 
 
 def _ensure_level6_connector_hosts(connectors):
-    connector_hosts = INESDATA_ADAPTER.config_adapter.generate_connector_hosts(connectors)
-    if connector_hosts:
-        INESDATA_ADAPTER.infrastructure.manage_hosts_entries(
-            connector_hosts,
-            header_comment="# Dataspace Connector Hosts",
-        )
-
-    unresolved = _connector_hosts_resolve(connectors)
-    if unresolved:
-        joined = ", ".join(unresolved)
-        raise RuntimeError(
-            "Connector hostnames do not resolve locally. "
-            f"Check /etc/hosts and minikube tunnel for: {joined}"
-        )
+    return level6_hosts.ensure_connector_hosts(
+        connectors,
+        config_adapter=INESDATA_ADAPTER.config_adapter,
+        infrastructure_adapter=INESDATA_ADAPTER.infrastructure,
+        domain=Config.ds_domain_base(),
+        resolver=socket.gethostbyname,
+    )
 
 
 def _ensure_level6_connectors_ready():
@@ -2763,355 +2486,38 @@ def _ensure_level6_connectors_ready():
 # LEVEL 6 - VALIDATION TESTS
 # =========================================================
 
-def lvl_6():
-    """Level 6 - Run validation tests on deployed connectors."""
-    print("\n========================================")
-    print("LEVEL 6 - VALIDATION TESTS")
-    print("========================================\n")
-    
-    if not NEWMAN_EXECUTOR.is_available():
-        raise RuntimeError("Newman not installed. Install with: npm install or npm install -g newman")
-
-    connectors = _ensure_level6_connectors_ready()
-    
-    if not connectors:
-        raise RuntimeError("No connectors running after Vault recovery")
-
-    _ensure_level6_connector_hosts(connectors)
-    
-    if len(connectors) < 2:
-        raise RuntimeError("At least 2 connectors required")
-    
-    print(f"Detected connectors: {connectors}\n")
-    experiment_dir = ExperimentStorage.create_experiment_directory()
-    ExperimentStorage.save_experiment_metadata(experiment_dir, connectors)
-    ExperimentStorage.newman_reports_dir(experiment_dir)
-
-    validation_reports = []
-    newman_request_metrics = []
-    kafka_metrics = None
-    kafka_edc_results = []
-    storage_checks = []
-    level6_readiness = None
-    ui_results = []
-    component_results = []
-    _save_level6_experiment_state(
-        experiment_dir,
-        connectors,
-        status="running",
-        level6_readiness=level6_readiness,
-        validation_reports=validation_reports,
-        newman_request_metrics=newman_request_metrics,
-        kafka_metrics=kafka_metrics,
-        kafka_edc_results=kafka_edc_results,
-        storage_checks=storage_checks,
-        ui_results=ui_results,
-        component_results=component_results,
+def _build_level6_runtime():
+    return Level6Runtime(
+        newman_executor=NEWMAN_EXECUTOR,
+        ensure_connectors_ready=_ensure_level6_connectors_ready,
+        ensure_connector_hosts=_ensure_level6_connector_hosts,
+        validate_connectors_deployment=validate_connectors_deployment,
+        ensure_all_minio_policies=ensure_all_minio_policies,
+        wait_for_keycloak_readiness=_wait_for_level6_keycloak_readiness,
+        wait_for_validation_ready=_wait_for_level6_validation_ready,
+        validation_engine=VALIDATION_ENGINE,
+        metrics_collector=METRICS_COLLECTOR,
+        experiment_storage=ExperimentStorage,
+        save_experiment_state=_save_level6_experiment_state,
+        should_run_kafka_edc_validation=_should_run_level6_kafka_edc_validation,
+        run_kafka_edc_validation=_run_level6_kafka_edc_validation,
+        run_kafka_benchmark=_run_level6_kafka_benchmark,
+        should_run_ui_dataspace=lambda: _config_or_env_flag_enabled("LEVEL6_RUN_UI_DATASPACE", default=True),
+        should_run_ui_ops=_should_run_level6_ui_ops,
+        should_run_component_validation=_should_run_level6_component_validation,
+        run_component_validations=_run_level6_component_validations,
+        script_dir=Config.script_dir,
+        load_connector_credentials=load_connector_credentials,
+        build_connector_url=build_connector_url,
+        run_ui_smoke=_run_level6_ui_smoke,
+        run_ui_dataspace=_run_level6_ui_dataspace,
+        run_ui_ops=_run_level6_ui_ops,
     )
 
-    try:
-        if not validate_connectors_deployment(connectors):
-            raise RuntimeError("Connector deployment validation failed")
 
-        # Ensure MinIO S3 policies are attached for all connectors (idempotent, survives MinIO restarts)
-        ensure_all_minio_policies(connectors)
-
-        if not _wait_for_level6_keycloak_readiness():
-            raise RuntimeError("Keycloak authentication readiness check failed")
-
-        level6_readiness = _wait_for_level6_validation_ready(
-            connectors,
-            experiment_dir=experiment_dir,
-        )
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="running",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-        )
-        if level6_readiness.get("status") != "passed":
-            raise RuntimeError("Level 6 validation readiness check failed")
-
-        VALIDATION_ENGINE.last_storage_checks = []
-        validation_reports = VALIDATION_ENGINE.run_all_dataspace_tests(
-            connectors,
-            experiment_dir=experiment_dir,
-        ) or []
-        storage_checks = list(getattr(VALIDATION_ENGINE, "last_storage_checks", []) or [])
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="running",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-        )
-
-        newman_request_metrics = METRICS_COLLECTOR.collect_experiment_newman_metrics(experiment_dir) or []
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="running",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-        )
-
-        if _should_run_level6_kafka_edc_validation():
-            print("\nRunning optional EDC+Kafka transfer validation suite...")
-            kafka_edc_results = _run_level6_kafka_edc_validation(connectors, experiment_dir) or []
-            for result in kafka_edc_results:
-                provider = result.get("provider", "unknown-provider")
-                consumer = result.get("consumer", "unknown-consumer")
-                status = result.get("status", "unknown")
-                if status == "passed":
-                    print(f"  EDC+Kafka validation passed for {provider} -> {consumer}")
-                elif status == "failed":
-                    error = (result.get("error") or {}).get("message", "unknown reason")
-                    print(f"  Warning: EDC+Kafka validation failed for {provider} -> {consumer} ({error})")
-                else:
-                    reason = result.get("reason", "unknown reason")
-                    print(f"  EDC+Kafka validation skipped for {provider} -> {consumer} ({reason})")
-
-            _save_level6_experiment_state(
-                experiment_dir,
-                connectors,
-                status="running",
-                level6_readiness=level6_readiness,
-                validation_reports=validation_reports,
-                newman_request_metrics=newman_request_metrics,
-                kafka_metrics=kafka_metrics,
-                kafka_edc_results=kafka_edc_results,
-                storage_checks=storage_checks,
-                ui_results=ui_results,
-                component_results=component_results,
-            )
-
-        kafka_metrics = _run_level6_kafka_benchmark(experiment_dir)
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="running",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-        )
-
-        # Run the stable Playwright smoke suite for each connector
-        ui_test_dir = os.path.join(Config.script_dir(), "validation", "ui")
-        if os.path.isdir(ui_test_dir):
-            for connector in connectors:
-                creds = load_connector_credentials(connector)
-                if not creds:
-                    print(f"  No credentials for {connector}, skipping UI smoke tests")
-                    ui_results.append({
-                        "connector": connector,
-                        "test": "ui-core-smoke",
-                        "status": "skipped",
-                        "reason": "missing_credentials",
-                    })
-                    continue
-                portal_url = build_connector_url(connector)
-                portal_user = creds.get("connector_user", {}).get("user", "")
-                portal_pass = creds.get("connector_user", {}).get("passwd", "")
-                print(f"\nRunning UI core smoke suite for {connector}...")
-                ui_result = _run_level6_ui_smoke(
-                    ui_test_dir,
-                    connector,
-                    portal_url,
-                    portal_user,
-                    portal_pass,
-                    experiment_dir,
-                )
-                ui_results.append(ui_result)
-                if ui_result["status"] == "failed":
-                    print(
-                        f"  Warning: UI core smoke suite failed for {connector} "
-                        f"(exit {ui_result['exit_code']})"
-                    )
-                elif ui_result["status"] == "skipped":
-                    skip_reason = (ui_result.get("error") or {}).get("message", "unknown reason")
-                    print(f"  Warning: UI core smoke suite skipped for {connector} ({skip_reason})")
-                else:
-                    print(f"  UI core smoke suite passed for {connector}")
-
-            if _config_or_env_flag_enabled("LEVEL6_RUN_UI_DATASPACE", default=True):
-                if len(connectors) < 2:
-                    print("Warning: not enough connectors for UI dataspace suite — skipping")
-                    ui_results.append({
-                        "test": "ui-core-dataspace",
-                        "status": "skipped",
-                        "reason": "not_enough_connectors",
-                    })
-                else:
-                    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
-                    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
-                        (connector for connector in connectors if connector != provider_connector),
-                        connectors[1],
-                    )
-                    print(
-                        f"\nRunning UI dataspace suite for "
-                        f"{provider_connector} -> {consumer_connector}..."
-                    )
-                    ui_result = _run_level6_ui_dataspace(
-                        ui_test_dir,
-                        provider_connector,
-                        consumer_connector,
-                        experiment_dir,
-                    )
-                    ui_results.append(ui_result)
-                    if ui_result["status"] == "failed":
-                        print(
-                            f"  Warning: UI dataspace suite failed for "
-                            f"{provider_connector} -> {consumer_connector} "
-                            f"(exit {ui_result['exit_code']})"
-                        )
-                    elif ui_result["status"] == "skipped":
-                        skip_reason = (ui_result.get("error") or {}).get("message", "unknown reason")
-                        print(
-                            f"  Warning: UI dataspace suite skipped for "
-                            f"{provider_connector} -> {consumer_connector} ({skip_reason})"
-                        )
-                    else:
-                        print(
-                            f"  UI dataspace suite passed for "
-                            f"{provider_connector} -> {consumer_connector}"
-                        )
-
-            if _should_run_level6_ui_ops(ui_test_dir):
-                if len(connectors) < 2:
-                    print("Warning: not enough connectors for UI ops MinIO suite — skipping")
-                    ui_results.append({
-                        "test": "ui-ops-minio-console",
-                        "status": "skipped",
-                        "reason": "not_enough_connectors",
-                    })
-                else:
-                    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
-                    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
-                        (connector for connector in connectors if connector != provider_connector),
-                        connectors[1],
-                    )
-                    print(
-                        f"\nRunning UI ops MinIO suite for "
-                        f"{provider_connector} -> {consumer_connector}..."
-                    )
-                    ui_ops_result = _run_level6_ui_ops(
-                        ui_test_dir,
-                        provider_connector,
-                        consumer_connector,
-                        experiment_dir,
-                    )
-                    ui_results.append(ui_ops_result)
-                    if ui_ops_result["status"] == "failed":
-                        print(
-                            "  Warning: UI ops MinIO suite failed "
-                            f"(exit {ui_ops_result['exit_code']})"
-                        )
-                    elif ui_ops_result["status"] == "skipped":
-                        skip_reason = (ui_ops_result.get("error") or {}).get("message", "unknown reason")
-                        print(f"  Warning: UI ops MinIO suite skipped ({skip_reason})")
-                    else:
-                        print("  UI ops MinIO suite passed")
-        else:
-            print("Warning: validation/ui directory not found — skipping UI smoke tests")
-
-        if _should_run_level6_component_validation():
-            print("\nRunning component validation suite...")
-            try:
-                component_results = _run_level6_component_validations(experiment_dir) or []
-            except Exception as exc:
-                component_results = [
-                    {
-                        "component": "_component-validation",
-                        "status": "failed",
-                        "error": {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                        },
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                ]
-
-            for result in component_results:
-                component = result.get("component", "unknown-component")
-                status = result.get("status", "unknown")
-                if status == "passed":
-                    print(f"  Component validation passed for {component}")
-                elif status == "failed":
-                    print(f"  Warning: component validation failed for {component}")
-                else:
-                    reason = result.get("reason") or (result.get("error") or {}).get("message", "unknown reason")
-                    print(f"  Component validation skipped for {component} ({reason})")
-
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="completed",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-        )
-    except Exception as exc:
-        if not newman_request_metrics:
-            try:
-                newman_request_metrics = METRICS_COLLECTOR.collect_experiment_newman_metrics(experiment_dir) or []
-            except Exception as metrics_exc:
-                print(f"[WARNING] Newman metrics collection failed during Level 6 error handling: {metrics_exc}")
-        if kafka_metrics is None:
-            try:
-                kafka_metrics = _run_level6_kafka_benchmark(experiment_dir)
-            except Exception as kafka_exc:
-                print(f"[WARNING] Kafka benchmark failed during Level 6 error handling: {kafka_exc}")
-        _save_level6_experiment_state(
-            experiment_dir,
-            connectors,
-            status="failed",
-            level6_readiness=level6_readiness,
-            validation_reports=validation_reports,
-            newman_request_metrics=newman_request_metrics,
-            kafka_metrics=kafka_metrics,
-            kafka_edc_results=kafka_edc_results,
-            storage_checks=storage_checks,
-            ui_results=ui_results,
-            component_results=component_results,
-            error={
-                "type": type(exc).__name__,
-                "message": str(exc),
-            },
-        )
-        raise
-
-    print("\n========================================")
-    print("VALIDATION COMPLETED")
-    print("========================================\n")
+def lvl_6():
+    """Level 6 - Run validation tests on deployed connectors."""
+    return run_level6_validation(_build_level6_runtime())
 
 
 # =========================================================
@@ -3167,8 +2573,8 @@ def _maybe_seed_ai_model_hub_assets(deployed_components):
 def lvl_5():
     """Level 5 - Deploy optional component services via Helm charts.
 
-    Uses Helm charts discovered in the platform repo (inesdata-deployment) under:
-    - components/<component>/
+    Uses Helm charts discovered in the shared deployer artifacts under:
+    - deployers/shared/components/<component>/
 
     The default selection can be provided via deployer.config:
     - COMPONENTS=ontology-hub,ai-model-hub,semantic-virtualization
@@ -3179,7 +2585,7 @@ def lvl_5():
     print("LEVEL 5 - DEPLOY COMPONENTS")
     print("========================================\n")
 
-    # Keep platform repo deployer.config in sync with the local one.
+    # Keep the INESData deployer runtime config in sync with the local one.
     try:
         import contextlib
         import io
@@ -3213,8 +2619,8 @@ def lvl_5():
 
     if not available:
         raise RuntimeError(
-            "COMPONENTS is set but no component charts were discovered in inesdata-deployment. "
-            "Update the platform repo (git pull) or re-run Level 2."
+            "COMPONENTS is set but no component charts were discovered in deployers/shared/components. "
+            "Verify that the shared deployer artifacts are present in this repository checkout."
         )
 
     print("Components to deploy:")
@@ -3449,13 +2855,13 @@ def _resolve_local_image_override_config():
 
 
 def _local_deployer_config_path():
-    """Return the user-facing deployer.config path next to inesdata.py."""
-    return os.path.join(Config.script_dir(), "deployer.config")
+    """Return the user-facing INESData deployer.config path."""
+    return Config.deployer_config_path()
 
 
 def _local_deployer_config_example_path():
-    """Return the local deployer.config.example path next to inesdata.py."""
-    return os.path.join(Config.script_dir(), "deployer.config.example")
+    """Return the INESData deployer.config.example path."""
+    return Config.deployer_config_example_path()
 
 
 def _required_local_deployer_config_keys():
@@ -3515,7 +2921,7 @@ def _ensure_local_deployer_config_ready_for_levels(level_ids):
         return True
 
     levels_text = ", ".join(sorted({str(level_id) for level_id in (level_ids or [])}))
-    print("\nCannot continue because deployer.config is missing or incomplete.")
+    print("\nCannot continue because the INESData deployer.config is missing or incomplete.")
     if levels_text:
         print(f"Guarded levels requested: {levels_text}")
     for issue in issues:
@@ -3523,7 +2929,7 @@ def _ensure_local_deployer_config_ready_for_levels(level_ids):
     print("\nSuggested next steps:")
     print(f"- Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}")
     print("- Or use option B in the menu to bootstrap the framework")
-    print("- Review deployer.config before retrying the guarded levels\n")
+    print(f"- Review {Config.deployer_config_path()} before retrying the guarded levels\n")
     return False
 
 
@@ -3684,8 +3090,8 @@ def _collect_framework_doctor_report():
     root_venv_python = os.path.join(root_dir, ".venv", "bin", "python")
     local_newman = os.path.join(root_dir, "node_modules", ".bin", "newman")
     local_playwright = os.path.join(ui_dir, "node_modules", ".bin", "playwright")
-    deployer_config_path = os.path.join(root_dir, "deployer.config")
-    deployer_example_path = os.path.join(root_dir, "deployer.config.example")
+    deployer_config_path = Config.deployer_config_path()
+    deployer_example_path = Config.deployer_config_example_path()
     platform_repo_dir = os.path.join(root_dir, Config.REPO_DIR)
 
     checks = []
@@ -3832,9 +3238,9 @@ def _collect_framework_doctor_report():
         details = deployer_config_path
         remediation = None
         if required_keys:
-            details = f"Missing required keys in deployer.config: {', '.join(required_keys)}"
-            remediation = "Edit deployer.config before running the deployment levels."
-        checks.append(_doctor_item("config", "deployer.config", status, details, remediation))
+            details = f"Missing required keys in INESData deployer.config: {', '.join(required_keys)}"
+            remediation = f"Edit {deployer_config_path} before running the deployment levels."
+        checks.append(_doctor_item("config", "deployers/inesdata/deployer.config", status, details, remediation))
 
         kafka_bootstrap = config_values.get("KAFKA_BOOTSTRAP_SERVERS")
         if kafka_bootstrap:
@@ -3860,19 +3266,22 @@ def _collect_framework_doctor_report():
                     "container env file",
                     "ok" if exists else "warning",
                     resolved_env_file if exists else f"Missing Kafka env file: {resolved_env_file}",
-                    None if exists else "Create the Kafka env file or remove KAFKA_CONTAINER_ENV_FILE from deployer.config.",
+                    None if exists else "Create the Kafka env file or remove KAFKA_CONTAINER_ENV_FILE from deployers/inesdata/deployer.config.",
                 )
             )
     else:
         remediation = None
         if os.path.exists(deployer_example_path):
-            remediation = "Run the bootstrap script or copy deployer.config.example to deployer.config."
+            remediation = (
+                "Run the bootstrap script or copy "
+                "deployers/inesdata/deployer.config.example to deployers/inesdata/deployer.config."
+            )
         checks.append(
             _doctor_item(
                 "config",
-                "deployer.config",
+                "deployers/inesdata/deployer.config",
                 "missing",
-                "Local deployer.config is missing",
+                "Local INESData deployer.config is missing",
                 remediation,
             )
         )
@@ -3881,7 +3290,7 @@ def _collect_framework_doctor_report():
         checks.append(
             _doctor_item(
                 "config",
-                "inesdata-deployment repo",
+                "deployers/inesdata artifacts",
                 "ok",
                 platform_repo_dir,
                 None,
@@ -3891,10 +3300,10 @@ def _collect_framework_doctor_report():
         checks.append(
             _doctor_item(
                 "config",
-                "inesdata-deployment repo",
+                "deployers/inesdata artifacts",
                 "warning",
-                "The platform repository is not present yet; Level 2 can clone it automatically.",
-                "Run Level 2 or clone the platform repository manually if needed.",
+                "The INESData deployer artifacts are not present in this checkout.",
+                "Restore deployers/inesdata from the repository before running deployment levels.",
             )
         )
 
@@ -3985,7 +3394,7 @@ def run_framework_doctor():
 
 
 def run_framework_bootstrap_interactive():
-    """Run local bootstrap to prepare Python, Newman, Playwright and deployer.config."""
+    """Run local bootstrap to prepare Python, Newman, Playwright and deployer config."""
     script_path = os.path.join(Config.script_dir(), FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH)
     if not os.path.isfile(script_path):
         print(f"\nBootstrap script not found: {script_path}\n")
@@ -4825,7 +4234,8 @@ def _resolve_ai_model_hub_base_url():
 
     chart_dir = os.path.join(
         Config.script_dir(),
-        "inesdata-deployment",
+        "deployers",
+        "shared",
         "components",
         "ai-model-hub",
     )
@@ -4945,97 +4355,21 @@ def run_ai_model_hub_ui_tests_interactive():
 
 def _run_core_ui_tests(mode):
     ui_test_dir = os.path.join(Config.script_dir(), "validation", "ui")
-    if not os.path.isdir(ui_test_dir):
-        print("Warning: validation/ui directory not found — skipping UI tests")
-        return None
-
-    connectors = get_connectors_from_cluster()
-    if not connectors:
-        print("No running connectors detected — skipping UI tests")
-        return None
-
-    experiment_dir = ExperimentStorage.create_experiment_directory()
-    extra_args = mode.get("args") or []
-    extra_env = mode.get("env") or {}
-    ui_results = []
-
-    for connector in connectors:
-        creds = load_connector_credentials(connector)
-        if not creds:
-            print(f"  No credentials for {connector}, skipping UI smoke tests")
-            continue
-        portal_url = build_connector_url(connector)
-        portal_user = creds.get("connector_user", {}).get("user", "")
-        portal_pass = creds.get("connector_user", {}).get("passwd", "")
-        print(f"\nRunning UI core smoke suite for {connector} ({mode['label']})...")
-        ui_result = _run_level6_ui_smoke(
-            ui_test_dir,
-            connector,
-            portal_url,
-            portal_user,
-            portal_pass,
-            experiment_dir,
-            extra_args=extra_args,
-            extra_env=extra_env,
-        )
-        if ui_result:
-            ui_results.append(ui_result)
-
-    if len(connectors) < 2:
-        print("Warning: not enough connectors for UI dataspace suite — skipping")
-        payload = _save_interactive_core_ui_experiment_state(
-            experiment_dir,
-            connectors,
-            mode=mode,
-            ui_results=ui_results,
-        )
-        print(f"Interactive UI results saved to {os.path.join(experiment_dir, 'experiment_results.json')}")
-        return payload
-
-    provider_connector = os.environ.get("UI_PROVIDER_CONNECTOR") or connectors[0]
-    consumer_connector = os.environ.get("UI_CONSUMER_CONNECTOR") or next(
-        (connector for connector in connectors if connector != provider_connector),
-        connectors[1],
+    return level6_ui.run_core_ui_tests(
+        mode,
+        ui_test_dir=ui_test_dir,
+        ui_test_dir_exists=os.path.isdir,
+        get_connectors=get_connectors_from_cluster,
+        create_experiment_directory=ExperimentStorage.create_experiment_directory,
+        load_connector_credentials=load_connector_credentials,
+        build_connector_url=build_connector_url,
+        run_ui_smoke=_run_level6_ui_smoke,
+        run_ui_dataspace=_run_level6_ui_dataspace,
+        run_ui_ops=_run_level6_ui_ops,
+        ui_ops_suite_available=_level6_ui_ops_suite_available,
+        save_interactive_state=_save_interactive_core_ui_experiment_state,
+        environment=os.environ,
     )
-    print(
-        f"\nRunning UI dataspace suite for {provider_connector} -> {consumer_connector} "
-        f"({mode['label']})..."
-    )
-    ui_result = _run_level6_ui_dataspace(
-        ui_test_dir,
-        provider_connector,
-        consumer_connector,
-        experiment_dir,
-        extra_args=extra_args,
-        extra_env=extra_env,
-    )
-    if ui_result:
-        ui_results.append(ui_result)
-
-    if _level6_ui_ops_suite_available(ui_test_dir):
-        print(
-            f"\nRunning UI ops MinIO suite for {provider_connector} -> {consumer_connector} "
-            f"({mode['label']})..."
-        )
-        ui_result = _run_level6_ui_ops(
-            ui_test_dir,
-            provider_connector,
-            consumer_connector,
-            experiment_dir,
-            extra_args=extra_args,
-            extra_env=extra_env,
-        )
-        if ui_result:
-            ui_results.append(ui_result)
-
-    payload = _save_interactive_core_ui_experiment_state(
-        experiment_dir,
-        connectors,
-        mode=mode,
-        ui_results=ui_results,
-    )
-    print(f"Interactive UI results saved to {os.path.join(experiment_dir, 'experiment_results.json')}")
-    return payload
 
 
 def run_inesdata_ui_tests_interactive():

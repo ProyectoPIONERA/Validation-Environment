@@ -9,8 +9,8 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEPLOYER_CONFIG_PATH = PROJECT_ROOT / "deployer.config"
-CHART_DIR = PROJECT_ROOT / "inesdata-deployment" / "components" / "ontology-hub"
+DEPLOYER_CONFIG_PATH = PROJECT_ROOT / "deployers" / "inesdata" / "deployer.config"
+CHART_DIR = PROJECT_ROOT / "deployers" / "shared" / "components" / "ontology-hub"
 
 
 def _parse_key_value_file(file_path: Path) -> Dict[str, str]:
