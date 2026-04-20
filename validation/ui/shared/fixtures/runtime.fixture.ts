@@ -34,10 +34,19 @@ function getFileSizeMb(): number {
 function resolvePortalRuntime(): ConnectorPortalRuntime {
   const explicitPortalUrl = process.env.PORTAL_BASE_URL?.trim();
   if (explicitPortalUrl) {
+    const adapter = process.env.UI_ADAPTER?.trim().toLowerCase() || "custom";
     return {
+      adapter,
       connectorName: process.env.UI_PORTAL_CONNECTOR?.trim() || "custom",
       portalBaseUrl: explicitPortalUrl.replace(/\/$/, ""),
       managementBaseUrl: process.env.PORTAL_MANAGEMENT_BASE_URL?.trim() || "",
+      protocolBaseUrl: process.env.PORTAL_PROTOCOL_BASE_URL?.trim() || "",
+      transferStartPath:
+        process.env.PORTAL_TRANSFER_START_PATH?.trim() ||
+        (adapter === "edc" ? "adaptertransferprocesses" : "inesdatatransferprocesses"),
+      transferDestinationType:
+        process.env.PORTAL_TRANSFER_DESTINATION_TYPE?.trim() ||
+        (adapter === "edc" ? "AmazonS3" : "InesDataStore"),
       username: process.env.PORTAL_USER ?? "",
       password: process.env.PORTAL_PASSWORD ?? "",
     };

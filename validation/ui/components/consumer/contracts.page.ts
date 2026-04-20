@@ -2,13 +2,14 @@ import { expect, Page } from "@playwright/test";
 
 import { clickMarked } from "../../shared/utils/live-marker";
 import { materialSelect, snackBar } from "../../shared/utils/selectors";
+import { waitForUiTransition } from "../../shared/utils/waiting";
 
 export class ContractsPage {
   constructor(private readonly page: Page) {}
 
   async goto(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/contracts`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
@@ -69,8 +70,7 @@ export class ContractsPage {
 
     while (await previousButton.isEnabled().catch(() => false)) {
       await clickMarked(previousButton);
-      await this.page.waitForLoadState("networkidle");
-      await this.page.waitForTimeout(500);
+      await waitForUiTransition(this.page);
     }
   }
 
@@ -88,8 +88,7 @@ export class ContractsPage {
     }
 
     await clickMarked(nextButton);
-    await this.page.waitForLoadState("networkidle");
-    await this.page.waitForTimeout(500);
+    await waitForUiTransition(this.page);
     return true;
   }
 }

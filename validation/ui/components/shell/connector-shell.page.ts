@@ -2,12 +2,13 @@ import { expect, Page } from "@playwright/test";
 
 import { clickMarked } from "../../shared/utils/live-marker";
 import { errorBanner } from "../../shared/utils/selectors";
+import { waitForUiTransition } from "../../shared/utils/waiting";
 
 export class ConnectorShellPage {
   constructor(private readonly page: Page) {}
 
   async expectReady(): Promise<void> {
-    await expect(this.page.locator("text=Log out").first()).toBeVisible({
+    await expect(this.page.getByText(/^\s*log\s*out\s*$/i).first()).toBeVisible({
       timeout: 60_000,
     });
   }
@@ -17,11 +18,11 @@ export class ConnectorShellPage {
 
     if ((await navTarget.count()) > 0) {
       await clickMarked(navTarget);
-      await this.page.waitForLoadState("networkidle");
+      await waitForUiTransition(this.page);
       return;
     }
 
-    await this.page.goto(fallbackHashUrl, { waitUntil: "networkidle" });
+    await this.page.goto(fallbackHashUrl, { waitUntil: "domcontentloaded" });
   }
 
   async assertNoGateway403(context: string): Promise<void> {

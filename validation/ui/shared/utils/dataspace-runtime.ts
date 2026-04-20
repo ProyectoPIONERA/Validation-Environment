@@ -2,14 +2,26 @@ import fs from "fs";
 import path from "path";
 
 export type ConnectorPortalRuntime = {
+  adapter: string;
   connectorName: string;
   portalBaseUrl: string;
   managementBaseUrl: string;
+  protocolBaseUrl: string;
+  transferStartPath: string;
+  transferDestinationType: string;
   username: string;
   password: string;
+  transferDestination?: {
+    bucketName: string;
+    region: string;
+    endpointOverride: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+  };
 };
 
 export type DataspacePortalRuntime = {
+  adapter: string;
   dataspace: string;
   dsDomain: string;
   keycloakUrl: string;
@@ -19,6 +31,7 @@ export type DataspacePortalRuntime = {
 };
 
 type DataspaceDefaults = {
+  adapter: string;
   dataspace: string;
   environment: string;
   dsDomain: string;
@@ -64,11 +77,57 @@ function requiredString(value: string | undefined, label: string): string {
   return value.trim();
 }
 
+function normalizedAdapter(): string {
+  const value = (process.env.UI_ADAPTER || "inesdata").trim().toLowerCase();
+  return value || "inesdata";
+}
+
+function deploymentRoot(adapter: string): string {
+  const projectRootPath = projectRoot();
+  return path.join(projectRootPath, "deployers", adapter, "deployments");
+}
+
+function defaultPortalPath(adapter: string): string {
+  return adapter === "edc" ? "/edc-dashboard/" : "/inesdata-connector-interface";
+}
+
+function connectorCredentialsPath(
+  adapter: string,
+  environment: string,
+  dataspace: string,
+  connectorName: string,
+): string {
+  return path.join(
+    deploymentRoot(adapter),
+    environment,
+    dataspace,
+    `credentials-connector-${connectorName}.json`,
+  );
+}
+
+function discoverConnectorNames(adapter: string, environment: string, dataspace: string): string[] {
+  const runtimeDir = path.join(deploymentRoot(adapter), environment, dataspace);
+  if (!fs.existsSync(runtimeDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(runtimeDir)
+    .map((entry) => {
+      const match = entry.match(/^credentials-connector-(.+)\.json$/);
+      return match ? match[1] : undefined;
+    })
+    .filter((value): value is string => Boolean(value))
+    .sort();
+}
+
 function resolveDataspaceDefaults(): DataspaceDefaults {
-  const deployerConfigPath = path.join(projectRoot(), "inesdata-deployment", "deployer.config");
+  const deployerConfigPath = path.join(projectRoot(), "deployers", "inesdata", "deployer.config");
   const deployerConfig = parseKeyValueFile(deployerConfigPath);
+  const adapter = normalizedAdapter();
 
   return {
+    adapter,
     dataspace: process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo",
     environment: process.env.UI_ENVIRONMENT || deployerConfig.ENVIRONMENT || "DEV",
     dsDomain: process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm",
@@ -82,36 +141,61 @@ function resolveDataspaceDefaults(): DataspaceDefaults {
 }
 
 function resolveConnectorRuntime(
+  adapter: string,
   connectorName: string,
   dataspace: string,
   environment: string,
   dsDomain: string,
 ): ConnectorPortalRuntime {
-  const credentialsPath = path.join(
-    projectRoot(),
-    "inesdata-deployment",
-    "deployments",
-    environment,
-    dataspace,
-    `credentials-connector-${connectorName}.json`,
-  );
+  const credentialsPath = connectorCredentialsPath(adapter, environment, dataspace, connectorName);
   const credentials = readJson(credentialsPath);
   const username = requiredString(credentials?.connector_user?.user, `${connectorName} username`);
   const password = requiredString(credentials?.connector_user?.passwd, `${connectorName} password`);
   const host = `${connectorName}.${dsDomain}`;
+  const deployerConfigPath = path.join(projectRoot(), "deployers", "inesdata", "deployer.config");
+  const deployerConfig = parseKeyValueFile(deployerConfigPath);
+  const minioHost = process.env.UI_MINIO_HOST || deployerConfig.MINIO_HOSTNAME || `minio.${deployerConfig.DOMAIN_BASE || "dev.ed.dataspaceunit.upm"}`;
+  const minioProtocol = process.env.UI_MINIO_PROTOCOL || "http";
+  const transferRegion = process.env.UI_TRANSFER_REGION || "us-east-1";
+  const endpointOverride = `${minioProtocol}://${minioHost}`;
+  const minioAccessKey = credentials?.minio?.access_key;
+  const minioSecretKey = credentials?.minio?.secret_key;
 
   return {
+    adapter,
     connectorName,
-    portalBaseUrl: process.env[`UI_${connectorName.toUpperCase().replace(/-/g, "_")}_PORTAL_URL`] || `http://${host}/inesdata-connector-interface`,
+    portalBaseUrl:
+      process.env[`UI_${connectorName.toUpperCase().replace(/-/g, "_")}_PORTAL_URL`] ||
+      `http://${host}${defaultPortalPath(adapter)}`,
     managementBaseUrl: `http://${host}/management/v3`,
+    protocolBaseUrl: `http://${host}/protocol`,
+    transferStartPath: adapter === "edc" ? "adaptertransferprocesses" : "inesdatatransferprocesses",
+    transferDestinationType: adapter === "edc" ? "AmazonS3" : "InesDataStore",
     username,
     password,
+    transferDestination:
+      minioAccessKey && minioSecretKey
+        ? {
+            bucketName:
+              process.env[`UI_${connectorName.toUpperCase().replace(/-/g, "_")}_TRANSFER_BUCKET`] ||
+              `${dataspace}-${connectorName}`,
+            region:
+              process.env[`UI_${connectorName.toUpperCase().replace(/-/g, "_")}_TRANSFER_REGION`] ||
+              transferRegion,
+            endpointOverride:
+              process.env[`UI_${connectorName.toUpperCase().replace(/-/g, "_")}_TRANSFER_ENDPOINT`] ||
+              endpointOverride,
+            accessKeyId: String(minioAccessKey),
+            secretAccessKey: String(minioSecretKey),
+          }
+        : undefined,
   };
 }
 
 export function resolveConnectorPortalRuntime(connectorName: string): ConnectorPortalRuntime {
   const defaults = resolveDataspaceDefaults();
   return resolveConnectorRuntime(
+    defaults.adapter,
     connectorName,
     defaults.dataspace,
     defaults.environment,
@@ -121,21 +205,35 @@ export function resolveConnectorPortalRuntime(connectorName: string): ConnectorP
 
 export function resolveDataspacePortalRuntime(): DataspacePortalRuntime {
   const defaults = resolveDataspaceDefaults();
-  const providerConnector = process.env.UI_PROVIDER_CONNECTOR || "conn-citycouncil-demo";
-  const consumerConnector = process.env.UI_CONSUMER_CONNECTOR || "conn-company-demo";
+  const discoveredConnectors = discoverConnectorNames(
+    defaults.adapter,
+    defaults.environment,
+    defaults.dataspace,
+  );
+  const providerConnector =
+    process.env.UI_PROVIDER_CONNECTOR ||
+    discoveredConnectors[0] ||
+    "conn-citycouncil-demo";
+  const consumerConnector =
+    process.env.UI_CONSUMER_CONNECTOR ||
+    discoveredConnectors[1] ||
+    "conn-company-demo";
 
   return {
+    adapter: defaults.adapter,
     dataspace: defaults.dataspace,
     dsDomain: defaults.dsDomain,
     keycloakUrl: defaults.keycloakUrl,
     keycloakClientId: defaults.keycloakClientId,
     provider: resolveConnectorRuntime(
+      defaults.adapter,
       providerConnector,
       defaults.dataspace,
       defaults.environment,
       defaults.dsDomain,
     ),
     consumer: resolveConnectorRuntime(
+      defaults.adapter,
       consumerConnector,
       defaults.dataspace,
       defaults.environment,

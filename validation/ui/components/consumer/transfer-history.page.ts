@@ -1,6 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
 import { clickMarked } from "../../shared/utils/live-marker";
+import { waitForEventualConsistencyPoll, waitForUiTransition } from "../../shared/utils/waiting";
 
 const SUCCESS_STATES = new Set(["COMPLETED", "ENDED", "TERMINATED", "DEPROVISIONED"]);
 
@@ -9,7 +10,7 @@ export class TransferHistoryPage {
 
   async goto(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/transfer-history`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
@@ -37,7 +38,7 @@ export class TransferHistoryPage {
       }
 
       await this.refresh();
-      await this.page.waitForTimeout(3_000);
+      await waitForEventualConsistencyPoll(this.page);
     }
 
     throw new Error(
@@ -65,8 +66,7 @@ export class TransferHistoryPage {
 
   private async refresh(): Promise<void> {
     await clickMarked(this.page.getByRole("button", { name: /refresh/i }));
-    await this.page.waitForLoadState("networkidle");
-    await this.page.waitForTimeout(500);
+    await waitForUiTransition(this.page);
   }
 
   private async readStateOnCurrentPage(assetId: string): Promise<string | undefined> {
@@ -91,8 +91,7 @@ export class TransferHistoryPage {
 
     while (await previousButton.isEnabled().catch(() => false)) {
       await clickMarked(previousButton);
-      await this.page.waitForLoadState("networkidle");
-      await this.page.waitForTimeout(500);
+      await waitForUiTransition(this.page);
     }
   }
 
@@ -110,8 +109,7 @@ export class TransferHistoryPage {
     }
 
     await clickMarked(nextButton);
-    await this.page.waitForLoadState("networkidle");
-    await this.page.waitForTimeout(500);
+    await waitForUiTransition(this.page);
     return true;
   }
 }

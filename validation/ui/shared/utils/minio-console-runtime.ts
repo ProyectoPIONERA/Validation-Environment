@@ -16,6 +16,7 @@ export type MinioBucketTarget = {
 };
 
 export type MinioConsoleRuntime = {
+  adapter: string;
   consoleBaseUrl: string;
   dataspace: string;
   environment: string;
@@ -60,15 +61,24 @@ function requiredString(value: string | undefined, label: string): string {
   return value.trim();
 }
 
+function normalizedAdapter(): string {
+  const value = (process.env.UI_ADAPTER || "inesdata").trim().toLowerCase();
+  return value || "inesdata";
+}
+
+function deploymentRoot(adapter: string): string {
+  const root = projectRoot();
+  return path.join(root, "deployers", adapter, "deployments");
+}
+
 function resolveConnectorMinioCredentials(
+  adapter: string,
   connectorName: string,
   dataspace: string,
   environment: string,
 ): MinioUserCredentials {
   const credentialsPath = path.join(
-    projectRoot(),
-    "inesdata-deployment",
-    "deployments",
+    deploymentRoot(adapter),
     environment,
     dataspace,
     `credentials-connector-${connectorName}.json`,
@@ -86,6 +96,7 @@ function withNoTrailingSlash(value: string): string {
 }
 
 function buildBucketTarget(opts: {
+  adapter: string;
   role: "provider" | "consumer";
   connectorName: string;
   dataspace: string;
@@ -102,6 +113,7 @@ function buildBucketTarget(opts: {
     bucketName,
     bucketBrowserUrl: `${withNoTrailingSlash(opts.consoleBaseUrl)}/browser/${bucketName}`,
     credentials: resolveConnectorMinioCredentials(
+      opts.adapter,
       opts.connectorName,
       opts.dataspace,
       opts.environment,
@@ -110,9 +122,13 @@ function buildBucketTarget(opts: {
   };
 }
 
-export function resolveMinioConsoleRuntime(): MinioConsoleRuntime {
-  const deployerConfigPath = path.join(projectRoot(), "inesdata-deployment", "deployer.config");
+export function resolveMinioConsoleRuntime(overrides?: {
+  providerExpectedObject?: string;
+  consumerExpectedObject?: string;
+}): MinioConsoleRuntime {
+  const deployerConfigPath = path.join(projectRoot(), "deployers", "inesdata", "deployer.config");
   const deployerConfig = parseKeyValueFile(deployerConfigPath);
+  const adapter = normalizedAdapter();
 
   const dataspace = process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo";
   const environment = process.env.UI_ENVIRONMENT || deployerConfig.ENVIRONMENT || "DEV";
@@ -123,27 +139,30 @@ export function resolveMinioConsoleRuntime(): MinioConsoleRuntime {
     process.env.UI_MINIO_CONSOLE_URL || `http://console.minio-s3.${domainBase}`;
 
   return {
+    adapter,
     consoleBaseUrl,
     dataspace,
     environment,
     targets: [
       buildBucketTarget({
+        adapter,
         role: "provider",
         connectorName: providerConnector,
         dataspace,
         environment,
         consoleBaseUrl,
         bucketOverride: process.env.UI_MINIO_PROVIDER_BUCKET,
-        expectedObject: process.env.UI_MINIO_PROVIDER_EXPECT_OBJECT,
+        expectedObject: overrides?.providerExpectedObject || process.env.UI_MINIO_PROVIDER_EXPECT_OBJECT,
       }),
       buildBucketTarget({
+        adapter,
         role: "consumer",
         connectorName: consumerConnector,
         dataspace,
         environment,
         consoleBaseUrl,
         bucketOverride: process.env.UI_MINIO_CONSUMER_BUCKET,
-        expectedObject: process.env.UI_MINIO_CONSUMER_EXPECT_OBJECT,
+        expectedObject: overrides?.consumerExpectedObject || process.env.UI_MINIO_CONSUMER_EXPECT_OBJECT,
       }),
     ],
   };

@@ -2,6 +2,7 @@ import { test as base, expect, Page, TestInfo } from "@playwright/test";
 import fs from "fs";
 
 import { DataspacePortalRuntime, resolveDataspacePortalRuntime } from "../utils/dataspace-runtime";
+import { installEdcDashboardRouteBridge } from "../utils/edc-dashboard-route-bridge";
 
 type DataspaceFixtures = {
   dataspaceRuntime: DataspacePortalRuntime;
@@ -20,8 +21,10 @@ async function writeJsonArtifact(testInfo: TestInfo, name: string, payload: unkn
 }
 
 export const test = base.extend<DataspaceFixtures>({
-  dataspaceRuntime: async ({}, use) => {
-    await use(resolveDataspacePortalRuntime());
+  dataspaceRuntime: async ({ page, request }, use) => {
+    const runtime = resolveDataspacePortalRuntime();
+    await installEdcDashboardRouteBridge(page, request, runtime);
+    await use(runtime);
   },
 
   captureStep: async ({}, use, testInfo) => {

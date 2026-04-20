@@ -12,6 +12,7 @@ import { ContractsPage } from "../components/consumer/contracts.page";
 import { TransferHistoryPage } from "../components/consumer/transfer-history.page";
 import { bootstrapProviderContractArtifacts } from "../shared/utils/provider-bootstrap";
 import { resolveDataspacePortalRuntime } from "../shared/utils/dataspace-runtime";
+import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
 
 type UploadFileHandle = {
   path: string;
@@ -246,10 +247,23 @@ test("05 e2e transfer flow: provider UI bootstrap + consumer negotiation and tra
       expect(opened, `Asset ${assetId} is not visible in the consumer catalog yet`).toBeTruthy();
     }).toPass({
       timeout: 90_000,
-      intervals: [2_000, 5_000],
+      intervals: EVENTUAL_UI_RETRY_INTERVALS,
     });
 
-    await contractOffersPage.expectReady();
+    const attachConsumerJson = async (name: string, payload: unknown): Promise<void> => {
+      await attachJson(testInfo, name, payload);
+    };
+
+    await catalogPage.expectDetailsVisible({
+      assetId,
+      attachJson: attachConsumerJson,
+      context: "e2e-consumer-catalog-detail",
+    });
+    await contractOffersPage.expectReady({
+      assetId,
+      attachJson: attachConsumerJson,
+      context: "e2e-consumer-contract-offers",
+    });
     await captureStep(testInfo, consumerPage, "consumer-02-catalog-detail");
     await contractOffersPage.openContractOffersTab();
     await captureStep(testInfo, consumerPage, "consumer-03-contract-offers");
@@ -270,7 +284,7 @@ test("05 e2e transfer flow: provider UI bootstrap + consumer negotiation and tra
       ).toBeTruthy();
     }).toPass({
       timeout: 90_000,
-      intervals: [2_000, 5_000],
+      intervals: EVENTUAL_UI_RETRY_INTERVALS,
     });
 
     await captureStep(testInfo, consumerPage, "consumer-05-contracts");

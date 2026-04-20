@@ -8,7 +8,7 @@ export class AssetCreatePage {
 
   async goto(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/assets/create`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 

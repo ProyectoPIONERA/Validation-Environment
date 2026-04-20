@@ -1,5 +1,7 @@
 import { expect, Page } from "@playwright/test";
 
+import { waitForEventualConsistencyPoll } from "../../shared/utils/waiting";
+
 export class MinioBucketBrowserPage {
   constructor(private readonly page: Page) {}
 
@@ -25,5 +27,21 @@ export class MinioBucketBrowserPage {
     await expect(this.page.getByText(objectName, { exact: false }).first()).toBeVisible({
       timeout: timeoutMs,
     });
+  }
+
+  async waitForObjectVisible(objectName: string, timeoutMs = 90_000): Promise<void> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if ((await this.page.getByText(objectName, { exact: false }).first().count().catch(() => 0)) > 0) {
+        await this.expectObjectVisible(objectName, 15_000);
+        return;
+      }
+
+      await this.page.reload({ waitUntil: "domcontentloaded" });
+      await waitForEventualConsistencyPoll(this.page);
+    }
+
+    throw new Error(`MinIO object ${objectName} did not become visible within ${timeoutMs}ms`);
   }
 }

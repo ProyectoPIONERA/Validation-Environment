@@ -2,6 +2,11 @@ import { expect, Page } from "@playwright/test";
 
 import { clickMarked, fillMarked, pressMarked } from "../../shared/utils/live-marker";
 import { materialInput, materialSelect, snackBar } from "../../shared/utils/selectors";
+import {
+  FAST_UI_RETRY_INTERVALS,
+  waitForEventualConsistencyPoll,
+  waitForUiTransition,
+} from "../../shared/utils/waiting";
 
 type ContractDefinitionListExpectations = {
   policyId?: string;
@@ -19,7 +24,7 @@ export class ContractDefinitionCreatePage {
 
   async gotoList(baseUrl: string): Promise<void> {
     await this.page.goto(`${baseUrl.replace(/\/$/, "")}/contract-definitions`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     });
   }
 
@@ -47,7 +52,7 @@ export class ContractDefinitionCreatePage {
 
       const accessSelected = await this.trySelectPolicyOption(/Access policy/i, policyId);
       if (!accessSelected) {
-        await this.page.waitForTimeout(2_000);
+        await waitForEventualConsistencyPoll(this.page);
         continue;
       }
 
@@ -56,11 +61,12 @@ export class ContractDefinitionCreatePage {
         return;
       }
 
-      await this.page.waitForTimeout(2_000);
+      await waitForEventualConsistencyPoll(this.page);
     }
 
     throw new Error(
-      `Policy '${policyId}' did not become available in both contract definition selectors within ${timeoutMs}ms.`,
+      `Policy '${policyId}' exists in the policies list but did not become selectable in both contract definition policy selectors within ${timeoutMs}ms. ` +
+      "This usually means the contract definition form is not loading/searching the full policy catalog.",
     );
   }
 
@@ -107,7 +113,7 @@ export class ContractDefinitionCreatePage {
       ).toBeTruthy();
     }).toPass({
       timeout: timeoutMs,
-      intervals: [500, 1_000, 2_000],
+      intervals: FAST_UI_RETRY_INTERVALS,
     });
   }
 
@@ -142,8 +148,7 @@ export class ContractDefinitionCreatePage {
     }
 
     await clickMarked(nextButton);
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
-    await this.page.waitForTimeout(200);
+    await waitForUiTransition(this.page);
     return true;
   }
 
@@ -168,12 +173,12 @@ export class ContractDefinitionCreatePage {
     label: string | RegExp,
     policyId: string,
   ): Promise<boolean> {
-    const exactPolicy = new RegExp(`^\\s*${escapeRegExp(policyId)}\\s*$`);
+    const policyOption = new RegExp(escapeRegExp(policyId));
 
     await clickMarked(materialSelect(this.page, label), { timeout: 5_000 });
 
     const overlayOptions = this.page.locator(".cdk-overlay-pane [role='option'], .cdk-overlay-pane mat-option");
-    const option = overlayOptions.filter({ hasText: exactPolicy }).last();
+    const option = overlayOptions.filter({ hasText: policyOption }).last();
     if ((await option.count().catch(() => 0)) > 0) {
       await option.scrollIntoViewIfNeeded().catch(() => {});
       await clickMarked(option, { timeout: 5_000, force: true });

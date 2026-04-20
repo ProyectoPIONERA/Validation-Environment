@@ -197,7 +197,7 @@ test("03c provider setup: contract definition creation from the UI", async ({
 
     await contractDefinitionCreatePage.goto(portalBaseUrl);
     await contractDefinitionCreatePage.expectReady();
-    await contractDefinitionCreatePage.selectMatchingPolicies(policyId, 120_000);
+    await contractDefinitionCreatePage.selectMatchingPolicies(policyId);
     await contractDefinitionCreatePage.fillContractDefinitionId(contractDefinitionId);
     await contractDefinitionCreatePage.addAsset(assetId);
     await captureStep(page, "06-contract-definition-form-complete");

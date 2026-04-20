@@ -2,6 +2,7 @@ import { expect, Page } from "@playwright/test";
 
 import { clickMarked, fillMarked, pressMarked } from "../../shared/utils/live-marker";
 import { materialInput, snackBar } from "../../shared/utils/selectors";
+import { FAST_UI_RETRY_INTERVALS, waitForUiTransition } from "../../shared/utils/waiting";
 
 export class PolicyCreatePage {
   constructor(private readonly page: Page) {}
@@ -60,7 +61,7 @@ export class PolicyCreatePage {
       expect(found, `Policy ${policyId} is not visible in the policies list`).toBeTruthy();
     }).toPass({
       timeout: timeoutMs,
-      intervals: [500, 1_000, 2_000],
+      intervals: FAST_UI_RETRY_INTERVALS,
     });
   }
 
@@ -91,8 +92,7 @@ export class PolicyCreatePage {
 
     while (await previousButton.isEnabled().catch(() => false)) {
       await clickMarked(previousButton);
-      await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
-      await this.page.waitForTimeout(200);
+      await waitForUiTransition(this.page);
     }
   }
 
@@ -110,8 +110,7 @@ export class PolicyCreatePage {
     }
 
     await clickMarked(nextButton);
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 });
-    await this.page.waitForTimeout(200);
+    await waitForUiTransition(this.page);
     return true;
   }
 
