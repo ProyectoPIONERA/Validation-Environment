@@ -572,8 +572,42 @@ class NewmanMetricsTests(unittest.TestCase):
         env_vars = fake_executor.run_validation_collections.call_args.args[0]
         self.assertEqual(env_vars["keycloakUrl"], "http://keycloak.local")
         self.assertEqual(env_vars["keycloakClientId"], "dataspace-users")
+        self.assertIn(os.path.basename(tmpdir).lower(), env_vars["e2e_run_scope"])
+        self.assertIn("conn-b", env_vars["e2e_run_scope"])
+        self.assertIn("conn-a", env_vars["e2e_run_scope"])
         report_dir = fake_executor.run_validation_collections.call_args.kwargs["report_dir"]
         self.assertIn("newman_reports", report_dir)
+
+    def test_provider_setup_collection_uses_dynamic_transfer_object_name(self):
+        with open("validation/core/collections/03_provider_setup.json", "r", encoding="utf-8") as handle:
+            collection = json.load(handle)
+
+        create_asset = next(
+            item for item in collection["item"]
+            if item["name"] == "Create E2E Asset"
+        )
+        raw_body = create_asset["request"]["body"]["raw"]
+
+        self.assertIn('"name": "{{e2e_source_object_name}}"', raw_body)
+        self.assertIn('"sourceObjectName": "{{e2e_source_object_name}}"', raw_body)
+
+    def test_validation_engine_uses_neutral_edc_transfer_contract(self):
+        engine = ValidationEngine(
+            load_connector_credentials=lambda name: {"connector_user": {"user": name, "passwd": "secret"}},
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak-admin.local",
+                "KC_INTERNAL_URL": "http://keycloak.local",
+                "PIONERA_ADAPTER": "edc",
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name="demoedc",
+        )
+
+        env_vars = engine.build_newman_env("conn-citycounciledc-demoedc", "conn-companyedc-demoedc")
+
+        self.assertEqual(env_vars["adapter"], "edc")
+        self.assertEqual(env_vars["transferStartPath"], "adaptertransferprocesses")
+        self.assertEqual(env_vars["transferDestinationType"], "AmazonS3")
 
     def test_validation_engine_collects_transfer_storage_checks(self):
         fake_executor = mock.Mock()

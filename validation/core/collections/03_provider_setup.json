@@ -56,7 +56,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\",\n    \"dct\": \"http://purl.org/dc/terms/\",\n    \"dcat\": \"http://www.w3.org/ns/dcat#\"\n  },\n  \"@id\": \"{{e2e_asset_id}}\",\n  \"@type\": \"Asset\",\n  \"properties\": {\n    \"name\": \"E2E Dataspace Asset {{e2e_suffix}}\",\n    \"version\": \"1.0.0\",\n    \"shortDescription\": \"Asset for end-to-end dataspace validation\",\n    \"assetType\": \"dataset\",\n    \"dct:description\": \"Asset for end-to-end dataspace validation\",\n    \"dcat:keyword\": [\"validation\", \"e2e\", \"dataspace\"]\n  },\n  \"dataAddress\": {\n    \"type\": \"HttpData\",\n    \"baseUrl\": \"https://jsonplaceholder.typicode.com/todos\",\n    \"name\": \"todos\"\n  }\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\",\n    \"dct\": \"http://purl.org/dc/terms/\",\n    \"dcat\": \"http://www.w3.org/ns/dcat#\"\n  },\n  \"@id\": \"{{e2e_asset_id}}\",\n  \"@type\": \"Asset\",\n  \"properties\": {\n    \"name\": \"E2E Dataspace Asset {{e2e_suffix}}\",\n    \"version\": \"1.0.0\",\n    \"shortDescription\": \"Asset for end-to-end dataspace validation\",\n    \"assetType\": \"dataset\",\n    \"dct:description\": \"Asset for end-to-end dataspace validation\",\n    \"dcat:keyword\": [\"validation\", \"e2e\", \"dataspace\"],\n    \"sourceObjectName\": \"{{e2e_source_object_name}}\"\n  },\n  \"dataAddress\": {\n    \"type\": \"HttpData\",\n    \"baseUrl\": \"https://jsonplaceholder.typicode.com/todos\",\n    \"name\": \"{{e2e_source_object_name}}\"\n  }\n}"
         }
       }
     },

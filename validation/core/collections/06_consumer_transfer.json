@@ -2,7 +2,7 @@
   "info": {
     "name": "06 Consumer Transfer",
     "_postman_id": "consumer-transfer-06",
-    "description": "Consumer starts the INESData transfer process and validates the resolved storage destination",
+    "description": "Consumer starts the transfer process and validates the resolved storage destination",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
 
@@ -82,7 +82,7 @@
           }
         ],
         "url": {
-          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/inesdatatransferprocesses",
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/{{transferStartPath}}",
           "host": [
             "{{consumer}}",
             "{{dsDomain}}"
@@ -90,12 +90,12 @@
           "path": [
             "management",
             "v3",
-            "inesdatatransferprocesses"
+            "{{transferStartPath}}"
           ]
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"assetId\": \"{{e2e_asset_id}}\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"AmazonS3-PUSH\",\n  \"dataDestination\": {\n    \"type\": \"InesDataStore\"\n  }\n}"
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"assetId\": \"{{e2e_asset_id}}\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"AmazonS3-PUSH\",\n  \"dataDestination\": {\n    \"type\": \"{{transferDestinationType}}\"\n  }\n}"
         }
       }
     },

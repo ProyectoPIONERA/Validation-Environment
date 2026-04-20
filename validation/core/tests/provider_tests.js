@@ -7,6 +7,16 @@
 const requestName = pm.info.requestName
 const body = parseJsonResponse()
 
+function safeIdentifier(value, fallback) {
+    const raw = String(value || fallback || "unknown")
+    const safe = raw
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^[._-]+|[._-]+$/g, "")
+    return safe || fallback || "unknown"
+}
+
 if (requestName === "Provider Login") {
     assertStatus200()
     if (!body) {
@@ -16,10 +26,15 @@ if (requestName === "Provider Login") {
     saveCollectionVar("provider_jwt", body.access_token)
 
     const suffix = String(Date.now())
+    const runScope = safeIdentifier(
+        getStoredVar("e2e_run_scope"),
+        `${getStoredVar("provider") || "provider"}-${getStoredVar("consumer") || "consumer"}`
+    )
     saveCollectionVar("e2e_suffix", suffix)
     saveCollectionVar("e2e_asset_id", `asset-e2e-${suffix}`)
     saveCollectionVar("e2e_policy_id", `policy-e2e-${suffix}`)
     saveCollectionVar("e2e_contract_definition_id", `contract-e2e-${suffix}`)
+    saveCollectionVar("e2e_source_object_name", `todos-${runScope}-${suffix}.json`)
     return
 }
 

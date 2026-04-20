@@ -6,7 +6,16 @@ from urllib.parse import urlparse
 
 
 class TransferStorageVerifier:
-    """Validate that a successful INESData transfer produces observable objects in MinIO."""
+    """Validate that a successful transfer produces observable objects in MinIO."""
+
+    SENSITIVE_DESTINATION_KEYWORDS = (
+        "accesskey",
+        "secret",
+        "password",
+        "passwd",
+        "token",
+        "privatekey",
+    )
 
     def __init__(
         self,
@@ -58,6 +67,21 @@ class TransferStorageVerifier:
             if namespaced in properties:
                 return properties[namespaced]
         return None
+
+    @classmethod
+    def _redact_sensitive_fields(cls, value):
+        if isinstance(value, dict):
+            redacted = {}
+            for key, item in value.items():
+                normalized = str(key or "").replace("_", "").replace("-", "").lower()
+                if any(marker in normalized for marker in cls.SENSITIVE_DESTINATION_KEYWORDS):
+                    redacted[key] = "***REDACTED***"
+                else:
+                    redacted[key] = cls._redact_sensitive_fields(item)
+            return redacted
+        if isinstance(value, list):
+            return [cls._redact_sensitive_fields(item) for item in value]
+        return value
 
     @staticmethod
     def _decode_response_json(execution):
@@ -198,11 +222,52 @@ class TransferStorageVerifier:
             "failures": report.get("run", {}).get("failures", []) or [],
         }
 
-    def _detect_new_or_updated_objects(self, before_snapshot, after_snapshot, started_at):
+    def _parse_expected_object_name(self, report_dir):
+        report_path = os.path.join(report_dir, "03_provider_setup.json")
+        if not os.path.exists(report_path):
+            return None
+
+        try:
+            with open(report_path, "r", encoding="utf-8") as handle:
+                report = json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+        for execution in report.get("run", {}).get("executions", []) or []:
+            request_name = ((execution.get("item") or {}).get("name")) or ""
+            if request_name != "Create E2E Asset":
+                continue
+
+            body = ((execution.get("request") or {}).get("body") or {}).get("raw")
+            if not body:
+                return None
+            try:
+                asset_payload = json.loads(body)
+            except ValueError:
+                return None
+
+            data_address = self._read_field(asset_payload, "dataAddress") or asset_payload.get("dataAddress")
+            object_name = self._read_field(data_address, "name")
+            return object_name.strip() if isinstance(object_name, str) and object_name.strip() else None
+
+        return None
+
+    @staticmethod
+    def _matches_expected_object(object_name, expected_object_name):
+        if not expected_object_name:
+            return True
+        if object_name == expected_object_name:
+            return True
+        return str(object_name or "").endswith(f"/{expected_object_name}")
+
+    def _detect_new_or_updated_objects(self, before_snapshot, after_snapshot, started_at, expected_object_name=None):
         matches = []
         started_at = started_at.astimezone(timezone.utc) if started_at else None
 
         for object_name, current in (after_snapshot or {}).items():
+            if not self._matches_expected_object(object_name, expected_object_name):
+                continue
+
             previous = (before_snapshot or {}).get(object_name)
             current_modified = self._parse_iso_datetime(current.get("last_modified"))
             if current_modified and current_modified.tzinfo is None:
@@ -238,8 +303,10 @@ class TransferStorageVerifier:
         if not experiment_dir:
             return None
         path = self._artifact_path(experiment_dir, provider, consumer)
+        payload_to_save = dict(payload)
+        payload_to_save["artifact_path"] = path
         with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            json.dump(payload_to_save, handle, indent=2, ensure_ascii=False)
         return path
 
     @staticmethod
@@ -286,17 +353,20 @@ class TransferStorageVerifier:
             payload["reason"] = f"Unable to parse transfer report: {exc}"
             payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
             return payload
+        expected_object_name = self._parse_expected_object_name(report_dir)
 
         if baseline_reason:
             payload["status"] = "failed"
             payload["reason"] = f"Unable to capture consumer bucket baseline before validation: {baseline_reason}"
             payload["transfer_id"] = report_data.get("transfer_id")
+            payload["expected_object_name"] = expected_object_name
             payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
             return payload
 
         if before_snapshot is None:
             payload["reason"] = "Consumer bucket baseline was not captured before validation"
             payload["transfer_id"] = report_data.get("transfer_id")
+            payload["expected_object_name"] = expected_object_name
             payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
             return payload
 
@@ -305,6 +375,7 @@ class TransferStorageVerifier:
             payload["status"] = "failed"
             payload["reason"] = "06_consumer_transfer reported Newman assertion failures before storage verification"
             payload["transfer_id"] = report_data.get("transfer_id")
+            payload["expected_object_name"] = expected_object_name
             payload["report_failures"] = failures
             payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
             return payload
@@ -314,6 +385,7 @@ class TransferStorageVerifier:
         if not bucket_name:
             payload["reason"] = "Transfer report does not expose a destination bucket"
             payload["transfer_id"] = report_data.get("transfer_id")
+            payload["expected_object_name"] = expected_object_name
             payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
             return payload
 
@@ -336,6 +408,7 @@ class TransferStorageVerifier:
                 before_snapshot,
                 after_snapshot,
                 report_data.get("started_at"),
+                expected_object_name=expected_object_name,
             )
             if changed_objects:
                 break
@@ -346,21 +419,31 @@ class TransferStorageVerifier:
             {
                 "bucket_name": bucket_name,
                 "transfer_id": report_data.get("transfer_id"),
+                "expected_object_name": expected_object_name,
                 "transfer_started_at": report_data.get("started_at").isoformat() if report_data.get("started_at") else None,
                 "objects_before": len(before_snapshot),
                 "objects_after": len(after_snapshot),
                 "matched_objects": changed_objects,
-                "data_destination": data_destination,
+                "data_destination": self._redact_sensitive_fields(data_destination),
                 "attempts": attempts,
             }
         )
 
         if changed_objects:
             payload["status"] = "passed"
-            payload["reason"] = "New or updated objects were observed in the consumer bucket after transfer start"
+            if expected_object_name:
+                payload["reason"] = "Expected transfer object was observed in the consumer bucket after transfer start"
+            else:
+                payload["reason"] = "New or updated objects were observed in the consumer bucket after transfer start"
         else:
             payload["status"] = "failed"
-            payload["reason"] = "No new or updated objects were observed in the consumer bucket after transfer start"
+            if expected_object_name:
+                payload["reason"] = (
+                    "Expected transfer object was not observed as new or updated in the consumer bucket "
+                    f"after transfer start: {expected_object_name}"
+                )
+            else:
+                payload["reason"] = "No new or updated objects were observed in the consumer bucket after transfer start"
 
         payload["artifact_path"] = self._save_payload(payload, experiment_dir, provider, consumer)
         return payload

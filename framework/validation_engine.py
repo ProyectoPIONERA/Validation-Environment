@@ -1,5 +1,6 @@
 from itertools import permutations
 import os
+import re
 
 from .newman_executor import NewmanExecutor
 from .experiment_storage import ExperimentStorage
@@ -60,6 +61,12 @@ class ValidationEngine:
             raise ValueError("Missing connector credentials")
 
         config = load_deployer_config()
+        adapter_name = str(config.get("PIONERA_ADAPTER") or config.get("ADAPTER_NAME") or "").strip().lower()
+        if not adapter_name:
+            if "edc" in provider.lower() or "edc" in consumer.lower():
+                adapter_name = "edc"
+            else:
+                adapter_name = "inesdata"
 
         ds_domain = ds_domain_resolver()
         dataspace = self.ds_name
@@ -83,7 +90,33 @@ class ValidationEngine:
             "consumerProtocolAddress": f"http://{consumer}:19194/protocol",
             "e2e_expected_provider_bucket": f"{dataspace}-{provider}",
             "e2e_expected_consumer_bucket": f"{dataspace}-{consumer}",
+            "adapter": adapter_name,
+            "transferStartPath": (
+                "adaptertransferprocesses"
+                if adapter_name == "edc"
+                else "inesdatatransferprocesses"
+            ),
+            "transferDestinationType": (
+                "AmazonS3"
+                if adapter_name == "edc"
+                else "InesDataStore"
+            ),
         }
+
+    @staticmethod
+    def _safe_scope_part(value):
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip())
+        safe = re.sub(r"-{2,}", "-", safe).strip("-._")
+        return safe.lower() or "unknown"
+
+    def _build_e2e_run_scope(self, provider, consumer, experiment_dir=None, run_index=None):
+        parts = []
+        if experiment_dir:
+            parts.append(os.path.basename(os.path.normpath(experiment_dir)))
+        if run_index is not None:
+            parts.append(f"run-{int(run_index):03d}")
+        parts.extend([provider, consumer])
+        return "-".join(self._safe_scope_part(part) for part in parts if part)
 
     def run_dataspace_validation(self, provider, consumer, experiment_dir=None, run_index=None):
         """Run dataspace validation tests for a provider-consumer pair."""
@@ -122,6 +155,12 @@ class ValidationEngine:
             os.makedirs(report_dir, exist_ok=True)
 
         env_vars = self.build_newman_env(provider, consumer)
+        env_vars["e2e_run_scope"] = self._build_e2e_run_scope(
+            provider,
+            consumer,
+            experiment_dir=experiment_dir,
+            run_index=run_index,
+        )
         baseline_snapshot = None
         baseline_reason = None
         if self.transfer_storage_verifier is not None and experiment_dir:

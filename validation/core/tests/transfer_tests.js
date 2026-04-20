@@ -178,8 +178,10 @@ if (requestName === "Start Transfer Process") {
     clearLocalVar("e2e_transfer_destination_bucket")
     assertCreated()
     extractAtId(body, "e2e_transfer_id")
-    pm.test("Transfer request is aligned with the INESData push flow", function () {
-        pm.expect(pm.request.url.toString()).to.include("/management/v3/inesdatatransferprocesses")
+    const expectedPath = getStoredVar("transferStartPath")
+    assertNotEmpty(expectedPath, "transferStartPath")
+    pm.test("Transfer request is aligned with the adapter-compatible push flow", function () {
+        pm.expect(pm.request.url.toString()).to.include(`/management/v3/${expectedPath}`)
     })
     return
 }
@@ -253,7 +255,7 @@ if (requestName === "Check Transfer Status") {
     }
     if (state === "STARTED") {
         clearLocalVar("e2e_transfer_status_attempt")
-        pm.test("Transfer reached an active INESData push state that allows destination validation", function () {
+        pm.test("Transfer reached an active push state that allows destination validation", function () {
             pm.expect(state).to.equal("STARTED")
         })
         return
@@ -330,7 +332,7 @@ if (requestName === "Resolve Current Transfer Destination") {
     }
 
     const transferType = readField(transfer, "transferType") || transfer.transferType
-    pm.test("Transfer request is using the INESData AmazonS3 push mode", function () {
+    pm.test("Transfer request is using the AmazonS3 push mode", function () {
         pm.expect(transferType).to.equal("AmazonS3-PUSH")
     })
 
@@ -345,7 +347,7 @@ if (requestName === "Resolve Current Transfer Destination") {
     })
 
     const destinationType = readField(dataDestination, "type")
-    pm.test("Transfer destination type resolved by INESData is AmazonS3", function () {
+    pm.test("Transfer destination type resolved by the runtime is AmazonS3", function () {
         pm.expect(destinationType).to.equal("AmazonS3")
     })
 
