@@ -459,8 +459,9 @@ async function reopenVocabularyEditionAndSave(page, runtime, prefix, patch = {})
 
 async function waitForPublicVocabularyDetail(page, runtime, prefix, title = "") {
   let lastReason = `Ontology Hub did not expose the public detail page for '${prefix}'.`;
+  const maxAttempts = 30;
 
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const detailProbe = await probeVocabularyDetail(page.request, runtime, prefix, {
       refresh: attempt > 1,
     });
@@ -470,8 +471,8 @@ async function waitForPublicVocabularyDetail(page, runtime, prefix, title = "") 
     }
 
     lastReason = detailProbe.reason || lastReason;
-    if (attempt < 12) {
-      await page.waitForTimeout(5000);
+    if (attempt < maxAttempts) {
+      await page.waitForTimeout(2000);
     }
   }
 

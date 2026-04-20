@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import inesdata
+from validation.components.ontology_hub.functional import runtime_preparation
 
 
 class _FakeSession:
@@ -30,7 +30,7 @@ class OntologyHubCleanupGuardsTests(unittest.TestCase):
             text="<html><h1>500 - Oops! something went wrong - 500</h1></html>",
         )
 
-        self.assertTrue(inesdata._ontology_hub_response_looks_broken(response))
+        self.assertTrue(runtime_preparation.ontology_hub_response_looks_broken(response))
 
     def test_response_looks_broken_when_stacktrace_mentions_null_agent_name(self):
         response = SimpleNamespace(
@@ -38,7 +38,7 @@ class OntologyHubCleanupGuardsTests(unittest.TestCase):
             text="TypeError: /app/app/views/edition.jade:153 Cannot read properties of null (reading 'name')",
         )
 
-        self.assertTrue(inesdata._ontology_hub_response_looks_broken(response))
+        self.assertTrue(runtime_preparation.ontology_hub_response_looks_broken(response))
 
     def test_session_login_rejects_authenticated_broken_edition_page(self):
         runtime = {
@@ -58,8 +58,11 @@ class OntologyHubCleanupGuardsTests(unittest.TestCase):
         )
         session = _FakeSession(login_response, edition_response)
 
-        with mock.patch("inesdata.requests.Session", return_value=session):
-            authenticated = inesdata._ontology_hub_session_login(runtime)
+        with mock.patch(
+            "validation.components.ontology_hub.functional.runtime_preparation.requests.Session",
+            return_value=session,
+        ):
+            authenticated = runtime_preparation._ontology_hub_session_login(runtime)
 
         self.assertIsNone(authenticated)
 

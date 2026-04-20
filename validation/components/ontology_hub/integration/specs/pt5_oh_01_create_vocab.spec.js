@@ -23,7 +23,7 @@ async function waitForCatalogPublication(page, baseUrl, prefix, timeoutMs = 9000
       return catalogPage;
     }
 
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
   }
 
   throw new Error(

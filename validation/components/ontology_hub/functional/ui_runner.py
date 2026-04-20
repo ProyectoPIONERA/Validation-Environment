@@ -5,6 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from validation.components.ontology_hub.functional.runtime_preparation import (
+    prepare_ontology_hub_for_functional,
+)
 from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
 
 COMPONENT_KEY = "ontology-hub"
@@ -175,12 +178,7 @@ def _build_evidence_index(executed_cases: List[Dict[str, Any]], artifact_paths: 
 
 def _prepare_functional_runtime(runtime: Dict[str, Any]) -> tuple[bool, Dict[str, str] | None]:
     try:
-        import inesdata
-    except Exception as exc:  # pragma: no cover - defensive import guard
-        return False, {"type": type(exc).__name__, "message": str(exc)}
-
-    try:
-        prepared = bool(inesdata._prepare_ontology_hub_for_functional(runtime))
+        prepared = bool(prepare_ontology_hub_for_functional(runtime))
     except Exception as exc:  # pragma: no cover - defensive preparation guard
         return False, {"type": type(exc).__name__, "message": str(exc)}
 

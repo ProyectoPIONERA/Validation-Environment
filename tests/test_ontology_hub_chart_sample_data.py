@@ -11,7 +11,8 @@ class OntologyHubChartSampleDataTests(unittest.TestCase):
         cls.validation_environment_dir = Path(__file__).resolve().parents[1]
         cls.chart_dir = (
             cls.validation_environment_dir
-            / "inesdata-deployment"
+            / "deployers"
+            / "shared"
             / "components"
             / "ontology-hub"
         )
@@ -34,6 +35,8 @@ class OntologyHubChartSampleDataTests(unittest.TestCase):
         return rendered.stdout
 
     def test_demo_values_render_sample_data_resources(self):
+        if not (self.chart_dir / "values-demo.yaml").exists():
+            self.skipTest("values-demo.yaml is a local runtime values file")
         rendered = self._render_chart("values-demo.yaml")
 
         self.assertIn("name: ontology-hub-test-sample-data", rendered)
@@ -70,6 +73,9 @@ class OntologyHubChartSampleDataTests(unittest.TestCase):
     def test_default_values_do_not_render_optional_sample_data_resources(self):
         rendered = self._render_chart("values.yaml")
 
+        self.assertIn('value: "mongodb://mongodb:27017"', rendered)
+        self.assertIn('value: "mongodb://mongodb:27017/lov"', rendered)
+        self.assertNotIn("%!d", rendered)
         self.assertNotIn("name: ontology-hub-test-sample-data", rendered)
         self.assertNotIn("seed-ontology-hub-mongodb", rendered)
         self.assertNotIn("seed-ontology-hub-elasticsearch", rendered)

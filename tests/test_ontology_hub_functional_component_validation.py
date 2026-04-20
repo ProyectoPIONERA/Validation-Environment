@@ -33,7 +33,10 @@ class OntologyHubFunctionalComponentValidationTests(unittest.TestCase):
         prepare_mock.assert_called_once()
 
     def test_prepare_functional_runtime_reports_preparation_failure(self):
-        with mock.patch("inesdata._prepare_ontology_hub_for_functional", return_value=False):
+        with mock.patch(
+            "validation.components.ontology_hub.functional.ui_runner.prepare_ontology_hub_for_functional",
+            return_value=False,
+        ):
             prepared, error = _prepare_functional_runtime({"baseUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm"})
 
         self.assertFalse(prepared)

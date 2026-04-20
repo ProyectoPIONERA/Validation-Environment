@@ -70,7 +70,7 @@ class CatalogPage {
       }
 
       await clickMarked(this.nextPageButton);
-      await this.page.waitForTimeout(500);
+      await this.page.waitForLoadState("domcontentloaded", { timeout: 1000 }).catch(() => {});
     }
 
     throw new Error(`Catalog card '${text}' was not visible in the paginated catalog results`);

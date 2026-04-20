@@ -67,7 +67,7 @@ class OntologyHubTermsPage {
 
   async clickFacetLink(groupLabel, valueLabel) {
     await clickMarked(this.facetLink(groupLabel, valueLabel));
-    await this.page.waitForLoadState("networkidle");
+    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
   }
 
   async currentResultCount() {

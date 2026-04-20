@@ -112,7 +112,9 @@ function resolveRuntimeValue(envName, deployerConfig, fallback, options = {}) {
 }
 
 function resolveOntologyHubRuntime() {
-  const deployerConfig = parseKeyValueFile(path.join(projectRoot(), "deployer.config"));
+  const deployerConfig = parseKeyValueFile(
+    path.join(projectRoot(), "deployers", "inesdata", "deployer.config"),
+  );
   const dataspace = (process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo").trim();
   const dsDomain = (process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm").trim();
   const runtimeFile = process.env.ONTOLOGY_HUB_RUNTIME_FILE;

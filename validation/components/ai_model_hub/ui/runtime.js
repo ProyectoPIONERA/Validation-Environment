@@ -6,6 +6,9 @@ function projectRoot() {
 }
 
 function parseKeyValueFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
   const content = fs.readFileSync(filePath, "utf8");
   const values = {};
   for (const line of content.split(/\r?\n/)) {
@@ -23,7 +26,9 @@ function parseKeyValueFile(filePath) {
 }
 
 function resolveAIModelHubRuntime() {
-  const deployerConfig = parseKeyValueFile(path.join(projectRoot(), "deployer.config"));
+  const deployerConfig = parseKeyValueFile(
+    path.join(projectRoot(), "deployers", "inesdata", "deployer.config"),
+  );
   const dataspace = (process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo").trim();
   const dsDomain = (process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm").trim();
   const keycloakBaseUrl = (

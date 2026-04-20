@@ -4,7 +4,7 @@ class OntologyHubApiDocsPage {
   }
 
   async goto(baseUrl) {
-    await this.page.goto(`${baseUrl}/dataset/api`, { waitUntil: "networkidle" });
+    await this.page.goto(`${baseUrl}/dataset/api`, { waitUntil: "domcontentloaded" });
   }
 
   async expectReady() {

@@ -359,11 +359,14 @@ async function gotoEdition(page, runtime) {
     await fillMarked(page.getByPlaceholder("Email"), runtime.adminEmail);
     await fillMarked(page.getByPlaceholder("Password"), runtime.adminPassword);
     await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
-    await page.waitForLoadState("domcontentloaded");
-    await page.waitForTimeout(500);
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
 
     const invalidCredentials = page.getByText("Invalid email or password.", { exact: true });
-    if ((await invalidCredentials.count()) > 0 && (await invalidCredentials.isVisible())) {
+    const invalidCredentialsVisible = await invalidCredentials
+      .waitFor({ state: "visible", timeout: 1000 })
+      .then(() => true)
+      .catch(() => false);
+    if (invalidCredentialsVisible) {
       throw new Error(
         `El login de Ontology Hub fue rechazado por el entorno actual. ${loginErrorHint(runtime)}`,
       );
@@ -392,8 +395,9 @@ async function gotoEdition(page, runtime) {
 async function ensurePublicDetail(page, runtime, prefix, title) {
   const detailUrl = `${runtime.baseUrl}/dataset/vocabs/${encodeURIComponent(prefix)}`;
   let lastReason = `La vista detalle publica de '${prefix}' no estuvo lista a tiempo.`;
+  const maxAttempts = 30;
 
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const detailProbe = await probeVocabularyDetail(page.request, runtime, prefix, {
       refresh: attempt > 1,
     });
@@ -415,8 +419,8 @@ async function ensurePublicDetail(page, runtime, prefix, title) {
     }
 
     lastReason = detailProbe.reason || lastReason;
-    if (attempt < 12) {
-      await page.waitForTimeout(5000);
+    if (attempt < maxAttempts) {
+      await page.waitForTimeout(2000);
     }
   }
 
@@ -739,8 +743,9 @@ async function gatherBootstrapCapabilities(page, runtime, context, options = {})
 
 async function waitForBootstrapCapabilities(page, runtime, context) {
   let capabilities = await gatherBootstrapCapabilities(page, runtime, context);
+  const maxAttempts = 10;
 
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     if (
       capabilities.publicVocabularyDetail &&
       capabilities.publicVocabularyAutocomplete &&
@@ -749,8 +754,8 @@ async function waitForBootstrapCapabilities(page, runtime, context) {
       return capabilities;
     }
 
-    if (attempt < 6) {
-      await page.waitForTimeout(3000);
+    if (attempt < maxAttempts) {
+      await page.waitForTimeout(2000);
       capabilities = await gatherBootstrapCapabilities(page, runtime, context, { refresh: true });
     }
   }
