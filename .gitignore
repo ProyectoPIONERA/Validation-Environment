@@ -27,6 +27,19 @@ build/
 dist/
 *.egg-info/
 
+# EDC adapter build sources are part of the framework; generated image contexts stay ignored.
+!adapters/edc/build/
+!adapters/edc/build/docker/
+!adapters/edc/build/docker/**
+!adapters/edc/build/local-overrides/
+!adapters/edc/build/local-overrides/**
+!adapters/edc/build/dashboard-proxy/
+!adapters/edc/build/dashboard-proxy/**
+adapters/edc/build/dashboard-proxy/__pycache__/
+adapters/edc/build/dashboard-proxy/*.py[cod]
+adapters/edc/build/dashboard-image-context/
+adapters/edc/build/dashboard-proxy-image-context/
+
 # =========================
 # NODE / PLAYWRIGHT
 # =========================
@@ -54,8 +67,21 @@ newman/
 # SENSITIVE CONFIGURATION
 # =========================
 deployer.config
-!deployer.config.example
+/deployer.config.example
 inesdata-deployment/
+edc-deployment/
+
+# Shared deployer artifacts: keep chart sources tracked, not generated/runtime material.
+deployers/shared/common/charts/
+deployers/shared/common/init-keys-vault.json
+deployers/shared/dataspace/registration-service/cacerts.jks
+deployers/shared/dataspace/registration-service/cert.yaml
+deployers/shared/dataspace/registration-service/values-*.yaml
+deployers/shared/components/*/values-*.yaml
+deployers/*/deployments/
+deployers/inesdata/connector/values-*.yaml
+deployers/inesdata/dataspace/*/values-*.yaml
+deployers/edc/connector/values-*.yaml
 
 # =========================
 # VARIABLES DE ENTORNO
@@ -106,3 +132,6 @@ validation/components/ai_model_hub/README.md
 docs/15_ai_model_hub_validation_plan.md
 docs/16_flares_linguistic_domain_context.md
 docs/A5.2_Casos_Prueba_ copy.xlsx
+docs/17_edc_adapter_design_and_implementation_plan.md
+adapters/edc/sources/connector
+adapters/edc/sources/dashboard
