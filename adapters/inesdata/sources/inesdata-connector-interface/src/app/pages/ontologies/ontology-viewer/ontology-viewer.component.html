@@ -4,7 +4,7 @@
   <a
     mat-stroked-button
     color="accent"
-    [href]="baseUrl"
+    [href]="baseUrl + '/edition'"
     target="_blank"
     rel="noopener noreferrer"
     aria-label="Create ontology"
@@ -34,11 +34,11 @@
 
         <mat-card-actions class="card-actions align-content-end text-align-end">
           <mat-card-actions class="card-actions align-content-end text-align-end">
-            <a 
-              [href]="baseUrl + '/vocabs/' + ontology.prefix" 
-              target="_blank" 
+            <a
+              [href]="baseUrl + '/dataset/vocabs/' + ontology.prefix"
+              target="_blank"
               rel="noopener noreferrer"
-              color="info" 
+              color="info"
               mat-stroked-button
             >
               <mat-icon>visibility</mat-icon>

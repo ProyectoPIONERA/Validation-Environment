@@ -40,13 +40,13 @@ No sustituye a los README operativos junto al código, pero sí concentra:
 
 | Elemento | Estado actual en el framework local | Referencia real |
 | --- | --- | --- |
-| Tipo de despliegue | componente opcional de `Level 5` | `inesdata-deployment/deployer.config` |
-| Namespace | `demo` | `inesdata-deployment/deployer.config` |
+| Tipo de despliegue | componente opcional de `Level 5` | `deployers/inesdata/deployer.config` |
+| Namespace | `demo` | `deployers/inesdata/deployer.config` |
 | Release Helm | `demo-ontology-hub` | `adapters/inesdata/components.py` |
-| Chart | `inesdata-deployment/components/ontology-hub/` | árbol del repo |
-| Host público | `ontology-hub-demo.dev.ds.dataspaceunit.upm` | `inesdata-deployment/components/ontology-hub/values-demo.yaml` |
-| Servicio interno | `ClusterIP` puerto `3333` | `inesdata-deployment/components/ontology-hub/values-demo.yaml` |
-| Dependencias internas | MongoDB y Elasticsearch | `inesdata-deployment/components/ontology-hub/values-demo.yaml` |
+| Chart | `deployers/shared/components/ontology-hub/` | árbol del repo |
+| Host público | `ontology-hub-demo.dev.ds.dataspaceunit.upm` | `deployers/shared/components/ontology-hub/values-demo.yaml` local o values generados |
+| Servicio interno | `ClusterIP` puerto `3333` | `deployers/shared/components/ontology-hub/values-demo.yaml` local o values generados |
+| Dependencias internas | MongoDB y Elasticsearch | `deployers/shared/components/ontology-hub/values-demo.yaml` local o values generados |
 | Imagen | `ontology-hub:local` preparada por `Level 5` | `adapters/inesdata/components.py` |
 | Suite automática en `Level 6` | `functional/` | `validation/components/runner.py` |
 | Suite complementaria | `integration/` | `validation/components/ontology_hub/integration/README.md` |
@@ -231,6 +231,35 @@ Ejemplos directos:
   público configurado para el componente.
 - El objetivo es evitar fallos de autoacceso del backend en operaciones como el
   análisis de versiones, sin modificar el código de la aplicación.
+
+## Integración semántica con el conector INESData
+
+La integración de la extensión semántica del PR `#10` se incorpora de forma
+selectiva sobre los artefactos versionados del framework:
+
+- se integran los cambios de `inesdata-connector-interface` que permiten
+  seleccionar vocabularios de `Ontology Hub`, detectar archivos RDF y lanzar la
+  validación semántica antes de crear el asset.
+- se integra la extensión `ontology-validator` en `inesdata-connector` y se
+  empaqueta desde el launcher del conector.
+- no se versiona el gitlink `adapters/inesdata/sources/Ontology-Hub` del PR,
+  porque `Ontology-Hub` se mantiene como repositorio fuente local gestionado por
+  el framework y excluido por `.gitignore`.
+
+Para mantener reproducibilidad entre dataspaces, la interfaz del conector no
+debe asumir siempre `demo`. El chart del conector genera `ONTOLOGY_URL` a partir
+del dataspace activo y lo inyecta en `app.config.json` como `ontologyUrl`.
+
+La extensión del conector recibe URLs públicas de `Ontology Hub` y, cuando
+siguen el patrón `ontology-hub-<dataspace>.<dominio>`, las resuelve internamente
+como `http://<dataspace>-ontology-hub:3333`. Así se evita depender de un
+hostname fijo y se conserva la compatibilidad con dataspaces locales
+personalizados.
+
+Las credenciales administrativas de `Ontology Hub` no quedan hardcodeadas en el
+frontend. Si el flujo de subida de SHACL necesita autenticación, debe resolverse
+en una evolución posterior mediante configuración segura o un backend/BFF, no
+mediante secretos embebidos en código cliente.
 
 ## Criterio de mantenimiento
 

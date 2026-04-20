@@ -2,6 +2,7 @@ import { Component, Inject, OnInit, QueryList, ViewChildren } from '@angular/cor
 import { HttpDataAddress, DataAddress } from '@think-it-labs/edc-connector-client';
 import { JsonDoc } from "../../../shared/models/json-doc";
 import { StorageType } from "../../../shared/models/storage-type";
+import { MatDialog } from '@angular/material/dialog';
 import { AmazonS3DataAddress } from "../../../shared/models/amazon-s3-data-address";
 import { Vocabulary } from "../../../shared/models/vocabulary";
 import { NotificationService } from 'src/app/shared/services/notification.service';
@@ -20,6 +21,10 @@ import { BehaviorSubject } from 'rxjs';
 import { Router } from '@angular/router';
 import { MatSlideToggleChange } from '@angular/material/slide-toggle';
 import { NgModel } from '@angular/forms';
+import { SemanticFileValidatorService } from 'src/app/shared/services/semantic-file-validator.service';
+import { Ontology, OntologyVersion } from 'src/app/shared/models/ontology';
+import { OntologyService } from 'src/app/shared/services/ontology.service';
+import { ConfirmationDialogComponent, ConfirmDialogModel } from 'src/app/shared/components/confirmation-dialog/confirmation-dialog.component';
 
 
 @Component({
@@ -38,6 +43,11 @@ export class AssetCreateComponent implements OnInit {
       }
     ]
   };
+
+  //manage the validation button for semantic files
+  showTestFileButton = false;
+  showUploadFileButton = false;
+
 
   // Dynamic forms from vocabylary variables
   vocabularies: Vocabulary[];
@@ -75,6 +85,15 @@ export class AssetCreateComponent implements OnInit {
   keywords: string = '';
   format: string = '';
   byteSize: string = '';
+  ontologyUri: string = '';
+  ontologyVersion: string = '';
+  ontologyShacl: any = '';
+
+  ontologies: Ontology[] = [];
+  filteredOntologies: Ontology[] = [];
+  ontologyVersions: OntologyVersion[] = [];
+  ontologyShacls: any[] = [];
+
 
   // Storage information
   amazonS3DataAddress: AmazonS3DataAddress = {
@@ -87,6 +106,10 @@ export class AssetCreateComponent implements OnInit {
   };
 
   inesDataStoreAddress: InesDataStoreAddress = {
+    type: 'InesDataStore'
+  };
+
+  shaclInesDataStoreAddress: InesDataStoreAddress = {
     type: 'InesDataStore'
   };
 
@@ -110,6 +133,14 @@ export class AssetCreateComponent implements OnInit {
     this.defaultForms = []
     this.selectedForms = []
     this.selectedAssetTypeVocabularies = []
+
+    this.ontologyService.getOntologyLists().subscribe({
+      next: (res: Ontology[]) => {
+        this.ontologies = res;
+        this.filteredOntologies = res;
+      },
+    });
+
 
     this.vocabularyService.requestVocabularies().subscribe({
       next: (res: Vocabulary[]) => {
@@ -151,7 +182,10 @@ export class AssetCreateComponent implements OnInit {
     private notificationService: NotificationService,
     @Inject('STORAGE_TYPES') public storageTypes: StorageType[],
     private router: Router,
-    private loadingService: LoadingService) {
+    private loadingService: LoadingService,
+    private ontologyService: OntologyService,
+    private semanticFileValidator: SemanticFileValidatorService,
+    private dialog: MatDialog) {
   }
 
   async onSave() {
@@ -245,7 +279,9 @@ export class AssetCreateComponent implements OnInit {
     properties["dcterms:description"] = this.description;
     properties["dcat:byteSize"] = this.byteSize;
     properties["dcterms:format"] = this.format;
-
+    properties["ontologyUri"] = this.ontologyUri;
+    properties["ontologyVersion"] = this.ontologyVersion;
+    properties["ontologyShacl"] = this.ontologyShacl;
     this.addKeywords(properties);
   }
 
@@ -290,6 +326,10 @@ export class AssetCreateComponent implements OnInit {
     if (!this.id || !this.storageTypeId || !this.name || !this.version || !this.description || !this.keywords || !this.shortDescription || !this.assetType) {
       return false;
     } else {
+      if (this.ontologyUri && (!this.ontologyVersion || !this.ontologyShacl || (this.ontologyShacl === 'newShaclFile' && !this.shaclInesDataStoreAddress.file))) {
+        return false;
+      }
+
       if (this.storageTypeId === DATA_ADDRESS_TYPES.httpData && (!this.httpDataAddress.name || !this.httpDataAddress.baseUrl || !this.validateUrl())) {
         return false;
       }
@@ -349,9 +389,20 @@ export class AssetCreateComponent implements OnInit {
 
   setFiles(event: File[]) {
     if (event?.length > 0) {
-      this.inesDataStoreAddress.file = event[0]
+      this.inesDataStoreAddress.file = event[0];
+      this.fileRequiresValidation();
     } else {
       delete this.inesDataStoreAddress.file
+    }
+  }
+
+  async setShaclFiles(event: File[], shaclFile:any) {
+    this.showUploadFileButton = false;
+    if (event?.length > 0) {
+      this.showUploadFileButton = true;
+      this.shaclInesDataStoreAddress.file = event[0];
+    } else {
+      delete this.shaclInesDataStoreAddress.file;
     }
   }
 
@@ -448,6 +499,149 @@ export class AssetCreateComponent implements OnInit {
   }
 
   onToggleChange(propertyName: string, event: MatSlideToggleChange): void {
-    this.httpDataAddress[propertyName] = event ? 'true' : 'false';
+    this.httpDataAddress[propertyName] = event.checked;
   }
+
+
+  async fileRequiresValidation(){
+    let isSemanticFile = false;
+
+    if(!this.inesDataStoreAddress.file || this.ontologyShacl === 'newShaclFile' || this.ontologyShacl === ''){
+      return
+    }
+
+    await this.semanticFileValidator.isASemanticFile(this.inesDataStoreAddress.file).then(res => {
+      isSemanticFile = res
+    });
+
+    if(isSemanticFile && this.ontologyUri && this.ontologyVersion && this.ontologyShacl){
+      this.showTestFileButton = true;
+    }
+  }
+
+  onSearchOntology(event: any) {
+    const value = (event.target as HTMLInputElement).value.toLowerCase();
+    this.filteredOntologies = this.ontologies.filter(ontology =>
+      ontology.titles[0].value.toLowerCase().includes(value) ||
+      ontology.uri.toLowerCase().includes(value)
+    );
+  }
+
+  runOntologyTest() {
+    const selectedOntology = this.ontologies.find(o => o.uri === this.ontologyUri);
+    const prefix = selectedOntology?.prefix || '';
+
+    this.loadingService.showLoading('Validating semantic file...');
+    const ontologyUrl = this.ontologyService.buildUrl(prefix, 'ontology', this.ontologyVersion.split('T')[0]);
+    const shaclUrl = this.ontologyService.buildUrl(prefix, 'shacl', this.ontologyShacl);
+    const rdfFormat = this.resolveRdfFormat(this.inesDataStoreAddress.file);
+
+    this.assetService.testRdfAsset(ontologyUrl, shaclUrl, this.inesDataStoreAddress.file, rdfFormat).subscribe({
+      next: (res) => {
+        this.notificationService.showInfo('Validation completed successfully');
+        this.loadingService.hideLoading();
+      },
+      error: (err) => {
+        this.loadingService.hideLoading();
+
+        const detail = Array.isArray(err.error)
+          ? err.error.map((e: any) => typeof e === 'string' ? e : e.message).join('\n')
+          : err.error?.message || err.message || "Unknown validation error";
+
+        const dialogData = new ConfirmDialogModel("Validation Failed", detail);
+        dialogData.confirmText = "Close";
+        dialogData.confirmColor = "warn";
+        dialogData.showCancel = false;
+
+        this.dialog.open(ConfirmationDialogComponent, { data: dialogData, width: '600px' });
+      }
+    });
+  }
+
+  private resolveRdfFormat(file: File): string {
+    const mimeType = (file?.type || '').toLowerCase();
+    switch (mimeType) {
+      case 'text/turtle':
+        return 'turtle';
+      case 'application/rdf+xml':
+        return 'rdfxml';
+      case 'application/ld+json':
+        return 'jsonld';
+      case 'application/n-triples':
+        return 'ntriples';
+      case 'text/n3':
+        return 'n3';
+      default:
+        break;
+    }
+
+    const fileName = (file?.name || '').toLowerCase();
+    if (fileName.endsWith('.n3')) return 'n3';
+    if (fileName.endsWith('.ttl')) return 'turtle';
+    if (fileName.endsWith('.rdf') || fileName.endsWith('.xml') || fileName.endsWith('.owl')) return 'rdfxml';
+    if (fileName.endsWith('.jsonld')) return 'jsonld';
+    if (fileName.endsWith('.nt')) return 'ntriples';
+
+    return 'turtle';
+  }
+
+  fillVersions(uri: string) {
+    const selectedOntology = this.ontologies.find(o => o.uri === uri);
+    this.ontologyVersions = selectedOntology?.versions || [];
+    this.ontologyShacls = selectedOntology?.artifacts?.shapes || [];
+
+    if (this.ontologyVersions.length === 1) {
+      this.ontologyVersion = this.ontologyVersions[0].issued;
+    } else {
+      this.ontologyVersion = '';
+    }
+
+    if (this.ontologyShacls.length === 1) {
+      this.ontologyShacl = this.ontologyShacls[0];
+    } else {
+      this.ontologyShacl = '';
+    }
+  }
+
+
+  uploadShaclFile() {
+    if (this.ontologyShacl === 'newShaclFile' && this.shaclInesDataStoreAddress.file && this.ontologyUri) {
+      const selectedOntology = this.ontologies.find(o => o.uri === this.ontologyUri);
+      if (selectedOntology) {
+        this.loadingService.showLoading('Uploading SHACL file...');
+        this.ontologyService.postUploadShacl(
+          this.shaclInesDataStoreAddress.file,
+          selectedOntology.prefix,
+          selectedOntology.uri
+        ).subscribe({
+          next: () => {
+            this.ontologyService.getOntologyLists().subscribe({
+              next: (res: Ontology[]) => {
+                this.ontologies = res;
+                this.filteredOntologies = res;
+
+                const updatedOntology = this.ontologies.find(o => o.uri === this.ontologyUri);
+                this.ontologyShacls = updatedOntology?.artifacts?.shapes || [];
+                this.ontologyShacl = '';
+
+                this.loadingService.hideLoading();
+                this.notificationService.showInfo('SHACL file uploaded successfully');
+                this.showUploadFileButton = false;
+                delete this.shaclInesDataStoreAddress.file;
+              },
+              error: () => {
+                this.loadingService.hideLoading();
+                this.notificationService.showError('Error refreshing ontology list');
+              }
+            });
+          },
+          error: (err) => {
+            this.loadingService.hideLoading();
+            this.notificationService.showError('Error uploading SHACL file');
+          }
+        });
+      }
+    }
+  }
+
 }

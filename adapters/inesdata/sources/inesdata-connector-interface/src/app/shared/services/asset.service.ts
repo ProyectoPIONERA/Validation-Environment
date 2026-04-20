@@ -13,7 +13,7 @@
 
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Observable, from, lastValueFrom } from 'rxjs';
+import { Observable, from, lastValueFrom, map, switchMap } from 'rxjs';
 
 import { expandArray, Asset, EDC_CONTEXT, JSON_LD_DEFAULT_CONTEXT } from '@think-it-labs/edc-connector-client';
 import { AssetInput,  QuerySpec } from "../models/edc-connector-entities"
@@ -28,6 +28,7 @@ export class AssetService {
   private readonly BASE_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.baseUrl}`;
   private readonly UPLOAD_CHUNK_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.uploadChunk}`;
   private readonly FINALIZE_UPLOAD_URL = `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.finalizeUpload}`;
+  private readonly TEST_RDF_ASSET = `${environment.runtime.managementApiUrl}/validation/rdf_asset`;
 
   constructor(private http: HttpClient) {
   }
@@ -47,9 +48,7 @@ export class AssetService {
       }
     }
 
-    return from(lastValueFrom(this.http.post<Asset>(
-      `${this.BASE_URL}`, body
-    )));
+    return this.http.post<Asset>(`${this.BASE_URL}`, body);
   }
 
   /**
@@ -61,9 +60,9 @@ export class AssetService {
       throw new Error('Required parameter id was null or undefined when calling getAsset.');
     }
 
-    return from(lastValueFrom(this.http.get<Asset>(
+    return this.http.get<Asset>(
       `${this.BASE_URL}${environment.runtime.service.asset.get}${id}`
-    )));
+    );
   }
 
   /**
@@ -75,9 +74,9 @@ export class AssetService {
       throw new Error('Required parameter id was null or undefined when calling removeAsset.');
     }
 
-    return from(lastValueFrom(this.http.delete<Asset>(
+    return this.http.delete<Asset>(
       `${this.BASE_URL}${environment.runtime.service.asset.get}${id}`
-    )));
+    );
   }
 
   /**
@@ -94,10 +93,10 @@ export class AssetService {
       }
     }
 
-    return from(lastValueFrom(this.http.post<Array<Asset>>(
+    return this.http.post<Array<Asset>>(
       `${this.BASE_URL}${environment.runtime.service.asset.getAll}`, body
-    )).then(results => {
-      return expandArray(results, () => new Asset());
+    ).pipe(switchMap((results: Array<Asset>) => {
+      return from(expandArray(results, () => new Asset()));
     }));
   }
 
@@ -114,9 +113,9 @@ export class AssetService {
       ...querySpec
     };
 
-    return from(lastValueFrom(this.http.post<number>(
+    return this.http.post<number>(
       `${environment.runtime.managementApiUrl}${environment.runtime.service.asset.count}`, body
-    )));
+    );
   }
 
   async uploadChunk(assetEntryDto: any, chunk: Blob, fileName: string, chunkIndex: number, totalChunks: number): Promise<any> {
@@ -176,5 +175,23 @@ export class AssetService {
       this.http.post(`${this.FINALIZE_UPLOAD_URL}`, formData)
     );
   }
-}
 
+  testRdfAsset(ontologyUrl: string,
+                  shaclUrl: string,
+                      rdfFile: File,
+                        format: string): Observable<any> {
+
+    const formData = new FormData();
+    formData.append('ontologyUrl', ontologyUrl);
+    formData.append('shaclUrl', shaclUrl);
+    formData.append('rdf', rdfFile);
+    formData.append('format', format);
+
+    return this.http.post(
+      this.TEST_RDF_ASSET,
+      formData
+    );
+  }
+
+
+}
