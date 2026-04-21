@@ -30,6 +30,11 @@ Desde la raíz del repositorio:
 bash scripts/bootstrap_framework.sh
 ```
 
+En Linux/WSL, el bootstrap instala Playwright con sus dependencias del sistema
+para evitar que las validaciones UI fallen al arrancar el navegador. En
+entornos donde no se puedan instalar paquetes del sistema, usa
+`bash scripts/bootstrap_framework.sh --without-system-deps`.
+
 Después abre el menú guiado:
 
 ```bash

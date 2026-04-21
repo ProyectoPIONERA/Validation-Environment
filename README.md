@@ -75,6 +75,10 @@ cd Validation-Environment
 bash scripts/bootstrap_framework.sh
 ```
 
+En Linux/WSL, este comando instala también las dependencias del sistema que
+Playwright necesita para arrancar los navegadores. Si el entorno no permite
+instalar paquetes del sistema, usa `--without-system-deps`.
+
 3. Abre el menú guiado:
 
 ```bash
@@ -207,19 +211,15 @@ npx newman -v
 ```
 
 El bootstrap del framework prepara `.venv`, dependencias Python, dependencias
-Node.js y navegadores Playwright cuando es posible:
+Node.js, navegadores Playwright y, en Linux/WSL, las dependencias del sistema
+necesarias para ejecutar esos navegadores:
 
 ```bash
 bash scripts/bootstrap_framework.sh
 ```
 
-Si Playwright necesita dependencias del sistema en Linux/WSL, puede ser
-necesario ejecutar:
-
-```bash
-cd validation/ui
-npx playwright install --with-deps
-```
+Si un entorno no permite instalar paquetes del sistema desde el bootstrap, se
+puede usar `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
 ## Minikube Tunnel
 

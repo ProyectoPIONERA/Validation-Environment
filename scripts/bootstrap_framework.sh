@@ -15,7 +15,7 @@ INESDATA_CONFIG_DIR="$ROOT_DIR/deployers/inesdata"
 INESDATA_CONFIG="$INESDATA_CONFIG_DIR/deployer.config"
 INESDATA_CONFIG_EXAMPLE="$INESDATA_CONFIG_DIR/deployer.config.example"
 
-WITH_SYSTEM_DEPS=false
+PLAYWRIGHT_SYSTEM_DEPS_MODE=auto
 SKIP_PLAYWRIGHT=false
 SKIP_ROOT_NODE=false
 SKIP_UI_NODE=false
@@ -37,7 +37,8 @@ Usage: bash scripts/bootstrap_framework.sh [options]
 Prepare the local framework workspace from a fresh machine checkout.
 
 Options:
-  --with-system-deps        Run 'npx playwright install --with-deps'
+  --with-system-deps        Force 'npx playwright install --with-deps'
+  --without-system-deps     Do not install Playwright system dependencies
   --skip-playwright         Skip Playwright browser installation
   --skip-root-node          Skip 'npm install' in the repo root
   --skip-ui-node            Skip 'npm install' in validation/ui
@@ -49,7 +50,11 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-system-deps)
-      WITH_SYSTEM_DEPS=true
+      PLAYWRIGHT_SYSTEM_DEPS_MODE=with
+      shift
+      ;;
+    --without-system-deps)
+      PLAYWRIGHT_SYSTEM_DEPS_MODE=without
       shift
       ;;
     --skip-playwright)
@@ -77,6 +82,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+should_install_playwright_system_deps() {
+  case "$PLAYWRIGHT_SYSTEM_DEPS_MODE" in
+    with)
+      return 0
+      ;;
+    without)
+      return 1
+      ;;
+  esac
+
+  # Fresh Linux/WSL machines usually need Chromium/WebKit runtime libraries.
+  # Playwright handles distro-specific packages through --with-deps.
+  [[ "$(uname -s)" == "Linux" ]]
+}
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 
@@ -125,9 +145,11 @@ if [[ "$SKIP_PLAYWRIGHT" == false ]]; then
   log "Installing Playwright browsers"
   (
     cd "$UI_DIR"
-    if [[ "$WITH_SYSTEM_DEPS" == true ]]; then
+    if should_install_playwright_system_deps; then
+      log "Installing Playwright browsers with system dependencies"
       npx playwright install --with-deps
     else
+      log "Installing Playwright browsers without system dependencies"
       npx playwright install
     fi
   )

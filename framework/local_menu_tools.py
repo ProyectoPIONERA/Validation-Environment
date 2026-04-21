@@ -33,6 +33,18 @@ FRAMEWORK_DOCTOR_SYSTEM_COMMANDS = (
 )
 
 
+def _playwright_bootstrap_remediation() -> str:
+    if sys.platform.startswith("linux"):
+        return f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH} (installs Playwright with system dependencies on Linux/WSL)"
+    return f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}"
+
+
+def _playwright_browser_remediation() -> str:
+    if sys.platform.startswith("linux"):
+        return "Run: cd validation/ui && npx playwright install --with-deps"
+    return "Run: cd validation/ui && npx playwright install"
+
+
 @dataclass(frozen=True)
 class LocalImageRecipe:
     """Explicit local-image build recipe exposed by the developer menu."""
@@ -218,7 +230,7 @@ def collect_framework_doctor_report():
                 "playwright cli",
                 "ok" if return_code == 0 else "warning",
                 version_text.splitlines()[0].strip() if version_text else local_playwright,
-                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+                _playwright_bootstrap_remediation(),
             )
         )
 
@@ -244,7 +256,7 @@ def collect_framework_doctor_report():
                 "playwright browsers",
                 browser_status,
                 browser_details,
-                "Run: cd validation/ui && npx playwright install",
+                _playwright_browser_remediation(),
             )
         )
     else:
@@ -254,7 +266,7 @@ def collect_framework_doctor_report():
                 "playwright cli",
                 "missing",
                 f"Missing Playwright binary: {local_playwright}",
-                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+                _playwright_bootstrap_remediation(),
             )
         )
 
@@ -424,6 +436,8 @@ def run_framework_bootstrap_interactive():
         return None
 
     command = ["bash", script_path]
+    if sys.platform.startswith("linux"):
+        print("\nOn Linux/WSL this also prepares Playwright system dependencies and may request sudo privileges.")
     print(f"\nLaunching framework bootstrap: {' '.join(command)}\n")
     result = subprocess.run(command, cwd=root_dir)
 

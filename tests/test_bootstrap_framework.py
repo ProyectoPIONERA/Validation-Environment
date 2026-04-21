@@ -1,4 +1,5 @@
 import os
+import platform
 import shutil
 import stat
 import subprocess
@@ -24,6 +25,7 @@ class BootstrapFrameworkTests(unittest.TestCase):
 
         with open(os.path.join(root, "requirements.txt"), "w", encoding="utf-8") as handle:
             handle.write("")
+        os.makedirs(os.path.join(root, "validation", "ui"), exist_ok=True)
 
         for deployer, marker in (("infrastructure", "KC_URL=http://keycloak.local\n"), ("inesdata", "DS_1_NAME=demo\n")):
             deployer_dir = os.path.join(root, "deployers", deployer)
@@ -54,6 +56,26 @@ class BootstrapFrameworkTests(unittest.TestCase):
                 )
             )
         os.chmod(fake_python, os.stat(fake_python).st_mode | stat.S_IXUSR)
+
+        for command_name in ("npm", "npx"):
+            command_path = os.path.join(fake_bin, command_name)
+            with open(command_path, "w", encoding="utf-8") as handle:
+                if command_name == "npx":
+                    handle.write(
+                        textwrap.dedent(
+                            """\
+                            #!/usr/bin/env bash
+                            set -euo pipefail
+                            if [[ -n "${BOOTSTRAP_NPX_LOG:-}" ]]; then
+                              printf '%s\n' "$*" >> "$BOOTSTRAP_NPX_LOG"
+                            fi
+                            exit 0
+                            """
+                        )
+                    )
+                else:
+                    handle.write("#!/usr/bin/env bash\nexit 0\n")
+            os.chmod(command_path, os.stat(command_path).st_mode | stat.S_IXUSR)
         return root, fake_bin
 
     def test_bootstrap_initializes_infrastructure_and_inesdata_configs(self):
@@ -107,6 +129,66 @@ class BootstrapFrameworkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(os.path.exists(os.path.join(root, "deployers", "infrastructure", "deployer.config")))
         self.assertFalse(os.path.exists(os.path.join(root, "deployers", "inesdata", "deployer.config")))
+
+    def test_bootstrap_installs_playwright_system_deps_by_default_on_linux(self):
+        root, fake_bin = self._prepare_workspace()
+        npx_log = os.path.join(root, "npx.log")
+        env = dict(os.environ)
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+        env["BOOTSTRAP_NPX_LOG"] = npx_log
+
+        result = subprocess.run(
+            [
+                "bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-root-node",
+                "--skip-ui-node",
+                "--skip-deployer-config",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        with open(npx_log, encoding="utf-8") as handle:
+            npx_commands = handle.read()
+
+        expected = (
+            "playwright install --with-deps"
+            if platform.system() == "Linux"
+            else "playwright install"
+        )
+        self.assertIn(expected, npx_commands)
+
+    def test_bootstrap_can_skip_playwright_system_deps(self):
+        root, fake_bin = self._prepare_workspace()
+        npx_log = os.path.join(root, "npx.log")
+        env = dict(os.environ)
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+        env["BOOTSTRAP_NPX_LOG"] = npx_log
+
+        result = subprocess.run(
+            [
+                "bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-root-node",
+                "--skip-ui-node",
+                "--skip-deployer-config",
+                "--without-system-deps",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        with open(npx_log, encoding="utf-8") as handle:
+            npx_commands = handle.read()
+        self.assertIn("playwright install", npx_commands)
+        self.assertNotIn("--with-deps", npx_commands)
 
 
 if __name__ == "__main__":

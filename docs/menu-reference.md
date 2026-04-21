@@ -81,7 +81,7 @@ Abre suites UI específicas para portales y componentes.
 
 `1 - Bootstrap Framework Dependencies`
 
-Instala o repara dependencias del framework. Úsalo en una máquina limpia o tras problemas de dependencias.
+Instala o repara dependencias del framework. Úsalo en una máquina limpia o tras problemas de dependencias; en Linux/WSL también prepara las dependencias de sistema necesarias para Playwright.
 
 `2 - Run Framework Doctor`
 
