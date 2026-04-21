@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from deployers.shared.lib.contracts import DeploymentContext, NamespaceRoles, ValidationProfile
+from deployers.shared.lib.contracts import DeploymentContext, NamespaceRoles, TopologyProfile, ValidationProfile
 
 
 class SharedContractsTests(unittest.TestCase):
@@ -68,6 +68,29 @@ class SharedContractsTests(unittest.TestCase):
         self.assertIsInstance(context.namespace_roles, NamespaceRoles)
         self.assertEqual(context.namespace_roles.registration_service_namespace, "demoedc")
         self.assertEqual(context.config["DS_1_NAME"], "demoedc")
+
+    def test_deployment_context_from_mapping_wraps_topology_profile(self):
+        context = DeploymentContext.from_mapping(
+            {
+                "deployer": "edc",
+                "topology": "vm-single",
+                "environment": "DEV",
+                "dataspace_name": "demoedc",
+                "ds_domain_base": "dev.ds.dataspaceunit.upm",
+                "topology_profile": {
+                    "name": "vm-single",
+                    "default_address": "192.0.2.10",
+                    "role_addresses": {"components": "192.0.2.20"},
+                    "ingress_external_ip": "192.0.2.10",
+                    "routing_mode": "host",
+                },
+            }
+        )
+
+        self.assertIsInstance(context.topology_profile, TopologyProfile)
+        self.assertEqual(context.topology_profile.name, "vm-single")
+        self.assertEqual(context.topology_profile.address_for("common"), "192.0.2.10")
+        self.assertEqual(context.topology_profile.address_for("components"), "192.0.2.20")
 
 
 if __name__ == "__main__":

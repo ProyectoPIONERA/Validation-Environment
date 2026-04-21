@@ -325,6 +325,29 @@ class FakeDeployer:
         return {"deployed": list(context.components), "urls": {}}
 
 
+class FakeVmDeployer(FakeDeployer):
+    @staticmethod
+    def supported_topologies():
+        return ["local", "vm-single", "vm-distributed"]
+
+    def resolve_context(self, topology="local"):
+        context = super().resolve_context(topology=topology)
+        if topology == "vm-single":
+            context["topology_profile"] = {
+                "name": "vm-single",
+                "default_address": "192.0.2.10",
+                "role_addresses": {
+                    "common": "192.0.2.10",
+                    "registration_service": "192.0.2.10",
+                    "connectors": "192.0.2.10",
+                    "components": "192.0.2.10",
+                },
+                "ingress_external_ip": "192.0.2.10",
+                "routing_mode": "host",
+            }
+        return context
+
+
 class MainCliTests(unittest.TestCase):
     def setUp(self):
         self.fake_module = types.ModuleType("fake_adapter_module")
@@ -335,9 +358,11 @@ class MainCliTests(unittest.TestCase):
         self.fake_module.DeployShadowPreviewAdapter = DeployShadowPreviewAdapter
         self.fake_deployer_module = types.ModuleType("fake_deployer_module")
         self.fake_deployer_module.FakeDeployer = FakeDeployer
+        self.fake_deployer_module.FakeVmDeployer = FakeVmDeployer
         self.registry = {"fake": "fake_adapter_module:FakeAdapter"}
         self.deployer_registry = {
             "fake": "fake_deployer_module:FakeDeployer",
+            "fakevm": "fake_deployer_module:FakeVmDeployer",
             "edc": "fake_deployer_module:FakeDeployer",
         }
         self.module_patcher = mock.patch.dict(
@@ -733,6 +758,15 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
 
+    def test_run_level_refuses_non_local_deployment_levels_until_vm_execution_exists(self):
+        adapter = FakeAdapter()
+
+        with self.assertRaises(RuntimeError) as error:
+            main.run_level(adapter, 4, deployer_name="fake", topology="vm-single")
+
+        self.assertIn("Real Level 4 execution is not enabled", str(error.exception))
+        self.assertEqual(adapter.calls, [])
+
     def test_run_levels_reuses_one_adapter_for_selected_levels(self):
         result = main.run_levels(
             "fake",
@@ -1048,6 +1082,21 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["validation_profile"]["adapter"], "fake")
         self.assertEqual(adapter.calls, [])
 
+    def test_deploy_command_non_local_uses_deployer_shadow_plan_by_default(self):
+        adapter = FakeAdapter()
+
+        result = main.run_deploy(
+            adapter,
+            deployer_name="fakevm",
+            deployer_registry=self.deployer_registry,
+            topology="vm-single",
+        )
+
+        self.assertEqual(result["mode"], "shadow")
+        self.assertEqual(result["topology"], "vm-single")
+        self.assertEqual(result["hosts_plan"]["address"], "192.0.2.10")
+        self.assertEqual(adapter.calls, [])
+
     def test_deploy_shadow_plan_includes_level_plan_from_adapter_preflight(self):
         adapter = DeployShadowPreviewAdapter(topology="local")
 
@@ -1139,6 +1188,26 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["hosts_sync"]["reason"], "disabled")
         self.assertEqual(result["hosts_plan"]["level_3"], ["registration-service-fake-ds.example.local"])
         self.assertEqual(result["hosts_plan"]["level_4"], ["conn-a.example.local", "conn-b.example.local"])
+
+    def test_hosts_command_vm_single_uses_vm_address_from_context(self):
+        adapter = FakeAdapter()
+
+        result = main.run_hosts(
+            adapter,
+            deployer_name="fakevm",
+            deployer_registry=self.deployer_registry,
+            topology="vm-single",
+        )
+
+        self.assertEqual(result["hosts_plan"]["address"], "192.0.2.10")
+        self.assertIn(
+            "192.0.2.10 registration-service-fake-ds.example.local",
+            result["hosts_plan"]["blocks"]["dataspace fake-ds"],
+        )
+        self.assertIn(
+            "192.0.2.10 conn-a.example.local",
+            result["hosts_plan"]["blocks"]["connectors fake fake-ds"],
+        )
 
     def test_hosts_command_applies_only_missing_entries_when_enabled(self):
         adapter = FakeAdapter()

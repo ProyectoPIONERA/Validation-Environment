@@ -41,6 +41,7 @@ from deployers.infrastructure.lib.hosts_manager import (
     hostnames_by_level,
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
+from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
 from validation.ui import interactive_menu as ui_interactive_menu
 from validation.ui.ui_runner import run_playwright_validation
@@ -56,7 +57,7 @@ DEPLOYER_REGISTRY = {
 }
 
 SUPPORTED_COMMANDS = ("deploy", "validate", "metrics", "run", "hosts", "recreate-dataspace")
-SUPPORTED_TOPOLOGIES = ("local",)
+SUPPORTED_TOPOLOGIES = DEPLOYER_SUPPORTED_TOPOLOGIES
 LEVEL_DESCRIPTIONS = {
     1: "Setup Cluster",
     2: "Deploy Common Services",
@@ -537,7 +538,10 @@ def build_dry_run_preview(
     }
 
     if include_deployer_dry_run is None:
-        include_deployer_dry_run = _env_flag("PIONERA_ENABLE_DEPLOYER_DRY_RUN", default=False)
+        include_deployer_dry_run = _env_flag(
+            "PIONERA_ENABLE_DEPLOYER_DRY_RUN",
+            default=str(topology or "local").strip().lower() != "local",
+        )
 
     if include_deployer_dry_run:
         preview["deployer_orchestrator"] = _build_deployer_dry_run_preview(
@@ -887,8 +891,19 @@ def _should_sync_deployer_hosts():
     return _env_flag("PIONERA_SYNC_HOSTS", default=False)
 
 
-def _deployer_hosts_address():
-    return str(os.getenv("PIONERA_HOSTS_ADDRESS") or "127.0.0.1").strip() or "127.0.0.1"
+def _deployer_hosts_address_override():
+    value = str(os.getenv("PIONERA_HOSTS_ADDRESS") or "").strip()
+    return value or None
+
+
+def _deployer_hosts_default_address(context=None):
+    override = _deployer_hosts_address_override()
+    if override:
+        return override
+
+    topology_profile = getattr(context, "topology_profile", None)
+    default_address = str(getattr(topology_profile, "default_address", "") or "").strip()
+    return default_address or "127.0.0.1"
 
 
 def _deployer_hosts_file():
@@ -1006,12 +1021,20 @@ def _resolve_deployer_context(adapter, deployer_name=None, deployer_registry=Non
 
 
 def _build_shadow_host_sync_plan(context):
-    blocks = build_context_host_blocks(context, address=_deployer_hosts_address())
+    address_override = _deployer_hosts_address_override()
+    blocks = build_context_host_blocks(context, address=address_override)
     levels = hostnames_by_level(blocks)
+    topology_profile = getattr(context, "topology_profile", None)
     return {
         "status": "planned",
         "hosts_file": _deployer_hosts_file() or None,
-        "address": _deployer_hosts_address(),
+        "address": _deployer_hosts_default_address(context),
+        "address_override": address_override,
+        "topology_profile": (
+            topology_profile.as_dict()
+            if hasattr(topology_profile, "as_dict")
+            else None
+        ),
         "blocks": blocks_as_dict(blocks),
         "level_1_2": levels["level_1_2"],
         "level_3": levels["level_3"],
@@ -1036,7 +1059,7 @@ def _sync_deployer_hosts_if_enabled(context):
             "For Windows from WSL this is usually /mnt/c/Windows/System32/drivers/etc/hosts."
         )
 
-    blocks = build_context_host_blocks(context, address=_deployer_hosts_address())
+    blocks = build_context_host_blocks(context, address=_deployer_hosts_address_override())
     result = apply_managed_blocks(hosts_file, blocks)
     return {
         "status": "updated" if result["changed"] else "unchanged",
@@ -1396,7 +1419,7 @@ def run_recreate_dataspace(
 
 def run_deploy(adapter, deployer_name=None, deployer_registry=None, topology="local"):
     """Deploy infrastructure and connectors using the selected adapter."""
-    if _should_use_deployer_deploy():
+    if _should_use_deployer_deploy() or str(topology or "local").strip().lower() != "local":
         if _should_execute_deployer_deploy(deployer_name=deployer_name, topology=topology):
             return _execute_deployer_deploy(
                 adapter,
@@ -1910,6 +1933,13 @@ def run_level(
 
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
+    normalized_topology = str(topology or "local").strip().lower()
+    if normalized_topology != "local" and level_id in {1, 2, 3, 4, 5}:
+        raise RuntimeError(
+            f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
+            "Use the deployer dry-run/hosts plan first, then enable VM execution once the topology-specific "
+            "deployment path is implemented."
+        )
 
     if level_id == 1:
         setup_cluster = _resolve_adapter_callable(adapter, "setup_cluster")
@@ -2482,11 +2512,12 @@ def create_parser(adapter_registry=None):
     parser = argparse.ArgumentParser(
         prog="python main.py",
         description="Dataspace Experimentation Framework CLI",
-        usage="python main.py menu | python main.py list | python main.py <adapter> [command] [--topology local] [--dry-run] [--iterations N] [--kafka] [--baseline] | python main.py report <experiment_id> | python main.py compare <experiment_a> <experiment_b>",
+        usage="python main.py menu | python main.py list | python main.py <adapter> [command] [--topology local|vm-single|vm-distributed] [--dry-run] [--iterations N] [--kafka] [--baseline] | python main.py report <experiment_id> | python main.py compare <experiment_a> <experiment_b>",
         epilog=(
             "Examples:\n"
             "  python main.py menu\n"
             "  python main.py inesdata deploy --topology local\n"
+            "  PIONERA_VM_EXTERNAL_IP=192.0.2.10 python main.py edc hosts --topology vm-single\n"
             "  python main.py edc validate --topology local\n"
             "  python main.py edc hosts --topology local\n"
             "  python main.py edc recreate-dataspace --topology local --confirm-dataspace demoedc\n"
@@ -2518,7 +2549,7 @@ def create_parser(adapter_registry=None):
         "--topology",
         choices=SUPPORTED_TOPOLOGIES,
         default=SUPPORTED_TOPOLOGIES[0],
-        help="Deployment topology to target (currently only 'local').",
+        help="Deployment topology to target.",
     )
     parser.add_argument(
         "--dry-run",
@@ -2638,20 +2669,23 @@ def main(
         parser.error(f"unrecognized arguments: {' '.join(args.extra)}")
 
     if args.dry_run:
-        preview = build_dry_run_preview(
-            adapter_name=args.adapter,
-            command=command,
-            adapter_registry=registry,
-            deployer_registry=deployer_registry,
-            validation_engine_cls=validation_engine_cls,
-            metrics_collector_cls=metrics_collector_cls,
-            experiment_storage=experiment_storage,
-            iterations=args.iterations,
-            kafka_enabled=args.kafka,
-            baseline=args.baseline,
-            topology=args.topology,
-            with_connectors=args.with_connectors,
-        )
+        try:
+            preview = build_dry_run_preview(
+                adapter_name=args.adapter,
+                command=command,
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=validation_engine_cls,
+                metrics_collector_cls=metrics_collector_cls,
+                experiment_storage=experiment_storage,
+                iterations=args.iterations,
+                kafka_enabled=args.kafka,
+                baseline=args.baseline,
+                topology=args.topology,
+                with_connectors=args.with_connectors,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
         print(json.dumps(preview, indent=2, default=str))
         return preview
 
@@ -2666,47 +2700,59 @@ def main(
         parser.error(str(exc))
 
     if command == "deploy":
-        result = run_deploy(
-            adapter,
-            deployer_name=args.adapter,
-            deployer_registry=deployer_registry,
-            topology=args.topology,
-        )
+        try:
+            result = run_deploy(
+                adapter,
+                deployer_name=args.adapter,
+                deployer_registry=deployer_registry,
+                topology=args.topology,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
         if isinstance(result, dict) and result.get("mode") in {"shadow", "execute"}:
             print(json.dumps(result, indent=2, default=str))
         return result
 
     if command == "validate":
-        return run_validate(
-            adapter,
-            deployer_name=args.adapter,
-            deployer_registry=deployer_registry,
-            topology=args.topology,
-            validation_engine_cls=validation_engine_cls,
-            experiment_storage=experiment_storage,
-            baseline=args.baseline,
-        )
+        try:
+            return run_validate(
+                adapter,
+                deployer_name=args.adapter,
+                deployer_registry=deployer_registry,
+                topology=args.topology,
+                validation_engine_cls=validation_engine_cls,
+                experiment_storage=experiment_storage,
+                baseline=args.baseline,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if command == "metrics":
-        return run_metrics(
-            adapter,
-            deployer_name=args.adapter,
-            deployer_registry=deployer_registry,
-            topology=args.topology,
-            metrics_collector_cls=metrics_collector_cls,
-            experiment_storage=experiment_storage,
-            kafka_enabled=args.kafka,
-            kafka_manager_cls=kafka_manager_cls,
-            baseline=args.baseline,
-        )
+        try:
+            return run_metrics(
+                adapter,
+                deployer_name=args.adapter,
+                deployer_registry=deployer_registry,
+                topology=args.topology,
+                metrics_collector_cls=metrics_collector_cls,
+                experiment_storage=experiment_storage,
+                kafka_enabled=args.kafka,
+                kafka_manager_cls=kafka_manager_cls,
+                baseline=args.baseline,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if command == "hosts":
-        result = run_hosts(
-            adapter,
-            deployer_name=args.adapter,
-            deployer_registry=deployer_registry,
-            topology=args.topology,
-        )
+        try:
+            result = run_hosts(
+                adapter,
+                deployer_name=args.adapter,
+                deployer_registry=deployer_registry,
+                topology=args.topology,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
         print(json.dumps(result, indent=2, default=str))
         return result
 

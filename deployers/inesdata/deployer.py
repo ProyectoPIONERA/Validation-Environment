@@ -7,6 +7,7 @@ from adapters.inesdata.adapter import InesdataAdapter
 from adapters.inesdata.components import INESDataComponentsAdapter
 from adapters.inesdata.config import INESDataConfigAdapter, InesdataConfig
 from deployers.infrastructure.lib.contracts import DeploymentContext, NamespaceRoles, ValidationProfile
+from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
 
 
 class InesdataDeployer:
@@ -44,7 +45,7 @@ class InesdataDeployer:
 
     @staticmethod
     def supported_topologies() -> list[str]:
-        return ["local"]
+        return list(SUPPORTED_TOPOLOGIES)
 
     def load_config(self) -> dict[str, Any]:
         return dict(self.config_adapter.load_deployer_config() or {})
@@ -73,6 +74,7 @@ class InesdataDeployer:
                 "observability_namespace": config.get("OBSERVABILITY_NAMESPACE") or None,
             }
         )
+        topology_profile = build_topology_profile(topology, config)
 
         runtime_dir = os.path.join(
             self.config.repo_dir(),
@@ -90,6 +92,7 @@ class InesdataDeployer:
             connectors=self._resolve_primary_connectors(dataspace_name, config),
             components=self._configured_optional_components(config),
             namespace_roles=namespace_roles,
+            topology_profile=topology_profile,
             runtime_dir=runtime_dir,
             config=config,
         )

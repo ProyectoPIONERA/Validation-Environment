@@ -5,6 +5,13 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+from .topology import (
+    ROLE_COMMON,
+    ROLE_COMPONENTS,
+    ROLE_CONNECTORS,
+    ROLE_REGISTRATION_SERVICE,
+)
+
 
 _BEGIN_PREFIX = "# BEGIN Validation-Environment "
 _END_PREFIX = "# END Validation-Environment "
@@ -66,12 +73,16 @@ def upsert_managed_block(existing_content: str, block_name: str, entries: list[H
 def build_context_host_blocks(
     context: Any,
     *,
-    address: str = DEFAULT_HOST_ADDRESS,
+    address: str | None = None,
     include_common: bool = True,
 ) -> list[HostBlock]:
     """Build managed hosts blocks from a deployer context."""
 
     config = dict(getattr(context, "config", {}) or {})
+    common_address = _address_for_role(context, ROLE_COMMON, address)
+    dataspace_address = _address_for_role(context, ROLE_REGISTRATION_SERVICE, address)
+    connector_address = _address_for_role(context, ROLE_CONNECTORS, address)
+    component_address = _address_for_role(context, ROLE_COMPONENTS, address)
     dataspace_name = _clean_token(getattr(context, "dataspace_name", ""))
     ds_domain_base = _clean_token(getattr(context, "ds_domain_base", "") or config.get("DS_DOMAIN_BASE", ""))
     deployer_name = _clean_token(getattr(context, "deployer", "deployer")) or "deployer"
@@ -80,7 +91,7 @@ def build_context_host_blocks(
 
     blocks: list[HostBlock] = []
     if include_common:
-        common_entries = _build_common_entries(config, address=address)
+        common_entries = _build_common_entries(config, address=common_address)
         if common_entries:
             blocks.append(HostBlock("shared common", common_entries))
 
@@ -88,12 +99,12 @@ def build_context_host_blocks(
         blocks.append(
             HostBlock(
                 f"dataspace {dataspace_name}",
-                [HostEntry(address, f"registration-service-{dataspace_name}.{ds_domain_base}")],
+                [HostEntry(dataspace_address, f"registration-service-{dataspace_name}.{ds_domain_base}")],
             )
         )
 
     connector_entries = [
-        HostEntry(address, f"{connector}.{ds_domain_base}")
+        HostEntry(connector_address, f"{connector}.{ds_domain_base}")
         for connector in connectors
         if connector and ds_domain_base
     ]
@@ -106,7 +117,7 @@ def build_context_host_blocks(
         )
 
     component_entries = [
-        HostEntry(address, f"{_component_hostname(component, dataspace_name)}.{ds_domain_base}")
+        HostEntry(component_address, f"{_component_hostname(component, dataspace_name)}.{ds_domain_base}")
         for component in components
         if component and ds_domain_base
     ]
@@ -271,6 +282,19 @@ def _build_common_entries(config: dict[str, Any], *, address: str) -> list[HostE
     return _dedupe_entries(
         [HostEntry(address, hostname) for hostname in hostnames if hostname]
     )
+
+
+def _address_for_role(context: Any, role: str, override: str | None = None) -> str:
+    explicit_address = _clean_token(override)
+    if explicit_address:
+        return explicit_address
+
+    topology_profile = getattr(context, "topology_profile", None)
+    address_for = getattr(topology_profile, "address_for", None)
+    if callable(address_for):
+        return address_for(role, fallback=DEFAULT_HOST_ADDRESS)
+
+    return DEFAULT_HOST_ADDRESS
 
 
 def _component_hostname(component: str, dataspace_name: str) -> str:

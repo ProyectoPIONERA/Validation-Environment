@@ -8,6 +8,7 @@ from deployers.shared.lib.contracts import DeploymentContext, NamespaceRoles
 from deployers.shared.lib.hosts_manager import (
     HostEntry,
     apply_managed_blocks,
+    blocks_as_dict,
     build_context_host_blocks,
     hostnames_by_level,
     merge_missing_managed_blocks,
@@ -15,6 +16,7 @@ from deployers.shared.lib.hosts_manager import (
     render_managed_block,
     upsert_managed_block,
 )
+from deployers.shared.lib.topology import build_topology_profile
 
 
 class SharedHostsManagerTests(unittest.TestCase):
@@ -108,6 +110,46 @@ class SharedHostsManagerTests(unittest.TestCase):
                 "ontology-hub-demoedc.dev.ds.dataspaceunit.upm",
                 "ai-model-hub-demoedc.dev.ds.dataspaceunit.upm",
             ],
+        )
+
+    def test_build_context_host_blocks_uses_topology_role_addresses(self):
+        context = DeploymentContext(
+            deployer="edc",
+            topology="vm-distributed",
+            environment="DEV",
+            dataspace_name="demoedc",
+            ds_domain_base="dev.ds.dataspaceunit.upm",
+            connectors=["conn-citycounciledc-demoedc"],
+            components=["ontology-hub"],
+            topology_profile=build_topology_profile(
+                "vm-distributed",
+                {
+                    "VM_COMMON_IP": "192.0.2.10",
+                    "VM_DATASPACE_IP": "192.0.2.11",
+                    "VM_CONNECTORS_IP": "192.0.2.12",
+                    "VM_COMPONENTS_IP": "192.0.2.13",
+                },
+            ),
+            config={
+                "DOMAIN_BASE": "dev.ed.dataspaceunit.upm",
+                "KEYCLOAK_HOSTNAME": "keycloak.dev.ed.dataspaceunit.upm",
+            },
+        )
+
+        rendered = blocks_as_dict(build_context_host_blocks(context))
+
+        self.assertIn("192.0.2.10 keycloak.dev.ed.dataspaceunit.upm", rendered["shared common"])
+        self.assertEqual(
+            rendered["dataspace demoedc"],
+            ["192.0.2.11 registration-service-demoedc.dev.ds.dataspaceunit.upm"],
+        )
+        self.assertEqual(
+            rendered["connectors edc demoedc"],
+            ["192.0.2.12 conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm"],
+        )
+        self.assertEqual(
+            rendered["components demoedc"],
+            ["192.0.2.13 ontology-hub-demoedc.dev.ds.dataspaceunit.upm"],
         )
 
     def test_apply_managed_blocks_updates_hosts_file_idempotently(self):

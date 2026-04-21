@@ -30,5 +30,17 @@ VT_TOKEN=
 # Shared local domain
 DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm
 
+# Topology
+# local uses 127.0.0.1 unless HOSTS_ADDRESS or LOCAL_HOSTS_ADDRESS is set.
+# vm-single requires VM_EXTERNAL_IP, VM_SINGLE_IP, VM_SINGLE_ADDRESS, HOSTS_ADDRESS, or INGRESS_EXTERNAL_IP.
+# vm-distributed may use VM_EXTERNAL_IP for all roles or role-specific VM_*_IP values.
+# VM_EXTERNAL_IP=
+# VM_COMMON_IP=
+# VM_DATASPACE_IP=
+# VM_CONNECTORS_IP=
+# VM_COMPONENTS_IP=
+# INGRESS_EXTERNAL_IP=
+# TOPOLOGY_ROUTING_MODE=host
+
 # Local tooling
 MINIKUBE_PROFILE=minikube

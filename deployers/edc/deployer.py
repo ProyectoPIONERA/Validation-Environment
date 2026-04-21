@@ -5,6 +5,7 @@ from typing import Any
 from adapters.edc.adapter import EdcAdapter
 from adapters.edc.config import EDCConfigAdapter, EdcConfig
 from deployers.infrastructure.lib.contracts import DeploymentContext, NamespaceRoles, ValidationProfile
+from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
 
 
 class EdcDeployer:
@@ -39,7 +40,7 @@ class EdcDeployer:
 
     @staticmethod
     def supported_topologies() -> list[str]:
-        return ["local"]
+        return list(SUPPORTED_TOPOLOGIES)
 
     def load_config(self) -> dict[str, Any]:
         return dict(self.config_adapter.load_deployer_config() or {})
@@ -68,6 +69,7 @@ class EdcDeployer:
                 "observability_namespace": config.get("OBSERVABILITY_NAMESPACE") or None,
             }
         )
+        topology_profile = build_topology_profile(topology, config)
 
         runtime_dir = self.config_adapter.edc_dataspace_runtime_dir(ds_name=dataspace_name)
 
@@ -80,6 +82,7 @@ class EdcDeployer:
             connectors=self._resolve_primary_connectors(dataspace_name, config),
             components=[],
             namespace_roles=namespace_roles,
+            topology_profile=topology_profile,
             runtime_dir=runtime_dir,
             config=config,
         )
