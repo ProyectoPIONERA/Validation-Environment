@@ -8,9 +8,12 @@ ROOT_REQUIREMENTS="$ROOT_DIR/requirements.txt"
 ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 UI_DIR="$ROOT_DIR/validation/ui"
 UI_PACKAGE_JSON="$UI_DIR/package.json"
-DEPLOYER_CONFIG_DIR="$ROOT_DIR/deployers/inesdata"
-DEPLOYER_CONFIG="$DEPLOYER_CONFIG_DIR/deployer.config"
-DEPLOYER_CONFIG_EXAMPLE="$DEPLOYER_CONFIG_DIR/deployer.config.example"
+INFRASTRUCTURE_CONFIG_DIR="$ROOT_DIR/deployers/infrastructure"
+INFRASTRUCTURE_CONFIG="$INFRASTRUCTURE_CONFIG_DIR/deployer.config"
+INFRASTRUCTURE_CONFIG_EXAMPLE="$INFRASTRUCTURE_CONFIG_DIR/deployer.config.example"
+INESDATA_CONFIG_DIR="$ROOT_DIR/deployers/inesdata"
+INESDATA_CONFIG="$INESDATA_CONFIG_DIR/deployer.config"
+INESDATA_CONFIG_EXAMPLE="$INESDATA_CONFIG_DIR/deployer.config.example"
 
 WITH_SYSTEM_DEPS=false
 SKIP_PLAYWRIGHT=false
@@ -38,7 +41,7 @@ Options:
   --skip-playwright         Skip Playwright browser installation
   --skip-root-node          Skip 'npm install' in the repo root
   --skip-ui-node            Skip 'npm install' in validation/ui
-  --skip-deployer-config    Do not create deployers/inesdata/deployer.config from the example file
+  --skip-deployer-config    Do not create deployer.config files from the example files
   -h, --help                Show this help
 EOF
 }
@@ -133,15 +136,21 @@ else
 fi
 
 if [[ "$SKIP_DEPLOYER_CONFIG_INIT" == false ]]; then
-  mkdir -p "$DEPLOYER_CONFIG_DIR"
-  if [[ ! -f "$DEPLOYER_CONFIG" && -f "$DEPLOYER_CONFIG_EXAMPLE" ]]; then
-    log "Creating deployers/inesdata/deployer.config from deployers/inesdata/deployer.config.example"
-    cp "$DEPLOYER_CONFIG_EXAMPLE" "$DEPLOYER_CONFIG"
-  elif [[ -f "$DEPLOYER_CONFIG" ]]; then
-    log "Reusing existing deployers/inesdata/deployer.config"
-  else
-    log "deployers/inesdata/deployer.config.example not found; skipping deployer config initialization"
-  fi
+  for config_pair in \
+    "$INFRASTRUCTURE_CONFIG_DIR|$INFRASTRUCTURE_CONFIG|$INFRASTRUCTURE_CONFIG_EXAMPLE|deployers/infrastructure/deployer.config|deployers/infrastructure/deployer.config.example" \
+    "$INESDATA_CONFIG_DIR|$INESDATA_CONFIG|$INESDATA_CONFIG_EXAMPLE|deployers/inesdata/deployer.config|deployers/inesdata/deployer.config.example"
+  do
+    IFS='|' read -r config_dir config_path example_path label example_label <<<"$config_pair"
+    mkdir -p "$config_dir"
+    if [[ ! -f "$config_path" && -f "$example_path" ]]; then
+      log "Creating $label from $example_label"
+      cp "$example_path" "$config_path"
+    elif [[ -f "$config_path" ]]; then
+      log "Reusing existing $label"
+    else
+      log "$example_label not found; skipping $label initialization"
+    fi
+  done
 else
   log "Skipping deployer.config initialization"
 fi
@@ -149,5 +158,5 @@ fi
 log "Bootstrap completed"
 log "Next steps:"
 log "  1. Activate the root environment: source .venv/bin/activate"
-log "  2. Review deployers/inesdata/deployer.config if needed"
+log "  2. Review deployers/infrastructure/deployer.config and deployers/inesdata/deployer.config if needed"
 log "  3. Run: python3 main.py menu"
