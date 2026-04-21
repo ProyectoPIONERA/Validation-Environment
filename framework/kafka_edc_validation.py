@@ -9,9 +9,14 @@ from itertools import permutations
 import requests
 
 
+class KafkaDataAddressUnsupported(RuntimeError):
+    """Raised when the deployed connector does not accept Kafka data addresses."""
+
+
 class KafkaEdcValidationSuite:
     """Validate an end-to-end EDC + Kafka transfer flow."""
 
+    EDC_NAMESPACE = "https://w3id.org/edc/v0.0.1/ns/"
     KAFKA_EDC_ASSET_PREFIX = "kafka-edc-asset-"
     KAFKA_EDC_POLICY_PREFIX = "kafka-edc-policy-"
     KAFKA_EDC_CONTRACT_PREFIX = "kafka-edc-contract-"
@@ -329,6 +334,78 @@ class KafkaEdcValidationSuite:
         except ValueError as exc:
             raise RuntimeError(f"{label} did not return valid JSON") from exc
 
+    @staticmethod
+    def _json_ld_value(value):
+        return [{"@value": value}]
+
+    @classmethod
+    def _expanded_kafka_address(cls, topic, bootstrap_servers):
+        return {
+            f"{cls.EDC_NAMESPACE}type": cls._json_ld_value("Kafka"),
+            f"{cls.EDC_NAMESPACE}topic": cls._json_ld_value(topic),
+            f"{cls.EDC_NAMESPACE}kafka.bootstrap.servers": cls._json_ld_value(bootstrap_servers),
+        }
+
+    @staticmethod
+    def _response_text(response):
+        return str(getattr(response, "text", "") or "")
+
+    @classmethod
+    def _is_kafka_dataaddress_type_validation_failure(cls, response):
+        if getattr(response, "status_code", None) != 400:
+            return False
+        body = cls._response_text(response)
+        return (
+            f"{cls.EDC_NAMESPACE}type" in body
+            and (
+                "field is not valid" in body
+                or "missing or invalid" in body
+                or "mandatory value" in body
+            )
+        )
+
+    def _post_kafka_payload_with_expanded_fallback(
+        self,
+        url,
+        token,
+        payload,
+        expanded_payload,
+        label,
+    ):
+        response = self._request_with_retry(
+            "post",
+            url,
+            label=label,
+            accepted_statuses={200, 201, 400},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json_payload=payload,
+        )
+        if self._is_kafka_dataaddress_type_validation_failure(response):
+            response = self._request_with_retry(
+                "post",
+                url,
+                label=f"{label} expanded JSON-LD fallback",
+                accepted_statuses={200, 201, 400},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json_payload=expanded_payload,
+            )
+            if self._is_kafka_dataaddress_type_validation_failure(response):
+                raise KafkaDataAddressUnsupported(
+                    f"{label} is not supported by the deployed connector runtime: {self._response_text(response)}"
+                )
+
+        self._assert_status(response, {200, 201}, label)
+        try:
+            return response.json(), response.status_code
+        except ValueError as exc:
+            raise RuntimeError(f"{label} did not return valid JSON") from exc
+
     def _post_json_optional_body(self, url, token, payload, label, accepted_statuses=None):
         response = self._request_with_retry(
             "post",
@@ -536,10 +613,18 @@ class KafkaEdcValidationSuite:
                 "kafka.bootstrap.servers": runtime["cluster_bootstrap_servers"],
             },
         }
-        body, status_code = self._post_json(
+        expanded_payload = {
+            **payload,
+            "dataAddress": self._expanded_kafka_address(
+                source_topic,
+                runtime["cluster_bootstrap_servers"],
+            ),
+        }
+        body, status_code = self._post_kafka_payload_with_expanded_fallback(
             self._management_url(provider, "/management/v3/assets"),
             provider_jwt,
             payload,
+            expanded_payload,
             "provider Kafka asset creation",
         )
         return asset_id, body.get("@id") or body.get("id") or asset_id, status_code
@@ -967,10 +1052,18 @@ class KafkaEdcValidationSuite:
                 "kafka.bootstrap.servers": runtime["cluster_bootstrap_servers"],
             },
         }
-        body, status_code = self._post_json(
+        expanded_payload = {
+            **payload,
+            "dataDestination": self._expanded_kafka_address(
+                destination_topic,
+                runtime["cluster_bootstrap_servers"],
+            ),
+        }
+        body, status_code = self._post_kafka_payload_with_expanded_fallback(
             self._management_url(consumer, "/management/v3/transferprocesses"),
             consumer_jwt,
             payload,
+            expanded_payload,
             "consumer Kafka transfer start",
         )
         transfer_id = body.get("@id") or body.get("id")
@@ -1558,12 +1651,19 @@ class KafkaEdcValidationSuite:
             payload["status"] = "passed"
             return payload
         except Exception as exc:
-            payload["status"] = "failed"
+            unsupported_kafka = isinstance(exc, KafkaDataAddressUnsupported)
+            payload["status"] = "skipped" if unsupported_kafka else "failed"
+            if unsupported_kafka:
+                payload["reason"] = "kafka_dataaddress_not_supported"
             payload["error"] = {
                 "type": type(exc).__name__,
                 "message": str(exc),
             }
-            record_step("suite_error", "failed", error=str(exc))
+            record_step(
+                "suite_error",
+                "skipped" if unsupported_kafka else "failed",
+                error=str(exc),
+            )
             return payload
         finally:
             if provider_jwt or consumer_jwt:

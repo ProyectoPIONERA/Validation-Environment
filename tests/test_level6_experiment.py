@@ -1,4 +1,3 @@
-import ast
 import json
 import os
 import shutil
@@ -768,24 +767,6 @@ class Level6ExperimentTests(unittest.TestCase):
             self.assertEqual(stored["kafka_edc_results"][0]["metrics"]["messages_consumed"], 5)
             self.assertEqual(stored["kafka_edc_results"][1]["status"], "failed")
             self.assertIn("authKey/authCode", stored["kafka_edc_results"][1]["error"]["message"])
-
-    def test_inesdata_wrapper_keeps_delegating_level6_to_common_orchestration(self):
-        with open(os.path.join(PROJECT_ROOT, "inesdata.py"), "r", encoding="utf-8") as handle:
-            tree = ast.parse(handle.read())
-
-        functions = {
-            node.name: node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-        }
-        self.assertIn("_build_level6_runtime", functions)
-        self.assertIn("lvl_6", functions)
-
-        lvl_6 = functions["lvl_6"]
-        return_nodes = [node for node in ast.walk(lvl_6) if isinstance(node, ast.Return)]
-        self.assertEqual(len(return_nodes), 1)
-        self.assertIn("run_level6_validation", ast.dump(return_nodes[0]))
-        self.assertIn("_build_level6_runtime", ast.dump(return_nodes[0]))
 
 
 if __name__ == "__main__":

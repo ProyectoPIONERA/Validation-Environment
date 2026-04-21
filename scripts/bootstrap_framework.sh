@@ -14,6 +14,9 @@ INFRASTRUCTURE_CONFIG_EXAMPLE="$INFRASTRUCTURE_CONFIG_DIR/deployer.config.exampl
 INESDATA_CONFIG_DIR="$ROOT_DIR/deployers/inesdata"
 INESDATA_CONFIG="$INESDATA_CONFIG_DIR/deployer.config"
 INESDATA_CONFIG_EXAMPLE="$INESDATA_CONFIG_DIR/deployer.config.example"
+EDC_CONFIG_DIR="$ROOT_DIR/deployers/edc"
+EDC_CONFIG="$EDC_CONFIG_DIR/deployer.config"
+EDC_CONFIG_EXAMPLE="$EDC_CONFIG_DIR/deployer.config.example"
 
 PLAYWRIGHT_SYSTEM_DEPS_MODE=auto
 SKIP_PLAYWRIGHT=false
@@ -160,7 +163,8 @@ fi
 if [[ "$SKIP_DEPLOYER_CONFIG_INIT" == false ]]; then
   for config_pair in \
     "$INFRASTRUCTURE_CONFIG_DIR|$INFRASTRUCTURE_CONFIG|$INFRASTRUCTURE_CONFIG_EXAMPLE|deployers/infrastructure/deployer.config|deployers/infrastructure/deployer.config.example" \
-    "$INESDATA_CONFIG_DIR|$INESDATA_CONFIG|$INESDATA_CONFIG_EXAMPLE|deployers/inesdata/deployer.config|deployers/inesdata/deployer.config.example"
+    "$INESDATA_CONFIG_DIR|$INESDATA_CONFIG|$INESDATA_CONFIG_EXAMPLE|deployers/inesdata/deployer.config|deployers/inesdata/deployer.config.example" \
+    "$EDC_CONFIG_DIR|$EDC_CONFIG|$EDC_CONFIG_EXAMPLE|deployers/edc/deployer.config|deployers/edc/deployer.config.example"
   do
     IFS='|' read -r config_dir config_path example_path label example_label <<<"$config_pair"
     mkdir -p "$config_dir"
@@ -180,5 +184,5 @@ fi
 log "Bootstrap completed"
 log "Next steps:"
 log "  1. Activate the root environment: source .venv/bin/activate"
-log "  2. Review deployers/infrastructure/deployer.config and deployers/inesdata/deployer.config if needed"
+log "  2. Review deployers/infrastructure/deployer.config, deployers/inesdata/deployer.config and deployers/edc/deployer.config if needed"
 log "  3. Run: python3 main.py menu"

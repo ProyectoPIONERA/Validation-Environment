@@ -57,13 +57,38 @@ Deployer relevante:
 deployers/edc/deployer.py
 ```
 
-El adapter EDC puede construir o usar una imagen de conector configurada. El despliegue real rechaza valores por defecto inseguros salvo que se indiquen overrides explícitos.
+El adapter EDC puede construir o usar una imagen de conector configurada. En topología `local`, si no se han definido overrides, Level 4 prepara automáticamente la imagen local desde `adapters/edc/sources/connector`, la carga en Minikube y usa `validation-environment/edc-connector:local` para esa ejecución.
+
+Si `EDC_DASHBOARD_ENABLED=true`, Level 4 también prepara y carga en Minikube las imágenes locales del dashboard y del proxy:
+
+```text
+validation-environment/edc-dashboard:latest
+validation-environment/edc-dashboard-proxy:latest
+```
+
+En topologías VM, o cuando se quiera usar una imagen publicada en un registry, se deben definir overrides explícitos para evitar desplegar una imagen por defecto no verificada.
 
 Variables comunes de override:
 
 ```text
 PIONERA_EDC_CONNECTOR_IMAGE_NAME
 PIONERA_EDC_CONNECTOR_IMAGE_TAG
+```
+
+Variables opcionales para cambiar la imagen local automática:
+
+```text
+PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_NAME
+PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_TAG
+```
+
+Variables opcionales para cambiar las imágenes del dashboard:
+
+```text
+PIONERA_EDC_DASHBOARD_IMAGE_NAME
+PIONERA_EDC_DASHBOARD_IMAGE_TAG
+PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME
+PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG
 ```
 
 El dashboard EDC es opcional y sirve como apoyo visual para validación UI. Las validaciones API con Newman siguen siendo el mecanismo principal de validación end-to-end.

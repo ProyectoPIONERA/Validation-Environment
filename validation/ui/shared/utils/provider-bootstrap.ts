@@ -8,6 +8,15 @@ type BootstrapArtifacts = {
   contractDefinitionId: string;
 };
 
+type CatalogDatasetReadiness = {
+  assetId: string;
+  counterPartyAddress: string;
+  counterPartyId: string;
+  datasetId: string;
+  offerId: string;
+  datasetCount: number;
+};
+
 type ConsumerNegotiationArtifacts = {
   negotiationId: string;
   agreementId: string;
@@ -129,6 +138,7 @@ async function createAsset(
         version: "1.0.0",
         shortDescription: "Asset bootstrap for UI negotiation validation",
         assetType: "dataset",
+        assetData: {},
         "dct:description": "Asset bootstrap for UI negotiation validation",
         "dcat:keyword": ["validation", "ui", "negotiation"],
       },
@@ -336,6 +346,37 @@ async function fetchConsumerCatalogDatasetWithOffer(
     `Catalog dataset '${assetId}' did not expose an offer policy in time. ` +
       `Last catalog state: ${lastDatasetFound ? "dataset without offer policy" : "dataset not found"}`,
   );
+}
+
+export async function waitForConsumerCatalogDatasetReadiness(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  assetId: string,
+  counterPartyAddress: string = runtime.provider.protocolBaseUrl,
+  counterPartyId: string = runtime.provider.connectorName,
+): Promise<CatalogDatasetReadiness> {
+  const { catalogResponse, dataset } = await fetchConsumerCatalogDatasetWithOffer(
+    request,
+    runtime,
+    assetId,
+    counterPartyAddress,
+    counterPartyId,
+  );
+  const datasets = Array.isArray(catalogResponse?.["dcat:dataset"])
+    ? catalogResponse["dcat:dataset"]
+    : Array.isArray(catalogResponse?.datasets)
+      ? catalogResponse.datasets
+      : [];
+  const offer = catalogDatasetOffer(dataset);
+
+  return {
+    assetId,
+    counterPartyAddress,
+    counterPartyId,
+    datasetId: String(dataset?.["@id"] || dataset?.id || ""),
+    offerId: String(offer?.["@id"] || ""),
+    datasetCount: datasets.length,
+  };
 }
 
 function negotiationTimeoutMs(): number {

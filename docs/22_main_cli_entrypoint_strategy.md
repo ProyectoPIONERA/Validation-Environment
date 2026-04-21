@@ -1,7 +1,8 @@
-# 22. `main.py` e `inesdata.py`
+# 22. Entrada `main.py`
 
-`main.py` es la entrada canonica del framework. `inesdata.py` queda como entrada
-legacy de compatibilidad cuando exista en una copia local del proyecto.
+`main.py` es la entrada canónica del framework. Todas las operaciones de uso,
+despliegue, validación, métricas, hosts y topologías deben ejecutarse desde este
+punto.
 
 ## Entrada Recomendada
 
@@ -13,7 +14,7 @@ python3 main.py inesdata validate --topology local
 python3 main.py edc validate --topology local
 ```
 
-## Por Que `main.py`
+## Por Qué `main.py`
 
 `main.py` es neutral respecto al adapter:
 
@@ -41,10 +42,9 @@ Las opciones legacy como bootstrap, doctor, recovery, cleanup, build de imagenes
 y suites UI siguen disponibles desde submenus para no romper el flujo de trabajo
 existente.
 
-## Compatibilidad
+## Organización Interna
 
-La logica nueva no debe nacer en `inesdata.py`. Las operaciones compartidas
-viven en:
+Las operaciones compartidas viven en:
 
 | Modulo | Uso |
 | --- | --- |
@@ -54,4 +54,4 @@ viven en:
 | `deployers/infrastructure/lib` | contratos y utilidades compartidas |
 
 El objetivo es que la ergonomia historica se mantenga, pero la arquitectura
-evolucione desde `main.py`.
+quede centralizada en `main.py` y en contratos reutilizables por adapter.

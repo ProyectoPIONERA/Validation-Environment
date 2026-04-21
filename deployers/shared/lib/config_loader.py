@@ -7,6 +7,26 @@ import re
 _DATASPACE_SLOT_PATTERN = re.compile(r"^DS_(\d+)_([A-Z0-9_]+)$")
 
 
+INFRASTRUCTURE_MANAGED_KEYS = frozenset(
+    {
+        "KC_URL",
+        "KC_INTERNAL_URL",
+        "KC_USER",
+        "KC_PASSWORD",
+        "PG_HOST",
+        "PG_USER",
+        "PG_PASSWORD",
+        "VT_URL",
+        "VT_TOKEN",
+        "MINIO_ENDPOINT",
+        "MINIO_USER",
+        "MINIO_PASSWORD",
+        "MINIO_ADMIN_USER",
+        "MINIO_ADMIN_PASS",
+    }
+)
+
+
 def load_deployer_config(path: str) -> dict[str, str]:
     """Load a deployer.config file using a simple KEY=VALUE format."""
     config: dict[str, str] = {}
@@ -43,12 +63,18 @@ def load_layered_deployer_config(
     *,
     defaults: dict[str, str] | None = None,
     apply_environment: bool = True,
+    protected_keys: set[str] | frozenset[str] | None = None,
 ) -> dict[str, str]:
     """Load deployer configuration as defaults < files in order < PIONERA_*."""
 
     config: dict[str, str] = dict(defaults or {})
+    protected = set(protected_keys or [])
     for path in paths:
-        config.update(load_deployer_config(path))
+        layer = load_deployer_config(path)
+        for key, value in layer.items():
+            if key in protected and key in config:
+                continue
+            config[key] = value
     if apply_environment:
         apply_pionera_environment_overrides(config)
     return config

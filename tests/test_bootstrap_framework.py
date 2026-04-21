@@ -27,7 +27,11 @@ class BootstrapFrameworkTests(unittest.TestCase):
             handle.write("")
         os.makedirs(os.path.join(root, "validation", "ui"), exist_ok=True)
 
-        for deployer, marker in (("infrastructure", "KC_URL=http://keycloak.local\n"), ("inesdata", "DS_1_NAME=demo\n")):
+        for deployer, marker in (
+            ("infrastructure", "KC_URL=http://keycloak.local\n"),
+            ("inesdata", "DS_1_NAME=demo\n"),
+            ("edc", "EDC_DASHBOARD_ENABLED=true\n"),
+        ):
             deployer_dir = os.path.join(root, "deployers", deployer)
             os.makedirs(deployer_dir, exist_ok=True)
             with open(os.path.join(deployer_dir, "deployer.config.example"), "w", encoding="utf-8") as handle:
@@ -78,7 +82,7 @@ class BootstrapFrameworkTests(unittest.TestCase):
             os.chmod(command_path, os.stat(command_path).st_mode | stat.S_IXUSR)
         return root, fake_bin
 
-    def test_bootstrap_initializes_infrastructure_and_inesdata_configs(self):
+    def test_bootstrap_initializes_deployer_configs(self):
         root, fake_bin = self._prepare_workspace()
         env = dict(os.environ)
         env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
@@ -100,11 +104,14 @@ class BootstrapFrameworkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertTrue(os.path.isfile(os.path.join(root, "deployers", "infrastructure", "deployer.config")))
         self.assertTrue(os.path.isfile(os.path.join(root, "deployers", "inesdata", "deployer.config")))
+        self.assertTrue(os.path.isfile(os.path.join(root, "deployers", "edc", "deployer.config")))
 
         with open(os.path.join(root, "deployers", "infrastructure", "deployer.config"), encoding="utf-8") as handle:
             self.assertIn("KC_URL=http://keycloak.local", handle.read())
         with open(os.path.join(root, "deployers", "inesdata", "deployer.config"), encoding="utf-8") as handle:
             self.assertIn("DS_1_NAME=demo", handle.read())
+        with open(os.path.join(root, "deployers", "edc", "deployer.config"), encoding="utf-8") as handle:
+            self.assertIn("EDC_DASHBOARD_ENABLED=true", handle.read())
 
     def test_bootstrap_skip_deployer_config_leaves_configs_absent(self):
         root, fake_bin = self._prepare_workspace()
@@ -129,6 +136,7 @@ class BootstrapFrameworkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(os.path.exists(os.path.join(root, "deployers", "infrastructure", "deployer.config")))
         self.assertFalse(os.path.exists(os.path.join(root, "deployers", "inesdata", "deployer.config")))
+        self.assertFalse(os.path.exists(os.path.join(root, "deployers", "edc", "deployer.config")))
 
     def test_bootstrap_installs_playwright_system_deps_by_default_on_linux(self):
         root, fake_bin = self._prepare_workspace()

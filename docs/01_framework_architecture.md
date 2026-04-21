@@ -25,7 +25,7 @@ Desde ahí se ejecutan los niveles:
 - Level 5: componentes opcionales
 - Level 6: validación
 
-`inesdata.py` se conserva como wrapper compatible durante la transición, pero la lógica nueva debe integrarse en `main.py`, `deployers/`, `adapters/`, `framework/` o `validation/`.
+`main.py` es la única entrada operativa del framework. La lógica nueva debe integrarse en `main.py`, `deployers/`, `adapters/`, `framework/` o `validation/`.
 
 ## 2. Núcleo reutilizable
 

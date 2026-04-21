@@ -17,7 +17,7 @@ El flujo habitual es este:
 
 `Level 6` ya no ejecuta solo la validación API del núcleo del dataspace. Hoy orquesta un experimento completo y persiste sus artefactos.
 
-La secuencia común de orquestación vive en `validation/orchestration/runner.py`. Cada adapter/deployer debe aportar un `Level6Runtime` con sus dependencias concretas; durante la transición, `inesdata.py` conserva `lvl_6()` como wrapper compatible que construye ese runtime para INESData.
+La secuencia común de orquestación vive en `validation/orchestration/runner.py`. Cada adapter/deployer debe aportar un `Level6Runtime` con sus dependencias concretas. `main.py` resuelve el adapter activo y ejecuta esta orquestación común.
 
 El flujo actual es:
 

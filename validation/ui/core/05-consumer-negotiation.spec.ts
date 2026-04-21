@@ -4,7 +4,10 @@ import { KeycloakLoginPage } from "../components/auth/keycloak-login.page";
 import { ConnectorShellPage } from "../components/shell/connector-shell.page";
 import { CatalogPage } from "../components/consumer/catalog.page";
 import { ContractOffersPage } from "../components/consumer/contract-offers.page";
-import { bootstrapProviderNegotiationArtifacts } from "../shared/utils/provider-bootstrap";
+import {
+  bootstrapProviderNegotiationArtifacts,
+  waitForConsumerCatalogDatasetReadiness,
+} from "../shared/utils/provider-bootstrap";
 import { collectBrowserDiagnostics } from "../shared/utils/browser-diagnostics";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
 
@@ -77,6 +80,10 @@ test("05 consumer negotiation: visible negotiation from catalog", async ({
       suffix,
     );
     await attachJson("consumer-negotiation-bootstrap", report.providerBootstrap);
+    await attachJson(
+      "consumer-negotiation-catalog-api-readiness",
+      await waitForConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
+    );
 
     await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);
     await loginPage.loginIfNeeded();

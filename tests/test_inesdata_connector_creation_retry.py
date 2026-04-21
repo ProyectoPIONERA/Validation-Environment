@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -247,6 +249,96 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 ],
             )
 
+    def test_create_connector_aborts_before_cleanup_when_vault_token_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            class ConfigAdapterWithVault(ConnectorRetryConfigAdapter):
+                def load_deployer_config(self):
+                    values = super().load_deployer_config()
+                    values.update(
+                        {
+                            "VT_URL": "http://vault.local:8200",
+                            "VT_TOKEN": "stale-token",
+                        }
+                    )
+                    return values
+
+            class Infra:
+                @staticmethod
+                def ensure_local_infra_access():
+                    return True
+
+                @staticmethod
+                def ensure_vault_unsealed():
+                    return True
+
+                @staticmethod
+                def sync_vault_token_to_deployer_config():
+                    return True
+
+            calls = []
+            adapter = INESDataConnectorsAdapter(
+                run=lambda cmd, **_kwargs: calls.append(cmd) or object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=Infra(),
+                config_adapter=ConfigAdapterWithVault(tmpdir),
+                config_cls=config,
+            )
+
+            output = io.StringIO()
+            with mock.patch(
+                "adapters.inesdata.connectors.requests.get",
+                return_value=mock.Mock(status_code=403),
+            ), contextlib.redirect_stdout(output):
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo"])
+
+            self.assertFalse(created)
+            self.assertIn("Vault token validation failed", output.getvalue())
+            self.assertFalse(any("bootstrap.py connector delete" in call for call in calls))
+            self.assertFalse(any("bootstrap.py connector create" in call for call in calls))
+
+    def test_vault_management_preflight_accepts_root_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class ConfigAdapterWithVault(ConnectorRetryConfigAdapter):
+                def load_deployer_config(self):
+                    values = super().load_deployer_config()
+                    values.update(
+                        {
+                            "VT_URL": "http://vault.local:8200",
+                            "VT_TOKEN": "root-token",
+                        }
+                    )
+                    return values
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=ConfigAdapterWithVault(tmpdir),
+                config_cls=config,
+            )
+
+            capabilities = {
+                "sys/policy/inesdata-preflight-secrets-policy": ["root"],
+                "auth/token/create": ["root"],
+                "secret/data/demo/inesdata-preflight/public-key": ["root"],
+            }
+            with mock.patch(
+                "adapters.inesdata.connectors.requests.get",
+                return_value=mock.Mock(status_code=200),
+            ), mock.patch(
+                "adapters.inesdata.connectors.requests.post",
+                return_value=mock.Mock(status_code=200, json=lambda: capabilities),
+            ):
+                self.assertTrue(adapter._verify_vault_management_token(ds_name="demo"))
+
     def test_create_connector_retries_after_initial_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -259,8 +351,8 @@ class ConnectorCreationRetryTests(unittest.TestCase):
 
             def fake_run(cmd, **_kwargs):
                 calls.append(cmd)
-                if "deployer.py connector create" in cmd:
-                    attempt = sum("deployer.py connector create" in item for item in calls)
+                if "bootstrap.py connector create" in cmd:
+                    attempt = sum("bootstrap.py connector create" in item for item in calls)
                     if attempt == 1:
                         return None
                     with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
@@ -290,13 +382,14 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
 
             with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
                 created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 
             self.assertTrue(created)
-            create_calls = [call for call in calls if "deployer.py connector create" in call]
-            delete_calls = [call for call in calls if "deployer.py connector delete" in call]
+            create_calls = [call for call in calls if "bootstrap.py connector create" in call]
+            delete_calls = [call for call in calls if "bootstrap.py connector delete" in call]
             self.assertEqual(len(create_calls), 2)
             self.assertEqual(len(delete_calls), 2)
 
@@ -308,7 +401,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             os.makedirs(config.venv_path(), exist_ok=True)
 
             def fake_run(cmd, **_kwargs):
-                if "deployer.py connector create" in cmd:
+                if "bootstrap.py connector create" in cmd:
                     with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
                         handle.write("hostAliases: []\n")
                 return object()
@@ -360,6 +453,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
 
             created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 
@@ -483,7 +577,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             os.makedirs(config.venv_path(), exist_ok=True)
 
             def fake_run(cmd, **_kwargs):
-                if "deployer.py connector create" in cmd:
+                if "bootstrap.py connector create" in cmd:
                     with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
                         handle.write("hostAliases: []\n")
                 return object()
@@ -538,6 +632,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
 
             override_path = os.path.join(tmpdir, "connector-local-overrides.yaml")
             with open(override_path, "w", encoding="utf-8") as handle:

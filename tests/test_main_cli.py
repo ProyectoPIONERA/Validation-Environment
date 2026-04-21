@@ -184,6 +184,10 @@ class FakeStorage:
         return None
 
     @staticmethod
+    def save_kafka_edc_results_json(results, experiment_dir):
+        return None
+
+    @staticmethod
     def save(results, experiment_dir=None, file_name="experiment_results.json"):
         return file_name
 
@@ -767,6 +771,34 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("Real Level 4 execution is not enabled", str(error.exception))
         self.assertEqual(adapter.calls, [])
 
+    def test_run_level_four_prepares_local_edc_image_when_missing_override(self):
+        adapter = FakeAdapter()
+        adapter.config_adapter.load_deployer_config = lambda: {
+            "KC_URL": "http://keycloak.local",
+            "DS_1_NAME": "fake-ds",
+            "EDC_DASHBOARD_ENABLED": "true",
+        }
+
+        with mock.patch.object(
+            main,
+            "_prepare_edc_local_connector_image_override",
+            return_value={
+                "image_name": "validation-environment/edc-connector",
+                "image_tag": "local",
+                "minikube_profile": "minikube",
+            },
+        ) as image_prepare, mock.patch.object(
+            main,
+            "_prepare_edc_local_dashboard_images",
+            return_value={"status": "prepared"},
+        ) as dashboard_prepare, mock.patch.dict(os.environ, {}, clear=True):
+            result = main.run_level(adapter, 4, deployer_name="edc", topology="local")
+
+        self.assertEqual(result["level"], 4)
+        self.assertEqual(result["result"], ["conn-a", "conn-b"])
+        image_prepare.assert_called_once_with(adapter)
+        dashboard_prepare.assert_called_once()
+
     def test_run_levels_reuses_one_adapter_for_selected_levels(self):
         result = main.run_levels(
             "fake",
@@ -1236,10 +1268,27 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("127.0.0.1 conn-b.example.local", hosts_content)
         self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
 
-    def test_deploy_command_refuses_real_edc_execution_without_explicit_image_override(self):
+    def test_deploy_command_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
+        adapter.config_adapter.load_deployer_config = lambda: {
+            "KC_URL": "http://keycloak.local",
+            "DS_1_NAME": "fake-ds",
+            "EDC_DASHBOARD_ENABLED": "true",
+        }
 
-        with mock.patch.dict(
+        with mock.patch.object(
+            main,
+            "_prepare_edc_local_connector_image_override",
+            return_value={
+                "image_name": "validation-environment/edc-connector",
+                "image_tag": "local",
+                "minikube_profile": "minikube",
+            },
+        ) as image_prepare, mock.patch.object(
+            main,
+            "_prepare_edc_local_dashboard_images",
+            return_value={"status": "prepared"},
+        ) as dashboard_prepare, mock.patch.dict(
             os.environ,
             {
                 "PIONERA_USE_DEPLOYER_DEPLOY": "true",
@@ -1247,6 +1296,31 @@ class MainCliTests(unittest.TestCase):
             },
             clear=True,
         ):
+            result = main.run_deploy(
+                adapter,
+                deployer_name="edc",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+
+        self.assertEqual(result["mode"], "execute")
+        self.assertEqual(result["deployment"]["connectors"], ["conn-deployer-a", "conn-deployer-b"])
+        image_prepare.assert_called_once_with(adapter)
+        dashboard_prepare.assert_called_once()
+
+    def test_deploy_command_refuses_real_edc_execution_with_partial_image_override(self):
+        adapter = FakeAdapter()
+
+        with mock.patch.object(main, "_prepare_edc_local_connector_image_override") as image_prepare, \
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "PIONERA_USE_DEPLOYER_DEPLOY": "true",
+                        "PIONERA_EXECUTE_DEPLOYER_DEPLOY": "true",
+                        "PIONERA_EDC_CONNECTOR_IMAGE_NAME": "validation-environment/edc-connector",
+                    },
+                    clear=True,
+                ):
             with self.assertRaises(RuntimeError) as exc:
                 main.run_deploy(
                     adapter,
@@ -1256,6 +1330,33 @@ class MainCliTests(unittest.TestCase):
                 )
 
         self.assertIn("EDC connector image overrides", str(exc.exception))
+        image_prepare.assert_not_called()
+
+    def test_prepare_edc_local_dashboard_images_builds_dashboard_and_proxy(self):
+        adapter = FakeAdapter()
+        config = {
+            "DS_1_NAME": "fake-ds",
+            "EDC_DASHBOARD_ENABLED": "true",
+            "EDC_DASHBOARD_IMAGE_NAME": "validation-environment/edc-dashboard",
+            "EDC_DASHBOARD_IMAGE_TAG": "local-ui",
+            "EDC_DASHBOARD_PROXY_IMAGE_NAME": "validation-environment/edc-dashboard-proxy",
+            "EDC_DASHBOARD_PROXY_IMAGE_TAG": "local-proxy",
+        }
+
+        with mock.patch("main.subprocess.run", return_value=mock.Mock(returncode=0)) as run_command, \
+                mock.patch.dict(os.environ, {}, clear=True):
+            result = main._prepare_edc_local_dashboard_images(adapter, config)
+            dashboard_tag = os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"]
+            proxy_tag = os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"]
+
+        self.assertEqual(result["status"], "prepared")
+        self.assertEqual(result["dashboard_image"], "validation-environment/edc-dashboard:local-ui")
+        self.assertEqual(result["dashboard_proxy_image"], "validation-environment/edc-dashboard-proxy:local-proxy")
+        self.assertEqual(run_command.call_count, 2)
+        self.assertIn("build_dashboard_image.sh", run_command.call_args_list[0].args[0][1])
+        self.assertIn("build_dashboard_proxy_image.sh", run_command.call_args_list[1].args[0][1])
+        self.assertEqual(dashboard_tag, "local-ui")
+        self.assertEqual(proxy_tag, "local-proxy")
 
     def test_deploy_command_refuses_real_edc_execution_on_shared_demo_dataspace(self):
         adapter = FakeAdapter()
@@ -1342,6 +1443,71 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["deployer_context"]["dataspace_name"], "fake-ds")
         self.assertEqual(result["deployer_context"]["config"]["KC_PASSWORD"], "***REDACTED***")
         self.assertEqual(result["deployer_context"]["config"]["VT_TOKEN"], "***REDACTED***")
+
+    def test_validate_command_runs_kafka_edc_after_newman_for_supported_adapter(self):
+        events = []
+
+        class RecordingValidationEngine(FakeValidationEngine):
+            def run(self, connectors):
+                events.append("validation")
+                return super().run(connectors)
+
+        class RecordingMetricsCollector:
+            def collect_experiment_newman_metrics(self, experiment_dir):
+                events.append("newman_metrics")
+                return [{"request": "login"}]
+
+        class KafkaReadyAdapter(FakeAdapter):
+            def get_kafka_config(self):
+                return {"bootstrap_servers": "localhost:9092"}
+
+        class InesdataValidationDeployer(FakeDeployer):
+            def get_validation_profile(self, context):
+                return {
+                    "adapter": "inesdata",
+                    "newman_enabled": True,
+                    "test_data_cleanup_enabled": False,
+                    "playwright_enabled": False,
+                }
+
+        def run_kafka(connectors, experiment_dir, *, validator, experiment_storage):
+            events.append("kafka_edc")
+            return [{"status": "passed", "provider": connectors[0], "consumer": connectors[1]}]
+
+        self.fake_module.KafkaReadyAdapter = KafkaReadyAdapter
+        self.fake_deployer_module.InesdataValidationDeployer = InesdataValidationDeployer
+        registry = {
+            **self.registry,
+            "fake": "fake_adapter_module:KafkaReadyAdapter",
+        }
+        deployer_registry = {
+            **self.deployer_registry,
+            "fake": "fake_deployer_module:InesdataValidationDeployer",
+        }
+
+        with mock.patch.object(
+            main,
+            "build_metrics_collector",
+            return_value=RecordingMetricsCollector(),
+        ), mock.patch.object(
+            main,
+            "build_kafka_edc_validation_suite",
+            return_value=mock.Mock(),
+        ), mock.patch.object(
+            main,
+            "run_kafka_edc_validation",
+            side_effect=run_kafka,
+        ):
+            result = main.main(
+                ["fake", "validate"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=RecordingValidationEngine,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(events, ["validation", "newman_metrics", "kafka_edc"])
+        self.assertEqual(result["kafka_edc_results"][0]["status"], "passed")
 
     def test_validate_command_runs_test_data_cleanup_when_enabled(self):
         with mock.patch.object(
@@ -1654,7 +1820,11 @@ class MainCliTests(unittest.TestCase):
                 main,
                 "run_playwright_validation",
                 return_value={"status": "passed", "summary": {"total_specs": 5}},
-            ) as playwright_runner, mock.patch.dict(
+            ) as playwright_runner, mock.patch.object(
+                main,
+                "_wait_for_edc_dashboard_readiness",
+                return_value={"status": "passed", "gates": []},
+            ) as readiness_probe, mock.patch.dict(
                 os.environ,
                 {"PIONERA_ENABLE_DEPLOYER_PLAYWRIGHT": "true"},
                 clear=False,
@@ -1670,6 +1840,90 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["playwright"]["status"], "passed")
         self.assertEqual(result["playwright"]["summary"]["total_specs"], 5)
         playwright_runner.assert_called_once()
+        readiness_probe.assert_called_once()
+
+    def test_validate_command_fails_clearly_when_edc_dashboard_services_are_not_ready(self):
+        with tempfile.TemporaryDirectory() as runtime_root:
+            runtime_dir = os.path.join(runtime_root, "fake-ds")
+            dashboard_dir = os.path.join(runtime_dir, "dashboard", "conn-a")
+            os.makedirs(dashboard_dir, exist_ok=True)
+            with open(os.path.join(dashboard_dir, "app-config.json"), "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            with open(
+                os.path.join(dashboard_dir, "edc-connector-config.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("[]\n")
+            with open(os.path.join(runtime_dir, "values-conn-a.yaml"), "w", encoding="utf-8") as handle:
+                handle.write("dashboard:\n  authMode: oidc-bff\n")
+
+            def resolve_context_from_runtime(self, topology="local"):
+                return {
+                    "deployer": "edc",
+                    "topology": topology,
+                    "environment": "DEV",
+                    "dataspace_name": "fake-ds",
+                    "ds_domain_base": "example.local",
+                    "connectors": ["conn-a"],
+                    "components": [],
+                    "namespace_roles": {
+                        "registration_service_namespace": "fake-ds",
+                        "provider_namespace": "fake-ds",
+                        "consumer_namespace": "fake-ds",
+                    },
+                    "runtime_dir": runtime_dir,
+                    "config": {
+                        "DS_1_NAME": "fake-ds",
+                        "EDC_DASHBOARD_ENABLED": "false",
+                        "EDC_DASHBOARD_PROXY_AUTH_MODE": "service-account",
+                    },
+                }
+
+            with mock.patch.object(
+                FakeDeployer,
+                "get_validation_profile",
+                return_value={
+                    "adapter": "edc",
+                    "newman_enabled": True,
+                    "playwright_enabled": True,
+                    "playwright_config": "validation/ui/playwright.edc.config.ts",
+                },
+            ), mock.patch.object(
+                FakeDeployer,
+                "resolve_context",
+                new=resolve_context_from_runtime,
+            ), mock.patch.object(
+                main,
+                "_wait_for_edc_dashboard_readiness",
+                return_value={
+                    "status": "failed",
+                    "artifact": "/tmp/dashboard_readiness.json",
+                    "gates": [
+                        {
+                            "service": "conn-a-dashboard",
+                            "ready": False,
+                            "detail": "service has no ready endpoints",
+                        }
+                    ],
+                },
+            ), mock.patch.object(main, "run_playwright_validation") as playwright_runner, mock.patch.dict(
+                os.environ,
+                {"PIONERA_ENABLE_DEPLOYER_PLAYWRIGHT": "true"},
+                clear=False,
+            ):
+                with self.assertRaises(RuntimeError) as exc:
+                    main.main(
+                        ["fake", "validate"],
+                        adapter_registry=self.registry,
+                        deployer_registry={"fake": "fake_deployer_module:FakeDeployer"},
+                        validation_engine_cls=FakeValidationEngine,
+                        experiment_storage=FakeStorage,
+                    )
+
+        self.assertIn("dashboard and dashboard-proxy services", str(exc.exception))
+        self.assertIn("conn-a-dashboard: service has no ready endpoints", str(exc.exception))
+        playwright_runner.assert_not_called()
 
     def test_metrics_command_uses_metrics_collector(self):
         result = main.main(

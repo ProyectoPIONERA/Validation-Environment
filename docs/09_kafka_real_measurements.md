@@ -3,17 +3,17 @@
 En la secuencia de evolución descrita desde [07_experiment_system.md](./07_experiment_system.md), la Fase 3 distingue dos capas complementarias:
 
 - benchmark de broker Kafka en `kafka_metrics.json`
-- validacion funcional opcional `EDC+Kafka` en `kafka_edc_results.json`
+- validacion funcional `EDC+Kafka` en `kafka_edc_results.json`
 
 ## Alcance
 
-Esta fase mantiene las metricas de Kafka como opcionales, pero hace que su resultado sea explicito y repetible desde los caminos de ejecucion activos:
+Esta fase mantiene el benchmark de broker Kafka como opcional, pero hace que su resultado sea explicito y repetible desde los caminos de ejecucion activos:
 
 - `python main.py inesdata metrics --kafka`
 - `python main.py inesdata run --kafka`
-- `python main.py menu` -> `Level 6 - Run Validation Tests`
+- `python main.py menu` -> `M - Run metrics (Kafka optional)`
 
-Cuando se activa `LEVEL6_RUN_KAFKA_EDC=true`, `Level 6` ejecuta ademas una suite funcional inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC.
+La activacion del benchmark de broker para usuarios debe hacerse desde el CLI o el menu, no desde `deployer.config`. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y se ejecuta automaticamente en `Level 6`, despues de Newman, para los adaptadores `inesdata` y `edc`.
 
 ## Salida
 
@@ -21,14 +21,20 @@ Toda ejecucion con Kafka habilitado debe dejar:
 
 - `kafka_metrics.json`
 
-Cuando la suite `EDC+Kafka` se activa en `Level 6`, la ejecucion deja además:
+Cuando se ejecuta `Level 6`, la suite `EDC+Kafka` deja además:
 
 - `kafka_edc_results.json`
 - `kafka_edc/<provider>__<consumer>.json`
 
-El fichero debe contener siempre un estado de ejecucion:
+`kafka_metrics.json` debe contener siempre un estado de ejecucion:
 
 - `completed`
+- `skipped`
+
+`kafka_edc_results.json` contiene una lista de resultados por par proveedor-consumidor:
+
+- `passed`
+- `failed`
 - `skipped`
 
 ## Payload Completado
@@ -88,7 +94,7 @@ La fuente de verdad de esta configuracion puede vivir en `deployers/inesdata/dep
 - `KAFKA_CONTAINER_IMAGE`
 - `KAFKA_CONTAINER_ENV_FILE`
 
-El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `main.py menu` en `Level 6`. El wrapper `inesdata.py` conserva la misma lectura por compatibilidad.
+El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `main.py menu` en `Level 6`.
 
 ## Runtime del Conector
 
@@ -99,7 +105,7 @@ Eso significa:
 - el benchmark persistido sigue siendo de broker
 - la imagen local del conector ya queda preparada para construir un runtime con soporte Kafka
 - el validador `EDC+Kafka` puede ya ejercer un flujo completo `asset -> catalogo -> negociacion -> transfer Kafka-PUSH -> consumo del topic destino`
-- ese flujo se ejecuta como suite opcional independiente del benchmark, para no mezclar latencia del broker con latencia del intercambio mediado por EDC
+- ese flujo se ejecuta como suite automatica de `Level 6`, independiente del benchmark, para no mezclar latencia del broker con latencia del intercambio mediado por EDC
 
 ## Broker Autoaprovisionado
 

@@ -2,7 +2,7 @@
 """
 Local deployment entrypoint for Validation-Environment.
 
-This script keeps the existing inesdata.py workflow intact and adds a parallel
+This script keeps the historical INESData workflow intact and adds a parallel
 path that deploys services using local images built from:
 adapters/inesdata/sources
 """
@@ -899,7 +899,7 @@ def execute(args):
 
 
 def show_menu(args):
-    """Display numbered local deployment menu analogous to inesdata.py."""
+    """Display a numbered local deployment menu analogous to the historical INESData menu."""
     ensure_prerequisites()
 
     adapter = InesdataAdapter(

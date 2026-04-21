@@ -294,6 +294,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
         infrastructure.run_silent = mock.Mock(side_effect=[
             "unsealed",
+            '{"data":{"id":"root"}}',
             '{"secret/": {}}',
         ])
 
@@ -301,6 +302,28 @@ class InesdataLevelOutputTests(unittest.TestCase):
         called_commands = [call.args[0] for call in infrastructure.run_silent.call_args_list]
         self.assertFalse(any("vault operator init" in cmd for cmd in called_commands))
         self.assertTrue(any("vault operator unseal" in cmd for cmd in called_commands))
+
+    def test_setup_vault_fails_when_existing_root_token_is_stale(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"
+        infrastructure.wait_for_pod_running = lambda *_args, **_kwargs: True
+
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"unseal_keys_hex":["abc"],"root_token":"stale-root"}')
+
+        infrastructure._read_vault_status = mock.Mock(
+            return_value=({"initialized": True, "sealed": False}, None)
+        )
+        infrastructure.run_silent = mock.Mock(return_value=None)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertFalse(infrastructure.setup_vault())
+
+        self.assertIn("local Vault root token is not valid", output.getvalue())
+        called_commands = [call.args[0] for call in infrastructure.run_silent.call_args_list]
+        self.assertTrue(any("vault token lookup" in cmd for cmd in called_commands))
+        self.assertFalse(any("vault secrets enable" in cmd for cmd in called_commands))
 
     def test_ensure_vault_unsealed_recovers_with_existing_keys_when_status_is_temporarily_unavailable(self):
         infrastructure = self._make_infrastructure()

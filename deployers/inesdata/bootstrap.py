@@ -24,12 +24,114 @@ from keycloak import KeycloakAdmin,KeycloakOpenID
 from keycloak.exceptions import KeycloakGetError,KeycloakPostError
 import json
 import os
+import requests
 import urllib3
 import warnings
 from urllib.parse import urlparse
 
 URL_PRO = '.dataspaceunit-project.eu'
 URL_DEV = '.dev.ds.dataspaceunit.upm'
+
+
+INFRASTRUCTURE_MANAGED_KEYS = {
+    "KC_URL",
+    "KC_INTERNAL_URL",
+    "KC_USER",
+    "KC_PASSWORD",
+    "PG_HOST",
+    "PG_USER",
+    "PG_PASSWORD",
+    "VT_URL",
+    "VT_TOKEN",
+    "MINIO_ENDPOINT",
+    "MINIO_USER",
+    "MINIO_PASSWORD",
+    "MINIO_ADMIN_USER",
+    "MINIO_ADMIN_PASS",
+}
+
+
+def _vault_capabilities_allow_management(capabilities):
+    capability_set = set(capabilities or [])
+    if "root" in capability_set or "sudo" in capability_set:
+        return True
+    return bool({"create", "update"}.intersection(capability_set)) and "deny" not in capability_set
+
+
+def _vault_capabilities_for_path(payload, path):
+    capabilities = payload.get("capabilities")
+    if isinstance(capabilities, dict):
+        return capabilities.get(path)
+    if path in payload:
+        return payload.get(path)
+    return capabilities
+
+
+def validate_vault_management_access(vt_token, vt_url, connector, dataspace):
+    vault_url = (vt_url or "").strip().rstrip("/")
+    token = (vt_token or "").strip()
+    if not vault_url or not token:
+        raise click.ClickException(
+            "Vault preflight failed: VT_URL/VT_TOKEN are not defined. "
+            "Review deployers/infrastructure/deployer.config before creating connectors."
+        )
+
+    headers = {"X-Vault-Token": token}
+    try:
+        response = requests.get(
+            f"{vault_url}/v1/auth/token/lookup-self",
+            headers=headers,
+            timeout=5,
+            verify=False,
+        )
+    except requests.RequestException as exc:
+        raise click.ClickException(f"Vault preflight failed: Vault is not reachable ({exc})") from exc
+
+    if response.status_code != 200:
+        raise click.ClickException(
+            "Vault preflight failed: the configured token is not valid for the running Vault "
+            f"(lookup-self HTTP {response.status_code}). Recreate Level 2 common services or "
+            "restore the current Vault root token before creating connectors."
+        )
+
+    policy_name = f"{connector}-secrets-policy"
+    paths = [
+        f"sys/policy/{policy_name}",
+        f"sys/policies/acl/{policy_name}",
+        "auth/token/create",
+        f"secret/data/{dataspace}/{connector}/public-key",
+    ]
+    try:
+        response = requests.post(
+            f"{vault_url}/v1/sys/capabilities-self",
+            headers=headers,
+            json={"paths": paths},
+            timeout=5,
+            verify=False,
+        )
+    except requests.RequestException as exc:
+        raise click.ClickException(f"Vault preflight failed: Vault is not reachable ({exc})") from exc
+
+    if response.status_code != 200:
+        raise click.ClickException(
+            "Vault preflight failed: could not verify token capabilities "
+            f"(HTTP {response.status_code}). Connector bootstrap requires policy, token and "
+            "secret creation permissions."
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise click.ClickException("Vault preflight failed: invalid capabilities response from Vault") from exc
+
+    for path in paths:
+        capabilities = _vault_capabilities_for_path(payload, path)
+        if not _vault_capabilities_allow_management(capabilities):
+            raise click.ClickException(
+                "Vault preflight failed: configured token does not have management "
+                f"permissions for '{path}'. Recreate Level 2 common services or restore "
+                "the current Vault root token before creating connectors."
+            )
 
 
 def _read_deployer_config_file(path):
@@ -50,13 +152,16 @@ def _read_deployer_config_file(path):
 def load_effective_deployer_config():
     """Load shared infrastructure first, then adapter overlay and env overrides."""
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    config = {}
-    config.update(
-        _read_deployer_config_file(
-            os.path.abspath(os.path.join(root_dir, "..", "infrastructure", "deployer.config"))
-        )
+    infrastructure_config = _read_deployer_config_file(
+        os.path.abspath(os.path.join(root_dir, "..", "infrastructure", "deployer.config"))
     )
-    config.update(_read_deployer_config_file(os.path.join(root_dir, "deployer.config")))
+    adapter_config = _read_deployer_config_file(os.path.join(root_dir, "deployer.config"))
+    config = dict(infrastructure_config)
+
+    for key, value in adapter_config.items():
+        if key in INFRASTRUCTURE_MANAGED_KEYS and key in config:
+            continue
+        config[key] = value
 
     for env_key, env_value in os.environ.items():
         if not env_key.startswith("PIONERA_") or env_value in (None, ""):
@@ -218,6 +323,9 @@ def create(ctx, name, dataspace):
     click.echo(f'Creating connector {name} in dataspace {dataspace}')
 
     environment = ctx.obj['in_env']
+
+    click.echo(f'- Validating {name} vault access')
+    validate_vault_management_access(ctx.obj['vt_token'], ctx.obj['vt_url'], name, dataspace)
 
     # Create passwords file
     create_password_file(dataspace, environment, 'connector', name)
@@ -1029,6 +1137,8 @@ def delete_connector_keycloak(username, password, server_url, connector, dataspa
 #######################################
 import hvac
 def create_connector_vault(vt_token, vt_url, connector, dataspace, environment):
+    validate_vault_management_access(vt_token, vt_url, connector, dataspace)
+
     # Connect with Vault
     client = hvac.Client(
         url=vt_url,

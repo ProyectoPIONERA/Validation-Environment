@@ -67,6 +67,34 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
         self.assertEqual(config["DS_DOMAIN_BASE"], "dev.ds.dataspaceunit.upm")
         self.assertEqual(config["DS_1_NAME"], "demo")
 
+    def test_load_deployer_config_keeps_infrastructure_credentials_over_adapter_placeholders(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata"), exist_ok=True)
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("VT_TOKEN=real-vault-token\nPG_PASSWORD=real-db-password\n")
+            with open(
+                os.path.join(tmpdir, "deployers", "inesdata", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("VT_TOKEN=X\nPG_PASSWORD=CHANGE_ME\nDS_1_NAME=demo\n")
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            config = INESDataConfigAdapter(TempConfig).load_deployer_config()
+
+        self.assertEqual(config["VT_TOKEN"], "real-vault-token")
+        self.assertEqual(config["PG_PASSWORD"], "real-db-password")
+        self.assertEqual(config["DS_1_NAME"], "demo")
+
     def test_primary_dataspace_name_prefers_deployer_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = DataspaceAwareConfig(tmpdir)

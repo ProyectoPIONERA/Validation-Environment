@@ -18,6 +18,18 @@ class NewmanExecutor:
     CONTRACT_AGREEMENT_TIMEOUT_SECONDS = 60
     CONTRACT_AGREEMENT_POLL_INTERVAL_SECONDS = 3
     ASYNC_COLLECTION_DELAY_REQUEST_MS = 2000
+    TRANSIENT_AUTH_ATTEMPTS = 3
+    TRANSIENT_AUTH_RETRY_DELAY_SECONDS = 5
+    AUTH_LOGIN_REQUESTS = {"Provider Login", "Consumer Login"}
+    AUTH_HEALTH_REQUESTS = {"Provider Management API Health", "Consumer Management API Health"}
+    TRANSIENT_AUTH_STATUS_CODES = {502, 503, 504}
+    TRANSIENT_AUTH_ERROR_HINTS = (
+        "ECONNRESET",
+        "ECONNREFUSED",
+        "ETIMEDOUT",
+        "ESOCKETTIMEDOUT",
+        "socket hang up",
+    )
 
     def ensure_available(self):
         newman_cmd = self.resolve_newman_command()
@@ -63,6 +75,9 @@ class NewmanExecutor:
         scripts = []
 
         scripts.append(self._load_file("validation/shared/api/common_tests.js"))
+
+        if "environment_health" in collection_name:
+            scripts.append(self._load_file("validation/core/tests/health_tests.js"))
 
         if "management" in collection_name:
             scripts.append(self._load_file("validation/core/tests/management_tests.js"))
@@ -138,6 +153,107 @@ class NewmanExecutor:
         with open(environment_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+    @staticmethod
+    def _positive_int_from_env(name, default):
+        value = os.getenv(name)
+        if value in (None, ""):
+            return default
+        try:
+            return max(1, int(value))
+        except ValueError:
+            print(f"[WARNING] Ignoring invalid {name}={value!r}; using {default}")
+            return default
+
+    @staticmethod
+    def _positive_float_from_env(name, default):
+        value = os.getenv(name)
+        if value in (None, ""):
+            return default
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            print(f"[WARNING] Ignoring invalid {name}={value!r}; using {default}")
+            return default
+
+    @staticmethod
+    def _response_header(response, header_name):
+        expected = header_name.lower()
+        for header in response.get("header", []) or []:
+            key = str(header.get("key") or "").lower()
+            if key == expected:
+                return header.get("value")
+        return None
+
+    @staticmethod
+    def _response_body_text(response):
+        stream = response.get("stream")
+        if isinstance(stream, dict) and stream.get("type") == "Buffer":
+            try:
+                return bytes(stream.get("data") or []).decode("utf-8", errors="replace")
+            except (TypeError, ValueError):
+                return ""
+        if isinstance(stream, str):
+            return stream
+        body = response.get("body")
+        return body if isinstance(body, str) else ""
+
+    def _newman_auth_execution(self, report, request_name):
+        for execution in report.get("run", {}).get("executions", []) or []:
+            item_name = (execution.get("item") or {}).get("name")
+            if item_name == request_name:
+                return execution
+        return None
+
+    def _newman_auth_failure_detail(self, report_path):
+        """Return a retry reason when Newman hit a transient auth endpoint failure."""
+        if not report_path or not os.path.exists(report_path):
+            return None
+
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                report = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        failures = report.get("run", {}).get("failures", []) or []
+        for failure in failures:
+            request_name = (failure.get("source") or {}).get("name")
+            if request_name not in self.AUTH_LOGIN_REQUESTS and request_name not in self.AUTH_HEALTH_REQUESTS:
+                continue
+
+            error = failure.get("error") or {}
+            error_text = " ".join(
+                str(error.get(key) or "")
+                for key in ("name", "test", "message")
+            )
+            execution = self._newman_auth_execution(report, request_name)
+            response = (execution or {}).get("response") or {}
+            status_code = response.get("code")
+            status_text = response.get("status") or ""
+            content_type = self._response_header(response, "Content-Type") or "unknown content type"
+
+            if status_code in self.TRANSIENT_AUTH_STATUS_CODES:
+                return (
+                    f"{request_name} returned HTTP {status_code} {status_text} "
+                    f"({content_type})"
+                )
+
+            body_text = self._response_body_text(response)
+            if (
+                request_name in self.AUTH_HEALTH_REQUESTS
+                and status_code == 401
+                and "AuthenticationFailed" in body_text
+            ):
+                return (
+                    f"{request_name} returned transient HTTP 401 AuthenticationFailed "
+                    f"({content_type})"
+                )
+
+            if any(hint in error_text for hint in self.TRANSIENT_AUTH_ERROR_HINTS):
+                return f"{request_name} failed with transient network error: {error_text.strip()}"
+
+        return None
+
     def _should_wait_for_contract_agreement(self, environment_path):
         _, env_vars = self._read_environment_values(environment_path)
         return bool(env_vars.get("e2e_negotiation_id") and not env_vars.get("e2e_agreement_id"))
@@ -159,6 +275,83 @@ class NewmanExecutor:
                 return body
 
         return None
+
+    @staticmethod
+    def _negotiation_summary(negotiation):
+        if not isinstance(negotiation, dict):
+            return ""
+
+        fields = []
+        for key in ("@id", "id", "type", "state", "counterPartyId", "contractAgreementId", "errorDetail"):
+            value = negotiation.get(key)
+            if value not in (None, ""):
+                fields.append(f"{key}={value}")
+        return ", ".join(fields)
+
+    def _provider_negotiation_diagnostic(self, env_vars):
+        provider = env_vars.get("provider")
+        consumer = env_vars.get("consumer")
+        ds_domain = env_vars.get("dsDomain")
+        provider_jwt = env_vars.get("provider_jwt")
+        missing = [
+            key for key, value in (
+                ("provider", provider),
+                ("consumer", consumer),
+                ("dsDomain", ds_domain),
+                ("provider_jwt", provider_jwt),
+            )
+            if not value
+        ]
+        if missing:
+            return "provider diagnostics unavailable; missing " + ", ".join(missing)
+
+        url = f"http://{provider}.{ds_domain}/management/v3/contractnegotiations/request"
+        payload = {
+            "@context": {
+                "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
+            },
+            "offset": 0,
+            "limit": 100,
+        }
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {provider_jwt}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            return f"provider diagnostics request failed: {exc}"
+
+        if response.status_code != 200:
+            return f"provider diagnostics returned HTTP {response.status_code}"
+
+        try:
+            body = response.json()
+        except ValueError:
+            return "provider diagnostics response body is not valid JSON"
+
+        if not isinstance(body, list):
+            return "provider diagnostics response body is not a negotiation list"
+
+        candidates = [
+            item for item in body
+            if isinstance(item, dict) and item.get("counterPartyId") == consumer
+        ]
+        if not candidates:
+            return f"provider diagnostics found no negotiation with counterPartyId={consumer}"
+
+        candidates.sort(key=lambda item: item.get("createdAt") or 0, reverse=True)
+        terminated = [
+            item for item in candidates
+            if item.get("state") == "TERMINATED"
+        ]
+        selected = terminated[0] if terminated else candidates[0]
+        summary = self._negotiation_summary(selected)
+        return summary or "provider diagnostics found a negotiation but could not summarize it"
 
     def wait_for_contract_agreement(self, environment_path, timeout=None, poll_interval=None):
         timeout = (
@@ -247,6 +440,14 @@ class NewmanExecutor:
                                 )
                                 return agreement_id
                             last_issue = negotiation.get("errorDetail") or f"state={last_state or 'unknown'}"
+                            if last_state == "TERMINATED":
+                                provider_detail = self._provider_negotiation_diagnostic(env_vars)
+                                if provider_detail:
+                                    last_issue = f"{last_issue}; provider_side=({provider_detail})"
+                                raise RuntimeError(
+                                    "Negotiation reached TERMINATED before contractAgreementId. "
+                                    f"Negotiation={negotiation_id}, detail={last_issue}"
+                                )
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -319,23 +520,53 @@ class NewmanExecutor:
                 report_path,
             ])
 
-        try:
-            result = subprocess.run(
-                cmd,
-                check=False,
-                capture_output=False,
-                text=True
+        max_attempts = (
+            self._positive_int_from_env(
+                "PIONERA_NEWMAN_TRANSIENT_AUTH_ATTEMPTS",
+                self.TRANSIENT_AUTH_ATTEMPTS,
             )
+            if report_path
+            else 1
+        )
+        retry_delay = self._positive_float_from_env(
+            "PIONERA_NEWMAN_TRANSIENT_AUTH_RETRY_DELAY_SECONDS",
+            self.TRANSIENT_AUTH_RETRY_DELAY_SECONDS,
+        )
 
-            if result.returncode != 0:
-                print(f"[WARNING] Newman returned exit code {result.returncode}")
+        for attempt in range(1, max_attempts + 1):
+            if report_path and os.path.exists(report_path):
+                os.remove(report_path)
 
+            try:
+                result = subprocess.run(
+                    cmd,
+                    check=False,
+                    capture_output=False,
+                    text=True
+                )
+            except FileNotFoundError:
+                print("ERROR: Newman is not installed or not available locally")
+                print("Install with: npm install or npm install -g newman")
+                return None
+
+            if result.returncode == 0:
+                return report_path
+
+            transient_auth_detail = self._newman_auth_failure_detail(report_path)
+            if transient_auth_detail and attempt < max_attempts:
+                print(
+                    "[INFO] Newman auth endpoint was temporarily unavailable: "
+                    f"{transient_auth_detail}. Retrying "
+                    f"{os.path.basename(collection_path)} in {retry_delay:g}s "
+                    f"({attempt + 1}/{max_attempts})"
+                )
+                time.sleep(retry_delay)
+                continue
+
+            print(f"[WARNING] Newman returned exit code {result.returncode}")
             return report_path
 
-        except FileNotFoundError:
-            print("ERROR: Newman is not installed or not available locally")
-            print("Install with: npm install or npm install -g newman")
-            return None
+        return report_path
 
     def run_validation_collections(self, env_vars, report_dir=None):
         """Run all validation collections in sequence and optionally export JSON reports."""

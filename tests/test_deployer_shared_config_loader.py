@@ -6,6 +6,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from deployers.shared.lib.config_loader import (
+    INFRASTRUCTURE_MANAGED_KEYS,
     iter_dataspace_slots,
     load_deployer_config,
     load_layered_deployer_config,
@@ -48,6 +49,42 @@ class SharedConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config["KC_USER"], "admin")
         self.assertEqual(config["KC_URL"], "http://shared-keycloak")
         self.assertEqual(config["DS_1_NAME"], "adapter")
+
+    def test_load_layered_deployer_config_can_protect_infrastructure_managed_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            common_path = os.path.join(tmpdir, "common.config")
+            adapter_path = os.path.join(tmpdir, "adapter.config")
+            with open(common_path, "w", encoding="utf-8") as handle:
+                handle.write("VT_TOKEN=real-token\nKC_PASSWORD=real-password\nDS_1_NAME=shared\n")
+            with open(adapter_path, "w", encoding="utf-8") as handle:
+                handle.write("VT_TOKEN=X\nKC_PASSWORD=CHANGE_ME\nDS_1_NAME=adapter\n")
+
+            config = load_layered_deployer_config(
+                [common_path, adapter_path],
+                apply_environment=False,
+                protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
+            )
+
+        self.assertEqual(config["VT_TOKEN"], "real-token")
+        self.assertEqual(config["KC_PASSWORD"], "real-password")
+        self.assertEqual(config["DS_1_NAME"], "adapter")
+
+    def test_protected_empty_infrastructure_value_is_not_replaced_by_adapter_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            common_path = os.path.join(tmpdir, "common.config")
+            adapter_path = os.path.join(tmpdir, "adapter.config")
+            with open(common_path, "w", encoding="utf-8") as handle:
+                handle.write("VT_TOKEN=\n")
+            with open(adapter_path, "w", encoding="utf-8") as handle:
+                handle.write("VT_TOKEN=X\n")
+
+            config = load_layered_deployer_config(
+                [common_path, adapter_path],
+                apply_environment=False,
+                protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
+            )
+
+        self.assertEqual(config["VT_TOKEN"], "")
 
     def test_iter_dataspace_slots_groups_values_per_slot(self):
         slots = iter_dataspace_slots(

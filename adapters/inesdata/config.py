@@ -2,7 +2,10 @@ import json
 import os
 import shutil
 
-from deployers.infrastructure.lib.config_loader import load_layered_deployer_config
+from deployers.infrastructure.lib.config_loader import (
+    INFRASTRUCTURE_MANAGED_KEYS,
+    load_layered_deployer_config,
+)
 from deployers.infrastructure.lib.paths import (
     legacy_deployer_artifact_dir,
     resolve_shared_artifact_dir,
@@ -336,7 +339,8 @@ class INESDataConfigAdapter:
             [
                 self._infrastructure_deployer_config_path(),
                 adapter_config_path,
-            ]
+            ],
+            protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
         )
 
     @staticmethod

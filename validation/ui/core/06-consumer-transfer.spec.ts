@@ -6,7 +6,10 @@ import { CatalogPage } from "../components/consumer/catalog.page";
 import { ContractOffersPage } from "../components/consumer/contract-offers.page";
 import { ContractsPage } from "../components/consumer/contracts.page";
 import { TransferHistoryPage } from "../components/consumer/transfer-history.page";
-import { bootstrapProviderNegotiationArtifacts } from "../shared/utils/provider-bootstrap";
+import {
+  bootstrapProviderNegotiationArtifacts,
+  waitForConsumerCatalogDatasetReadiness,
+} from "../shared/utils/provider-bootstrap";
 import { collectBrowserDiagnostics } from "../shared/utils/browser-diagnostics";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
 
@@ -92,6 +95,10 @@ test("06 consumer transfer: visible transfer from contracts and history", async 
       suffix,
     );
     await attachJson("consumer-transfer-bootstrap", report.providerBootstrap);
+    await attachJson(
+      "consumer-transfer-catalog-api-readiness",
+      await waitForConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
+    );
 
     await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);
     await loginPage.loginIfNeeded();

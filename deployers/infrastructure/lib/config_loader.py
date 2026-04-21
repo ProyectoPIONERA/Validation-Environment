@@ -1,6 +1,7 @@
 """Stable infrastructure import path for deployer configuration helpers."""
 
 from deployers.shared.lib.config_loader import (
+    INFRASTRUCTURE_MANAGED_KEYS,
     apply_pionera_environment_overrides,
     iter_dataspace_slots,
     load_deployer_config,
@@ -8,6 +9,7 @@ from deployers.shared.lib.config_loader import (
 )
 
 __all__ = [
+    "INFRASTRUCTURE_MANAGED_KEYS",
     "apply_pionera_environment_overrides",
     "iter_dataspace_slots",
     "load_deployer_config",

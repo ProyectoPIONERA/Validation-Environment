@@ -27,14 +27,13 @@ Sin este framework, cada integración tendría que resolverse de forma manual y 
 
 ## Idea general de la arquitectura
 
-La estructura actual del repositorio se entiende bien si la miramos en seis bloques:
+La estructura actual del repositorio se entiende bien si la miramos en cinco bloques:
 
 1. `main.py` es la entrada canónica del framework.
-2. `inesdata.py` se conserva como wrapper compatible para el flujo INESData.
-3. `adapters/` encapsula la lógica específica de cada adapter.
-4. `deployers/` contiene charts, bootstrap y artefactos de despliegue por adapter.
-5. `framework/` contiene la lógica genérica de validación y resultados.
-6. `validation/` contiene las suites API, UI y por componente.
+2. `adapters/` encapsula la lógica específica de cada adapter.
+3. `deployers/` contiene charts, bootstrap y artefactos de despliegue por adapter.
+4. `framework/` contiene la lógica genérica de validación y resultados.
+5. `validation/` contiene las suites API, UI y por componente.
 
 ## Qué está implementado
 

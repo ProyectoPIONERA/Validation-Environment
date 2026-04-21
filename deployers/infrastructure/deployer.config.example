@@ -1,46 +1,31 @@
-# Common local infrastructure configuration shared by deployers.
-# Copy this file to deployers/infrastructure/deployer.config and keep secrets out of Git.
-
 ENVIRONMENT=DEV
-
-# Keycloak
 KC_URL=http://keycloak-admin.dev.ed.dataspaceunit.upm
 KC_INTERNAL_URL=http://keycloak.dev.ed.dataspaceunit.upm
+KEYCLOAK_HOSTNAME=keycloak.dev.ed.dataspaceunit.upm
+KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.dev.ed.dataspaceunit.upm
 KC_USER=admin
 KC_PASSWORD=change-me
-
-# PostgreSQL
 PG_HOST=localhost
+DATABASE_HOSTNAME=common-srvs-postgresql.common-srvs.svc
 PG_USER=postgres
 PG_PASSWORD=change-me
-
-# MinIO
 MINIO_HOSTNAME=minio.dev.ed.dataspaceunit.upm
+MINIO_CONSOLE_HOSTNAME=console.minio-s3.dev.ed.dataspaceunit.upm
 MINIO_USER=admin
 MINIO_PASSWORD=change-me
 MINIO_ENDPOINT=http://127.0.0.1:9000
 MINIO_ADMIN_USER=admin
 MINIO_ADMIN_PASS=change-me
-
-# Vault
-VAULT_URL=http://127.0.0.1:8200
+VAULT_URL=http://common-srvs-vault.common-srvs.svc:8200
 VT_URL=http://127.0.0.1:8200
 VT_TOKEN=
-
-# Shared local domain
+DOMAIN_BASE=dev.ed.dataspaceunit.upm
 DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm
-
-# Topology
-# local uses 127.0.0.1 unless HOSTS_ADDRESS or LOCAL_HOSTS_ADDRESS is set.
-# vm-single requires VM_EXTERNAL_IP, VM_SINGLE_IP, VM_SINGLE_ADDRESS, HOSTS_ADDRESS, or INGRESS_EXTERNAL_IP.
-# vm-distributed may use VM_EXTERNAL_IP for all roles or role-specific VM_*_IP values.
-# VM_EXTERNAL_IP=
-# VM_COMMON_IP=
-# VM_DATASPACE_IP=
-# VM_CONNECTORS_IP=
-# VM_COMPONENTS_IP=
-# INGRESS_EXTERNAL_IP=
-# TOPOLOGY_ROUTING_MODE=host
-
-# Local tooling
 MINIKUBE_PROFILE=minikube
+VM_EXTERNAL_IP=
+VM_COMMON_IP=
+VM_DATASPACE_IP=
+VM_CONNECTORS_IP=
+VM_COMPONENTS_IP=
+INGRESS_EXTERNAL_IP=
+TOPOLOGY_ROUTING_MODE=host

@@ -4,7 +4,9 @@ import importlib
 import inspect
 import json
 import os
+import subprocess
 import sys
+import time
 
 from runtime_dependencies import ensure_runtime_dependencies
 
@@ -27,6 +29,7 @@ ensure_runtime_dependencies(
 
 from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
+from framework.kafka_edc_validation import KafkaEdcValidationSuite
 from framework.kafka_manager import KafkaManager
 from framework.metrics_collector import MetricsCollector
 from framework.reporting.experiment_loader import ExperimentLoader
@@ -43,6 +46,7 @@ from deployers.infrastructure.lib.hosts_manager import (
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
+from validation.orchestration.kafka import run_kafka_edc_validation
 from validation.ui import interactive_menu as ui_interactive_menu
 from validation.ui.ui_runner import run_playwright_validation
 
@@ -203,6 +207,168 @@ def _edc_dashboard_runtime_auth_mode(deployer_context):
         except OSError:
             continue
     return None
+
+
+def _edc_dashboard_namespace(deployer_context):
+    namespace_roles = getattr(deployer_context, "namespace_roles", None)
+    namespace = str(getattr(namespace_roles, "provider_namespace", "") or "").strip()
+    if namespace:
+        return namespace
+    namespace = str(getattr(namespace_roles, "consumer_namespace", "") or "").strip()
+    if namespace:
+        return namespace
+    return str(getattr(deployer_context, "dataspace_name", "") or "").strip()
+
+
+def _positive_float_env(name, default):
+    raw_value = os.getenv(name)
+    if raw_value in (None, ""):
+        return float(default)
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        print(f"[WARNING] Ignoring invalid {name}={raw_value!r}; using {default}")
+        return float(default)
+
+
+def _kubectl_endpoint_ready(namespace, service_name):
+    command = [
+        "kubectl",
+        "get",
+        "endpoints",
+        service_name,
+        "-n",
+        namespace,
+        "-o",
+        "json",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False, "kubectl is not available"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or f"kubectl returned exit code {result.returncode}"
+
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, "kubectl endpoint output is not valid JSON"
+
+    subsets = payload.get("subsets") or []
+    for subset in subsets:
+        addresses = subset.get("addresses") or []
+        ports = subset.get("ports") or []
+        if addresses and ports:
+            return True, f"{len(addresses)} endpoint address(es)"
+    return False, "service has no ready endpoints"
+
+
+def _probe_edc_dashboard_readiness(deployer_context):
+    namespace = _edc_dashboard_namespace(deployer_context)
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    gates = []
+
+    if not namespace:
+        return {
+            "status": "failed",
+            "namespace": namespace,
+            "connectors": connectors,
+            "gates": [{"gate": "namespace", "ready": False, "detail": "namespace is empty"}],
+        }
+
+    if not connectors:
+        return {
+            "status": "failed",
+            "namespace": namespace,
+            "connectors": connectors,
+            "gates": [{"gate": "connectors", "ready": False, "detail": "no connectors resolved"}],
+        }
+
+    for connector in connectors:
+        for suffix in ("dashboard", "dashboard-proxy"):
+            service_name = f"{connector}-{suffix}"
+            ready, detail = _kubectl_endpoint_ready(namespace, service_name)
+            gates.append({
+                "gate": f"{suffix}:{connector}",
+                "namespace": namespace,
+                "service": service_name,
+                "ready": ready,
+                "detail": detail,
+            })
+
+    status = "passed" if all(gate["ready"] for gate in gates) else "failed"
+    return {
+        "status": status,
+        "namespace": namespace,
+        "connectors": connectors,
+        "gates": gates,
+    }
+
+
+def _write_edc_dashboard_readiness(experiment_dir, readiness):
+    if not experiment_dir:
+        return None
+    output_dir = os.path.join(experiment_dir, "ui", "edc")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "dashboard_readiness.json")
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(readiness, handle, indent=2)
+    return output_path
+
+
+def _wait_for_edc_dashboard_readiness(deployer_context, experiment_dir=None):
+    timeout = _positive_float_env("PIONERA_EDC_DASHBOARD_READINESS_TIMEOUT_SECONDS", 90)
+    poll_interval = _positive_float_env("PIONERA_EDC_DASHBOARD_READINESS_POLL_SECONDS", 3)
+    deadline = time.monotonic() + timeout
+    readiness = None
+
+    while True:
+        readiness = _probe_edc_dashboard_readiness(deployer_context)
+        readiness["timeout_seconds"] = timeout
+        readiness["poll_interval_seconds"] = poll_interval
+        if readiness.get("status") == "passed":
+            readiness["artifact"] = _write_edc_dashboard_readiness(experiment_dir, readiness)
+            return readiness
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            readiness["artifact"] = _write_edc_dashboard_readiness(experiment_dir, readiness)
+            return readiness
+
+        time.sleep(min(poll_interval, remaining))
+
+
+def _edc_dashboard_readiness_failure_message(readiness):
+    failed_gates = [
+        gate for gate in readiness.get("gates", [])
+        if not gate.get("ready")
+    ]
+    if not failed_gates:
+        return "EDC dashboard readiness did not pass"
+
+    details = []
+    for gate in failed_gates[:6]:
+        service = gate.get("service") or gate.get("gate")
+        detail = gate.get("detail") or "not ready"
+        details.append(f"{service}: {detail}")
+    if len(failed_gates) > 6:
+        details.append(f"... and {len(failed_gates) - 6} more")
+
+    artifact = readiness.get("artifact")
+    artifact_text = f" Details saved in {artifact}." if artifact else ""
+    return (
+        "Playwright validation for 'edc' requires the dashboard and dashboard-proxy "
+        "services to have ready endpoints. Missing readiness: "
+        + "; ".join(details)
+        + artifact_text
+    )
 
 
 def resolve_adapter_class(adapter_name, adapter_registry=None):
@@ -406,6 +572,180 @@ def build_kafka_manager(adapter, manager_cls=KafkaManager, kafka_runtime_config=
         runtime_config=kafka_runtime_config or {},
         adapter_config_loader=kafka_config_loader,
     )
+
+
+def _adapter_level6_kafka_name(adapter, validation_profile=None, deployer_name=None):
+    candidates = []
+    if validation_profile is not None:
+        candidates.append(getattr(validation_profile, "adapter", ""))
+    if deployer_name:
+        candidates.append(deployer_name)
+    try:
+        candidates.append(_infer_deployer_name_from_adapter(adapter))
+    except Exception:
+        pass
+
+    for candidate in candidates:
+        normalized = str(candidate or "").strip().lower()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _supports_level6_kafka_edc(adapter, validation_profile=None, deployer_name=None):
+    adapter_name = _adapter_level6_kafka_name(
+        adapter,
+        validation_profile=validation_profile,
+        deployer_name=deployer_name,
+    )
+    if adapter_name not in {"edc", "inesdata"}:
+        return False
+
+    return callable(_resolve_adapter_callable(adapter, "get_kafka_config"))
+
+
+def _dataspace_name_loader(adapter):
+    config = getattr(adapter, "config", None)
+    dataspace_name_getter = getattr(config, "dataspace_name", None)
+    if callable(dataspace_name_getter):
+        return dataspace_name_getter
+
+    config_adapter = getattr(adapter, "config_adapter", None)
+    dataspace_name_getter = getattr(config_adapter, "primary_dataspace_name", None)
+    if callable(dataspace_name_getter):
+        return dataspace_name_getter
+
+    return lambda: getattr(config, "DS_NAME", "demo")
+
+
+def build_kafka_edc_validation_suite(
+    adapter,
+    suite_cls=KafkaEdcValidationSuite,
+    experiment_storage=ExperimentStorage,
+    kafka_manager_cls=KafkaManager,
+):
+    """Build the Level 6 functional EDC+Kafka validator from adapter hooks."""
+    load_connector_credentials = _resolve_adapter_callable(
+        adapter,
+        "connectors.load_connector_credentials",
+        "load_connector_credentials",
+    )
+    load_deployer_config = _resolve_adapter_callable(
+        adapter,
+        "config_adapter.load_deployer_config",
+        "load_deployer_config",
+    )
+    ds_domain_resolver = _resolve_adapter_callable(
+        adapter,
+        "config.ds_domain_base",
+        "ds_domain_base",
+    )
+    kafka_runtime_loader = _resolve_adapter_callable(
+        adapter,
+        "get_kafka_config",
+        default=lambda: {},
+    )
+    ensure_kafka_topic = _resolve_adapter_callable(
+        adapter,
+        "ensure_kafka_topic",
+    )
+
+    missing_dependencies = [
+        name
+        for name, dependency in (
+            ("load_connector_credentials", load_connector_credentials),
+            ("load_deployer_config", load_deployer_config),
+            ("ds_domain_resolver", ds_domain_resolver),
+        )
+        if not callable(dependency)
+    ]
+    if missing_dependencies:
+        missing = ", ".join(missing_dependencies)
+        raise RuntimeError(f"EDC+Kafka validation cannot run because adapter is missing: {missing}")
+
+    kafka_manager = build_kafka_manager(adapter, manager_cls=kafka_manager_cls)
+    return suite_cls(
+        load_connector_credentials=load_connector_credentials,
+        load_deployer_config=load_deployer_config,
+        kafka_runtime_loader=kafka_runtime_loader,
+        ensure_kafka_topic=ensure_kafka_topic,
+        kafka_manager=kafka_manager,
+        experiment_storage=experiment_storage,
+        ds_domain_resolver=ds_domain_resolver,
+        ds_name_loader=_dataspace_name_loader(adapter),
+    )
+
+
+def _save_kafka_edc_results(results, experiment_dir, experiment_storage=ExperimentStorage):
+    saver = getattr(experiment_storage, "save_kafka_edc_results_json", None)
+    if callable(saver):
+        saver(results, experiment_dir)
+
+
+def _print_kafka_edc_results(results):
+    for result in results or []:
+        provider = result.get("provider", "unknown-provider")
+        consumer = result.get("consumer", "unknown-consumer")
+        status = result.get("status", "unknown")
+        if status == "passed":
+            print(f"  EDC+Kafka validation passed for {provider} -> {consumer}")
+        elif status == "failed":
+            error = (result.get("error") or {}).get("message", "unknown reason")
+            print(f"  Warning: EDC+Kafka validation failed for {provider} -> {consumer} ({error})")
+        else:
+            reason = result.get("reason", "unknown reason")
+            print(f"  EDC+Kafka validation skipped for {provider} -> {consumer} ({reason})")
+
+
+def run_level6_kafka_edc_after_newman(
+    adapter,
+    connectors,
+    experiment_dir,
+    *,
+    validation_profile=None,
+    deployer_name=None,
+    experiment_storage=ExperimentStorage,
+    suite_cls=KafkaEdcValidationSuite,
+    kafka_manager_cls=KafkaManager,
+):
+    """Run the functional EDC+Kafka suite automatically after Newman in Level 6."""
+    if not _supports_level6_kafka_edc(
+        adapter,
+        validation_profile=validation_profile,
+        deployer_name=deployer_name,
+    ):
+        return []
+
+    print("\nRunning EDC+Kafka transfer validation suite...")
+    try:
+        validator = build_kafka_edc_validation_suite(
+            adapter,
+            suite_cls=suite_cls,
+            experiment_storage=experiment_storage,
+            kafka_manager_cls=kafka_manager_cls,
+        )
+        results = run_kafka_edc_validation(
+            list(connectors or []),
+            experiment_dir,
+            validator=validator,
+            experiment_storage=experiment_storage,
+        )
+    except Exception as exc:
+        results = [
+            {
+                "status": "failed",
+                "reason": "execution_error",
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        ]
+        _save_kafka_edc_results(results, experiment_dir, experiment_storage=experiment_storage)
+
+    _print_kafka_edc_results(results)
+    return list(results or [])
 
 
 def build_metrics_collector(
@@ -1175,7 +1515,178 @@ def _build_deployer_deploy_shadow_plan(adapter, deployer_name=None, deployer_reg
     }
 
 
-def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None):
+def _edc_local_connector_image_defaults():
+    return {
+        "name": os.getenv("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_NAME", "validation-environment/edc-connector"),
+        "tag": os.getenv("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_TAG", "local"),
+    }
+
+
+def _edc_local_dashboard_image_defaults(config, adapter):
+    config_cls = getattr(adapter, "config", None)
+    return {
+        "dashboard_name": str(
+            config.get("EDC_DASHBOARD_IMAGE_NAME")
+            or os.getenv("PIONERA_EDC_DASHBOARD_IMAGE_NAME")
+            or getattr(config_cls, "EDC_DASHBOARD_IMAGE_NAME", "validation-environment/edc-dashboard")
+            or ""
+        ).strip(),
+        "dashboard_tag": str(
+            config.get("EDC_DASHBOARD_IMAGE_TAG")
+            or os.getenv("PIONERA_EDC_DASHBOARD_IMAGE_TAG")
+            or getattr(config_cls, "EDC_DASHBOARD_IMAGE_TAG", "latest")
+            or ""
+        ).strip(),
+        "proxy_name": str(
+            config.get("EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or os.getenv("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or getattr(config_cls, "EDC_DASHBOARD_PROXY_IMAGE_NAME", "validation-environment/edc-dashboard-proxy")
+            or ""
+        ).strip(),
+        "proxy_tag": str(
+            config.get("EDC_DASHBOARD_PROXY_IMAGE_TAG")
+            or os.getenv("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG")
+            or getattr(config_cls, "EDC_DASHBOARD_PROXY_IMAGE_TAG", "latest")
+            or ""
+        ).strip(),
+    }
+
+
+def _edc_local_minikube_profile(adapter):
+    env_profile = os.getenv("PIONERA_MINIKUBE_PROFILE") or os.getenv("MINIKUBE_PROFILE")
+    if env_profile:
+        return env_profile.strip() or "minikube"
+
+    config_adapter = getattr(adapter, "config_adapter", None)
+    config_loader = getattr(config_adapter, "load_deployer_config", None)
+    config = dict(config_loader() or {}) if callable(config_loader) else {}
+    return str(config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
+
+
+def _prepare_edc_local_connector_image_override(adapter):
+    if _env_flag("PIONERA_SKIP_EDC_LOCAL_CONNECTOR_IMAGE_BUILD", default=False):
+        raise RuntimeError(
+            "EDC Level 4 local execution needs a connector image, but automatic local image "
+            "preparation was disabled with PIONERA_SKIP_EDC_LOCAL_CONNECTOR_IMAGE_BUILD=true."
+        )
+
+    image = _edc_local_connector_image_defaults()
+    image_name = str(image["name"] or "").strip()
+    image_tag = str(image["tag"] or "").strip()
+    if not image_name or not image_tag:
+        raise RuntimeError(
+            "EDC local connector image defaults are invalid. Set "
+            "PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_NAME and PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_TAG."
+        )
+
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(root_dir, "adapters", "edc", "scripts", "build_image.sh")
+    if not os.path.isfile(script_path):
+        raise RuntimeError(f"EDC connector image build script not found: {script_path}")
+
+    minikube_profile = _edc_local_minikube_profile(adapter)
+    command = [
+        "bash",
+        script_path,
+        "--apply",
+        "--image",
+        image_name,
+        "--tag",
+        image_tag,
+        "--minikube-profile",
+        minikube_profile,
+    ]
+
+    print(
+        "EDC connector image overrides are not configured. "
+        f"Preparing local image automatically: {image_name}:{image_tag}"
+    )
+    result = subprocess.run(command, cwd=root_dir, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Automatic EDC connector image preparation failed. "
+            f"Command returned exit code {result.returncode}: {' '.join(command)}"
+        )
+
+    os.environ["PIONERA_EDC_CONNECTOR_IMAGE_NAME"] = image_name
+    os.environ["PIONERA_EDC_CONNECTOR_IMAGE_TAG"] = image_tag
+    os.environ.setdefault("PIONERA_EDC_CONNECTOR_IMAGE_PULL_POLICY", "IfNotPresent")
+    return {
+        "image_name": image_name,
+        "image_tag": image_tag,
+        "minikube_profile": minikube_profile,
+    }
+
+
+def _run_edc_local_image_script(script_path, minikube_profile, env):
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    command = [
+        "bash",
+        script_path,
+        "--apply",
+        "--minikube-profile",
+        minikube_profile,
+    ]
+    result = subprocess.run(command, cwd=root_dir, check=False, env=env)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Automatic EDC local image preparation failed. "
+            f"Command returned exit code {result.returncode}: {' '.join(command)}"
+        )
+
+
+def _prepare_edc_local_dashboard_images(adapter, config):
+    if not _mapping_flag(config, "EDC_DASHBOARD_ENABLED", default=False):
+        return {"status": "skipped", "reason": "dashboard-disabled"}
+
+    if _env_flag("PIONERA_SKIP_EDC_LOCAL_DASHBOARD_IMAGE_BUILD", default=False):
+        return {"status": "skipped", "reason": "disabled-by-env"}
+
+    images = _edc_local_dashboard_image_defaults(config, adapter)
+    missing = [key for key, value in images.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "EDC dashboard local image defaults are invalid. Missing: "
+            + ", ".join(sorted(missing))
+        )
+
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    dashboard_script = os.path.join(root_dir, "adapters", "edc", "scripts", "build_dashboard_image.sh")
+    proxy_script = os.path.join(root_dir, "adapters", "edc", "scripts", "build_dashboard_proxy_image.sh")
+    for script_path in (dashboard_script, proxy_script):
+        if not os.path.isfile(script_path):
+            raise RuntimeError(f"EDC dashboard image build script not found: {script_path}")
+
+    minikube_profile = _edc_local_minikube_profile(adapter)
+    env = dict(os.environ)
+    env["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
+    env["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
+    env["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME"] = images["proxy_name"]
+    env["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"] = images["proxy_tag"]
+
+    print(
+        "EDC dashboard is enabled. Preparing local dashboard images automatically: "
+        f"{images['dashboard_name']}:{images['dashboard_tag']} and "
+        f"{images['proxy_name']}:{images['proxy_tag']}"
+    )
+    _run_edc_local_image_script(dashboard_script, minikube_profile, env)
+    _run_edc_local_image_script(proxy_script, minikube_profile, env)
+
+    os.environ["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
+    os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
+    os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME"] = images["proxy_name"]
+    os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"] = images["proxy_tag"]
+    os.environ.setdefault("PIONERA_EDC_DASHBOARD_IMAGE_PULL_POLICY", "IfNotPresent")
+    os.environ.setdefault("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_PULL_POLICY", "IfNotPresent")
+    return {
+        "status": "prepared",
+        "dashboard_image": f"{images['dashboard_name']}:{images['dashboard_tag']}",
+        "dashboard_proxy_image": f"{images['proxy_name']}:{images['proxy_tag']}",
+        "minikube_profile": minikube_profile,
+    }
+
+
+def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="local"):
     normalized_deployer = str(deployer_name or _infer_deployer_name_from_adapter(adapter)).strip().lower()
     if normalized_deployer != "edc":
         return
@@ -1183,37 +1694,7 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None):
     config_adapter = getattr(adapter, "config_adapter", None)
     config_loader = getattr(config_adapter, "load_deployer_config", None)
     config = dict(config_loader() or {}) if callable(config_loader) else {}
-
-    explicit_image_name = str(
-        config.get("EDC_CONNECTOR_IMAGE_NAME")
-        or os.getenv("PIONERA_EDC_CONNECTOR_IMAGE_NAME")
-        or ""
-    ).strip()
-    explicit_image_tag = str(
-        config.get("EDC_CONNECTOR_IMAGE_TAG")
-        or os.getenv("PIONERA_EDC_CONNECTOR_IMAGE_TAG")
-        or ""
-    ).strip()
-
-    config_cls = getattr(adapter, "config", None)
-    default_image_name = str(
-        getattr(config_cls, "EDC_CONNECTOR_IMAGE_NAME", "ghcr.io/proyectopionera/edc-connector") or ""
-    ).strip()
-    default_image_tag = str(
-        getattr(config_cls, "EDC_CONNECTOR_IMAGE_TAG", "latest") or ""
-    ).strip()
-
-    if not explicit_image_name or not explicit_image_tag:
-        raise RuntimeError(
-            "Real deployer execution for EDC requires explicit EDC connector image overrides. "
-            "Set PIONERA_EDC_CONNECTOR_IMAGE_NAME and PIONERA_EDC_CONNECTOR_IMAGE_TAG first."
-        )
-
-    if explicit_image_name == default_image_name and explicit_image_tag == default_image_tag:
-        raise RuntimeError(
-            "Real deployer execution for EDC refuses to use the default connector image "
-            f"'{default_image_name}:{default_image_tag}'. Provide an explicit working image override."
-        )
+    normalized_topology = str(topology or "local").strip().lower()
 
     dataspace_name = ""
     primary_dataspace_name = getattr(config_adapter, "primary_dataspace_name", None)
@@ -1238,10 +1719,55 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None):
             "PIONERA_ALLOW_SHARED_EDC_DEPLOY=true to bypass this protection explicitly."
         )
 
+    explicit_image_name = str(
+        config.get("EDC_CONNECTOR_IMAGE_NAME")
+        or os.getenv("PIONERA_EDC_CONNECTOR_IMAGE_NAME")
+        or ""
+    ).strip()
+    explicit_image_tag = str(
+        config.get("EDC_CONNECTOR_IMAGE_TAG")
+        or os.getenv("PIONERA_EDC_CONNECTOR_IMAGE_TAG")
+        or ""
+    ).strip()
+
+    config_cls = getattr(adapter, "config", None)
+    default_image_name = str(
+        getattr(config_cls, "EDC_CONNECTOR_IMAGE_NAME", "ghcr.io/proyectopionera/edc-connector") or ""
+    ).strip()
+    default_image_tag = str(
+        getattr(config_cls, "EDC_CONNECTOR_IMAGE_TAG", "latest") or ""
+    ).strip()
+
+    if not explicit_image_name or not explicit_image_tag:
+        if normalized_topology == "local" and not explicit_image_name and not explicit_image_tag:
+            prepared = _prepare_edc_local_connector_image_override(adapter)
+            explicit_image_name = prepared["image_name"]
+            explicit_image_tag = prepared["image_tag"]
+        else:
+            raise RuntimeError(
+                "Real deployer execution for EDC requires explicit EDC connector image overrides. "
+                "Set PIONERA_EDC_CONNECTOR_IMAGE_NAME and PIONERA_EDC_CONNECTOR_IMAGE_TAG first."
+            )
+
+    if not explicit_image_name or not explicit_image_tag:
+        raise RuntimeError(
+            "Real deployer execution for EDC requires explicit EDC connector image overrides. "
+            "Set PIONERA_EDC_CONNECTOR_IMAGE_NAME and PIONERA_EDC_CONNECTOR_IMAGE_TAG first."
+        )
+
+    if explicit_image_name == default_image_name and explicit_image_tag == default_image_tag:
+        raise RuntimeError(
+            "Real deployer execution for EDC refuses to use the default connector image "
+            f"'{default_image_name}:{default_image_tag}'. Provide an explicit working image override."
+        )
+
+    if normalized_topology == "local":
+        _prepare_edc_local_dashboard_images(adapter, config)
+
 
 def _execute_deployer_deploy(adapter, deployer_name=None, deployer_registry=None, topology="local"):
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
-    _ensure_safe_edc_deployer_execution(adapter, deployer_name=resolved_deployer_name)
+    _ensure_safe_edc_deployer_execution(adapter, deployer_name=resolved_deployer_name, topology=topology)
     orchestrator = build_deployer_orchestrator(
         deployer_name=resolved_deployer_name,
         deployer_registry=deployer_registry,
@@ -1460,6 +1986,8 @@ def run_validate(
     save_metadata=True,
     baseline=False,
     force_playwright=False,
+    kafka_edc_validation_suite_cls=KafkaEdcValidationSuite,
+    kafka_manager_cls=KafkaManager,
 ):
     """Run validation collections with the selected adapter."""
     validation_runtime = _resolve_validation_runtime(
@@ -1537,6 +2065,17 @@ def run_validate(
     if validation_error is not None:
         raise validation_error
 
+    kafka_edc_results = run_level6_kafka_edc_after_newman(
+        adapter,
+        connectors,
+        experiment_dir,
+        validation_profile=validation_profile,
+        deployer_name=validation_runtime.get("deployer_name") or deployer_name,
+        experiment_storage=experiment_storage,
+        suite_cls=kafka_edc_validation_suite_cls,
+        kafka_manager_cls=kafka_manager_cls,
+    )
+
     playwright_result = None
     if validation_profile is not None:
         if not getattr(validation_profile, "playwright_enabled", False):
@@ -1588,6 +2127,13 @@ def run_validate(
                 raise RuntimeError(
                     "Validation profile enables Playwright but does not define a playwright_config"
                 )
+            if is_edc_playwright:
+                readiness = _wait_for_edc_dashboard_readiness(
+                    deployer_context,
+                    experiment_dir=experiment_dir,
+                )
+                if readiness.get("status") != "passed":
+                    raise RuntimeError(_edc_dashboard_readiness_failure_message(readiness))
             playwright_result = run_playwright_validation(
                 profile=validation_profile,
                 context=deployer_context,
@@ -1602,6 +2148,7 @@ def run_validate(
         "experiment_dir": experiment_dir,
         "validation": validation_result,
         "newman_request_metrics": newman_request_metrics,
+        "kafka_edc_results": kafka_edc_results,
         "storage_checks": list(getattr(validation_engine, "last_storage_checks", []) or []),
         "playwright": playwright_result,
         "test_data_cleanup": test_data_cleanup,
@@ -1958,7 +2505,11 @@ def run_level(
         result = deploy_dataspace()
     elif level_id == 4:
         if resolved_deployer_name == "edc":
-            _ensure_safe_edc_deployer_execution(adapter, deployer_name=resolved_deployer_name)
+            _ensure_safe_edc_deployer_execution(
+                adapter,
+                deployer_name=resolved_deployer_name,
+                topology=topology,
+            )
         deploy_connectors = _resolve_adapter_callable(adapter, "deploy_connectors")
         if not callable(deploy_connectors):
             raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 4 deploy_connectors()")

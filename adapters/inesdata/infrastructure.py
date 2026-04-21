@@ -827,6 +827,24 @@ class INESDataInfrastructureAdapter:
 
         return None, status_error
 
+    def _vault_root_token_valid(self, pod_name, namespace, root_token):
+        if not root_token:
+            return False
+
+        token_lookup = self.run_silent(
+            f"kubectl exec {pod_name} -n {namespace} -- "
+            f"env VAULT_TOKEN={shlex.quote(root_token)} vault token lookup -format=json"
+        )
+        if not token_lookup:
+            return False
+
+        try:
+            payload = json.loads(token_lookup)
+        except json.JSONDecodeError:
+            return False
+
+        return bool(payload.get("data"))
+
     def setup_vault(self, namespace=None):
         namespace = namespace or self.config.NS_COMMON
         print("\nConfiguring Vault...")
@@ -912,10 +930,19 @@ class INESDataInfrastructureAdapter:
         else:
             print("Vault already unsealed")
 
+        if not self._vault_root_token_valid(pod_name, namespace, root_token):
+            print(
+                "Error: local Vault root token is not valid for the running Vault. "
+                "The Vault persistent state and deployers/shared/common/init-keys-vault.json "
+                "are out of sync. Recreate Level 2 common services or restore the current "
+                "Vault root token before continuing."
+            )
+            return False
+
         print("Checking KV engine...")
         secrets_list = self.run_silent(
             f"kubectl exec {pod_name} -n {namespace} -- "
-            f"env VAULT_TOKEN={root_token} vault secrets list -format=json"
+            f"env VAULT_TOKEN={shlex.quote(root_token)} vault secrets list -format=json"
         )
 
         kv_exists = False
@@ -930,7 +957,7 @@ class INESDataInfrastructureAdapter:
             print("Enabling KV v2 engine...")
             enable_kv = self.run_silent(
                 f"kubectl exec {pod_name} -n {namespace} -- "
-                f"env VAULT_TOKEN={root_token} vault secrets enable -path=secret kv-v2"
+                f"env VAULT_TOKEN={shlex.quote(root_token)} vault secrets enable -path=secret kv-v2"
             )
             if enable_kv:
                 print("KV v2 engine enabled")
@@ -1032,7 +1059,7 @@ class INESDataInfrastructureAdapter:
             print(f"Error: root_token not found in {vault_json_path}")
             return False
 
-        print(f"Token obtained: {new_token[:20]}...")
+        print("Token obtained from Vault keys artifact")
 
         try:
             with open(config_path) as f:

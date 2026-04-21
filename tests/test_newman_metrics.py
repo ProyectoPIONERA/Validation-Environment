@@ -123,6 +123,173 @@ class NewmanMetricsTests(unittest.TestCase):
         mock_wait.assert_called_once()
         self.assertTrue(mock_wait.call_args.args[0].endswith("environment.json"))
 
+    def test_environment_health_collection_loads_health_script(self):
+        executor = NewmanExecutor()
+
+        script = executor.load_test_scripts("validation/core/collections/01_environment_health.json")
+
+        self.assertIn("Environment health tests", script)
+        self.assertIn("Provider Management API Health", script)
+
+    def test_detects_transient_auth_failure_from_newman_report(self):
+        executor = NewmanExecutor()
+        report = {
+            "run": {
+                "failures": [
+                    {
+                        "source": {"name": "Consumer Login"},
+                        "error": {
+                            "name": "AssertionError",
+                            "test": "Response body is valid JSON",
+                            "message": "Response body is not valid JSON",
+                        },
+                    }
+                ],
+                "executions": [
+                    {
+                        "item": {"name": "Consumer Login"},
+                        "response": {
+                            "code": 503,
+                            "status": "Service Temporarily Unavailable",
+                            "header": [
+                                {"key": "Content-Type", "value": "text/html"}
+                            ],
+                        },
+                    }
+                ],
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = os.path.join(tmpdir, "06_consumer_transfer.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f)
+
+            detail = executor._newman_auth_failure_detail(report_path)
+
+        self.assertIn("Consumer Login returned HTTP 503", detail)
+        self.assertIn("text/html", detail)
+
+    def test_detects_transient_management_api_auth_failure_from_newman_report(self):
+        executor = NewmanExecutor()
+        body = b'[{"message":"Request could not be authenticated","type":"AuthenticationFailed"}]'
+        report = {
+            "run": {
+                "failures": [
+                    {
+                        "source": {"name": "Consumer Management API Health"},
+                        "error": {
+                            "name": "AssertionError",
+                            "test": "Consumer Management API Health authenticates successfully",
+                            "message": "Consumer Management API Health returned HTTP 401",
+                        },
+                    }
+                ],
+                "executions": [
+                    {
+                        "item": {"name": "Consumer Management API Health"},
+                        "response": {
+                            "code": 401,
+                            "status": "Unauthorized",
+                            "header": [
+                                {"key": "Content-Type", "value": "application/json"}
+                            ],
+                            "stream": {
+                                "type": "Buffer",
+                                "data": list(body),
+                            },
+                        },
+                    }
+                ],
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = os.path.join(tmpdir, "01_environment_health.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f)
+
+            detail = executor._newman_auth_failure_detail(report_path)
+
+        self.assertIn("Consumer Management API Health returned transient HTTP 401", detail)
+        self.assertIn("application/json", detail)
+
+    @mock.patch("framework.newman_executor.time.sleep", return_value=None)
+    @mock.patch("framework.newman_executor.subprocess.run")
+    def test_run_newman_retries_transient_auth_failure(self, mock_run, mock_sleep):
+        executor = NewmanExecutor()
+        call_count = {"value": 0}
+
+        def write_report(path, failures):
+            report = {
+                "collection": {"info": {"name": "06 Consumer Transfer"}},
+                "run": {
+                    "failures": failures,
+                    "executions": [
+                        {
+                            "item": {"name": "Consumer Login"},
+                            "response": {
+                                "code": 503 if failures else 200,
+                                "status": "Service Temporarily Unavailable" if failures else "OK",
+                                "header": [
+                                    {
+                                        "key": "Content-Type",
+                                        "value": "text/html" if failures else "application/json",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(report, f)
+
+        def fake_run(cmd, check=False, capture_output=False, text=True):
+            call_count["value"] += 1
+            report_path = cmd[cmd.index("--reporter-json-export") + 1]
+            if call_count["value"] == 1:
+                write_report(
+                    report_path,
+                    [
+                        {
+                            "source": {"name": "Consumer Login"},
+                            "error": {
+                                "test": "Response body is valid JSON",
+                                "message": "Response body is not valid JSON",
+                            },
+                        }
+                    ],
+                )
+                return mock.Mock(returncode=1)
+
+            write_report(report_path, [])
+            return mock.Mock(returncode=0)
+
+        mock_run.side_effect = fake_run
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = os.path.join(tmpdir, "06_consumer_transfer.json")
+            with mock.patch.object(executor, "ensure_available", return_value=["newman"]), \
+                    mock.patch.object(executor, "load_test_scripts", return_value="pm.test('ok')"), \
+                    mock.patch.dict(os.environ, {
+                        "PIONERA_NEWMAN_TRANSIENT_AUTH_ATTEMPTS": "2",
+                        "PIONERA_NEWMAN_TRANSIENT_AUTH_RETRY_DELAY_SECONDS": "0",
+                    }):
+                returned_path = executor.run_newman(
+                    "validation/core/collections/06_consumer_transfer.json",
+                    {"provider": "conn-a"},
+                    report_path=report_path,
+                )
+
+            with open(report_path, "r", encoding="utf-8") as f:
+                final_report = json.load(f)
+
+        self.assertEqual(returned_path, report_path)
+        self.assertEqual(call_count["value"], 2)
+        mock_sleep.assert_called_once_with(0.0)
+        self.assertEqual(final_report["run"]["failures"], [])
+
     @mock.patch("framework.newman_executor.time.sleep", return_value=None)
     @mock.patch("framework.newman_executor.requests.post")
     def test_wait_for_contract_agreement_updates_environment_when_available(self, mock_post, _mock_sleep):
@@ -186,6 +353,53 @@ class NewmanMetricsTests(unittest.TestCase):
                     timeout=0,
                     poll_interval=0,
                 )
+
+    @mock.patch("framework.newman_executor.requests.post")
+    def test_wait_for_contract_agreement_reports_provider_detail_when_terminated(self, mock_post):
+        executor = NewmanExecutor()
+        consumer_response = mock.Mock(status_code=200)
+        consumer_response.json.return_value = [
+            {"@id": "neg-1", "state": "TERMINATED"}
+        ]
+        provider_response = mock.Mock(status_code=200)
+        provider_response.json.return_value = [
+            {
+                "@id": "provider-neg-1",
+                "type": "PROVIDER",
+                "state": "TERMINATED",
+                "counterPartyId": "conn-b",
+                "createdAt": 2,
+                "errorDetail": "Failed to send agreement to consumer: 401 Unauthorized",
+            }
+        ]
+        mock_post.side_effect = [consumer_response, provider_response]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            environment_path = os.path.join(tmpdir, "environment.json")
+            executor._write_environment_file(
+                {
+                    "provider": "conn-a",
+                    "consumer": "conn-b",
+                    "dsDomain": "example.local",
+                    "provider_jwt": "provider-token",
+                    "consumer_jwt": "consumer-token",
+                    "e2e_negotiation_id": "neg-1",
+                },
+                environment_path,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "provider_side=.*401 Unauthorized"):
+                executor.wait_for_contract_agreement(
+                    environment_path,
+                    timeout=1,
+                    poll_interval=0,
+                )
+
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertIn(
+            "conn-a.example.local/management/v3/contractnegotiations/request",
+            mock_post.call_args_list[1].args[0],
+        )
 
     def test_parse_newman_report_extracts_request_metrics(self):
         collector = MetricsCollector()

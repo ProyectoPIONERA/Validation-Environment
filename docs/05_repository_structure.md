@@ -11,7 +11,6 @@ integration_pionera/
   tests/
   validation/
   main.py
-  inesdata.py  # wrapper legacy compatible
 ```
 
 ## `validation/`
@@ -53,7 +52,7 @@ Contiene utilidades compartidas por las pruebas en:
 Contiene la orquestación reutilizable de `Level 6`.
 
 - `components.py`: helpers para validación opcional de componentes.
-- `kafka.py`: helpers para validación opcional EDC+Kafka.
+- `kafka.py`: helpers para la validación EDC+Kafka de nivel 6.
 - `runner.py`: secuencia común de validación observable del entorno.
 - `hosts.py`: sincronización y verificación local de hosts de conectores.
 - `readiness.py`: probes reutilizables de readiness para Management API y catálogo.
@@ -61,7 +60,7 @@ Contiene la orquestación reutilizable de `Level 6`.
 - `ui.py`: runners Playwright reutilizables para `ui-core`, `ui-dataspace`, `ui-ops` y orquestación interactiva core UI.
 - `Level6Runtime`: contrato de dependencias inyectadas por el adapter/deployer activo.
 
-El wrapper legacy `inesdata.py` construye hoy un `Level6Runtime` específico de INESData y delega en este runner.
+Los adapters construyen el `Level6Runtime` específico del despliegue activo y delegan en este runner común desde `main.py`.
 
 ### `validation/ui/`
 

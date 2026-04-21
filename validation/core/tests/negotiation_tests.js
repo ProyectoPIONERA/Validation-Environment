@@ -185,11 +185,23 @@ if (requestName === "Check Negotiation Status") {
     })
     if (state === "TERMINATED") {
         clearLocalVar("e2e_negotiation_status_attempt")
+        const detailParts = [
+            `Negotiation ${negotiationId || "<unknown>"} reached TERMINATED state`,
+            `counterPartyId=${negotiation.counterPartyId || "<unknown>"}`,
+            `counterPartyAddress=${negotiation.counterPartyAddress || "<unknown>"}`
+        ]
+        if (negotiation.errorDetail) {
+            detailParts.push(`errorDetail=${negotiation.errorDetail}`)
+        } else {
+            detailParts.push("consumer-side errorDetail is empty; inspect provider-side negotiation detail")
+        }
         pm.test("Negotiation did not end in a terminated state", function () {
-            pm.expect.fail("Negotiation reached TERMINATED state")
+            pm.expect.fail(detailParts.join("; "))
         })
         if (negotiation.errorDetail) {
             console.log("Negotiation error detail:", negotiation.errorDetail)
+        } else {
+            console.log("Negotiation terminated without consumer-side error detail. Provider-side diagnostics may contain the DSP error.")
         }
         setNextRequestName(null)
         return

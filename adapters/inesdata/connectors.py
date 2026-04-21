@@ -24,6 +24,7 @@ class INESDataConnectorsAdapter:
         self.config = config_cls or InesdataConfig
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
         self._management_token_cache = {}
+        self._vault_management_token_verified = False
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
@@ -73,6 +74,119 @@ class INESDataConnectorsAdapter:
                 "timed out",
             )
         )
+
+    def _should_sync_vault_token_to_deployer_config(self):
+        for resolver_name in ("infrastructure_deployer_config_path", "deployer_config_path"):
+            resolver = getattr(self.config, resolver_name, None)
+            if callable(resolver) and os.path.exists(resolver()):
+                return True
+        return False
+
+    @staticmethod
+    def _vault_capabilities_allow_management(capabilities):
+        capability_set = set(capabilities or [])
+        if "root" in capability_set or "sudo" in capability_set:
+            return True
+        return bool({"create", "update"}.intersection(capability_set)) and "deny" not in capability_set
+
+    def _verify_vault_management_token(self, ds_name=None):
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        vault_url = str(
+            deployer_config.get("VT_URL") or deployer_config.get("VAULT_URL") or ""
+        ).strip().rstrip("/")
+        vault_token = str(deployer_config.get("VT_TOKEN") or "").strip()
+        if not vault_url or not vault_token:
+            print("Vault token validation failed: VT_URL/VT_TOKEN are not defined in deployer.config")
+            return False
+
+        headers = {"X-Vault-Token": vault_token}
+        try:
+            response = requests.get(
+                f"{vault_url}/v1/auth/token/lookup-self",
+                headers=headers,
+                timeout=5,
+                verify=False,
+            )
+        except requests.RequestException as exc:
+            print(f"Vault token validation failed: Vault is not reachable ({exc})")
+            return False
+
+        if response.status_code != 200:
+            print(
+                "Vault token validation failed: lookup-self returned "
+                f"HTTP {response.status_code}. The shared Vault keys artifact may be stale "
+                "for the running Vault. Recreate Level 2 common services or restore the "
+                "current Vault root token before deploying INESData connectors."
+            )
+            return False
+
+        ds_name = ds_name or self._dataspace_name()
+        paths = [
+            "sys/policy/inesdata-preflight-secrets-policy",
+            "auth/token/create",
+            f"secret/data/{ds_name}/inesdata-preflight/public-key",
+        ]
+        try:
+            response = requests.post(
+                f"{vault_url}/v1/sys/capabilities-self",
+                headers=headers,
+                json={"paths": paths},
+                timeout=5,
+                verify=False,
+            )
+        except requests.RequestException as exc:
+            print(f"Vault token capabilities check failed: Vault is not reachable ({exc})")
+            return False
+
+        if response.status_code != 200:
+            print(
+                "Vault token capabilities check failed: Vault returned "
+                f"HTTP {response.status_code}. INESData connector bootstrap requires policy, "
+                "token and secret creation permissions."
+            )
+            return False
+
+        try:
+            capabilities_payload = response.json()
+        except ValueError:
+            print("Vault token capabilities check failed: Vault returned an invalid JSON response")
+            return False
+
+        for path in paths:
+            capabilities = capabilities_payload.get(path)
+            if capabilities is None:
+                capabilities = capabilities_payload.get("capabilities")
+            if not self._vault_capabilities_allow_management(capabilities):
+                print(
+                    "Vault token capabilities check failed: token does not have management "
+                    f"permissions for '{path}'. Recreate Level 2 common services or restore "
+                    "the current Vault root token before deploying INESData connectors."
+                )
+                return False
+
+        return True
+
+    def _prepare_vault_management_access(self, ds_name=None):
+        if self._vault_management_token_verified:
+            return True
+
+        if not self.infrastructure.ensure_local_infra_access():
+            return False
+
+        if not self.infrastructure.ensure_vault_unsealed():
+            return False
+
+        if self._should_sync_vault_token_to_deployer_config():
+            sync_vault_token = getattr(self.infrastructure, "sync_vault_token_to_deployer_config", None)
+            if callable(sync_vault_token) and not sync_vault_token():
+                print("Could not synchronize Vault token into deployer.config")
+                return False
+
+        if not self._verify_vault_management_token(ds_name=ds_name):
+            return False
+
+        self._vault_management_token_verified = True
+        return True
 
     def _connector_pod_name(self, connector_name, interface=False):
         namespace = self.config.namespace_demo()
@@ -1049,10 +1163,7 @@ class INESDataConnectorsAdapter:
             print("Python environment not found. Run Level 3 first")
             return False
 
-        if not self.infrastructure.ensure_local_infra_access():
-            return False
-
-        if not self.infrastructure.ensure_vault_unsealed():
+        if not self._prepare_vault_management_access(ds_name=ds_name):
             return False
 
         values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
@@ -1330,6 +1441,8 @@ class INESDataConnectorsAdapter:
                     if not self.infrastructure.ensure_vault_unsealed():
                         return []
                     vault_ready = True
+                if not self._prepare_vault_management_access(ds_name=ds_name):
+                    return []
                 for stale_connector in stale:
                     self._cleanup_connector_state(stale_connector, repo_dir, ds_name, python_exec, namespace=namespace)
 

@@ -152,7 +152,7 @@ def run_level6(runtime: Level6Runtime) -> None:
         )
 
         if runtime.should_run_kafka_edc_validation():
-            print("\nRunning optional EDC+Kafka transfer validation suite...")
+            print("\nRunning EDC+Kafka transfer validation suite...")
             kafka_edc_results = runtime.run_kafka_edc_validation(connectors, experiment_dir) or []
             for result in kafka_edc_results:
                 provider = result.get("provider", "unknown-provider")

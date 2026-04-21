@@ -1,4 +1,4 @@
-"""Kafka-related optional validation helpers for Level 6."""
+"""Kafka-related validation helpers for Level 6."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from typing import Any, Callable
 
 def should_run_kafka_edc_validation(
     *,
-    flag_enabled: Callable[[str, bool], bool],
+    flag_enabled: Callable[[str, bool], bool] | None = None,
 ) -> bool:
-    return flag_enabled("LEVEL6_RUN_KAFKA_EDC", False)
+    """Kafka transfer validation is a standard Level 6 step after Newman."""
+    return True
 
 
 def run_kafka_edc_validation(
@@ -21,15 +22,29 @@ def run_kafka_edc_validation(
     experiment_storage: Any,
 ) -> list[dict[str, Any]]:
     if len(connectors) < 2:
-        return [
+        results = [
             {
                 "status": "skipped",
                 "reason": "not_enough_connectors",
                 "timestamp": datetime.now().isoformat(),
             }
         ]
+        experiment_storage.save_kafka_edc_results_json(results, experiment_dir)
+        return results
 
-    results = validator.run_all(connectors, experiment_dir=experiment_dir) or []
-    results = list(results)
+    try:
+        results = list(validator.run_all(connectors, experiment_dir=experiment_dir) or [])
+    except Exception as exc:
+        results = [
+            {
+                "status": "failed",
+                "reason": "execution_error",
+                "timestamp": datetime.now().isoformat(),
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            }
+        ]
     experiment_storage.save_kafka_edc_results_json(results, experiment_dir)
     return results

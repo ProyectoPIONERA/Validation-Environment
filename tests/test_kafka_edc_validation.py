@@ -152,6 +152,46 @@ class _FakeMessage:
         self.value = value
 
 
+class _KafkaTypeFallbackSession(_FakeSession):
+    def __init__(self):
+        super().__init__()
+        self.asset_posts = []
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if url.endswith("/management/v3/assets"):
+            self.asset_posts.append(json)
+            if len(self.asset_posts) == 1:
+                return _FakeResponse(
+                    400,
+                    [
+                        {
+                            "message": "The value for 'https://w3id.org/edc/v0.0.1/ns/type' field is not valid",
+                            "type": "ValidationFailure",
+                            "path": "https://w3id.org/edc/v0.0.1/ns/type",
+                            "invalidValue": None,
+                        }
+                    ],
+                )
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
+class _KafkaUnsupportedSession(_FakeSession):
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if url.endswith("/management/v3/assets"):
+            return _FakeResponse(
+                400,
+                [
+                    {
+                        "message": "The value for 'https://w3id.org/edc/v0.0.1/ns/type' field is not valid",
+                        "type": "ValidationFailure",
+                        "path": "https://w3id.org/edc/v0.0.1/ns/type",
+                        "invalidValue": None,
+                    }
+                ],
+            )
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
 class _FakeBrokerState:
     topics = {}
     routes = {}
@@ -384,6 +424,67 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
             self.assertEqual(session.destination_bootstrap_servers, "broker-cluster:29092")
             self.assertIn("transfer-1", session.terminated_transfers)
             self.assertIn("transfer-1", session.deprovisioned_transfers)
+
+    def test_create_asset_retries_with_expanded_json_ld_kafka_dataaddress(self):
+        session = _KafkaTypeFallbackSession()
+        suite = KafkaEdcValidationSuite(
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            ds_domain_resolver=lambda: "example.local",
+            session=session,
+        )
+
+        asset_id, returned_id, status_code = suite._create_asset(
+            "conn-provider",
+            "jwt-provider",
+            "source-topic",
+            {"cluster_bootstrap_servers": "broker-cluster:29092"},
+            "suffix",
+        )
+
+        self.assertEqual(asset_id, "kafka-edc-asset-suffix")
+        self.assertEqual(returned_id, "kafka-edc-asset-suffix")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(len(session.asset_posts), 2)
+        self.assertEqual(session.asset_posts[0]["dataAddress"]["type"], "Kafka")
+        expanded_address = session.asset_posts[1]["dataAddress"]
+        self.assertEqual(
+            expanded_address["https://w3id.org/edc/v0.0.1/ns/type"][0]["@value"],
+            "Kafka",
+        )
+        self.assertEqual(
+            expanded_address["https://w3id.org/edc/v0.0.1/ns/topic"][0]["@value"],
+            "source-topic",
+        )
+
+    def test_run_pair_skips_when_deployed_connector_rejects_kafka_dataaddress(self):
+        credentials = {
+            "conn-provider": {"connector_user": {"user": "provider-user", "passwd": "provider-pass"}},
+            "conn-consumer": {"connector_user": {"user": "consumer-user", "passwd": "consumer-pass"}},
+        }
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: credentials[connector],
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak.local",
+                "KAFKA_CLUSTER_BOOTSTRAP_SERVERS": "broker-cluster:29092",
+            },
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "localhost:9092",
+                "topic_name": "edc-kafka-suite",
+                "startup_grace_seconds": 0,
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            session=_KafkaUnsupportedSession(),
+            uuid_factory=iter(["topic", "suffix"]).__next__,
+        )
+
+        result = suite.run_pair("conn-provider", "conn-consumer")
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "kafka_dataaddress_not_supported")
+        self.assertEqual(result["error"]["type"], "KafkaDataAddressUnsupported")
 
     def test_run_pair_uses_runtime_bootstrap_servers_to_ensure_topic(self):
         fallback_topics = []

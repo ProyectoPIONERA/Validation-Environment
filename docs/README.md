@@ -58,7 +58,7 @@ decisiones tecnicas consolidadas sin incluir notas internas de planificacion.
 | [19](./19_playwright_adapter_strategy_for_edc_and_future_adapters.md) | Playwright por adapter |
 | [20](./20_edc_playwright_phase1_baseline.md) | Baseline Playwright EDC |
 | [21](./21_deployers_migration_namespace_roles_and_level5_strategy.md) | Arquitectura deployers, roles y Level 5 |
-| [22](./22_main_cli_and_inesdata_py_compatibility_strategy.md) | `main.py` e `inesdata.py` |
+| [22](./22_main_cli_entrypoint_strategy.md) | Entrada `main.py` |
 | [23](./23_common_deployer_contract_and_orchestration_strategy.md) | Contrato comun de deployer |
 | [24](./24_deployer_level_mapping_and_execution_matrix.md) | Matriz de niveles y ejecucion |
 | [25](./25_validation_issues_and_test_data_cleanup_strategy.md) | Issues de validacion y limpieza |
