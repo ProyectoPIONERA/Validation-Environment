@@ -9,7 +9,7 @@ Dentro de esa secuencia, la Fase 1 define el contrato minimo de artefactos para 
 Esta fase cubre los dos caminos de ejecucion usados actualmente en el proyecto:
 
 - `python main.py inesdata run`
-- `python inesdata.py` -> `Level 6 - Validation Tests`
+- `python main.py menu` -> `Level 6 - Run Validation Tests`
 
 Ambos caminos deben dejar un esqueleto de experimento consistente en disco, incluso si la validacion falla despues de que el experimento haya comenzado.
 
@@ -59,7 +59,7 @@ La carpeta `storage_checks/` contiene post-checks tecnicos de almacenamiento par
 - actualiza `experiment_results.json` conforme avanza la ejecucion
 - reescribe `experiment_results.json` con `status=failed` si la validacion o las metricas lanzan una excepcion
 
-### `inesdata.py` Level 6
+### `main.py menu` Level 6
 
 - crea el directorio del experimento antes de iniciar la validacion del dataspace
 - pasa `experiment_dir` a `ValidationEngine.run_all_dataspace_tests(...)`

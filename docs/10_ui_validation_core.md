@@ -268,11 +268,11 @@ Reglas practicas:
 
 - los specs simples pueden resolverse por `PORTAL_*` o por `UI_PORTAL_CONNECTOR` / `UI_PORTAL_ROLE`
 - los flujos de negociacion y transferencia usan `UI_PROVIDER_CONNECTOR` y `UI_CONSUMER_CONNECTOR`
-- la resolucion de credenciales y URLs parte de `inesdata-deployment/deployer.config` y de los `credentials-connector-*.json`
+- la resolucion de credenciales y URLs parte de `deployers/<adapter>/deployer.config` cuando existe y de los `credentials-connector-*.json` generados en `deployers/<adapter>/deployments/`
 
 ## Integracion con Level 6
 
-`inesdata.py` Level 6 ejecuta por defecto un subconjunto estable de smoke UI por cada conector:
+`main.py menu` Level 6 ejecuta por defecto un subconjunto estable de smoke UI por cada conector:
 
 - `core/01-login-readiness.spec.ts`
 - `core/04-consumer-catalog.spec.ts`
@@ -302,7 +302,7 @@ Para desactivarla explícitamente, exporta:
 
 - `LEVEL6_RUN_UI_OPS=false`
 
-Cuando la suite está habilitada, `inesdata.py` lanza:
+Cuando la suite está habilitada, Level 6 lanza:
 
 - `ops/minio-bucket-visibility.spec.ts`
 
@@ -317,7 +317,9 @@ La opción interactiva `I > Core` también ejecuta esta suite automáticamente a
 
 Igual que `Level 6`, esa ejecución interactiva persiste ahora sus artefactos bajo `experiments/<experiment_id>/` y guarda un `experiment_results.json` agregado con `ui_results` y `ui_validation`.
 
-En `Live` y `Debug`, el framework activa marcadores visuales sobre los elementos antes de las interacciones principales (`click`, `fill`, etc.) para hacer más visible el recorrido del test.
+El framework activa marcadores visuales sobre los elementos antes de las interacciones principales (`click`, `fill`, `check`, `selectOption`, subida de ficheros) para hacer más visible el recorrido del test. Esto aplica a las ejecuciones integradas desde `main.py validate`, Level 6 y el menú interactivo. En modo `Live` facilita seguir el navegador en tiempo real; en modo headless ayuda a interpretar los vídeos del reporte. En ejecuciones manuales con `npx`, se puede activar con `PLAYWRIGHT_INTERACTION_MARKERS=1`.
+
+Se puede desactivar explícitamente con `PLAYWRIGHT_INTERACTION_MARKERS=0`. La duración del resaltado se ajusta con `PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS`; las ejecuciones integradas usan `150` ms por defecto para no penalizar el tiempo de validación, mientras que los modos `Live` y `Debug` mantienen `350` ms para facilitar el seguimiento visual.
 
 Esta ejecucion se registra en `experiment_results.json` como:
 

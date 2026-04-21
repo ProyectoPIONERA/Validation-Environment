@@ -28,7 +28,7 @@ Esta carpeta agrupa toda la validacion de `Ontology Hub` dentro del framework.
 
 - Proposito: reproduccion funcional de los 27 casos del Excel `docs/A5.2_Casos_Prueba_.xlsx`.
 - Suite PT5 ejecutada por defecto para `ontology-hub` en `Level 6`.
-- Entrada desde menu: `python3 inesdata.py` -> `[UI Validation]` -> `O - Ontology Hub Tests` -> modo -> `2 - Ontology Hub Functional`.
+- Entrada desde menu: `python3 main.py menu` -> `U - UI Validation` -> `2 - Ontology Hub Tests` -> modo -> `2 - Ontology Hub Functional`.
 - Documentacion: `validation/components/ontology_hub/functional/README.md`.
 - Trazabilidad: `docs/11_ontology_hub_validation.md`.
 

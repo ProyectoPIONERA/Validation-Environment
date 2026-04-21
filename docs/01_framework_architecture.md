@@ -14,7 +14,7 @@ Eso permite mantener estable el núcleo del framework y concentrar la lógica de
 
 ### 1. Orquestación
 
-El punto de entrada operativo para el entorno local es `inesdata.py`.
+El punto de entrada operativo para el entorno local es `main.py menu`.
 
 Desde ahí se ejecutan los niveles:
 
@@ -24,6 +24,8 @@ Desde ahí se ejecutan los niveles:
 - Level 4: conectores
 - Level 5: componentes opcionales
 - Level 6: validación
+
+`inesdata.py` se conserva como wrapper compatible durante la transición, pero la lógica nueva debe integrarse en `main.py`, `deployers/`, `adapters/`, `framework/` o `validation/`.
 
 ## 2. Núcleo reutilizable
 
@@ -73,14 +75,15 @@ Subzonas importantes:
 
 ## 4. Artefactos de despliegue y validación
 
-Dos carpetas son especialmente importantes:
+Tres carpetas son especialmente importantes:
 
-- `inesdata-deployment/`: charts y values de Helm
+- `deployers/`: deployers, charts, bootstrap y runtime generado por adapter
+- `deployers/shared/`: artefactos compartidos por los deployers
 - `validation/`: colecciones y scripts de prueba
 
 La regla práctica es esta:
 
-- si integras un servicio API, normalmente trabajarás en `inesdata-deployment/components/`
+- si integras un servicio API compartido, normalmente trabajarás en `deployers/shared/components/`
 - si integras una extensión del conector, normalmente trabajarás en `adapters/inesdata/sources/`
 
 ## Qué no debe hacerse

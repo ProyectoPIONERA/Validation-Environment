@@ -35,7 +35,7 @@ Hoy conviven dos situaciones:
 
 La ejecución automática de una validación de componente depende de dos condiciones:
 
-1. el componente debe estar declarado en `COMPONENTS` en `deployer.config`. Ejemplo: `COMPONENTS=COMPONENTS=ontology-hub,ai-model-hub`
+1. el componente debe estar declarado en `COMPONENTS` en `deployers/inesdata/deployer.config`. Ejemplo: `COMPONENTS=ontology-hub,ai-model-hub`
 2. debe existir un runner registrado para ese componente
 
 ## Qué significa `shared`

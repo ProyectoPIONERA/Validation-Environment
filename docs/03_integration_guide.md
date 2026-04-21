@@ -6,9 +6,9 @@ Para integrar un componente en este proyecto, los cambios deben concentrarse en 
 
 ### Los desarrolladores SÍ deben modificar
 
-- `inesdata-deployment/components/`
+- `deployers/shared/components/`
 - `adapters/inesdata/sources/`
-- `deployer.config` cuando haga falta activar componentes o definir endpoints
+- `deployers/inesdata/deployer.config` cuando haga falta activar componentes o definir endpoints
 
 ### Los desarrolladores NO deben modificar
 
@@ -41,20 +41,20 @@ Ejemplos típicos:
 
 ### Dónde trabajar
 
-- `inesdata-deployment/components/<component>/`
+- `deployers/shared/components/<component>/`
 
 Hoy el ejemplo real existente es:
 
-- `inesdata-deployment/components/ontology-hub/`
+- `deployers/shared/components/ontology-hub/`
 
 ### Checklist paso a paso
 
-1. Crear o ajustar el chart Helm del componente en `inesdata-deployment/components/<component>/`.
+1. Crear o ajustar el chart Helm del componente en `deployers/shared/components/<component>/`.
 2. Asegurar que existe `Chart.yaml`.
 3. Añadir un `values-demo.yaml` o un `values.yaml` usable en entorno local.
 4. Definir puertos, servicios, ingress y endpoint de health.
 5. Comprobar que el componente puede desplegarse dentro del namespace `demo`.
-6. Configurar `COMPONENTS` en `deployer.config` para que `Level 5` lo despliegue.
+6. Configurar `COMPONENTS` en `deployers/inesdata/deployer.config` para que `Level 5` lo despliegue.
 7. Ejecutar `Level 5` y verificar que el servicio queda disponible.
 
 ### Resultado esperado

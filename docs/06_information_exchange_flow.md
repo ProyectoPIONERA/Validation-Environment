@@ -141,8 +141,8 @@ Puedes partir de un environment como este, ajustando credenciales y dominios a t
 
 En el entorno demo actual, las contraseñas locales están en:
 
-- `inesdata-deployment/deployments/DEV/demo/credentials-connector-conn-citycouncil-demo.json`
-- `inesdata-deployment/deployments/DEV/demo/credentials-connector-conn-company-demo.json`
+- `deployers/inesdata/deployments/DEV/demo/credentials-connector-conn-citycouncil-demo.json`
+- `deployers/inesdata/deployments/DEV/demo/credentials-connector-conn-company-demo.json`
 
 El campo que interesa es:
 

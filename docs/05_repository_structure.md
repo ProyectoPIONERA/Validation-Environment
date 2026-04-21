@@ -5,13 +5,13 @@
 ```text
 integration_pionera/
   adapters/
+  deployers/
   docs/
   framework/
-  inesdata-deployment/
   tests/
   validation/
-  inesdata.py
   main.py
+  inesdata.py  # wrapper legacy compatible
 ```
 
 ## `validation/`
@@ -47,6 +47,21 @@ Estado actual:
 Contiene utilidades compartidas por las pruebas en:
 
 - `validation/shared/api/common_tests.js`
+
+### `validation/orchestration/`
+
+Contiene la orquestación reutilizable de `Level 6`.
+
+- `components.py`: helpers para validación opcional de componentes.
+- `kafka.py`: helpers para validación opcional EDC+Kafka.
+- `runner.py`: secuencia común de validación observable del entorno.
+- `hosts.py`: sincronización y verificación local de hosts de conectores.
+- `readiness.py`: probes reutilizables de readiness para Management API y catálogo.
+- `state.py`: persistencia de estado de experimentos de `Level 6`.
+- `ui.py`: runners Playwright reutilizables para `ui-core`, `ui-dataspace`, `ui-ops` y orquestación interactiva core UI.
+- `Level6Runtime`: contrato de dependencias inyectadas por el adapter/deployer activo.
+
+El wrapper legacy `inesdata.py` construye hoy un `Level6Runtime` específico de INESData y delega en este runner.
 
 ### `validation/ui/`
 
@@ -98,18 +113,18 @@ Subdirectorios destacados:
 - `inesdata-public-portal-frontend/`
 - `inesdata-public-portal-backend/`
 
-## `inesdata-deployment/`
+## `deployers/`
 
-Aquí están los charts y values Helm usados por el entorno local:
+Aquí están los deployers, charts y artefactos de despliegue usados por el entorno local:
 
-- `common/`: servicios base
-- `dataspace/`: despliegue base del dataspace
-- `connector/`: chart del conector
-- `components/`: componentes opcionales desplegados como servicios
+- `deployers/infrastructure/`: librería común de contratos, rutas, configuración y hosts.
+- `deployers/shared/`: servicios base, registration service y componentes compartidos.
+- `deployers/inesdata/`: bootstrap, configuración y charts específicos de INESData.
+- `deployers/edc/`: bootstrap, configuración y charts específicos de EDC.
 
 Actualmente el ejemplo real de componente API-based es:
 
-- `inesdata-deployment/components/ontology-hub/`
+- `deployers/shared/components/ontology-hub/`
 
 ## `tests/`
 

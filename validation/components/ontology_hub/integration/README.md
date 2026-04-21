@@ -150,7 +150,7 @@ Comportamiento API:
 Comportamiento UI:
 
 - autentica en `/edition/login` cuando el flujo lo requiere
-- resuelve las credenciales UI desde `inesdata-deployment/components/ontology-hub/values.yaml` y `values-<dataspace>.yaml`, en `validation.ui.adminEmail` y `validation.ui.adminPassword`
+- resuelve las credenciales UI desde `deployers/shared/components/ontology-hub/values.yaml` y `values-<dataspace>.yaml`, en `validation.ui.adminEmail` y `validation.ui.adminPassword`
 - permite sobrescribirlas por entorno con `ONTOLOGY_HUB_ADMIN_EMAIL`, `ONTOLOGY_HUB_ADMIN_PASSWORD`, `ONTOLOGY_HUB_ADMIN_EMAIL_FILE` y `ONTOLOGY_HUB_ADMIN_PASSWORD_FILE`. El estado persistido del bootstrap se puede redirigir con `ONTOLOGY_HUB_INTEGRATION_STATE_FILE` y mantiene compatibilidad con `ONTOLOGY_HUB_BOOTSTRAP_STATE_FILE`
 - abre `/dataset`, `/dataset/terms` y `/dataset/vocabs/<prefix>` segun el caso
 - valida metadatos, estadisticas, historial y documentacion API sobre la publicacion actual en `/dataset`
@@ -186,9 +186,8 @@ Para que `PT5-OH-08`, `PT5-OH-09`, `PT5-OH-10`, `PT5-OH-11`, `PT5-OH-12` y `PT5-
 
 La semilla se configura en:
 
-- `inesdata-deployment/components/ontology-hub/values.yaml`
-- `inesdata-deployment/components/ontology-hub/values-demo.yaml`
-- `inesdata-deployment/components/ontology-hub/templates/sample-data-configmap.yaml`
+- `deployers/shared/components/ontology-hub/values.yaml`
+- `deployers/shared/components/ontology-hub/templates/`
 
 Y se aplica desde el propio deployment para dejar:
 

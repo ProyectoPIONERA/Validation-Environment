@@ -1,6 +1,6 @@
 # 04. Flujo de Ejecución
 
-## Flujo general desde `inesdata.py`
+## Flujo general desde `main.py menu`
 
 El repositorio está organizado en niveles secuenciales.
 
@@ -16,6 +16,8 @@ El flujo habitual es este:
 ## Qué hace hoy `Level 6`
 
 `Level 6` ya no ejecuta solo la validación API del núcleo del dataspace. Hoy orquesta un experimento completo y persiste sus artefactos.
+
+La secuencia común de orquestación vive en `validation/orchestration/runner.py`. Cada adapter/deployer debe aportar un `Level6Runtime` con sus dependencias concretas; durante la transición, `inesdata.py` conserva `lvl_6()` como wrapper compatible que construye ese runtime para INESData.
 
 El flujo actual es:
 

@@ -3,7 +3,7 @@
 ## Proposito
 Suite enfocada en flujos funcionales y de navegacion de Ontology Hub que sean
 trazables contra los 27 casos del Excel `Ontology Hub`. La suite usa Playwright
-contra la aplicacion real, integrada en el menu de `inesdata.py`, y deja que
+contra la aplicacion real, integrada en el menu de `main.py`, y deja que
 fallen los problemas de la aplicacion en lugar de ocultarlos con postprocesos
 manuales externos.
 
@@ -33,9 +33,9 @@ manuales externos.
 
 ## Ejecucion desde el menu
 ```
-python3 inesdata.py
-[UI Validation]
-O - Ontology Hub Tests (Normal/Live/Debug)
+python3 main.py menu
+U - UI Validation
+2 - Ontology Hub Tests (Normal/Live/Debug)
 > seleccionar modo
 2 - Ontology Hub Functional
 ```

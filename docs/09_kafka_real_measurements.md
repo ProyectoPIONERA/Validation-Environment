@@ -11,7 +11,7 @@ Esta fase mantiene las metricas de Kafka como opcionales, pero hace que su resul
 
 - `python main.py inesdata metrics --kafka`
 - `python main.py inesdata run --kafka`
-- `python inesdata.py` -> `Level 6 - Validation Tests`
+- `python main.py menu` -> `Level 6 - Run Validation Tests`
 
 Cuando se activa `LEVEL6_RUN_KAFKA_EDC=true`, `Level 6` ejecuta ademas una suite funcional inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC.
 
@@ -76,7 +76,7 @@ El arranque del contenedor Kafka puede configurarse con:
 
 Estas opciones se gestionan desde `framework/kafka_container_factory.py` y estan pensadas para entornos reproducibles con broker securizado, como pruebas locales basadas en SASL.
 
-La fuente de verdad de esta configuracion puede vivir en `deployer.config` mediante:
+La fuente de verdad de esta configuracion puede vivir en `deployers/inesdata/deployer.config` mediante:
 
 - `KAFKA_BOOTSTRAP_SERVERS`
 - `KAFKA_CLUSTER_BOOTSTRAP_SERVERS`
@@ -88,7 +88,7 @@ La fuente de verdad de esta configuracion puede vivir en `deployer.config` media
 - `KAFKA_CONTAINER_IMAGE`
 - `KAFKA_CONTAINER_ENV_FILE`
 
-El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `inesdata.py` en `Level 6`.
+El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `main.py menu` en `Level 6`. El wrapper `inesdata.py` conserva la misma lectura por compatibilidad.
 
 ## Runtime del Conector
 

@@ -10,7 +10,7 @@ El pipeline de metricas se ejecuta ahora desde:
 
 - `python main.py inesdata validate`
 - `python main.py inesdata run`
-- `python inesdata.py` -> `Level 6 - Validation Tests`
+- `python main.py menu` -> `Level 6 - Run Validation Tests`
 
 ## Entrada
 

@@ -79,7 +79,7 @@ Las variables base que debe contener son:
 Notas importantes:
 
 - `providerProtocolAddress` y `consumerProtocolAddress` **no** son endpoints pensados para ser invocados directamente desde Postman en tu máquina; son direcciones que el conector utiliza internamente cuando recibe la request de Management API.
-- Las contraseñas locales del entorno demo actual siguen estando en `inesdata-deployment/deployments/DEV/demo/credentials-connector-<connector>.json`, campo `connector_user.passwd`.
+- Las contraseñas locales del entorno demo actual se generan bajo `deployers/inesdata/deployments/DEV/demo/credentials-connector-<connector>.json`, campo `connector_user.passwd`.
 - La colección compacta genera dinámicamente todos los identificadores `e2e_*`, así que no hace falta precargarlos en el environment.
 
 ## Variables de colección usadas para reintentos
