@@ -325,6 +325,46 @@ class EdcDeploymentTests(unittest.TestCase):
         self.assertEqual(deployment._delegate.config.RUNTIME_LABEL, "shared dataspace")
         self.assertTrue(deployment._delegate.config.QUIET_SENSITIVE_DEPLOYER_OUTPUT)
 
+    def test_edc_deployment_stages_shared_dataspace_credentials_into_edc_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_repo = os.path.join(tmpdir, "deployers", "inesdata")
+            target_repo = os.path.join(tmpdir, "deployers", "edc")
+            source_dir = os.path.join(source_repo, "deployments", "DEV", "demoedc")
+            os.makedirs(source_dir, exist_ok=True)
+            source_file = os.path.join(source_dir, "credentials-dataspace-demoedc.json")
+            with open(source_file, "w", encoding="utf-8") as handle:
+                json.dump({"registration_service_database": {"name": "demoedc_rs"}}, handle)
+
+            class SourceConfig:
+                @staticmethod
+                def repo_dir():
+                    return source_repo
+
+            class ConfigAdapter:
+                @staticmethod
+                def primary_dataspace_name():
+                    return "demoedc"
+
+                @staticmethod
+                def deployment_environment_name():
+                    return "DEV"
+
+                @staticmethod
+                def edc_dataspace_runtime_dir(ds_name=None):
+                    return os.path.join(target_repo, "deployments", "DEV", ds_name or "demoedc")
+
+            deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
+            deployment._delegate = type("Delegate", (), {"config": SourceConfig})()
+            deployment.config_adapter = ConfigAdapter()
+
+            staged = deployment._stage_shared_dataspace_credentials()
+
+            target_file = os.path.join(target_repo, "deployments", "DEV", "demoedc", "credentials-dataspace-demoedc.json")
+            self.assertEqual(staged, target_file)
+            self.assertTrue(os.path.isfile(target_file))
+            self.assertFalse(os.path.exists(source_file))
+            self.assertFalse(os.path.exists(source_dir))
+
     def test_edc_deployment_recreate_dataspace_delegates_to_shared_level3_flow(self):
         deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
         deployment.infrastructure = SharedInfrastructureStub()
