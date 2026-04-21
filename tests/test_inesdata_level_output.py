@@ -221,6 +221,63 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertFalse(any("git clone" in call.args[0] for call in run.call_args_list))
 
+    def test_read_vault_status_accepts_json_stdout_when_cli_exits_nonzero(self):
+        infrastructure = self._make_infrastructure()
+        completed = mock.Mock(
+            returncode=2,
+            stdout='{"initialized": false, "sealed": true}',
+            stderr="Vault is sealed",
+        )
+
+        with mock.patch("adapters.inesdata.infrastructure.subprocess.run", return_value=completed) as run:
+            status, error = infrastructure._read_vault_status(
+                "common-srvs-vault-0",
+                "common-srvs",
+                attempts=1,
+                poll_interval=0,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(status["initialized"], False)
+        self.assertEqual(status["sealed"], True)
+        run.assert_called_once_with(
+            [
+                "kubectl",
+                "exec",
+                "common-srvs-vault-0",
+                "-n",
+                "common-srvs",
+                "--",
+                "vault",
+                "status",
+                "-format=json",
+            ],
+            text=True,
+            capture_output=True,
+        )
+
+    def test_read_vault_status_retries_until_vault_cli_returns_stdout(self):
+        infrastructure = self._make_infrastructure()
+        responses = [
+            mock.Mock(returncode=1, stdout="", stderr="connection refused"),
+            mock.Mock(returncode=2, stdout='{"initialized": false, "sealed": true}', stderr="Vault is sealed"),
+        ]
+
+        with mock.patch("adapters.inesdata.infrastructure.subprocess.run", side_effect=responses), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+        ) as sleep:
+            status, error = infrastructure._read_vault_status(
+                "common-srvs-vault-0",
+                "common-srvs",
+                attempts=2,
+                poll_interval=0,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(status["initialized"], False)
+        self.assertEqual(status["sealed"], True)
+        sleep.assert_called_once_with(0)
+
     def test_setup_vault_reuses_existing_keys_when_status_is_temporarily_unavailable(self):
         infrastructure = self._make_infrastructure()
         infrastructure.get_pod_by_name = lambda *_args, **_kwargs: "vault-0"

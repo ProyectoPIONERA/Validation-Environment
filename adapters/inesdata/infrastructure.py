@@ -781,17 +781,51 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
-    def _read_vault_status(self, pod_name, namespace):
-        status_json = self.run_silent(
-            f"kubectl exec {pod_name} -n {namespace} -- vault status -format=json"
-        )
-        if not status_json:
-            return None, "vault status unavailable"
-
+    def _run_vault_status_command(self, pod_name, namespace):
+        """Return Vault status stdout even when Vault exits non-zero while sealed."""
+        command = [
+            "kubectl",
+            "exec",
+            str(pod_name),
+            "-n",
+            str(namespace),
+            "--",
+            "vault",
+            "status",
+            "-format=json",
+        ]
         try:
-            return json.loads(status_json), None
-        except json.JSONDecodeError as exc:
-            return None, f"invalid vault status: {exc}"
+            result = subprocess.run(command, text=True, capture_output=True)
+        except Exception as exc:
+            return "", f"vault status command failed: {exc}"
+
+        stdout = (result.stdout or "").strip()
+        if stdout:
+            return stdout, None
+
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            return "", f"vault status unavailable: {stderr}"
+        if result.returncode != 0:
+            return "", f"vault status unavailable: exit code {result.returncode}"
+        return "", "vault status unavailable"
+
+    def _read_vault_status(self, pod_name, namespace, attempts=10, poll_interval=3):
+        attempts = max(1, int(attempts or 1))
+        status_error = "vault status unavailable"
+
+        for attempt in range(attempts):
+            status_json, status_error = self._run_vault_status_command(pod_name, namespace)
+            if status_json:
+                try:
+                    return json.loads(status_json), None
+                except json.JSONDecodeError as exc:
+                    return None, f"invalid vault status: {exc}"
+
+            if attempt < attempts - 1:
+                time.sleep(poll_interval)
+
+        return None, status_error
 
     def setup_vault(self, namespace=None):
         namespace = namespace or self.config.NS_COMMON
