@@ -35,7 +35,22 @@ para evitar que las validaciones UI fallen al arrancar el navegador. En
 entornos donde no se puedan instalar paquetes del sistema, usa
 `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
-Después abre el menú guiado:
+Después activa el entorno Python raíz:
+
+```bash
+source .venv/bin/activate
+```
+
+Revisa la configuración generada si necesitas ajustar credenciales, dominios o
+dataspaces:
+
+```text
+deployers/infrastructure/deployer.config
+deployers/inesdata/deployer.config
+deployers/edc/deployer.config
+```
+
+Finalmente abre el menú guiado:
 
 ```bash
 python3 main.py menu

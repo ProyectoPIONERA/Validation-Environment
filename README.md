@@ -79,7 +79,22 @@ En Linux/WSL, este comando instala también las dependencias del sistema que
 Playwright necesita para arrancar los navegadores. Si el entorno no permite
 instalar paquetes del sistema, usa `--without-system-deps`.
 
-3. Abre el menú guiado:
+3. Activa el entorno Python raíz:
+
+```bash
+source .venv/bin/activate
+```
+
+4. Revisa la configuración generada si necesitas ajustar credenciales, dominios
+o dataspaces:
+
+```text
+deployers/infrastructure/deployer.config
+deployers/inesdata/deployer.config
+deployers/edc/deployer.config
+```
+
+5. Abre el menú guiado:
 
 ```bash
 python3 main.py menu
