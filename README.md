@@ -64,17 +64,6 @@ tests/                          pruebas unitarias
 docs/                           documentación pública estable
 ```
 
-## Artefactos Generados
-
-No deben subirse al repositorio:
-
-- `deployer.config` locales;
-- `experiments/`;
-- `deployers/*/deployments/`;
-- reportes Playwright;
-- repositorios fuente locales bajo carpetas ignoradas;
-- `context/`.
-
 ## Financiación
 
 This work has received funding from the **PIONERA project** (Enhancing interoperability in data spaces through artificial intelligence), a project funded in the context of the call for Technological Products and Services for Data Spaces of the Ministry for Digital Transformation and Public Administration within the framework of the PRTR funded by the European Union (NextGenerationEU).
