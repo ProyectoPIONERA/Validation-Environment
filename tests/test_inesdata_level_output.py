@@ -22,6 +22,7 @@ class LevelOutputConfig:
     PORT_KEYCLOAK = 18081
     PORT_POSTGRES = 5432
     PORT_VAULT = 8200
+    PORT_MINIO = 9000
     PORT_REGISTRATION_SERVICE = 18080
     TIMEOUT_PORT = 30
     TIMEOUT_POD_WAIT = 120
@@ -489,7 +490,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
     def test_ensure_local_infra_access_uses_short_probe_before_creating_port_forward(self):
         infrastructure = self._make_infrastructure()
-        infrastructure.wait_for_port = mock.Mock(side_effect=[False, True])
+        infrastructure.wait_for_port = mock.Mock(side_effect=[False, True, True])
         infrastructure.port_forward_service = mock.Mock(return_value=True)
 
         result = infrastructure.ensure_local_infra_access()
@@ -497,6 +498,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertTrue(result)
         infrastructure.wait_for_port.assert_any_call("127.0.0.1", 5432, timeout=3)
         infrastructure.wait_for_port.assert_any_call("127.0.0.1", 8200, timeout=3)
+        infrastructure.wait_for_port.assert_any_call("127.0.0.1", 9000, timeout=3)
         infrastructure.port_forward_service.assert_called_once_with(
             "common",
             "postgresql",
@@ -505,6 +507,48 @@ class InesdataLevelOutputTests(unittest.TestCase):
             quiet=False,
             wait_timeout=30,
         )
+
+    def test_apply_sync_updates_minio_values_from_shared_config(self):
+        infrastructure = self._make_infrastructure()
+        values = {
+            "postgresql": {
+                "auth": {
+                    "postgresPassword": "old",
+                    "password": "old",
+                }
+            },
+            "keycloak": {
+                "externalDatabase": {"password": "old"},
+                "auth": {
+                    "adminUser": "old",
+                    "adminPassword": "old",
+                },
+                "keycloakConfigCli": {
+                    "extraEnv": [
+                        {"name": "KEYCLOAK_USER", "value": "old"},
+                        {"name": "KEYCLOAK_PASSWORD", "value": "old"},
+                    ]
+                },
+            },
+            "minio": {
+                "rootUser": "old",
+                "rootPassword": "old",
+            },
+        }
+
+        updated = infrastructure.apply_sync(
+            values,
+            {
+                "PG_PASSWORD": "pg-secret",
+                "KC_USER": "admin",
+                "KC_PASSWORD": "kc-secret",
+                "MINIO_USER": "minio-admin",
+                "MINIO_PASSWORD": "minio-secret",
+            },
+        )
+
+        self.assertEqual(updated["minio"]["rootUser"], "minio-admin")
+        self.assertEqual(updated["minio"]["rootPassword"], "minio-secret")
 
     def test_port_forward_service_waits_for_port_to_open(self):
         infrastructure = self._make_infrastructure()

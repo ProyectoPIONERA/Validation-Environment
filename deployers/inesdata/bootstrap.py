@@ -365,7 +365,7 @@ def create(ctx, name, dataspace):
         }
     except Exception as e:
         click.echo(f"    - Error obtaining token: {e}")
-        return
+        ctx.exit(1)
 
     keycloak_admin = KeycloakAdmin(server_url=ctx.obj['kc_url'],
                                    token=token_obj,
@@ -1022,7 +1022,8 @@ def create_user(keycloak_admin, user_name, user_password):
     click.echo(f"    + Creating {user_name} ............")
 
     users = keycloak_admin.get_users()
-    if not any(user['username'] == user_name for user in users):
+    existing_user = next((user for user in users if user['username'] == user_name), None)
+    if not existing_user:
         new_user = {
             "username": user_name,
             "email": user_name + '@dataspaceunit.com',
@@ -1038,8 +1039,10 @@ def create_user(keycloak_admin, user_name, user_password):
 
         return user_id
     else:
-        click.echo(f"    - User {user_name} already exists.")
-        return
+        user_id = existing_user['id']
+        keycloak_admin.set_user_password(user_id=user_id, password=user_password, temporary=False)
+        click.echo(f"    - User {user_name} already exists. Password reset for reproducible credentials.")
+        return user_id
 
 def delete_connector_keycloak(username, password, server_url, connector, dataspace):
     # Create keycloak configuration
@@ -1336,7 +1339,6 @@ def create_dataspace_value_files(name, environment):
 
     for key_name, value in load_effective_deployer_config().items():
         keys[key_name.lower()] = value
-    print(keys)
 
     # Generate registration-service values file
     #   registration-service
@@ -1376,7 +1378,6 @@ def create_connector_value_files(dataspace_name, connector_name, environment):
 
     for key_name, value in load_effective_deployer_config().items():
         keys[key_name.lower()] = value
-    print(keys)
 
     # Generate connector values file
     env = Environment(loader=FileSystemLoader('connector'))

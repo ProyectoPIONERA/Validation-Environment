@@ -1179,6 +1179,13 @@ def _run_test_data_cleanup_if_enabled(adapter, connectors, deployer_context, exp
             "reason": "missing-deployer-context",
         }
 
+    infrastructure = getattr(adapter, "infrastructure", None)
+    ensure_local_access = getattr(infrastructure, "ensure_local_infra_access", None)
+    if callable(ensure_local_access) and not ensure_local_access():
+        raise RuntimeError(
+            "Pre-validation test data cleanup failed. Local infrastructure access is not ready."
+        )
+
     cleanup_result = run_pre_validation_cleanup(
         adapter=adapter,
         context=deployer_context,

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import socket
 import time
 from urllib.parse import urlparse
@@ -25,6 +26,7 @@ class INESDataConnectorsAdapter:
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
         self._management_token_cache = {}
         self._vault_management_token_verified = False
+        self._last_ready_keycloak_url = None
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
@@ -49,6 +51,48 @@ class INESDataConnectorsAdapter:
         if callable(getter):
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
+
+    @staticmethod
+    def _first_config_value(config, *keys, default=None):
+        for key in keys:
+            value = config.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    @classmethod
+    def _minio_admin_credentials(cls, config):
+        return (
+            cls._first_config_value(config, "MINIO_ADMIN_USER", "MINIO_USER", default="admin"),
+            cls._first_config_value(config, "MINIO_ADMIN_PASS", "MINIO_PASSWORD", default="aPassword1234"),
+        )
+
+    @staticmethod
+    def _connector_credentials_missing_requirements(creds_file_path):
+        if not os.path.exists(creds_file_path):
+            return []
+
+        try:
+            with open(creds_file_path, encoding="utf-8") as handle:
+                credentials = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return ["valid-json"]
+
+        required = {
+            "database": ("name", "user", "passwd"),
+            "certificates": ("path", "passwd"),
+            "connector_user": ("user", "passwd"),
+            "vault": ("path", "token"),
+            "minio": ("user", "passwd", "access_key", "secret_key"),
+        }
+        missing = []
+        for section, keys in required.items():
+            value = credentials.get(section)
+            if not isinstance(value, dict):
+                missing.append(section)
+                continue
+            missing.extend(f"{section}.{key}" for key in keys if not value.get(key))
+        return missing
 
     @staticmethod
     def _reserve_local_port():
@@ -295,6 +339,7 @@ class INESDataConnectorsAdapter:
         kc_url = deployer_config.get("KC_URL")
         kc_user = deployer_config.get("KC_USER")
         kc_password = deployer_config.get("KC_PASSWORD")
+        self._last_ready_keycloak_url = None
 
         if not kc_url or not kc_user or not kc_password:
             print("Keycloak admin readiness check skipped: KC_URL/KC_USER/KC_PASSWORD missing")
@@ -320,6 +365,7 @@ class INESDataConnectorsAdapter:
                 )
                 if response.status_code == 200 and response.json().get("access_token"):
                     print("Keycloak admin authentication is ready")
+                    self._last_ready_keycloak_url = token_url.split("/realms/master/", 1)[0]
                     return True
                 last_issue = f"HTTP {response.status_code}"
             except Exception as exc:
@@ -338,6 +384,18 @@ class INESDataConnectorsAdapter:
         else:
             print("Keycloak admin authentication did not become ready")
         return False
+
+    def _bootstrap_connector_create_command(self, python_exec, connector_name, ds_name):
+        command = f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
+        if self._last_ready_keycloak_url:
+            return f"PIONERA_KC_URL={shlex.quote(self._last_ready_keycloak_url)} {command}"
+        return command
+
+    def _bootstrap_connector_delete_command(self, python_exec, connector_name, ds_name):
+        command = f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}"
+        if self._last_ready_keycloak_url:
+            return f"PIONERA_KC_URL={shlex.quote(self._last_ready_keycloak_url)} {command}"
+        return command
 
     def validate_connector_name(self, name):
         if not isinstance(name, str) or not name:
@@ -923,10 +981,9 @@ class INESDataConnectorsAdapter:
     def setup_minio_bucket(self, namespace, ds_name, connector_name, creds_file_path):
         print("\nConfiguring MinIO...")
 
-        deployer_config = self.config_adapter.load_deployer_config()
-        minio_endpoint = deployer_config.get("MINIO_ENDPOINT", "http://127.0.0.1:9000")
-        minio_admin_user = deployer_config.get("MINIO_ADMIN_USER", "admin")
-        minio_admin_pass = deployer_config.get("MINIO_ADMIN_PASS", "aPassword1234")
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        minio_endpoint = deployer_config.get("MINIO_ENDPOINT") or "http://127.0.0.1:9000"
+        minio_admin_user, minio_admin_pass = self._minio_admin_credentials(deployer_config)
 
         minio_pod = self.infrastructure.get_pod_by_name(namespace, self.config.service_minio())
         if not minio_pod:
@@ -941,21 +998,70 @@ class INESDataConnectorsAdapter:
             return False
 
         minio_creds = creds.get("minio", {})
+        minio_user_password = minio_creds.get("passwd")
+        minio_access_key = minio_creds.get("access_key")
+        minio_secret_key = minio_creds.get("secret_key")
+        if not all([minio_user_password, minio_access_key, minio_secret_key]):
+            print(f"MinIO credentials are incomplete in {creds_file_path}")
+            return False
+
         mc = f"kubectl exec -n {namespace} {minio_pod} --"
 
-        self.run(f"{mc} mc alias set minio {minio_endpoint} {minio_admin_user} {minio_admin_pass}", silent=True)
-        self.run(f"{mc} mc mb minio/{ds_name}-{connector_name}", check=False)
-        self.run(
-            f"{mc} mc admin user add minio {connector_name} {minio_creds.get('passwd')}",
-            capture=True,
+        alias_result = self.run(
+            f"{mc} mc alias set minio {shlex.quote(minio_endpoint)} "
+            f"{shlex.quote(minio_admin_user)} {shlex.quote(minio_admin_pass)}",
+            check=False,
             silent=True,
         )
-        self.run(
-            f"{mc} mc admin user svcacct add minio {connector_name} "
-            f"--access-key {minio_creds.get('access_key')} --secret-key {minio_creds.get('secret_key')}",
+        if alias_result is None:
+            print(
+                "MinIO admin alias could not be configured. "
+                "Check MINIO_USER/MINIO_PASSWORD in deployers/infrastructure/deployer.config "
+                "and recreate Level 2 if the running MinIO secret is stale."
+            )
+            return False
+
+        bucket_name = f"{ds_name}-{connector_name}"
+        bucket_result = self.run(
+            f"{mc} mc mb --ignore-existing {shlex.quote(f'minio/{bucket_name}')}",
+            check=False,
+        )
+        if bucket_result is None:
+            print(f"MinIO bucket '{bucket_name}' could not be created or verified")
+            return False
+
+        add_user_result = self.run(
+            f"{mc} mc admin user add minio {shlex.quote(connector_name)} {shlex.quote(minio_user_password)}",
             capture=True,
+            check=False,
             silent=True,
         )
+        if add_user_result is None:
+            user_info = self.run_silent(
+                f"{mc} mc admin user info minio {shlex.quote(connector_name)}"
+            )
+            if not user_info:
+                print(f"MinIO user '{connector_name}' could not be created or verified")
+                return False
+
+        svcacct_info = self.run_silent(
+            f"{mc} mc admin user svcacct list minio {shlex.quote(connector_name)}"
+        )
+        if not svcacct_info or minio_access_key not in svcacct_info:
+            svcacct_result = self.run(
+                f"{mc} mc admin user svcacct add minio {shlex.quote(connector_name)} "
+                f"--access-key {shlex.quote(minio_access_key)} --secret-key {shlex.quote(minio_secret_key)}",
+                capture=True,
+                check=False,
+                silent=True,
+            )
+            if svcacct_result is None:
+                svcacct_info = self.run_silent(
+                    f"{mc} mc admin user svcacct list minio {shlex.quote(connector_name)}"
+                )
+                if not svcacct_info or minio_access_key not in svcacct_info:
+                    print(f"MinIO service account for '{connector_name}' could not be created or verified")
+                    return False
 
         # Attach S3 policy to connector user (required for upload permissions) - FIX for BUG-001
         policy_name = f"policy-{ds_name}-{connector_name}"
@@ -977,10 +1083,14 @@ class INESDataConnectorsAdapter:
                 # Encode policy as base64 and decode in the pod to avoid shell
                 # quoting issues and kubectl cp dependency on `tar`.
                 policy_b64 = base64.b64encode(json.dumps(policy_content).encode("utf-8")).decode("ascii")
-                self.run(
+                write_policy_result = self.run(
                     f"{mc} sh -c \"echo '{policy_b64}' | base64 -d > {policy_path_pod}\"",
+                    check=False,
                     silent=True,
                 )
+                if write_policy_result is None:
+                    print(f"Could not write MinIO policy file inside pod for '{connector_name}'")
+                    return False
 
                 # Create policy in MinIO (idempotent: ignore already-exists error)
                 self.run(
@@ -1003,11 +1113,14 @@ class INESDataConnectorsAdapter:
                 if result and policy_name in result:
                     print(f"MinIO policy '{policy_name}' attached to '{connector_name}'")
                 else:
-                    print(f"Warning: policy attach may have failed for '{connector_name}'. Check MinIO user info.")
+                    print(f"MinIO policy attach could not be verified for '{connector_name}'")
+                    return False
             except (IOError, json.JSONDecodeError) as e:
-                print(f"Warning: Could not attach MinIO policy: {e}")
+                print(f"Could not attach MinIO policy: {e}")
+                return False
         else:
-            print(f"Warning: Policy file not found at {policy_file_path} — skipping policy attach")
+            print(f"Policy file not found at {policy_file_path}")
+            return False
 
         print("MinIO configured")
         return True
@@ -1021,10 +1134,9 @@ class INESDataConnectorsAdapter:
         namespace = self.config.NS_COMMON
         policy_name = f"policy-{ds_name}-{connector_name}"
 
-        deployer_config = self.config_adapter.load_deployer_config()
-        minio_endpoint = deployer_config.get("MINIO_ENDPOINT", "http://127.0.0.1:9000")
-        minio_admin_user = deployer_config.get("MINIO_ADMIN_USER", "admin")
-        minio_admin_pass = deployer_config.get("MINIO_ADMIN_PASS", "aPassword1234")
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        minio_endpoint = deployer_config.get("MINIO_ENDPOINT") or "http://127.0.0.1:9000"
+        minio_admin_user, minio_admin_pass = self._minio_admin_credentials(deployer_config)
 
         minio_pod = self.infrastructure.get_pod_by_name(namespace, self.config.service_minio())
         if not minio_pod:
@@ -1032,9 +1144,17 @@ class INESDataConnectorsAdapter:
             return False
 
         mc = f"kubectl exec -n {namespace} {minio_pod} --"
-        self.run(f"{mc} mc alias set minio {minio_endpoint} {minio_admin_user} {minio_admin_pass}", silent=True)
+        alias_result = self.run(
+            f"{mc} mc alias set minio {shlex.quote(minio_endpoint)} "
+            f"{shlex.quote(minio_admin_user)} {shlex.quote(minio_admin_pass)}",
+            check=False,
+            silent=True,
+        )
+        if alias_result is None:
+            print(f"  MinIO admin alias could not be configured for {connector_name}")
+            return False
 
-        user_info = self.run_silent(f"{mc} mc admin user info minio {connector_name}")
+        user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
         if user_info and policy_name in user_info:
             print(f"  MinIO policy '{policy_name}' already present on '{connector_name}'")
             return True
@@ -1059,11 +1179,22 @@ class INESDataConnectorsAdapter:
 
             policy_path_pod = f"/tmp/{policy_name}.json"
             policy_b64 = base64.b64encode(json.dumps(policy_content).encode("utf-8")).decode("ascii")
-            self.run(f"{mc} sh -c \"echo '{policy_b64}' | base64 -d > {policy_path_pod}\"", silent=True)
+            write_policy_result = self.run(
+                f"{mc} sh -c \"echo '{policy_b64}' | base64 -d > {policy_path_pod}\"",
+                check=False,
+                silent=True,
+            )
+            if write_policy_result is None:
+                print(f"  Warning: could not write MinIO policy file inside pod for {connector_name}")
+                return False
             self.run(f"{mc} mc admin policy create minio {policy_name} {policy_path_pod}", check=False, silent=True)
-            self.run(f"{mc} mc admin policy attach minio {policy_name} --user {connector_name}", check=False, silent=True)
+            self.run(
+                f"{mc} mc admin policy attach minio {policy_name} --user {shlex.quote(connector_name)}",
+                check=False,
+                silent=True,
+            )
 
-            user_info = self.run_silent(f"{mc} mc admin user info minio {connector_name}")
+            user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
             if user_info and policy_name in user_info:
                 print(f"  MinIO policy '{policy_name}' re-attached to '{connector_name}'")
                 return True
@@ -1124,7 +1255,8 @@ class INESDataConnectorsAdapter:
         self.invalidate_management_api_token(connector_name)
 
         print(f"Cleaning connector: {connector_name}")
-        self.run(f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}", cwd=repo_dir, check=False)
+        delete_cmd = self._bootstrap_connector_delete_command(python_exec, connector_name, ds_name)
+        self.run(delete_cmd, cwd=repo_dir, check=False)
 
         release_name = f"{connector_name}-{ds_name}"
         ns = namespace or self.config.namespace_demo()
@@ -1166,6 +1298,10 @@ class INESDataConnectorsAdapter:
         if not self._prepare_vault_management_access(ds_name=ds_name):
             return False
 
+        if not self.wait_for_keycloak_admin_ready():
+            print("Keycloak admin API not ready for connector cleanup")
+            return False
+
         values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
 
         if not self.wait_for_keycloak_admin_ready():
@@ -1173,13 +1309,25 @@ class INESDataConnectorsAdapter:
             return False
 
         print(f"Creating connector {connector_name}...")
-        create_cmd = f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
+        create_cmd = self._bootstrap_connector_create_command(python_exec, connector_name, ds_name)
         create_result = None
+        creds_path = self.config.connector_credentials_path(connector_name)
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
             create_result = self.run(create_cmd, cwd=repo_dir, check=False)
-            if create_result is not None:
+            missing_credentials = (
+                self._connector_credentials_missing_requirements(creds_path)
+                if create_result is not None
+                else []
+            )
+            if create_result is not None and not missing_credentials:
                 break
+            if missing_credentials:
+                print(
+                    "Connector bootstrap produced incomplete credentials "
+                    f"({', '.join(missing_credentials)}). Retrying cleanly..."
+                )
+                create_result = None
             if attempt < max_attempts:
                 print(
                     f"Connector creation failed on attempt {attempt}. "
@@ -1195,10 +1343,10 @@ class INESDataConnectorsAdapter:
             print("Error: deployment failed")
             return False
 
-        creds_path = self.config.connector_credentials_path(connector_name)
         self.invalidate_management_api_token(connector_name)
         if not self.setup_minio_bucket(self.config.NS_COMMON, ds_name, connector_name, creds_path):
-            print("Warning: MinIO configuration incomplete")
+            print("Error: MinIO configuration failed")
+            return False
 
         timeout = 10
         start = time.time()

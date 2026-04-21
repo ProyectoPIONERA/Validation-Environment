@@ -50,7 +50,7 @@ keycloak:
 minio:
   mode: standalone
   rootUser: admin
-  rootPassword: aPassword1234
+  rootPassword: CHANGE_ME
   replicas: 1
   persistence:
     size: 100Gi

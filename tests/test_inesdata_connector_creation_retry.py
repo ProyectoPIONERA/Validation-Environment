@@ -52,6 +52,9 @@ class ConnectorRetryConfig:
     def host_alias_domains(self):
         return []
 
+    def service_minio(self):
+        return "minio"
+
 
 class ConnectorRetryConfigAdapter:
     def __init__(self, root):
@@ -68,6 +71,8 @@ class ConnectorRetryConfigAdapter:
             "KC_URL": "http://keycloak-admin.local",
             "KC_USER": "admin",
             "KC_PASSWORD": "secret",
+            "MINIO_USER": "admin",
+            "MINIO_PASSWORD": "minio-secret",
         }
 
     def generate_connector_hosts(self, _connectors):
@@ -116,6 +121,69 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(len(infra.calls), 1)
             self.assertEqual(infra.calls[0][0], ("common-srvs", "keycloak", 18081, 8080))
             self.assertEqual(infra.calls[0][1], {"quiet": True})
+            self.assertEqual(adapter._last_ready_keycloak_url, "http://127.0.0.1:18081")
+
+    def test_create_connector_uses_verified_keycloak_url_for_bootstrap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+            calls = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(cmd)
+                if "bootstrap.py connector create" in cmd:
+                    with open(config.connector_credentials_path("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write(
+                            "{"
+                            '"database":{"name":"db","user":"db","passwd":"secret"},'
+                            '"certificates":{"path":"certs","passwd":"secret"},'
+                            '"connector_user":{"user":"user","passwd":"secret"},'
+                            '"vault":{"path":"secret/data/demo/conn-a-demo","token":"token"},'
+                            '"minio":{"user":"conn-a-demo","passwd":"secret","access_key":"access","secret_key":"secret"}'
+                            "}"
+                        )
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=type(
+                    "Infra",
+                    (),
+                    {
+                        "ensure_local_infra_access": staticmethod(lambda: True),
+                        "ensure_vault_unsealed": staticmethod(lambda: True),
+                        "deploy_helm_release": staticmethod(lambda *_args, **_kwargs: True),
+                        "wait_for_namespace_pods": staticmethod(lambda *_args, **_kwargs: True),
+                        "manage_hosts_entries": staticmethod(lambda *_args, **_kwargs: None),
+                        "get_pod_by_name": staticmethod(lambda *_args, **_kwargs: "minio"),
+                    },
+                )(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+            adapter._last_ready_keycloak_url = "http://127.0.0.1:18081"
+            adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+            adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                self.assertTrue(adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"]))
+
+            create_calls = [call for call in calls if "bootstrap.py connector create" in call]
+            delete_calls = [call for call in calls if "bootstrap.py connector delete" in call]
+            self.assertEqual(len(create_calls), 1)
+            self.assertTrue(create_calls[0].startswith("PIONERA_KC_URL=http://127.0.0.1:18081 "))
+            self.assertEqual(len(delete_calls), 1)
+            self.assertTrue(delete_calls[0].startswith("PIONERA_KC_URL=http://127.0.0.1:18081 "))
 
     def test_connector_ready_falls_back_to_local_interface_port_forward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -393,6 +461,71 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(len(create_calls), 2)
             self.assertEqual(len(delete_calls), 2)
 
+    def test_create_connector_retries_after_partial_credentials_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            calls = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(cmd)
+                if "bootstrap.py connector create" in cmd:
+                    attempt = sum("bootstrap.py connector create" in item for item in calls)
+                    creds_path = config.connector_credentials_path("conn-a-demo")
+                    if attempt == 1:
+                        with open(creds_path, "w", encoding="utf-8") as handle:
+                            handle.write('{"database":{"name":"db","user":"db","passwd":"secret"}}')
+                    else:
+                        with open(creds_path, "w", encoding="utf-8") as handle:
+                            handle.write(
+                                "{"
+                                '"database":{"name":"db","user":"db","passwd":"secret"},'
+                                '"certificates":{"path":"certs","passwd":"secret"},'
+                                '"connector_user":{"user":"user","passwd":"secret"},'
+                                '"vault":{"path":"secret/data/demo/conn-a-demo","token":"token"},'
+                                '"minio":{"user":"conn-a-demo","passwd":"secret","access_key":"access","secret_key":"secret"}'
+                                "}"
+                            )
+                        with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                            handle.write("hostAliases: []\n")
+                return object()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=type(
+                    "Infra",
+                    (),
+                    {
+                        "ensure_local_infra_access": staticmethod(lambda: True),
+                        "ensure_vault_unsealed": staticmethod(lambda: True),
+                        "deploy_helm_release": staticmethod(lambda *_args, **_kwargs: True),
+                        "wait_for_namespace_pods": staticmethod(lambda *_args, **_kwargs: True),
+                        "manage_hosts_entries": staticmethod(lambda *_args, **_kwargs: None),
+                        "get_pod_by_name": staticmethod(lambda *_args, **_kwargs: "minio"),
+                    },
+                )(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+            adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+            adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+
+            self.assertTrue(created)
+            create_calls = [call for call in calls if "bootstrap.py connector create" in call]
+            self.assertEqual(len(create_calls), 2)
+
     def test_create_connector_waits_for_runtime_and_interface_rollouts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -651,6 +784,103 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(args[1], "demo")
             self.assertEqual(args[2], ["values-conn-a-demo.yaml"])
             self.assertEqual(kwargs["cwd"], config.connector_dir())
+
+    def test_setup_minio_bucket_fails_when_admin_alias_cannot_be_configured(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            creds_path = config.connector_credentials_path("conn-a-demo")
+            with open(creds_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '{"minio":{"passwd":"connector-pass","access_key":"access","secret_key":"secret"}}'
+                )
+
+            def fake_run(cmd, **_kwargs):
+                if "mc alias set minio" in cmd:
+                    return None
+                return object()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=type(
+                    "Infra",
+                    (),
+                    {
+                        "get_pod_by_name": staticmethod(lambda *_args, **_kwargs: "minio-pod"),
+                    },
+                )(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            self.assertFalse(
+                adapter.setup_minio_bucket("common-srvs", "demo", "conn-a-demo", creds_path)
+            )
+
+    def test_create_connector_aborts_when_minio_configuration_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            def fake_run(cmd, **_kwargs):
+                if "bootstrap.py connector create" in cmd:
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
+
+            class RecordingInfra:
+                def __init__(self):
+                    self.deploy_calls = []
+
+                @staticmethod
+                def ensure_local_infra_access():
+                    return True
+
+                @staticmethod
+                def ensure_vault_unsealed():
+                    return True
+
+                def deploy_helm_release(self, *args, **kwargs):
+                    self.deploy_calls.append((args, kwargs))
+                    return True
+
+                @staticmethod
+                def wait_for_namespace_pods(*_args, **_kwargs):
+                    return True
+
+                @staticmethod
+                def manage_hosts_entries(*_args, **_kwargs):
+                    return None
+
+                @staticmethod
+                def get_pod_by_name(*_args, **_kwargs):
+                    return "minio"
+
+            infra = RecordingInfra()
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+            adapter.setup_minio_bucket = lambda *_args, **_kwargs: False
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+            adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+
+            self.assertFalse(created)
+            self.assertEqual(infra.deploy_calls, [])
 
 
 if __name__ == "__main__":

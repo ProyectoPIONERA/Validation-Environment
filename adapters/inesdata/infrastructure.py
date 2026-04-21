@@ -56,6 +56,21 @@ class INESDataInfrastructureAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    @staticmethod
+    def _first_config_value(config, *keys):
+        for key in keys:
+            value = config.get(key)
+            if value not in (None, ""):
+                return value
+        return None
+
+    @classmethod
+    def _minio_admin_credentials(cls, config):
+        return (
+            cls._first_config_value(config, "MINIO_ADMIN_USER", "MINIO_USER"),
+            cls._first_config_value(config, "MINIO_ADMIN_PASS", "MINIO_PASSWORD"),
+        )
+
     def announce_level(self, level, title):
         if level in self._announced_levels:
             return
@@ -1109,8 +1124,7 @@ class INESDataInfrastructureAdapter:
         def status(expected, current):
             return "OK" if expected == current else "DIFF"
 
-        def add_row(logical_var, values_path, config_var, current_value):
-            expected_value = config.get(config_var)
+        def add_row_value(logical_var, values_path, expected_value, current_value):
             rows.append([
                 logical_var,
                 values_path,
@@ -1119,10 +1133,17 @@ class INESDataInfrastructureAdapter:
                 status(expected_value, current_value)
             ])
 
+        def add_row(logical_var, values_path, config_var, current_value):
+            add_row_value(logical_var, values_path, config.get(config_var), current_value)
+
         add_row("PG_PASSWORD", "postgresql.auth.postgresPassword", "PG_PASSWORD", values["postgresql"]["auth"]["postgresPassword"])
         add_row("PG_PASSWORD", "keycloak.externalDatabase.password", "PG_PASSWORD", values["keycloak"]["externalDatabase"]["password"])
         add_row("KC_USER", "keycloak.auth.adminUser", "KC_USER", values["keycloak"]["auth"]["adminUser"])
         add_row("KC_PASSWORD", "keycloak.auth.adminPassword", "KC_PASSWORD", values["keycloak"]["auth"]["adminPassword"])
+        minio_user, minio_password = self._minio_admin_credentials(config)
+        minio_values = values.get("minio", {})
+        add_row_value("MINIO_USER", "minio.rootUser", minio_user, minio_values.get("rootUser"))
+        add_row_value("MINIO_PASSWORD", "minio.rootPassword", minio_password, minio_values.get("rootPassword"))
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
@@ -1139,12 +1160,18 @@ class INESDataInfrastructureAdapter:
         pg_password = config.get("PG_PASSWORD")
         kc_user = config.get("KC_USER")
         kc_password = config.get("KC_PASSWORD")
+        minio_user, minio_password = self._minio_admin_credentials(config)
 
         values["postgresql"]["auth"]["postgresPassword"] = pg_password
         values["postgresql"]["auth"]["password"] = pg_password
         values["keycloak"]["externalDatabase"]["password"] = pg_password
         values["keycloak"]["auth"]["adminUser"] = kc_user
         values["keycloak"]["auth"]["adminPassword"] = kc_password
+        values.setdefault("minio", {})
+        if minio_user:
+            values["minio"]["rootUser"] = minio_user
+        if minio_password:
+            values["minio"]["rootPassword"] = minio_password
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
@@ -1234,6 +1261,7 @@ class INESDataInfrastructureAdapter:
         config = self.config_adapter.load_deployer_config()
         expected_pg_password = config.get("PG_PASSWORD")
         expected_kc_password = config.get("KC_PASSWORD")
+        expected_minio_user, expected_minio_password = self._minio_admin_credentials(config)
 
         drift = []
 
@@ -1249,6 +1277,18 @@ class INESDataInfrastructureAdapter:
         if actual_kc_password and expected_kc_password and actual_kc_password != expected_kc_password:
             drift.append("Keycloak secret does not match KC_PASSWORD from deployer.config")
 
+        actual_minio_user = self._secret_value(
+            self.config.NS_COMMON, "common-srvs-minio", "rootUser"
+        )
+        if actual_minio_user and expected_minio_user and actual_minio_user != expected_minio_user:
+            drift.append("MinIO secret does not match MINIO_USER from deployer.config")
+
+        actual_minio_password = self._secret_value(
+            self.config.NS_COMMON, "common-srvs-minio", "rootPassword"
+        )
+        if actual_minio_password and expected_minio_password and actual_minio_password != expected_minio_password:
+            drift.append("MinIO secret does not match MINIO_PASSWORD from deployer.config")
+
         return drift
 
     def reconcile_common_services_source_of_truth(self):
@@ -1263,6 +1303,7 @@ class INESDataInfrastructureAdapter:
         print("\nRecreating common services so deployer.config becomes the effective source of truth...")
         self.stop_port_forward_service(self.config.NS_COMMON, "postgresql", quiet=True)
         self.stop_port_forward_service(self.config.NS_COMMON, "vault", quiet=True)
+        self.stop_port_forward_service(self.config.NS_COMMON, "minio", quiet=True)
 
         self.run(
             f"helm uninstall {self.config.helm_release_common()} -n {self.config.NS_COMMON}",
@@ -1273,13 +1314,13 @@ class INESDataInfrastructureAdapter:
             check=False,
         )
         self.run(
-            f"kubectl delete secret common-srvs-postgresql common-srvs-keycloak -n {self.config.NS_COMMON}",
+            f"kubectl delete secret common-srvs-postgresql common-srvs-keycloak common-srvs-minio -n {self.config.NS_COMMON}",
             check=False,
         )
         time.sleep(5)
 
     def ensure_local_infra_access(self):
-        print("\nVerifying local access to PostgreSQL and Vault...")
+        print("\nVerifying local access to PostgreSQL, Vault and MinIO...")
         full_timeout = max(int(getattr(self.config, "TIMEOUT_PORT", 30)), 1)
         probe_timeout = max(min(3, full_timeout), 1)
 
@@ -1305,6 +1346,18 @@ class INESDataInfrastructureAdapter:
             wait_timeout=full_timeout,
         )
         if not vault_ok:
+            return False
+
+        minio_ok, _ = self._ensure_local_service_access(
+            "MinIO",
+            self.config.NS_COMMON,
+            "minio",
+            getattr(self.config, "PORT_MINIO", 9000),
+            9000,
+            probe_timeout=probe_timeout,
+            wait_timeout=full_timeout,
+        )
+        if not minio_ok:
             return False
 
         print("Local infrastructure OK\n")
