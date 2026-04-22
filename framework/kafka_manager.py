@@ -72,7 +72,7 @@ class KafkaManager:
         config = {}
         config.update(self._load_adapter_config())
         config.update(self.runtime_config)
-        config.setdefault("provisioner", config.get("provisioner") or "docker")
+        config.setdefault("provisioner", config.get("provisioner") or "kubernetes")
         config.setdefault("cluster_advertised_host", config.get("cluster_advertised_host") or "host.minikube.internal")
         config.setdefault("k8s_namespace", config.get("k8s_namespace") or "demo")
         config.setdefault("k8s_service_name", config.get("k8s_service_name") or "framework-kafka")
@@ -82,7 +82,7 @@ class KafkaManager:
         return config
 
     def _provisioner(self):
-        return str(self._load_manager_config().get("provisioner") or "docker").strip().lower()
+        return str(self._load_manager_config().get("provisioner") or "kubernetes").strip().lower()
 
     @staticmethod
     def _normalize_bootstrap_servers(bootstrap_servers):
@@ -524,12 +524,9 @@ class KafkaManager:
                         [
                             "kubectl",
                             "delete",
-                            "deployment",
-                            ids["deployment_name"],
-                            "service",
-                            ids["service_name"],
-                            "service",
-                            ids["external_service_name"],
+                            f"deployment/{ids['deployment_name']}",
+                            f"service/{ids['service_name']}",
+                            f"service/{ids['external_service_name']}",
                             "-n",
                             ids["namespace"],
                             "--ignore-not-found=true",

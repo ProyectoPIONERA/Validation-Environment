@@ -76,7 +76,10 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertIsNone(manager.container)
 
     def test_auto_starts_kafka_container_when_broker_unavailable(self):
-        manager = KafkaManager(container_class=_FakeKafkaContainer)
+        manager = KafkaManager(
+            container_class=_FakeKafkaContainer,
+            runtime_config={"provisioner": "docker"},
+        )
 
         with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=[False, True]):
             bootstrap = manager.ensure_kafka_running()
@@ -86,6 +89,16 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertTrue(manager.started_by_framework)
         self.assertIsNotNone(manager.container)
         self.assertTrue(manager.container.started)
+
+    def test_auto_starts_kafka_broker_in_kubernetes_by_default(self):
+        manager = KafkaManager()
+
+        with mock.patch.object(KafkaManager, "is_kafka_available", return_value=False):
+            with mock.patch.object(manager, "_start_kafka_kubernetes", return_value="127.0.0.1:39092") as mocked_start:
+                bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:39092")
+        mocked_start.assert_called_once()
 
     def test_auto_starts_kafka_broker_in_kubernetes_when_configured(self):
         commands = []
@@ -132,7 +145,10 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertFalse(manager.started_by_framework)
 
     def test_docker_unavailable_skips_auto_start(self):
-        manager = KafkaManager(container_class=_FailingContainerLoader())
+        manager = KafkaManager(
+            container_class=_FailingContainerLoader(),
+            runtime_config={"provisioner": "docker"},
+        )
 
         with mock.patch.object(KafkaManager, "is_kafka_available", return_value=False):
             bootstrap = manager.ensure_kafka_running()
@@ -186,6 +202,7 @@ class KafkaManagerTests(unittest.TestCase):
             container_class=_FakeKafkaContainer,
             container_factory=factory,
             runtime_config={
+                "provisioner": "docker",
                 "container_env_file": "/tmp/fake.env",
                 "cluster_advertised_host": "cluster.kafka.internal",
             },
@@ -221,6 +238,44 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
         self.assertTrue(kwargs["text"])
+
+    def test_stop_kafka_kubernetes_deletes_deployment_and_services(self):
+        commands = []
+
+        def fake_runner(args, input_text=None):
+            commands.append(list(args))
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            },
+            command_runner=fake_runner,
+        )
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes"
+        port_forward_process = mock.Mock()
+        port_forward_process.wait.return_value = None
+        manager.port_forward_process = port_forward_process
+
+        manager.stop_kafka()
+
+        self.assertIn(
+            [
+                "kubectl",
+                "delete",
+                "deployment/framework-kafka",
+                "service/framework-kafka",
+                "service/framework-kafka-external",
+                "-n",
+                "demo",
+                "--ignore-not-found=true",
+            ],
+            commands,
+        )
+        port_forward_process.terminate.assert_called_once()
 
 
 if __name__ == "__main__":

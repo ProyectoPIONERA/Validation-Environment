@@ -87,6 +87,98 @@ class FakeAdapter:
         return ["conn-a", "conn-b"]
 
 
+class KafkaTransferConsoleOutputTests(unittest.TestCase):
+    def test_kafka_transfer_results_are_printed_with_neutral_summary(self):
+        results = [
+            {
+                "provider": "conn-provider",
+                "consumer": "conn-consumer",
+                "status": "passed",
+                "source_topic": "source-topic",
+                "destination_topic": "destination-topic",
+                "artifact_path": "/tmp/experiment/kafka_transfer/conn-provider__conn-consumer.json",
+                "steps": [
+                    {
+                        "name": "create_kafka_asset",
+                        "status": "passed",
+                        "http_status": 200,
+                        "asset_id": "asset-1",
+                    },
+                    {
+                        "name": "measure_kafka_transfer_latency",
+                        "status": "passed",
+                        "messages_consumed": 10,
+                        "average_latency_ms": 7.2,
+                    },
+                ],
+                "metrics": {
+                    "messages_produced": 10,
+                    "messages_consumed": 10,
+                    "average_latency_ms": 7.2,
+                    "p50_latency_ms": 6.8,
+                    "p95_latency_ms": 9.1,
+                    "p99_latency_ms": 9.8,
+                    "throughput_messages_per_second": 18.5,
+                    "message_samples": [
+                        {
+                            "message_id": "msg-1",
+                            "status": "consumed",
+                            "latency_ms": 6.5,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_kafka_edc_results(results)
+
+        output = stdout.getvalue()
+        self.assertIn("Kafka transfer validation results", output)
+        self.assertIn("PASS Kafka transfer: conn-provider -> conn-consumer", output)
+        self.assertIn("Steps:", output)
+        self.assertIn("PASS create_kafka_asset", output)
+        self.assertIn("PASS measure_kafka_transfer_latency", output)
+        self.assertIn("Messages: produced=10 consumed=10", output)
+        self.assertIn("Latency: avg=7.2ms p50=6.8ms p95=9.1ms p99=9.8ms", output)
+        self.assertIn("Throughput: 18.5 msg/s", output)
+        self.assertNotIn("EDC+Kafka", output)
+        self.assertNotIn("Message: id=msg-1", output)
+
+    def test_kafka_transfer_results_can_print_message_samples_when_enabled(self):
+        results = [
+            {
+                "provider": "conn-provider",
+                "consumer": "conn-consumer",
+                "status": "passed",
+                "metrics": {
+                    "messages_produced": 1,
+                    "messages_consumed": 1,
+                    "average_latency_ms": 3.4,
+                    "p50_latency_ms": 3.4,
+                    "p95_latency_ms": 3.4,
+                    "p99_latency_ms": 3.4,
+                    "throughput_messages_per_second": 2.0,
+                    "message_samples": [
+                        {
+                            "message_id": "msg-1",
+                            "status": "consumed",
+                            "latency_ms": 3.4,
+                        }
+                    ],
+                },
+            }
+        ]
+
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"PIONERA_KAFKA_TRANSFER_LOG_MESSAGES": "true"}, clear=False):
+            with contextlib.redirect_stdout(stdout):
+                main._print_kafka_edc_results(results)
+
+        self.assertIn("Message: id=msg-1 status=consumed latency=3.4ms", stdout.getvalue())
+
+
 class NoConnectorDeployAdapter:
     def deploy_infrastructure(self):
         return None

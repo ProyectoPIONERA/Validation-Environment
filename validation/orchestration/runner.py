@@ -40,6 +40,47 @@ class Level6Runtime:
     run_ui_ops: Callable[..., dict[str, Any]]
 
 
+def _format_console_metric(value: Any, suffix: str = "") -> str:
+    if value in (None, ""):
+        return "n/a"
+    return f"{value}{suffix}"
+
+
+def _print_kafka_transfer_steps(result: dict[str, Any], indent: str = "    ") -> None:
+    steps = result.get("steps") if isinstance(result, dict) else None
+    if not isinstance(steps, list) or not steps:
+        return
+
+    status_labels = {
+        "passed": "PASS",
+        "failed": "FAIL",
+        "skipped": "SKIP",
+    }
+    detail_keys = (
+        "http_status",
+        "state",
+        "topic",
+        "asset_id",
+        "agreement_id",
+        "transfer_id",
+        "messages_consumed",
+        "average_latency_ms",
+    )
+    print(f"{indent}Steps:")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        status = status_labels.get(str(step.get("status", "unknown")).lower(), str(step.get("status", "unknown")).upper())
+        name = step.get("name", "unknown_step")
+        details = [
+            f"{key}={step[key]}"
+            for key in detail_keys
+            if step.get(key) not in (None, "")
+        ]
+        suffix = f" ({', '.join(details)})" if details else ""
+        print(f"{indent}  {status} {name}{suffix}")
+
+
 def run_level6(runtime: Level6Runtime) -> None:
     """Run Level 6 validation using injected runtime-specific operations."""
 
@@ -152,20 +193,38 @@ def run_level6(runtime: Level6Runtime) -> None:
         )
 
         if runtime.should_run_kafka_edc_validation():
-            print("\nRunning EDC+Kafka transfer validation suite...")
+            print("\nRunning Kafka transfer validation suite...")
             kafka_edc_results = runtime.run_kafka_edc_validation(connectors, experiment_dir) or []
+            print("Kafka transfer validation results:")
             for result in kafka_edc_results:
                 provider = result.get("provider", "unknown-provider")
                 consumer = result.get("consumer", "unknown-consumer")
                 status = result.get("status", "unknown")
+                metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
                 if status == "passed":
-                    print(f"  EDC+Kafka validation passed for {provider} -> {consumer}")
+                    print(f"  PASS Kafka transfer: {provider} -> {consumer}")
+                    _print_kafka_transfer_steps(result)
+                    if metrics:
+                        print(
+                            "    Messages: "
+                            f"produced={_format_console_metric(metrics.get('messages_produced'))} "
+                            f"consumed={_format_console_metric(metrics.get('messages_consumed'))}"
+                        )
+                        print(
+                            "    Latency: "
+                            f"avg={_format_console_metric(metrics.get('average_latency_ms'), 'ms')} "
+                            f"p50={_format_console_metric(metrics.get('p50_latency_ms'), 'ms')} "
+                            f"p95={_format_console_metric(metrics.get('p95_latency_ms'), 'ms')} "
+                            f"p99={_format_console_metric(metrics.get('p99_latency_ms'), 'ms')}"
+                        )
                 elif status == "failed":
                     error = (result.get("error") or {}).get("message", "unknown reason")
-                    print(f"  Warning: EDC+Kafka validation failed for {provider} -> {consumer} ({error})")
+                    print(f"  FAIL Kafka transfer: {provider} -> {consumer} ({error})")
+                    _print_kafka_transfer_steps(result)
                 else:
                     reason = result.get("reason", "unknown reason")
-                    print(f"  EDC+Kafka validation skipped for {provider} -> {consumer} ({reason})")
+                    print(f"  SKIP Kafka transfer: {provider} -> {consumer} ({reason})")
+                    _print_kafka_transfer_steps(result)
 
             runtime.save_experiment_state(
                 experiment_dir,

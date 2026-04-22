@@ -363,12 +363,17 @@ class INESDataConfigAdapter:
         base_dir = self.config.script_dir()
 
         runtime = {
-            "bootstrap_servers": config.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+            "provisioner": config.get("KAFKA_PROVISIONER", "kubernetes"),
+            "bootstrap_servers": config.get("KAFKA_BOOTSTRAP_SERVERS", ""),
             "topic_name": config.get("KAFKA_TOPIC_NAME", "kafka-stream-topic"),
             "topic_strategy": config.get("KAFKA_TOPIC_STRATEGY", "STATIC_TOPIC"),
             "security_protocol": config.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
             "container_name": config.get("KAFKA_CONTAINER_NAME", "kafka-local"),
             "container_image": config.get("KAFKA_CONTAINER_IMAGE", "confluentinc/cp-kafka:7.5.2"),
+            "k8s_namespace": config.get("KAFKA_K8S_NAMESPACE") or self.primary_dataspace_namespace(),
+            "k8s_service_name": config.get("KAFKA_K8S_SERVICE_NAME", "framework-kafka"),
+            "k8s_local_port": config.get("KAFKA_K8S_LOCAL_PORT", "39092"),
+            "minikube_profile": config.get("KAFKA_MINIKUBE_PROFILE", "minikube"),
         }
 
         optional_mapping = {
@@ -377,6 +382,7 @@ class INESDataConfigAdapter:
             "password": "KAFKA_PASSWORD",
             "cluster_bootstrap_servers": "KAFKA_CLUSTER_BOOTSTRAP_SERVERS",
             "cluster_advertised_host": "KAFKA_CLUSTER_ADVERTISED_HOST",
+            "k8s_nodeport": "KAFKA_K8S_NODEPORT",
             "message_count": "KAFKA_MESSAGE_COUNT",
             "message_size_bytes": "KAFKA_MESSAGE_SIZE_BYTES",
             "poll_timeout_seconds": "KAFKA_POLL_TIMEOUT_SECONDS",
