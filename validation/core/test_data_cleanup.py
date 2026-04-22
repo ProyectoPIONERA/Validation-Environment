@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -190,6 +191,8 @@ class ManagementApiTestDataCleaner:
         report_enabled: bool = True,
         query_limit: int = DEFAULT_QUERY_LIMIT,
         max_pages: int = DEFAULT_MAX_PAGES,
+        auth_retries: int = 2,
+        auth_retry_delay: float = 2.0,
     ):
         self.adapter = adapter
         self.context = context
@@ -201,6 +204,8 @@ class ManagementApiTestDataCleaner:
         self.report_enabled = report_enabled
         self.query_limit = max(int(query_limit or DEFAULT_QUERY_LIMIT), 1)
         self.max_pages = max(int(max_pages or DEFAULT_MAX_PAGES), 1)
+        self.auth_retries = max(int(auth_retries or 0), 0)
+        self.auth_retry_delay = max(float(auth_retry_delay or 0), 0.0)
         self.config = self._load_config()
         self.dataspace = str(getattr(context, "dataspace_name", "") or self.config.get("DS_1_NAME") or "").strip()
         self.ds_domain_base = str(getattr(context, "ds_domain_base", "") or self._resolve_adapter_domain() or "").strip()
@@ -273,8 +278,10 @@ class ManagementApiTestDataCleaner:
 
         try:
             connector_report["management_base_url"] = self._management_base_url(connector)
-            token = self._issue_token(connector)
-            inventory = self._load_inventory(connector_report["management_base_url"], token)
+            token, inventory = self._load_inventory_with_auth_retry(
+                connector,
+                connector_report["management_base_url"],
+            )
             plan = build_cleanup_plan(inventory, mode=self.mode)
             connector_report["planned"] = plan
             self._record_unsafe_counts(connector_report, inventory, plan)
@@ -300,6 +307,25 @@ class ManagementApiTestDataCleaner:
         self._record_skipped_counts(connector_report)
         self._record_conflict_summary(connector_report)
         return connector_report
+
+    def _load_inventory_with_auth_retry(
+        self,
+        connector: str,
+        management_base_url: str,
+    ) -> tuple[str, dict[str, list[Any]]]:
+        last_error = None
+        for attempt in range(self.auth_retries + 1):
+            token = self._issue_token(connector)
+            try:
+                return token, self._load_inventory(management_base_url, token)
+            except RuntimeError as exc:
+                last_error = exc
+                if "HTTP 401" not in str(exc) or attempt >= self.auth_retries:
+                    raise
+                if self.auth_retry_delay:
+                    time.sleep(self.auth_retry_delay)
+
+        raise last_error or RuntimeError(f"Could not load cleanup inventory for {connector}")
 
     def _load_inventory(self, management_base_url: str, token: str) -> dict[str, list[Any]]:
         inventory: dict[str, list[Any]] = {entity_kind: [] for entity_kind in ENTITY_ORDER}

@@ -153,6 +153,22 @@ class RecordingCleanupSession(FakeCleanupSession):
         return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
 
 
+class TransientAuthCleanupSession(FakeCleanupSession):
+    def __init__(self):
+        super().__init__()
+        self.token_requests = 0
+        self.rejected_inventory_once = False
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if "openid-connect/token" in url:
+            self.token_requests += 1
+            return FakeResponse(200, {"access_token": f"jwt-token-{self.token_requests}"})
+        if url.endswith("/contractdefinitions/request") and not self.rejected_inventory_once:
+            self.rejected_inventory_once = True
+            return FakeResponse(401, [{"type": "AuthenticationFailed"}])
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
 class FakeMinioObject:
     def __init__(self, object_name):
         self.object_name = object_name
@@ -286,6 +302,25 @@ class TestDataCleanupTests(unittest.TestCase):
         self.assertEqual(report["status"], "completed")
         self.assertTrue(session.token_urls)
         self.assertTrue(session.token_urls[0].startswith("http://keycloak.dev.ed.dataspaceunit.upm/"))
+
+    def test_inventory_cleanup_retries_once_after_transient_401(self):
+        session = TransientAuthCleanupSession()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cleaner = ManagementApiTestDataCleaner(
+                adapter=FakeAdapter(),
+                context=fake_context(),
+                connectors=["conn-a"],
+                experiment_dir=tmpdir,
+                mode="safe",
+                session=session,
+                auth_retry_delay=0,
+            )
+            report = cleaner.run()
+
+        self.assertEqual(report["status"], "completed")
+        self.assertTrue(session.rejected_inventory_once)
+        self.assertEqual(session.token_requests, 2)
 
     def test_dry_run_builds_plan_without_deleting(self):
         session = FakeCleanupSession()
