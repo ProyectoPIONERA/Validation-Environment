@@ -99,6 +99,12 @@ Limpia artefactos generados, caches o salidas previas que dificultan razonar sob
 
 Construye y carga imágenes locales. Úsalo durante desarrollo cuando hayas modificado código fuente de conectores, dashboards o componentes que deban probarse en el cluster.
 
+Para recetas registradas de componentes, como `Ontology Hub` o `AI Model Hub`,
+si el deployment ya existe en el namespace del dataspace activo, el framework lo
+reinicia para que tome la imagen local cargada en Minikube. Si no existe, la
+opción solo prepara la imagen; después ejecuta `Level 5` para desplegar el
+componente.
+
 `6/X - Recreate Dataspace`
 
 Destruye y recrea el dataspace seleccionado preservando servicios comunes. Requiere escribir el nombre exacto del dataspace. Invalida conectores de nivel 4 y permite recrearlos inmediatamente si se confirma.

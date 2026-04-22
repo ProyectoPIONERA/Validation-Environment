@@ -88,6 +88,27 @@ si existe, o recrea los servicios comunes de nivel 2 en entorno local para que
 el framework vuelva a generar claves consistentes. Después ejecuta de nuevo
 nivel 3 y nivel 4.
 
+En un entorno sano no debería ser necesario recrear `common-srvs` en cada
+despliegue. Si vuelve a pasar, revisa si se ejecutó el mismo cluster desde dos
+copias distintas del framework, si se conservaron PVCs antiguos o si se copió
+`init-keys-vault.json` desde otro entorno.
+
+## Level 4 Falla con Keycloak 415
+
+Si `Level 4` falla al crear conectores con un error `415` de Keycloak durante
+el mapeo de roles del service account, revisa que estás usando una versión del
+framework que restaura `Content-Type: application/json` después de subir el
+certificado público del conector.
+
+El síntoma típico aparece justo después de:
+
+```text
+Client certificate for <connector> synchronized
+```
+
+La corrección forma parte del bootstrap de INESData y permite recrear conectores
+con certificados, scopes y roles de service account de forma reproducible.
+
 ## EDC Rechaza la Imagen por Defecto
 
 En topología `local`, Level 4 prepara automáticamente la imagen local del
@@ -182,6 +203,23 @@ de almacenamiento fallan, revisa:
 No conviene resolver este caso sustituyendo el hostname por `port-forward`,
 porque eso puede validar una ruta distinta a la que usaría el entorno local
 publicado por Ingress.
+
+## Transferencia Falla con Assets Subidos en Folder
+
+Si un asset creado desde la UI aparece en catálogo pero la transferencia no
+encuentra el objeto en MinIO/S3, comprueba si fue subido con un valor en el
+campo `Folder`.
+
+El objeto físico y el `DataAddress` del asset deben usar la misma key. Para
+uploads con folder, la key esperada es:
+
+```text
+<folder>/<file>
+```
+
+El flujo E2E `core/05-e2e-transfer-flow.spec.ts` cubre este caso porque crea un
+asset con folder, lo publica, lo descubre desde el consumidor y ejecuta
+negociación y transferencia.
 
 ## EDC+Kafka Queda en STARTED o No Consume Mensajes
 

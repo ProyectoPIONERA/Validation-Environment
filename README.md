@@ -368,6 +368,11 @@ topics y verificar mensajes desde el host.
 Durante desarrollo, usa la opción `T -> 5 - Build and Deploy Local Images` del
 menú para construir y cargar imágenes locales del adapter activo.
 
+Si la receta corresponde a un componente de `Level 5` ya desplegado, como
+`Ontology Hub` o `AI Model Hub`, el framework reinicia su deployment para que
+Kubernetes use la imagen recién cargada. Si el componente aún no existe, carga
+la imagen y deja el despliegue para `Level 5`.
+
 Scripts relevantes:
 
 ```text
@@ -409,7 +414,7 @@ El menú incluye herramientas locales:
 | `Run Framework Doctor` | Ejecuta checks del entorno local. |
 | `Recover Connectors After WSL Restart` | Recupera acceso local tras reiniciar WSL. |
 | `Cleanup Workspace` | Limpia caches y artefactos temporales. |
-| `Build and Deploy Local Images` | Construye imágenes locales. |
+| `Build and Deploy Local Images` | Construye imágenes locales y reinicia componentes desplegados cuando aplica. |
 
 El script de limpieza también puede ejecutarse manualmente:
 

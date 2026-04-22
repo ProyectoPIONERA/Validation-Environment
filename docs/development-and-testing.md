@@ -14,6 +14,30 @@ python3 -m unittest tests.test_deployer_shared_hosts_manager
 
 Para cambios UI, ejecuta la suite Playwright relevante desde `validation/ui/`.
 
+## Probar Imágenes Locales
+
+Usa `T -> 5 - Build and Deploy Local Images` cuando modifiques fuentes bajo
+`adapters/<adapter>/sources/` y quieras probarlas en el cluster local.
+
+Comportamiento esperado:
+
+- las recetas registradas construyen la imagen desde una fuente concreta;
+- las imágenes se cargan en Minikube cuando la receta lo requiere;
+- `Ontology Hub` y `AI Model Hub` reinician su deployment si ya están
+  desplegados;
+- si el deployment no existe, la imagen queda preparada y el componente debe
+  desplegarse con `Level 5`;
+- para cambios en conectores INESData, recompila el artefacto del conector
+  antes de construir la imagen cuando el cambio afecta al runtime Java.
+
+Después de cargar una imagen local, valida con una prueba focalizada antes de
+ejecutar toda la suite. Para el conector INESData, el flujo E2E recomendado es:
+
+```bash
+cd validation/ui
+UI_ADAPTER=inesdata npx playwright test core/05-e2e-transfer-flow.spec.ts --config=playwright.config.ts --workers=1
+```
+
 ## Extender Deployers
 
 La lógica compartida de deployers pertenece a:
