@@ -368,6 +368,11 @@ topics y verificar mensajes desde el host.
 Durante desarrollo, usa la opción `T -> 5 - Build and Deploy Local Images` del
 menú para construir y cargar imágenes locales del adapter activo.
 
+En topología `local`, `Level 4` de INESData prepara automáticamente
+`inesdata-connector` e `inesdata-connector-interface` desde las fuentes locales
+antes de crear los conectores. Esto evita validar con imágenes remotas antiguas
+cuando `Level 6` ejecuta flujos como Kafka o Playwright.
+
 Si la receta corresponde a un componente de `Level 5` ya desplegado, como
 `Ontology Hub` o `AI Model Hub`, el framework reinicia su deployment para que
 Kubernetes use la imagen recién cargada. Si el componente aún no existe, carga

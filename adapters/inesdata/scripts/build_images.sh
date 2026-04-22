@@ -207,25 +207,33 @@ prepare_component_artifacts() {
   local repo_dir="$2"
   local artifact_rel="${REQUIRED_ARTIFACT[$component]:-}"
   local prebuild_cmd="${PREBUILD_CMD[$component]:-}"
+  local artifact_path="$repo_dir/$artifact_rel"
+  local should_prebuild=0
 
   if [[ -z "$artifact_rel" ]]; then
     return
   fi
 
-  if artifact_exists "$repo_dir/$artifact_rel"; then
+  if ! artifact_exists "$artifact_path"; then
+    should_prebuild=1
+  elif component_has_changes "$repo_dir"; then
+    should_prebuild=1
+  fi
+
+  if [[ "$should_prebuild" -ne 1 ]]; then
     return
   fi
 
   if [[ -z "$prebuild_cmd" ]]; then
-    echo "Missing required artifact for $component: $repo_dir/$artifact_rel" >&2
+    echo "Missing required artifact for $component: $artifact_path" >&2
     exit 1
   fi
 
   echo "Preparing artifacts for $component ($artifact_rel)"
   run_cmd "cd $repo_dir && $prebuild_cmd"
 
-  if [[ "$DRY_RUN" -eq 0 ]] && ! artifact_exists "$repo_dir/$artifact_rel"; then
-    echo "Artifact still missing after prebuild for $component: $repo_dir/$artifact_rel" >&2
+  if [[ "$DRY_RUN" -eq 0 ]] && ! artifact_exists "$artifact_path"; then
+    echo "Artifact still missing after prebuild for $component: $artifact_path" >&2
     exit 1
   fi
 }

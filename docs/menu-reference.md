@@ -41,6 +41,12 @@ Despliega el runtime base del dataspace y el registration service.
 
 Despliega los conectores del adapter activo. En `inesdata`, despliega conectores INESData. En `edc`, despliega conectores EDC.
 
+En topología `local`, `inesdata` prepara automáticamente las imágenes locales de
+`inesdata-connector` e `inesdata-connector-interface` antes de crear los
+conectores, siempre que las fuentes existan bajo `adapters/inesdata/sources/`.
+Este comportamiento puede desactivarse con `INESDATA_LOCAL_IMAGES_MODE=disabled`
+o hacerse estricto con `INESDATA_LOCAL_IMAGES_MODE=required`.
+
 `5 - Level 5: Deploy Components`
 
 Despliega componentes opcionales configurados, como Ontology Hub o AI Model Hub cuando correspondan al adapter y configuración activos.

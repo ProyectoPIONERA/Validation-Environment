@@ -471,17 +471,6 @@ for key in "${load_keys[@]}"; do
   run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$full_image\""
 done
 
-if [[ "$RUN_DEPLOY" -eq 0 ]]; then
-  echo
-  echo "Deploy step skipped (--skip-deploy)."
-  exit 0
-fi
-
-if [[ ! -d "$PLATFORM_DIR" ]]; then
-  echo "Platform directory not found: $PLATFORM_DIR" >&2
-  exit 1
-fi
-
 mkdir -p "$OVERRIDES_DIR"
 
 CONNECTOR_OVERRIDE="$OVERRIDES_DIR/connector-local-overrides.yaml"
@@ -539,6 +528,17 @@ frontend:
     tag: ${IMAGE_BY_COMPONENT[public-portal-frontend]##*:}
 EOF
   fi
+fi
+
+if [[ "$RUN_DEPLOY" -eq 0 ]]; then
+  echo
+  echo "Deploy step skipped (--skip-deploy)."
+  exit 0
+fi
+
+if [[ ! -d "$PLATFORM_DIR" ]]; then
+  echo "Platform directory not found: $PLATFORM_DIR" >&2
+  exit 1
 fi
 
 echo

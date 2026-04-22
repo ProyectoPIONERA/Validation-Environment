@@ -715,6 +715,77 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
             self.assertEqual(infra.host_entries, [])
 
+    def test_deploy_connectors_prepares_local_images_before_creating_connectors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            class LocalImagesConfig(ConnectorRetryConfig):
+                def script_dir(self):
+                    return self.root
+
+            config = LocalImagesConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "adapters", "inesdata", "scripts"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "adapters", "inesdata", "sources", "inesdata-connector"), exist_ok=True)
+            os.makedirs(
+                os.path.join(tmpdir, "adapters", "inesdata", "sources", "inesdata-connector-interface"),
+                exist_ok=True,
+            )
+            script_path = os.path.join(tmpdir, "adapters", "inesdata", "scripts", "local_build_load_deploy.sh")
+            open(script_path, "w", encoding="utf-8").close()
+            events = []
+
+            class Infra:
+                def __init__(self):
+                    self.host_entries = None
+
+                def manage_hosts_entries(self, entries):
+                    self.host_entries = entries
+                    return None
+
+            def fake_run(cmd, **_kwargs):
+                if "local_build_load_deploy.sh" in cmd:
+                    events.append(("prepare-images", cmd))
+                return object()
+
+            infra = Infra()
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo"],
+                }
+            ]
+            adapter.connector_already_exists = lambda *_args, **_kwargs: False
+            adapter.wait_for_all_connectors = mock.Mock()
+
+            def create_connector(connector, _connectors):
+                events.append(("create-connector", connector))
+                with open(config.connector_values_file(connector), "w", encoding="utf-8") as handle:
+                    handle.write("hostAliases: []\n")
+                return True
+
+            adapter.create_connector = mock.Mock(side_effect=create_connector)
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, ["conn-a-demo"])
+            self.assertEqual(events[0][0], "prepare-images")
+            self.assertEqual(events[1], ("create-connector", "conn-a-demo"))
+            self.assertIn("--deploy-target connectors", events[0][1])
+            self.assertIn("--skip-deploy", events[0][1])
+            adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+
     def test_deploy_connectors_aborts_after_failed_recreation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -762,7 +833,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.wait_for_all_connectors.assert_not_called()
             self.assertIsNone(infra.host_entries)
 
-    def test_create_connector_ignores_detected_local_image_override_during_initial_deploy(self):
+    def test_create_connector_uses_detected_local_image_override_during_initial_deploy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             os.makedirs(config.repo_dir(), exist_ok=True)
@@ -842,7 +913,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             args, kwargs = infra.deploy_calls[0]
             self.assertEqual(args[0], "conn-a-demo-demo")
             self.assertEqual(args[1], "demo")
-            self.assertEqual(args[2], ["values-conn-a-demo.yaml"])
+            self.assertEqual(args[2], ["values-conn-a-demo.yaml", override_path])
             self.assertEqual(kwargs["cwd"], config.connector_dir())
 
     def test_setup_minio_bucket_fails_when_admin_alias_cannot_be_configured(self):

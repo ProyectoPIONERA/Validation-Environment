@@ -21,14 +21,25 @@ Usa `T -> 5 - Build and Deploy Local Images` cuando modifiques fuentes bajo
 
 Comportamiento esperado:
 
+- en `Level 4 local`, INESData prepara automáticamente `inesdata-connector` e
+  `inesdata-connector-interface` antes de crear conectores;
 - las recetas registradas construyen la imagen desde una fuente concreta;
 - las imágenes se cargan en Minikube cuando la receta lo requiere;
 - `Ontology Hub` y `AI Model Hub` reinician su deployment si ya están
   desplegados;
 - si el deployment no existe, la imagen queda preparada y el componente debe
   desplegarse con `Level 5`;
-- para cambios en conectores INESData, recompila el artefacto del conector
-  antes de construir la imagen cuando el cambio afecta al runtime Java.
+- para cambios en conectores INESData, el script de build recompila el runtime
+  Java cuando falta el artefacto o detecta cambios locales.
+
+Modos disponibles para `Level 4 local`:
+
+- `INESDATA_LOCAL_IMAGES_MODE=auto`: valor por defecto; usa fuentes locales si
+  existen y omite el paso si faltan.
+- `INESDATA_LOCAL_IMAGES_MODE=required`: falla si no puede preparar las imágenes
+  locales.
+- `INESDATA_LOCAL_IMAGES_MODE=disabled`: usa las imágenes configuradas en los
+  valores Helm.
 
 Después de cargar una imagen local, valida con una prueba focalizada antes de
 ejecutar toda la suite. Para el conector INESData, el flujo E2E recomendado es:

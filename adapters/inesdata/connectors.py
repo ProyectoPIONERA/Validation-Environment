@@ -522,6 +522,94 @@ class INESDataConnectorsAdapter:
             return override_path
         return None
 
+    def _framework_root_dir(self):
+        resolver = getattr(self.config, "script_dir", None)
+        if callable(resolver):
+            return resolver()
+        repo_resolver = getattr(self.config, "repo_dir", None)
+        if callable(repo_resolver):
+            return os.path.abspath(repo_resolver())
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _level4_local_images_mode(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        raw_value = (
+            os.environ.get("PIONERA_INESDATA_LOCAL_IMAGES_MODE")
+            or os.environ.get("INESDATA_LOCAL_IMAGES_MODE")
+            or deployer_config.get("INESDATA_LOCAL_IMAGES_MODE")
+            or deployer_config.get("LEVEL4_INESDATA_LOCAL_IMAGES_MODE")
+            or deployer_config.get("LEVEL4_LOCAL_IMAGES_MODE")
+            or "auto"
+        )
+        mode = str(raw_value or "auto").strip().lower()
+        if mode in {"0", "false", "no", "off", "disabled", "disable"}:
+            return "disabled"
+        if mode in {"1", "true", "yes", "on", "auto", ""}:
+            return "auto"
+        if mode in {"required", "require", "strict"}:
+            return "required"
+        print(f"Unknown INESData local images mode '{raw_value}'. Falling back to auto.")
+        return "auto"
+
+    def _maybe_prepare_level4_local_connector_images(self, namespace):
+        mode = self._level4_local_images_mode()
+        if mode == "disabled":
+            print("Level 4 local INESData connector images disabled by configuration.")
+            return True
+
+        root_dir = self._framework_root_dir()
+        adapter_dir = os.path.join(root_dir, "adapters", "inesdata")
+        script_path = os.path.join(adapter_dir, "scripts", "local_build_load_deploy.sh")
+        source_dirs = [
+            os.path.join(adapter_dir, "sources", "inesdata-connector"),
+            os.path.join(adapter_dir, "sources", "inesdata-connector-interface"),
+        ]
+        missing_sources = [path for path in source_dirs if not os.path.isdir(path)]
+
+        if missing_sources:
+            detail = ", ".join(os.path.relpath(path, root_dir) for path in missing_sources)
+            if mode == "required":
+                print(f"Required INESData local connector sources are missing: {detail}")
+                return False
+            print(f"Skipping Level 4 local connector image preparation; missing sources: {detail}")
+            return True
+
+        if not os.path.isfile(script_path):
+            detail = os.path.relpath(script_path, root_dir)
+            if mode == "required":
+                print(f"Required INESData local image workflow script is missing: {detail}")
+                return False
+            print(f"Skipping Level 4 local connector image preparation; missing script: {detail}")
+            return True
+
+        platform_dir = self.config.repo_dir()
+        command = " ".join(
+            shlex.quote(part)
+            for part in [
+                "bash",
+                script_path,
+                "--apply",
+                "--platform-dir",
+                platform_dir,
+                "--namespace",
+                namespace,
+                "--deploy-target",
+                "connectors",
+                "--skip-deploy",
+            ]
+        )
+
+        print("\nPreparing local INESData connector images for Level 4...")
+        print("This builds and loads inesdata-connector and inesdata-connector-interface before Helm deploy.")
+        result = self.run(command, check=False)
+        if result is None:
+            print("Error preparing local INESData connector images for Level 4.")
+            return False
+        return True
+
     def get_deployed_connectors(self, namespace):
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not result:
@@ -1391,6 +1479,10 @@ class INESDataConnectorsAdapter:
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
         values_files = [os.path.basename(values_file)]
+        local_image_override = self._local_connector_image_override_path()
+        if local_image_override:
+            values_files.append(local_image_override)
+            print(f"Using local connector image overrides: {local_image_override}")
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
@@ -1585,6 +1677,10 @@ class INESDataConnectorsAdapter:
         dataspaces = self.load_dataspace_connectors()
         if not dataspaces:
             print("No dataspaces defined in deployer.config")
+            return []
+
+        first_namespace = dataspaces[0].get("namespace") or self.config.namespace_demo()
+        if not self._maybe_prepare_level4_local_connector_images(first_namespace):
             return []
 
         all_connectors = set()

@@ -109,6 +109,27 @@ Client certificate for <connector> synchronized
 La corrección forma parte del bootstrap de INESData y permite recrear conectores
 con certificados, scopes y roles de service account de forma reproducible.
 
+## Kafka Transfer Queda Omitido por Imagen INESData Antigua
+
+Si `Level 6` muestra `SKIP Kafka transfer` con razón
+`kafka_dataaddress_not_supported`, Kafka no necesariamente ha fallado. Ese
+resultado indica que el broker y los logins funcionaron, pero el runtime del
+conector rechazó assets con `DataAddress.type=Kafka`.
+
+Comprueba la imagen desplegada:
+
+```bash
+kubectl get deploy -n demo -o wide
+```
+
+En local, `Level 4` debe preparar y desplegar una imagen local de
+`inesdata-connector` compatible con Kafka. Si ves una imagen remota antigua,
+vuelve a ejecutar `Level 4` o fuerza el comportamiento estricto:
+
+```bash
+INESDATA_LOCAL_IMAGES_MODE=required python3 main.py inesdata deploy --topology local
+```
+
 ## EDC Rechaza la Imagen por Defecto
 
 En topología `local`, Level 4 prepara automáticamente la imagen local del
