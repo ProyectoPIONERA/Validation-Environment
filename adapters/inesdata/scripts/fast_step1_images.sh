@@ -15,6 +15,8 @@ MANIFEST_FILE="${MANIFESTS_DIR:-/tmp/inesdata-manifests}/images-fast-step1.tsv"
 COMPONENTS_CSV=""
 REFRESH_RUNTIME=0
 SKIP_MINIKUBE_LOAD=0
+GRADLE_MAX_WORKERS="${GRADLE_MAX_WORKERS:-1}"
+GRADLE_COMMON_ARGS="${GRADLE_COMMON_ARGS:---no-daemon --no-parallel -Dorg.gradle.workers.max=$GRADLE_MAX_WORKERS}"
 
 COMPONENT_KEYS=(
   connector
@@ -146,9 +148,9 @@ declare -A REQUIRED_ARTIFACT=(
   ["registration-service"]="build/libs/*.jar"
 )
 
-declare -A PREBUILD_CMD=(
-  ["connector"]="./gradlew launchers:connector:build -x test"
-  ["registration-service"]="./gradlew bootJar -x test"
+declare -A PREBUILD_ARGS=(
+  ["connector"]="launchers:connector:build -x test"
+  ["registration-service"]="bootJar -x test"
 )
 
 is_component_key() {
@@ -189,7 +191,8 @@ prepare_component_artifacts() {
   local component="$1"
   local repo_dir="$2"
   local artifact_rel="${REQUIRED_ARTIFACT[$component]:-}"
-  local prebuild_cmd="${PREBUILD_CMD[$component]:-}"
+  local prebuild_args="${PREBUILD_ARGS[$component]:-}"
+  local gradle_user_home="$repo_dir/.gradle-user-home"
 
   if [[ -z "$artifact_rel" ]]; then
     return
@@ -199,13 +202,17 @@ prepare_component_artifacts() {
     return
   fi
 
-  if [[ -z "$prebuild_cmd" ]]; then
+  if [[ -z "$prebuild_args" ]]; then
     echo "Missing required artifact for $component: $repo_dir/$artifact_rel" >&2
     exit 1
   fi
 
   echo "Preparing artifacts for $component"
-  (cd "$repo_dir" && eval "$prebuild_cmd")
+  mkdir -p "$gradle_user_home"
+  if [[ -f "$repo_dir/gradlew" && ! -x "$repo_dir/gradlew" ]]; then
+    chmod +x "$repo_dir/gradlew"
+  fi
+  (cd "$repo_dir" && GRADLE_USER_HOME="$gradle_user_home" ./gradlew $GRADLE_COMMON_ARGS $prebuild_args)
 
   if ! artifact_exists "$repo_dir/$artifact_rel"; then
     echo "Artifact still missing after prebuild for $component: $repo_dir/$artifact_rel" >&2

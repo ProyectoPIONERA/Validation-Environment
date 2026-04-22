@@ -11,6 +11,8 @@ MANIFEST_FILE_OVERRIDE=""
 APPEND_MANIFEST=0
 REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
 REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-inesdata}"
+GRADLE_MAX_WORKERS="${GRADLE_MAX_WORKERS:-1}"
+GRADLE_COMMON_ARGS="${GRADLE_COMMON_ARGS:---no-daemon --no-parallel -Dorg.gradle.workers.max=$GRADLE_MAX_WORKERS}"
 
 usage() {
   cat <<'EOF'
@@ -30,6 +32,8 @@ Environment variables:
   REGISTRY_HOST
   REGISTRY_NAMESPACE
   MANIFESTS_DIR (default: /tmp/inesdata-manifests)
+  GRADLE_MAX_WORKERS (default: 1)
+  GRADLE_COMMON_ARGS (default: --no-daemon --no-parallel -Dorg.gradle.workers.max=<GRADLE_MAX_WORKERS>)
 
 Component keys:
   connector
@@ -165,9 +169,9 @@ declare -A REQUIRED_ARTIFACT=(
   ["registration-service"]="build/libs/*.jar"
 )
 
-declare -A PREBUILD_CMD=(
-  ["connector"]="./gradlew launchers:connector:build -x test"
-  ["registration-service"]="./gradlew bootJar -x test"
+declare -A PREBUILD_ARGS=(
+  ["connector"]="launchers:connector:build -x test"
+  ["registration-service"]="bootJar -x test"
 )
 
 run_cmd() {
@@ -206,8 +210,9 @@ prepare_component_artifacts() {
   local component="$1"
   local repo_dir="$2"
   local artifact_rel="${REQUIRED_ARTIFACT[$component]:-}"
-  local prebuild_cmd="${PREBUILD_CMD[$component]:-}"
+  local prebuild_args="${PREBUILD_ARGS[$component]:-}"
   local artifact_path="$repo_dir/$artifact_rel"
+  local gradle_user_home="$repo_dir/.gradle-user-home"
   local should_prebuild=0
 
   if [[ -z "$artifact_rel" ]]; then
@@ -224,13 +229,17 @@ prepare_component_artifacts() {
     return
   fi
 
-  if [[ -z "$prebuild_cmd" ]]; then
+  if [[ -z "$prebuild_args" ]]; then
     echo "Missing required artifact for $component: $artifact_path" >&2
     exit 1
   fi
 
   echo "Preparing artifacts for $component ($artifact_rel)"
-  run_cmd "cd $repo_dir && $prebuild_cmd"
+  run_cmd "mkdir -p \"$gradle_user_home\""
+  if [[ -f "$repo_dir/gradlew" && ! -x "$repo_dir/gradlew" ]]; then
+    run_cmd "chmod +x \"$repo_dir/gradlew\""
+  fi
+  run_cmd "cd \"$repo_dir\" && GRADLE_USER_HOME=\"$gradle_user_home\" ./gradlew $GRADLE_COMMON_ARGS $prebuild_args"
 
   if [[ "$DRY_RUN" -eq 0 ]] && ! artifact_exists "$artifact_path"; then
     echo "Artifact still missing after prebuild for $component: $artifact_path" >&2
@@ -244,6 +253,7 @@ echo "Mode: $([[ "$DRY_RUN" -eq 1 ]] && echo "dry-run" || echo "apply")"
 echo "Registry host: $REGISTRY_HOST"
 echo "Registry namespace: $REGISTRY_NAMESPACE"
 echo "Target: $TARGET"
+echo "Gradle args: $GRADLE_COMMON_ARGS"
 
 if [[ "$TARGET" == "TODO" ]]; then
   selected_components=("${ALL_COMPONENTS[@]}")

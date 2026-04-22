@@ -130,6 +130,27 @@ vuelve a ejecutar `Level 4` o fuerza el comportamiento estricto:
 INESDATA_LOCAL_IMAGES_MODE=required python3 main.py inesdata deploy --topology local
 ```
 
+## Level 4 Falla Preparando Imágenes INESData
+
+En topología `local`, `Level 4` recompila `inesdata-connector` e
+`inesdata-connector-interface` antes de crear los conectores. Si el log falla
+en `Preparing artifacts for connector` con un error de `Gradle Worker Daemon`,
+el problema está en el build local previo al despliegue, no en Helm ni en
+Kubernetes.
+
+El framework ejecuta Gradle de forma conservadora por defecto:
+
+```text
+--no-daemon --no-parallel -Dorg.gradle.workers.max=1
+```
+
+Si una máquina de desarrollo tiene más recursos y se quiere acelerar el build,
+puede sobreescribirse con:
+
+```bash
+GRADLE_MAX_WORKERS=2 python3 main.py menu
+```
+
 ## EDC Rechaza la Imagen por Defecto
 
 En topología `local`, Level 4 prepara automáticamente la imagen local del
