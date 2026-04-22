@@ -142,6 +142,17 @@ class FakeAdapter:
     connectors = FakeConnectors()
 
 
+class RecordingCleanupSession(FakeCleanupSession):
+    def __init__(self):
+        super().__init__()
+        self.token_urls = []
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if "openid-connect/token" in url:
+            self.token_urls.append(url)
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
 class FakeMinioObject:
     def __init__(self, object_name):
         self.object_name = object_name
@@ -255,6 +266,26 @@ class TestDataCleanupTests(unittest.TestCase):
         self.assertEqual(session.entities["assets"], [{"@id": "manual-asset"}])
         self.assertEqual(report["connectors"][0]["skipped_counts"]["assets"], 0)
         self.assertEqual(report["connectors"][0]["unplanned_counts"]["assets"], 1)
+
+    def test_token_request_uses_configured_keycloak_hostname(self):
+        session = RecordingCleanupSession()
+        context = fake_context()
+        context.config["KC_INTERNAL_URL"] = "http://keycloak.dev.ed.dataspaceunit.upm"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cleaner = ManagementApiTestDataCleaner(
+                adapter=FakeAdapter(),
+                context=context,
+                connectors=["conn-a"],
+                experiment_dir=tmpdir,
+                mode="safe",
+                session=session,
+            )
+            report = cleaner.run()
+
+        self.assertEqual(report["status"], "completed")
+        self.assertTrue(session.token_urls)
+        self.assertTrue(session.token_urls[0].startswith("http://keycloak.dev.ed.dataspaceunit.upm/"))
 
     def test_dry_run_builds_plan_without_deleting(self):
         session = FakeCleanupSession()

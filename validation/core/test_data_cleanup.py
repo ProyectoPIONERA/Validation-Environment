@@ -540,34 +540,56 @@ class ManagementApiTestDataCleaner:
         if not username or not password:
             raise RuntimeError(f"Missing connector_user credentials for {connector}")
 
-        keycloak_url = normalize_base_url(
-            self.config.get("KC_INTERNAL_URL")
-            or self.config.get("KC_URL")
-            or self.config.get("KEYCLOAK_HOSTNAME")
-        )
-        if not keycloak_url:
+        keycloak_urls = self._keycloak_token_base_urls()
+        if not keycloak_urls:
             raise RuntimeError("Missing KC_INTERNAL_URL/KC_URL/KEYCLOAK_HOSTNAME in deployer config")
         if not self.dataspace:
             raise RuntimeError("Missing dataspace name for test data cleanup")
 
-        response = self.session.post(
-            f"{keycloak_url}/realms/{self.dataspace}/protocol/openid-connect/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "password",
-                "client_id": self.config.get("EDC_DASHBOARD_PROXY_CLIENT_ID") or "dataspace-users",
-                "username": username,
-                "password": password,
-                "scope": self.config.get("EDC_DASHBOARD_PROXY_SCOPE") or "openid profile email",
-            },
-            timeout=30,
-        )
-        self._assert_status(response, {200}, f"Token request for {connector}")
-        body = self._json_body(response, f"Token request for {connector}")
-        token = body.get("access_token") if isinstance(body, dict) else None
-        if not token:
-            raise RuntimeError(f"Token request for {connector} did not return access_token")
-        return str(token)
+        last_error = None
+        for keycloak_url in keycloak_urls:
+            token_url = f"{keycloak_url}/realms/{self.dataspace}/protocol/openid-connect/token"
+            try:
+                response = self.session.post(
+                    token_url,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    data={
+                        "grant_type": "password",
+                        "client_id": self.config.get("EDC_DASHBOARD_PROXY_CLIENT_ID") or "dataspace-users",
+                        "username": username,
+                        "password": password,
+                        "scope": self.config.get("EDC_DASHBOARD_PROXY_SCOPE") or "openid profile email",
+                    },
+                    timeout=30,
+                )
+                self._assert_status(response, {200}, f"Token request for {connector}")
+                body = self._json_body(response, f"Token request for {connector}")
+                token = body.get("access_token") if isinstance(body, dict) else None
+                if token:
+                    return str(token)
+                last_error = f"Token request for {connector} did not return access_token"
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+
+        raise RuntimeError(f"Token request for {connector} failed: {last_error}")
+
+    def _keycloak_token_base_urls(self) -> list[str]:
+        candidates = []
+        for key in ("KC_INTERNAL_URL", "KC_URL", "KEYCLOAK_HOSTNAME"):
+            value = self.config.get(key)
+            if value:
+                candidates.append(value)
+
+        urls = []
+        seen = set()
+        for candidate in candidates:
+            normalized = normalize_base_url(candidate)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            urls.append(normalized)
+        return urls
 
     def _load_connector_credentials(self, connector: str) -> dict[str, Any]:
         credentials_loader = self._resolve_callable(
