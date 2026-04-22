@@ -1215,7 +1215,8 @@ class INESDataConnectorsAdapter:
                 user_info = self.run_silent(
                     f"{mc} mc admin user info minio {shlex.quote(connector_name)}"
                 )
-                if not user_info or policy_name not in user_info:
+                policy_already_attached = bool(user_info and policy_name in user_info)
+                if not policy_already_attached:
                     self.run(
                         f"{mc} mc admin policy attach minio {shlex.quote(policy_name)} "
                         f"--user {shlex.quote(connector_name)}",
@@ -1229,7 +1230,10 @@ class INESDataConnectorsAdapter:
                     f"{mc} mc admin user info minio {shlex.quote(connector_name)}"
                 )
                 if result and policy_name in result:
-                    print(f"MinIO policy '{policy_name}' attached to '{connector_name}'")
+                    if policy_already_attached:
+                        print(f"MinIO policy '{policy_name}' already attached to '{connector_name}'")
+                    else:
+                        print(f"MinIO policy '{policy_name}' attached to '{connector_name}'")
                 else:
                     print(f"MinIO policy attach could not be verified for '{connector_name}'")
                     return False
@@ -1274,7 +1278,7 @@ class INESDataConnectorsAdapter:
 
         user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
         if user_info and policy_name in user_info:
-            print(f"  MinIO policy '{policy_name}' already present on '{connector_name}'")
+            print(f"  MinIO policy '{policy_name}' already attached to '{connector_name}'")
             return True
 
         policy_file_path = os.path.join(
@@ -1312,7 +1316,8 @@ class INESDataConnectorsAdapter:
                 silent=True,
             )
             user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
-            if not user_info or policy_name not in user_info:
+            policy_already_attached = bool(user_info and policy_name in user_info)
+            if not policy_already_attached:
                 self.run(
                     f"{mc} mc admin policy attach minio {shlex.quote(policy_name)} "
                     f"--user {shlex.quote(connector_name)}",
@@ -1323,7 +1328,10 @@ class INESDataConnectorsAdapter:
 
             user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
             if user_info and policy_name in user_info:
-                print(f"  MinIO policy '{policy_name}' re-attached to '{connector_name}'")
+                if policy_already_attached:
+                    print(f"  MinIO policy '{policy_name}' already attached to '{connector_name}'")
+                else:
+                    print(f"  MinIO policy '{policy_name}' attached to '{connector_name}'")
                 return True
 
             print(f"  Warning: policy attach could not be verified for '{connector_name}'")

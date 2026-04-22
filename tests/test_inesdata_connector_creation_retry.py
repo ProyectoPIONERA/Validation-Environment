@@ -1012,6 +1012,60 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertTrue(all(kwargs.get("silent") for kwargs in policy_calls))
             self.assertTrue(all(kwargs.get("check") is False for kwargs in policy_calls))
 
+    def test_setup_minio_bucket_reports_already_attached_policy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            creds_path = config.connector_credentials_path("conn-a-demo")
+            with open(creds_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '{"minio":{"passwd":"connector-pass","access_key":"access","secret_key":"secret"}}'
+                )
+
+            policy_dir = os.path.join(tmpdir, "deployments", "DEV", "demo")
+            os.makedirs(policy_dir, exist_ok=True)
+            with open(os.path.join(policy_dir, "policy-demo-conn-a-demo.json"), "w", encoding="utf-8") as handle:
+                handle.write('{"Version":"2012-10-17","Statement":[]}')
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append((cmd, kwargs))
+                return "" if kwargs.get("capture") else object()
+
+            def fake_run_silent(cmd, **_kwargs):
+                if "mc admin user svcacct list" in cmd:
+                    return "access"
+                if "mc admin user info" in cmd:
+                    return "policy-demo-conn-a-demo"
+                return ""
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=fake_run_silent,
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=type(
+                    "Infra",
+                    (),
+                    {
+                        "get_pod_by_name": staticmethod(lambda *_args, **_kwargs: "minio-pod"),
+                    },
+                )(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                configured = adapter.setup_minio_bucket("common-srvs", "demo", "conn-a-demo", creds_path)
+
+            self.assertTrue(configured)
+            self.assertIn(
+                "MinIO policy 'policy-demo-conn-a-demo' already attached to 'conn-a-demo'",
+                output.getvalue(),
+            )
+            self.assertFalse(any("mc admin policy attach" in cmd for cmd, _kwargs in calls))
+
     def test_create_connector_aborts_when_minio_configuration_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
