@@ -820,6 +820,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
     # Create default realm roles
     create_role(keycloak_admin, 'connector-user')
     create_role(keycloak_admin, 'connector-admin')
+    create_role(keycloak_admin, 'connector-management')
     create_role(keycloak_admin, 'dataspace-admin')
 
     # Create manager realm group
@@ -931,7 +932,9 @@ def create_manager_group(keycloak_admin, realm_name):
 
 def create_client(keycloak_admin, dataspace, client_name, environment):
     clients = keycloak_admin.get_clients()
-    if not any(client['clientId'] == client_name for client in clients):
+    client = next((client for client in clients if client['clientId'] == client_name), None)
+    default_scopes = ["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "roles"]
+    if client is None:
         new_client = {
             "clientId": client_name,
             "name": client_name,
@@ -948,24 +951,78 @@ def create_client(keycloak_admin, dataspace, client_name, environment):
                 "frontchannel.logout": True,
                 "backchannel.logout.session.required": True
             },
-            "defaultClientScopes":["dataspaceunit-dataspace-audience","dataspaceunit-nbf-claim", "profile", "email", "acr"]
+            "defaultClientScopes": default_scopes
         }
         client_id = keycloak_admin.create_client(payload=new_client)
         click.echo(f"    + Client {client_name} created with ID {client_id}.")
-
-        # Setting client credentials manually using a certificate
-        import os
-        cert_path = os.path.join(os.path.dirname(__file__), 'deployments', environment, dataspace, 'certs', f'{client_name}-public.crt')
-        with open(cert_path, 'rb') as f:
-            cert_data = f.read()
-        try:
-            keycloak_admin.upload_certificate(client_id=client_id, certcont=cert_data)
-        except KeycloakPostError as e:
-            click.echo(f"Error uploading certificate {e}")
-
-        click.echo(f"    + Client secret for {client_name} set from {client_name}-public.crt.")
     else:
+        client_id = client['id']
         click.echo(f"    + Client {client_name} already exists.")
+        ensure_client_service_account_enabled(keycloak_admin, client_id, client)
+
+    # Keep existing clients reproducible when connector certificates are regenerated.
+    import os
+    cert_path = os.path.join(os.path.dirname(__file__), 'deployments', environment, dataspace, 'certs', f'{client_name}-public.crt')
+    with open(cert_path, 'rb') as f:
+        cert_data = f.read()
+    try:
+        keycloak_admin.upload_certificate(client_id=client_id, certcont=cert_data)
+        click.echo(f"    + Client certificate for {client_name} synchronized from {client_name}-public.crt.")
+    except KeycloakPostError as e:
+        click.echo(f"Error uploading certificate {e}")
+
+    ensure_client_default_scopes(keycloak_admin, client_id, default_scopes)
+    ensure_client_service_account_roles(keycloak_admin, client_id, [client_name, "connector-user"])
+
+
+def ensure_client_service_account_enabled(keycloak_admin, client_id, client):
+    if client.get("serviceAccountsEnabled"):
+        return
+    payload = dict(client)
+    payload["serviceAccountsEnabled"] = True
+    keycloak_admin.update_client(client_id=client_id, payload=payload)
+    click.echo("    + Client service account enabled.")
+
+
+def ensure_client_default_scopes(keycloak_admin, client_id, expected_scope_names):
+    current_scopes = keycloak_admin.get_client_default_client_scopes(client_id)
+    current_names = {scope.get("name") for scope in current_scopes}
+    all_scopes = {scope.get("name"): scope for scope in keycloak_admin.get_client_scopes()}
+
+    for scope_name in expected_scope_names:
+        if scope_name in current_names:
+            continue
+        scope = all_scopes.get(scope_name)
+        if not scope:
+            click.echo(f"    - Client scope {scope_name} not found. Skipping.")
+            continue
+        keycloak_admin.add_client_default_client_scope(
+            client_id=client_id,
+            client_scope_id=scope["id"],
+            payload={},
+        )
+        click.echo(f"    + Client default scope {scope_name} mapped.")
+
+
+def ensure_client_service_account_roles(keycloak_admin, client_id, role_names):
+    service_account = keycloak_admin.get_client_service_account_user(client_id)
+    current_roles = keycloak_admin.get_realm_roles_of_user(service_account["id"])
+    current_role_names = {role.get("name") for role in current_roles}
+    roles_to_assign = []
+
+    for role_name in role_names:
+        if role_name in current_role_names:
+            continue
+        roles_to_assign.append(keycloak_admin.get_realm_role(role_name))
+
+    if roles_to_assign:
+        keycloak_admin.assign_realm_roles(user_id=service_account["id"], roles=roles_to_assign)
+        click.echo(
+            "    + Client service account realm roles mapped: "
+            + ", ".join(role["name"] for role in roles_to_assign)
+        )
+    else:
+        click.echo("    + Client service account realm roles already mapped.")
 
 def create_realm_user(keycloak_admin, realm, dataspace, environment):
     click.echo(f"    + Creating realm user {realm} ............")
