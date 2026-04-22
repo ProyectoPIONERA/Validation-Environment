@@ -61,6 +61,7 @@ class LocalImageRecipe:
     context_rel_path: str = ""
     build_args: tuple[tuple[str, str], ...] = ()
     loads_minikube: bool = False
+    restart_deployment_template: str = ""
     description: str = ""
 
 
@@ -633,6 +634,7 @@ def _local_image_recipe_catalog() -> list[LocalImageRecipe]:
                 ("REPO_NAME", "Ontology-Hub-Scripts"),
                 ("REPO_PATRONES", "https://github.com/oeg-upm/GrOwEr.git"),
             ),
+            restart_deployment_template="{dataspace}-ontology-hub",
             description="Builds the Level 5 Ontology Hub component image.",
         ),
         LocalImageRecipe(
@@ -650,6 +652,7 @@ def _local_image_recipe_catalog() -> list[LocalImageRecipe]:
                 "Dockerfile",
             ),
             context_rel_path=os.path.join("adapters", "inesdata", "sources", "AIModelHub", "DataDashboard"),
+            restart_deployment_template="{dataspace}-ai-model-hub",
             description="Builds the Level 5 AI Model Hub dashboard image.",
         ),
         LocalImageRecipe(
@@ -774,6 +777,57 @@ def _minikube_profile_for_local_images(active_adapter: str) -> str:
     return (config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
 
 
+def _dataspace_context_for_local_images(active_adapter: str) -> dict[str, str]:
+    config_path = os.path.join(project_root(), "deployers", active_adapter, "deployer.config")
+    config = _read_key_value_config(config_path)
+    dataspace = (
+        config.get("DS_1_NAME")
+        or config.get("DS_NAME")
+        or config.get("DATASPACE_NAME")
+        or "demo"
+    ).strip() or "demo"
+    namespace = (
+        config.get("DS_1_NAMESPACE")
+        or config.get("NAMESPACE")
+        or dataspace
+    ).strip() or dataspace
+    return {"dataspace": dataspace, "namespace": namespace}
+
+
+def _restart_registered_recipe_deployment_if_running(recipe: LocalImageRecipe) -> None:
+    if not recipe.restart_deployment_template:
+        return
+
+    context = _dataspace_context_for_local_images(recipe.adapter)
+    deployment_name = recipe.restart_deployment_template.format(**context)
+    namespace = context["namespace"]
+
+    return_code, _ = _run_command_capture(["kubectl", "get", "deployment", deployment_name, "-n", namespace])
+    if return_code != 0:
+        print(
+            f"\nNo running deployment found for {recipe.key} ({deployment_name} in namespace {namespace}). "
+            "Run Level 5 after loading the image if this component is not deployed yet.\n"
+        )
+        return
+
+    print(f"\nRestarting deployment/{deployment_name} in namespace {namespace} to pick up {recipe.image_ref}...")
+    if not _run_command_interactive(["kubectl", "rollout", "restart", f"deployment/{deployment_name}", "-n", namespace]):
+        print(f"\nWarning: could not restart deployment/{deployment_name}.\n")
+        return
+
+    _run_command_interactive(
+        [
+            "kubectl",
+            "rollout",
+            "status",
+            f"deployment/{deployment_name}",
+            "-n",
+            namespace,
+            "--timeout=10m",
+        ]
+    )
+
+
 def _run_command_interactive(command, cwd=None, env=None) -> bool:
     print(f"\nLaunching: {' '.join(command)}\n")
     result = subprocess.run(command, cwd=cwd or project_root(), env=env)
@@ -834,6 +888,8 @@ def _execute_registered_local_image_recipe(recipe: LocalImageRecipe, platform_di
         if not _run_command_interactive(load_command, cwd=root_dir):
             print("\nImage load failed. Check logs above.\n")
             return False
+
+    _restart_registered_recipe_deployment_if_running(recipe)
 
     print("\nRegistered local image workflow completed successfully.\n")
     return True

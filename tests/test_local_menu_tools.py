@@ -141,6 +141,57 @@ class LocalMenuToolsTests(unittest.TestCase):
             ["minikube", "-p", "dev", "image", "load", "demo/image:local"],
         )
 
+    def test_execute_registered_local_image_recipe_restarts_component_deployment_when_running(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_dir = os.path.join(tmpdir, "sources", "ontology")
+            os.makedirs(source_dir, exist_ok=True)
+            dockerfile = os.path.join(source_dir, "Dockerfile")
+            with open(dockerfile, "w", encoding="utf-8") as handle:
+                handle.write("FROM scratch\n")
+
+            config_dir = os.path.join(tmpdir, "deployers", "inesdata")
+            os.makedirs(config_dir, exist_ok=True)
+            with open(os.path.join(config_dir, "deployer.config"), "w", encoding="utf-8") as handle:
+                handle.write("DS_1_NAME=demo\nDS_1_NAMESPACE=demo\n")
+
+            recipe = local_menu_tools.LocalImageRecipe(
+                key="inesdata/ontology-hub",
+                adapter="inesdata",
+                label="Ontology Hub",
+                source_rel_path=os.path.join("sources", "ontology"),
+                image_ref="ontology-hub:local",
+                dockerfile_rel_path=os.path.join("sources", "ontology", "Dockerfile"),
+                context_rel_path=os.path.join("sources", "ontology"),
+                restart_deployment_template="{dataspace}-ontology-hub",
+            )
+
+            with (
+                mock.patch.object(local_menu_tools, "project_root", return_value=tmpdir),
+                mock.patch.object(local_menu_tools, "_minikube_profile_for_local_images", return_value="dev"),
+                mock.patch.object(local_menu_tools, "_run_command_capture", return_value=(0, "deployment/demo-ontology-hub")) as capture,
+                mock.patch.object(local_menu_tools.subprocess, "run") as run,
+            ):
+                run.return_value = mock.Mock(returncode=0)
+
+                result = local_menu_tools._execute_registered_local_image_recipe(recipe)
+
+        self.assertTrue(result)
+        capture.assert_called_once_with(["kubectl", "get", "deployment", "demo-ontology-hub", "-n", "demo"])
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn(["kubectl", "rollout", "restart", "deployment/demo-ontology-hub", "-n", "demo"], commands)
+        self.assertIn(
+            [
+                "kubectl",
+                "rollout",
+                "status",
+                "deployment/demo-ontology-hub",
+                "-n",
+                "demo",
+                "--timeout=10m",
+            ],
+            commands,
+        )
+
     def test_execute_registered_local_image_recipe_passes_minikube_profile_to_edc_scripts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             script_dir = os.path.join(tmpdir, "adapters", "edc", "scripts")

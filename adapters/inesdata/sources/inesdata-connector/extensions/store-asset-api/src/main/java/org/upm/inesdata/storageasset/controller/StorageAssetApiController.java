@@ -71,15 +71,7 @@ public class StorageAssetApiController implements StorageAssetApi {
     Asset asset = transformerRegistry.transform(expand, Asset.class).orElseThrow(InvalidRequestException::new);
 
     String fileName = contentDisposition.split("filename=")[1].replace("\"", "");
-    String folder = String.valueOf(asset.getDataAddress().getProperties().get(CoreConstants.EDC_NAMESPACE + "folder"));
-
-    // Construct the S3 key for the file, keeping the folder structure
-    String fullKey;
-    if (folder == null || folder.trim().isEmpty() || "null".equals(folder)) {
-      fullKey = fileName;  // No folder, use the file name
-    } else {
-      fullKey = folder.endsWith("/") ? folder + fileName : folder + "/" + fileName;
-    }
+    String fullKey = resolveObjectKey(asset, fileName);
 
     // Handle file upload chunking
     try {
@@ -116,8 +108,8 @@ public class StorageAssetApiController implements StorageAssetApi {
     validator.validate(EDC_ASSET_TYPE, expand).orElseThrow(ValidationFailureException::new);
     Asset asset = transformerRegistry.transform(expand, Asset.class).orElseThrow(InvalidRequestException::new);
 
-    // Set storage properties for the asset
-    setStorageProperties(asset, fileName);
+    // Set storage properties for the asset using the same object key used by uploadChunk.
+    setStorageProperties(asset, resolveObjectKey(asset, fileName));
 
     // Create the asset in the service
     IdResponse idResponse = service.create(asset)
@@ -132,9 +124,18 @@ public class StorageAssetApiController implements StorageAssetApi {
   /**
    * Set necessary storage properties for the asset in S3.
    */
-  private void setStorageProperties(Asset asset, String fileName) {
-    asset.getPrivateProperties().put("storageAssetFile", fileName);
-    asset.getDataAddress().setKeyName(fileName);
+  private String resolveObjectKey(Asset asset, String fileName) {
+    String folder = String.valueOf(asset.getDataAddress().getProperties().get(CoreConstants.EDC_NAMESPACE + "folder"));
+    if (folder == null || folder.trim().isEmpty() || "null".equals(folder)) {
+      return fileName;
+    }
+    String normalizedFolder = folder.trim();
+    return normalizedFolder.endsWith("/") ? normalizedFolder + fileName : normalizedFolder + "/" + fileName;
+  }
+
+  private void setStorageProperties(Asset asset, String objectKey) {
+    asset.getPrivateProperties().put("storageAssetFile", objectKey);
+    asset.getDataAddress().setKeyName(objectKey);
     asset.getDataAddress().setType("AmazonS3");
     asset.getDataAddress().getProperties().put(CoreConstants.EDC_NAMESPACE + "bucketName", bucketName);
     asset.getDataAddress().getProperties().put(CoreConstants.EDC_NAMESPACE + "region", region);

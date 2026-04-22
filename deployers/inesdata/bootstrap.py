@@ -970,6 +970,8 @@ def create_client(keycloak_admin, dataspace, client_name, environment):
         click.echo(f"    + Client certificate for {client_name} synchronized from {client_name}-public.crt.")
     except KeycloakPostError as e:
         click.echo(f"Error uploading certificate {e}")
+    finally:
+        keycloak_admin.connection.add_param_headers("Content-Type", "application/json")
 
     ensure_client_default_scopes(keycloak_admin, client_id, default_scopes)
     ensure_client_service_account_roles(keycloak_admin, client_id, [client_name, "connector-user"])
