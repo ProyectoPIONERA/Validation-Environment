@@ -216,52 +216,35 @@ class INESDataDeploymentAdapter:
 
     def wait_for_keycloak_admin_ready(self, kc_url, kc_user, kc_password, timeout=120, poll_interval=3):
         print("Waiting for Keycloak admin authentication to become ready...")
-        token_urls = [f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"]
-        local_port_forward_started = False
+        token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
         last_issue = None
-        last_connectivity_issue = None
         start = time.time()
 
         while time.time() - start <= timeout:
-            for token_url in list(token_urls):
-                try:
-                    response = requests.post(
-                        token_url,
-                        data={
-                            "grant_type": "password",
-                            "client_id": "admin-cli",
-                            "username": kc_user,
-                            "password": kc_password,
-                        },
-                        headers={"Content-Type": "application/x-www-form-urlencoded"},
-                        timeout=5,
-                    )
-                    if response.status_code == 200 and response.json().get("access_token"):
-                        print("Keycloak admin authentication is ready")
-                        return True
-                    last_issue = f"HTTP {response.status_code}"
-                except Exception as exc:
-                    last_issue = str(exc)
-                    last_connectivity_issue = last_issue
-
-            if last_connectivity_issue and not local_port_forward_started:
-                keycloak_port = getattr(self.config, "PORT_KEYCLOAK", 18081)
-                if self.infrastructure.port_forward_service(
-                    self.config.NS_COMMON,
-                    "keycloak",
-                    keycloak_port,
-                    8080,
-                    quiet=True,
-                ):
-                    local_port_forward_started = True
-                    token_urls.append(
-                        f"http://127.0.0.1:{keycloak_port}/realms/master/protocol/openid-connect/token"
-                    )
+            try:
+                response = requests.post(
+                    token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": "admin-cli",
+                        "username": kc_user,
+                        "password": kc_password,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=5,
+                )
+                if response.status_code == 200 and response.json().get("access_token"):
+                    print("Keycloak admin authentication is ready")
+                    return True
+                last_issue = f"HTTP {response.status_code}"
+            except Exception as exc:
+                last_issue = str(exc)
 
             time.sleep(poll_interval)
 
         if last_issue:
             print(f"Keycloak admin authentication did not become ready: {last_issue}")
+            print("Check that the Keycloak hostname resolves through the active ingress/minikube tunnel.")
         else:
             print("Keycloak admin authentication did not become ready")
         return False

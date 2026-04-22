@@ -453,7 +453,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(result)
 
-    def test_wait_for_keycloak_admin_ready_falls_back_to_local_port_forward(self):
+    def test_wait_for_keycloak_admin_ready_uses_configured_hostname_without_port_forward(self):
         infrastructure = self._make_infrastructure()
         infrastructure.port_forward_service = mock.Mock(return_value=True)
         deployment = INESDataDeploymentAdapter(
@@ -465,28 +465,20 @@ class InesdataLevelOutputTests(unittest.TestCase):
             config_cls=self.config,
         )
 
-        responses = iter([
-            Exception("connection refused"),
-            mock.Mock(status_code=200, json=lambda: {"access_token": "token"}),
-        ])
-
         def fake_post(*_args, **_kwargs):
-            item = next(responses)
-            if isinstance(item, Exception):
-                raise item
-            return item
+            raise Exception("connection refused")
 
         with mock.patch("adapters.inesdata.deployment.requests.post", side_effect=fake_post):
             result = deployment.wait_for_keycloak_admin_ready(
                 "http://keycloak-admin.local",
                 "admin",
                 "secret",
-                timeout=5,
+                timeout=0.01,
                 poll_interval=0,
             )
 
-        self.assertTrue(result)
-        infrastructure.port_forward_service.assert_called_once_with("common", "keycloak", 18081, 8080, quiet=True)
+        self.assertFalse(result)
+        infrastructure.port_forward_service.assert_not_called()
 
     def test_ensure_local_infra_access_uses_short_probe_before_creating_port_forward(self):
         infrastructure = self._make_infrastructure()

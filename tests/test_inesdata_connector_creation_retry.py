@@ -80,7 +80,7 @@ class ConnectorRetryConfigAdapter:
 
 
 class ConnectorCreationRetryTests(unittest.TestCase):
-    def test_keycloak_readiness_falls_back_to_local_port_forward(self):
+    def test_keycloak_readiness_uses_configured_hostname_without_port_forward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -104,26 +104,15 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 config_cls=config,
             )
 
-            responses = iter([
-                Exception("connection refused"),
-                mock.Mock(status_code=200, json=lambda: {"access_token": "token"}),
-            ])
-
             def fake_post(*_args, **_kwargs):
-                item = next(responses)
-                if isinstance(item, Exception):
-                    raise item
-                return item
+                raise Exception("connection refused")
 
             with mock.patch("adapters.inesdata.connectors.requests.post", side_effect=fake_post):
-                self.assertTrue(adapter.wait_for_keycloak_admin_ready(timeout=5, poll_interval=0))
+                self.assertFalse(adapter.wait_for_keycloak_admin_ready(timeout=0.01, poll_interval=0))
 
-            self.assertEqual(len(infra.calls), 1)
-            self.assertEqual(infra.calls[0][0], ("common-srvs", "keycloak", 18081, 8080))
-            self.assertEqual(infra.calls[0][1], {"quiet": True})
-            self.assertEqual(adapter._last_ready_keycloak_url, "http://127.0.0.1:18081")
+            self.assertEqual(infra.calls, [])
 
-    def test_create_connector_uses_verified_keycloak_url_for_bootstrap(self):
+    def test_create_connector_uses_configured_keycloak_url_for_bootstrap(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -169,7 +158,6 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 config_cls=config,
             )
             adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
-            adapter._last_ready_keycloak_url = "http://127.0.0.1:18081"
             adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
             adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
             adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
@@ -181,11 +169,44 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             create_calls = [call for call in calls if "bootstrap.py connector create" in call]
             delete_calls = [call for call in calls if "bootstrap.py connector delete" in call]
             self.assertEqual(len(create_calls), 1)
-            self.assertTrue(create_calls[0].startswith("PIONERA_KC_URL=http://127.0.0.1:18081 "))
+            self.assertFalse(create_calls[0].startswith("PIONERA_KC_URL="))
             self.assertEqual(len(delete_calls), 1)
-            self.assertTrue(delete_calls[0].startswith("PIONERA_KC_URL=http://127.0.0.1:18081 "))
+            self.assertFalse(delete_calls[0].startswith("PIONERA_KC_URL="))
 
-    def test_connector_ready_falls_back_to_local_interface_port_forward(self):
+    def test_connector_ready_uses_hostname_without_port_forward_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-inteface-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "false"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.get", side_effect=Exception("connection refused")),
+            ):
+                self.assertFalse(adapter.wait_for_connector_ready("conn-a-demo", timeout=0.01))
+
+            self.assertEqual(infra.calls, [])
+
+    def test_connector_ready_falls_back_to_local_interface_port_forward_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -226,6 +247,8 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 return item
 
             with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "true"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
                 mock.patch("adapters.inesdata.connectors.requests.get", side_effect=fake_get),
                 mock.patch.object(adapter, "_reserve_local_port", return_value=19080),
             ):
@@ -250,7 +273,42 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 ],
             )
 
-    def test_management_api_ready_falls_back_to_local_runtime_port_forward(self):
+    def test_management_api_ready_uses_hostname_without_port_forward_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "false"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=Exception("connection refused")),
+            ):
+                self.assertFalse(adapter.wait_for_management_api_ready("conn-a-demo", timeout=0.01, poll_interval=0))
+
+            self.assertEqual(infra.calls, [])
+
+    def test_management_api_ready_falls_back_to_local_runtime_port_forward_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -293,6 +351,8 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 return item
 
             with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "true"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
                 mock.patch("adapters.inesdata.connectors.requests.post", side_effect=fake_post),
                 mock.patch.object(adapter, "_reserve_local_port", return_value=19193),
             ):

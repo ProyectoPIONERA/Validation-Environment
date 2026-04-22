@@ -26,7 +26,6 @@ class INESDataConnectorsAdapter:
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
         self._management_token_cache = {}
         self._vault_management_token_verified = False
-        self._last_ready_keycloak_url = None
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
@@ -117,6 +116,24 @@ class INESDataConnectorsAdapter:
                 "max retries exceeded",
                 "timed out",
             )
+        )
+
+    @staticmethod
+    def _is_truthy(value):
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _allow_connector_port_forward_fallback(self):
+        env_value = os.environ.get("PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
+        if env_value is not None:
+            return self._is_truthy(env_value)
+
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        return self._is_truthy(
+            deployer_config.get("ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
+            or deployer_config.get("CONNECTOR_PORT_FORWARD_FALLBACK")
         )
 
     def _should_sync_vault_token_to_deployer_config(self):
@@ -289,18 +306,6 @@ class INESDataConnectorsAdapter:
                 quiet=True,
             )
 
-    def _start_keycloak_local_fallback(self):
-        port_forward_service = getattr(self.infrastructure, "port_forward_service", None)
-        if not callable(port_forward_service):
-            return None
-
-        local_port = getattr(self.config, "PORT_KEYCLOAK", 18081)
-        namespace = getattr(self.config, "NS_COMMON", "common-srvs")
-        if not port_forward_service(namespace, "keycloak", local_port, 8080, quiet=True):
-            return None
-
-        return f"http://127.0.0.1:{local_port}"
-
     def _start_connector_interface_fallback(self, connector_name):
         pod_name = self._connector_pod_name(connector_name, interface=True)
         if not pod_name:
@@ -339,7 +344,6 @@ class INESDataConnectorsAdapter:
         kc_url = deployer_config.get("KC_URL")
         kc_user = deployer_config.get("KC_USER")
         kc_password = deployer_config.get("KC_PASSWORD")
-        self._last_ready_keycloak_url = None
 
         if not kc_url or not kc_user or not kc_password:
             print("Keycloak admin readiness check skipped: KC_URL/KC_USER/KC_PASSWORD missing")
@@ -348,7 +352,6 @@ class INESDataConnectorsAdapter:
         token_url = f"{kc_url.rstrip('/')}/realms/master/protocol/openid-connect/token"
         last_issue = None
         start = time.time()
-        used_local_fallback = False
 
         while time.time() - start <= timeout:
             try:
@@ -365,37 +368,25 @@ class INESDataConnectorsAdapter:
                 )
                 if response.status_code == 200 and response.json().get("access_token"):
                     print("Keycloak admin authentication is ready")
-                    self._last_ready_keycloak_url = token_url.split("/realms/master/", 1)[0]
                     return True
                 last_issue = f"HTTP {response.status_code}"
             except Exception as exc:
                 last_issue = str(exc)
-                if not used_local_fallback and self._should_attempt_local_fallback(exc):
-                    local_keycloak_url = self._start_keycloak_local_fallback()
-                    if local_keycloak_url:
-                        token_url = f"{local_keycloak_url}/realms/master/protocol/openid-connect/token"
-                        used_local_fallback = True
-                        continue
 
             time.sleep(poll_interval)
 
         if last_issue:
             print(f"Keycloak admin authentication did not become ready: {last_issue}")
+            print("Check that the Keycloak hostname resolves through the active ingress/minikube tunnel.")
         else:
             print("Keycloak admin authentication did not become ready")
         return False
 
     def _bootstrap_connector_create_command(self, python_exec, connector_name, ds_name):
-        command = f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
-        if self._last_ready_keycloak_url:
-            return f"PIONERA_KC_URL={shlex.quote(self._last_ready_keycloak_url)} {command}"
-        return command
+        return f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
 
     def _bootstrap_connector_delete_command(self, python_exec, connector_name, ds_name):
-        command = f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}"
-        if self._last_ready_keycloak_url:
-            return f"PIONERA_KC_URL={shlex.quote(self._last_ready_keycloak_url)} {command}"
-        return command
+        return f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}"
 
     def validate_connector_name(self, name):
         if not isinstance(name, str) or not name:
@@ -561,15 +552,22 @@ class INESDataConnectorsAdapter:
         url = self.build_connector_url(connector_name)
         host = urlparse(url).hostname
         local_fallback = None
+        allow_local_fallback = self._allow_connector_port_forward_fallback()
         if host:
             try:
                 socket.gethostbyname(host)
             except OSError as exc:
-                local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
-                if not local_url:
+                if allow_local_fallback:
+                    local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
+                    if local_url:
+                        url = local_url
+                    else:
+                        print(f"Connector host does not resolve locally: {host} ({exc})")
+                        return False
+                else:
                     print(f"Connector host does not resolve locally: {host} ({exc})")
+                    print("Connector port-forward fallback is disabled; validate the ingress hostname instead.")
                     return False
-                url = local_url
         start = time.time()
         last_issue = None
 
@@ -583,7 +581,11 @@ class INESDataConnectorsAdapter:
                     last_issue = f"HTTP {response.status_code}"
                 except Exception as exc:
                     last_issue = str(exc)
-                    if not local_fallback and self._should_attempt_local_fallback(exc):
+                    if (
+                        allow_local_fallback
+                        and not local_fallback
+                        and self._should_attempt_local_fallback(exc)
+                    ):
                         local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
                         if local_url:
                             url = local_url
@@ -605,6 +607,8 @@ class INESDataConnectorsAdapter:
         start = time.time()
         base_url = self.connector_base_url(connector_name)
         url = f"{base_url}/management/v3/assets/request"
+        host = urlparse(url).hostname
+        allow_local_fallback = self._allow_connector_port_forward_fallback()
         payload = {
             "@context": {
                 "@vocab": "https://w3id.org/edc/v0.0.1/ns/"
@@ -614,6 +618,22 @@ class INESDataConnectorsAdapter:
         }
         last_issue = None
         local_fallback = None
+
+        if host:
+            try:
+                socket.gethostbyname(host)
+            except OSError as exc:
+                if allow_local_fallback:
+                    local_url, local_fallback = self._start_connector_management_api_fallback(connector_name)
+                    if local_url:
+                        url = local_url
+                    else:
+                        print(f"Connector Management API host does not resolve locally: {host} ({exc})")
+                        return False
+                else:
+                    print(f"Connector Management API host does not resolve locally: {host} ({exc})")
+                    print("Connector port-forward fallback is disabled; validate the ingress hostname instead.")
+                    return False
 
         try:
             while time.time() - start <= timeout:
@@ -636,7 +656,11 @@ class INESDataConnectorsAdapter:
                     last_issue = f"HTTP {response.status_code}"
                 except Exception as exc:
                     last_issue = str(exc)
-                    if not local_fallback and self._should_attempt_local_fallback(exc):
+                    if (
+                        allow_local_fallback
+                        and not local_fallback
+                        and self._should_attempt_local_fallback(exc)
+                    ):
                         local_url, local_fallback = self._start_connector_management_api_fallback(connector_name)
                         if local_url:
                             url = local_url
