@@ -3,7 +3,9 @@ import { expect, Page } from "@playwright/test";
 import { clickMarked } from "../../shared/utils/live-marker";
 import { waitForEventualConsistencyPoll, waitForUiTransition } from "../../shared/utils/waiting";
 
-const SUCCESS_STATES = new Set(["COMPLETED", "ENDED", "TERMINATED", "DEPROVISIONED"]);
+// INESData can keep a successfully initiated push transfer in STARTED; storage
+// evidence is validated separately by API/Newman and MinIO checks.
+const ACCEPTED_TRANSFER_STATES = new Set(["STARTED", "COMPLETED", "ENDED", "TERMINATED", "DEPROVISIONED"]);
 
 export class TransferHistoryPage {
   constructor(private readonly page: Page) {}
@@ -32,7 +34,7 @@ export class TransferHistoryPage {
         if (state === "ERROR") {
           throw new Error(`Transfer for asset ${assetId} reached ERROR state`);
         }
-        if (SUCCESS_STATES.has(state)) {
+        if (ACCEPTED_TRANSFER_STATES.has(state)) {
           return state;
         }
       }
@@ -42,7 +44,7 @@ export class TransferHistoryPage {
     }
 
     throw new Error(
-      `Transfer for asset ${assetId} did not reach a terminal success state. Last state: ${lastState ?? "not found"}`,
+      `Transfer for asset ${assetId} did not reach an accepted transfer state. Last state: ${lastState ?? "not found"}`,
     );
   }
 
