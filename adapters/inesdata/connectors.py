@@ -1206,21 +1206,27 @@ class INESDataConnectorsAdapter:
 
                 # Create policy in MinIO (idempotent: ignore already-exists error)
                 self.run(
-                    f"{mc} mc admin policy create minio {policy_name} {policy_path_pod}",
+                    f"{mc} mc admin policy create minio {shlex.quote(policy_name)} {shlex.quote(policy_path_pod)}",
+                    capture=True,
                     check=False,
                     silent=True,
                 )
 
-                # Attach policy to user
-                self.run(
-                    f"{mc} mc admin policy attach minio {policy_name} --user {connector_name}",
-                    check=False,
-                    silent=True,
+                user_info = self.run_silent(
+                    f"{mc} mc admin user info minio {shlex.quote(connector_name)}"
                 )
+                if not user_info or policy_name not in user_info:
+                    self.run(
+                        f"{mc} mc admin policy attach minio {shlex.quote(policy_name)} "
+                        f"--user {shlex.quote(connector_name)}",
+                        capture=True,
+                        check=False,
+                        silent=True,
+                    )
 
                 # Verify
                 result = self.run_silent(
-                    f"kubectl exec -n {namespace} {minio_pod} -- mc admin user info minio {connector_name}"
+                    f"{mc} mc admin user info minio {shlex.quote(connector_name)}"
                 )
                 if result and policy_name in result:
                     print(f"MinIO policy '{policy_name}' attached to '{connector_name}'")
@@ -1299,12 +1305,21 @@ class INESDataConnectorsAdapter:
             if write_policy_result is None:
                 print(f"  Warning: could not write MinIO policy file inside pod for {connector_name}")
                 return False
-            self.run(f"{mc} mc admin policy create minio {policy_name} {policy_path_pod}", check=False, silent=True)
             self.run(
-                f"{mc} mc admin policy attach minio {policy_name} --user {shlex.quote(connector_name)}",
+                f"{mc} mc admin policy create minio {shlex.quote(policy_name)} {shlex.quote(policy_path_pod)}",
+                capture=True,
                 check=False,
                 silent=True,
             )
+            user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
+            if not user_info or policy_name not in user_info:
+                self.run(
+                    f"{mc} mc admin policy attach minio {shlex.quote(policy_name)} "
+                    f"--user {shlex.quote(connector_name)}",
+                    capture=True,
+                    check=False,
+                    silent=True,
+                )
 
             user_info = self.run_silent(f"{mc} mc admin user info minio {shlex.quote(connector_name)}")
             if user_info and policy_name in user_info:

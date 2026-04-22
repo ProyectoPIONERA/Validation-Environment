@@ -26,6 +26,8 @@ env/
 build/
 dist/
 *.egg-info/
+.gradle-user-home/
+**/.gradle-user-home/
 
 # EDC adapter build sources are part of the framework; generated image contexts stay ignored.
 !adapters/edc/build/
