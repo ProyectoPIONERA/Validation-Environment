@@ -122,3 +122,7 @@ minikube tunnel
 ```
 
 Déjalo ejecutándose en otra terminal durante despliegue y validación.
+
+Las validaciones funcionales deben usar los hostnames locales publicados por
+Ingress. Los `port-forward` quedan reservados para comprobaciones internas o
+diagnóstico de desarrollo; no deben sustituir la ruta normal de navegador o API.

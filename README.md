@@ -248,6 +248,13 @@ minikube tunnel
 Cuando `minikube tunnel` solicite contraseña, puede que la consola no muestre un
 indicador visible. Introduce la contraseña y pulsa `Enter`.
 
+Los accesos funcionales locales deben ejercitar los hostnames publicados por
+Ingress. El framework puede usar `port-forward` como apoyo interno para
+diagnósticos o clientes host-side, pero no debe sustituir los endpoints de
+navegador o API. El fallback de `port-forward` para conectores está desactivado
+por defecto y solo debe habilitarse temporalmente con
+`PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true`.
+
 ## CLI Principal
 
 Listar adapters:
@@ -296,6 +303,7 @@ python3 main.py edc recreate-dataspace --topology local --confirm-dataspace demo
 `Level 6` ejecuta la validación integral del adapter activo. Puede incluir:
 
 - Newman;
+- validación funcional EDC+Kafka después de Newman cuando el adapter la soporta;
 - Playwright;
 - comprobaciones de storage/MinIO;
 - validaciones de componentes;
@@ -346,8 +354,14 @@ bash scripts/run_kafka_benchmark.sh --prepare-only
 bash scripts/run_kafka_benchmark.sh --teardown-only
 ```
 
-El benchmark puede generar `kafka_metrics.json` y, cuando la validación EDC+Kafka
-está habilitada, `kafka_edc_results.json`.
+El benchmark puede generar `kafka_metrics.json`. Además, `Level 6` ejecuta la
+validación funcional EDC+Kafka después de Newman para adapters compatibles y
+puede generar `kafka_transfer_results.json`.
+
+En local, esa validación usa por defecto un broker Kafka temporal dentro de
+Kubernetes. Los conectores acceden al broker por DNS de cluster y el proceso
+Python del framework puede usar un `port-forward` temporal solo para crear
+topics y verificar mensajes desde el host.
 
 ## Imágenes Locales
 
@@ -420,7 +434,7 @@ experiments/
     experiment_results.json
     aggregated_metrics.json
     kafka_metrics.json
-    kafka_edc_results.json
+    kafka_transfer_results.json
     summary.json
     summary.md
     graphs/

@@ -34,6 +34,39 @@ kubectl get ingress -A
 helm list -A
 ```
 
+## Los Conectores Solo Funcionan con Port-forward
+
+En local, el resultado correcto es que los conectores sean accesibles por su
+hostname público de Ingress, por ejemplo:
+
+```text
+http://conn-<connector>-<dataspace>.dev.ds.dataspaceunit.upm/inesdata-connector-interface
+http://conn-<connector>-<dataspace>.dev.ds.dataspaceunit.upm/edc-dashboard/
+```
+
+Si solo funcionan con `kubectl port-forward`, revisa primero:
+
+- que `minikube tunnel` esté abierto;
+- que las entradas de `hosts` existan para el dataspace y sus conectores;
+- que el Ingress del namespace exista y tenga dirección;
+- que los pods y endpoints del conector estén listos.
+
+Comandos útiles:
+
+```bash
+python3 main.py inesdata hosts --topology local --dry-run
+python3 main.py edc hosts --topology local --dry-run
+kubectl get ingress -A
+kubectl get endpoints -A
+```
+
+El fallback de `port-forward` para conectores está desactivado por defecto para
+no ocultar problemas reales de routing. Úsalo solo como diagnóstico temporal:
+
+```bash
+PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true
+```
+
 ## Falla la Autenticación Admin de Keycloak
 
 Comprueba que:
@@ -128,6 +161,63 @@ Comprueba:
 - que el dashboard o portal está desplegado;
 - que el modo de autenticación coincide con la suite esperada;
 - que el reporte en `experiments/` contiene screenshots, trazas o detalles de error.
+
+## Playwright INESData y Transferencias en STARTED
+
+Si el test E2E de transferencia crea el asset, completa la negociación e inicia
+la transferencia, `STARTED` es un estado aceptado para la validación UI de
+INESData. La UI valida que el transfer fue aceptado e iniciado; la evidencia
+fuerte de movimiento de datos debe venir de Newman, MinIO o verificaciones de
+storage separadas.
+
+Si la suite falla aunque el historial muestre `STARTED`, o si las validaciones
+de almacenamiento fallan, revisa:
+
+- el reporte `e2e-transfer-report.json` o `consumer-transfer-report.json` dentro del experimento;
+- la colección Newman `06_consumer_transfer`;
+- los logs del conector consumer y provider;
+- la disponibilidad de MinIO y del dataplane;
+- si `minikube tunnel` pidió contraseña y no quedó realmente activo.
+
+No conviene resolver este caso sustituyendo el hostname por `port-forward`,
+porque eso puede validar una ruta distinta a la que usaría el entorno local
+publicado por Ingress.
+
+## EDC+Kafka Queda en STARTED o No Consume Mensajes
+
+`Level 6` ejecuta la validación funcional EDC+Kafka después de Newman cuando el
+adapter tiene soporte Kafka. En local, el broker gestionado por defecto se crea
+dentro de Kubernetes para que el dataplane de los conectores lo alcance por DNS
+de cluster:
+
+```text
+framework-kafka.<namespace>.svc.cluster.local:9092
+```
+
+El proceso Python del framework puede abrir un `port-forward` temporal a
+`127.0.0.1:<puerto>` para crear topics y verificar mensajes desde el host. Ese
+`port-forward` es interno a la validación y no debe usarse como endpoint del
+conector.
+
+Si ves errores contra `host.minikube.internal:<puerto>` o transferencias que
+quedan en `STARTED`, comprueba que no existan overrides antiguos como:
+
+```text
+KAFKA_BOOTSTRAP_SERVERS
+KAFKA_CLUSTER_BOOTSTRAP_SERVERS
+```
+
+Para la ruta local normal, usa el modo por defecto:
+
+```text
+KAFKA_PROVISIONER=kubernetes
+```
+
+Durante una ejecución puedes inspeccionar el broker temporal con:
+
+```bash
+kubectl get pods,svc -n <dataspace> -l app=framework-kafka
+```
 
 ## Se Acumulan Datos de Validación
 

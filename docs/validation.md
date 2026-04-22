@@ -8,6 +8,7 @@ Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 
 - limpieza de datos de prueba;
 - colecciones Newman/Postman;
+- validación funcional EDC+Kafka después de Newman cuando el adapter la soporta;
 - suites UI con Playwright;
 - validaciones de componentes;
 - recolección de métricas;
@@ -44,6 +45,34 @@ python3 main.py edc validate --topology local
 La validación puede empezar con limpieza para facilitar trazabilidad y evitar saturación por datos de ejecuciones previas.
 
 La limpieza debe ser segura por defecto y reportar qué eliminó o qué omitió.
+
+## Kafka en Nivel 6
+
+La validación funcional EDC+Kafka no es el mismo flujo que el benchmark opcional
+de broker. En `Level 6`, se ejecuta automáticamente después de Newman para los
+adapters compatibles y valida el recorrido `asset -> catalogo -> negociacion ->
+transferencia Kafka -> consumo del topic destino`.
+
+En topología `local`, el broker gestionado por defecto se despliega dentro de
+Kubernetes. Los conectores usan el endpoint interno de cluster:
+
+```text
+framework-kafka.<namespace>.svc.cluster.local:9092
+```
+
+El framework puede usar un `port-forward` temporal para que el proceso Python
+del host cree topics, produzca mensajes de prueba y verifique el topic destino.
+Ese `port-forward` es un mecanismo de soporte interno de la validación, no un
+endpoint público del dataspace.
+
+La consola usa mensajes neutrales bajo el nombre `Kafka transfer validation`.
+Por defecto imprime resultado por par de conectores, pasos ejecutados, topics,
+mensajes producidos/consumidos, latencias y throughput. Para mostrar muestras de
+IDs de mensajes en consola durante diagnóstico:
+
+```bash
+PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true python3 main.py inesdata validate --topology local
+```
 
 ## Métricas
 

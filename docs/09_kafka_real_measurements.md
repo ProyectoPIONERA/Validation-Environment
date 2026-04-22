@@ -3,7 +3,7 @@
 En la secuencia de evolución descrita desde [07_experiment_system.md](./07_experiment_system.md), la Fase 3 distingue dos capas complementarias:
 
 - benchmark de broker Kafka en `kafka_metrics.json`
-- validacion funcional `EDC+Kafka` en `kafka_edc_results.json`
+- validacion funcional Kafka transfer en `kafka_transfer_results.json`
 
 ## Alcance
 
@@ -21,21 +21,27 @@ Toda ejecucion con Kafka habilitado debe dejar:
 
 - `kafka_metrics.json`
 
-Cuando se ejecuta `Level 6`, la suite `EDC+Kafka` deja además:
+Cuando se ejecuta `Level 6`, la suite Kafka transfer deja además:
 
-- `kafka_edc_results.json`
-- `kafka_edc/<provider>__<consumer>.json`
+- `kafka_transfer_results.json`
+- `kafka_transfer/<provider>__<consumer>.json`
 
 `kafka_metrics.json` debe contener siempre un estado de ejecucion:
 
 - `completed`
 - `skipped`
 
-`kafka_edc_results.json` contiene una lista de resultados por par proveedor-consumidor:
+`kafka_transfer_results.json` contiene una lista de resultados por par proveedor-consumidor:
 
 - `passed`
 - `failed`
 - `skipped`
+
+En consola, la suite se muestra con una salida neutral como `Kafka transfer
+validation` para que el resultado no quede acoplado al nombre de un adapter. La
+salida normal incluye estado, par de conectores, pasos ejecutados, topics,
+mensajes producidos y consumidos, latencias y throughput. El detalle de muestras
+de mensajes puede habilitarse con `PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true`.
 
 ## Payload Completado
 
@@ -69,24 +75,66 @@ La resolucion del broker sigue este orden:
 1. variables de entorno
 2. configuracion Kafka del adapter
 3. overrides de ejecucion
-4. arranque de contenedor Kafka gestionado por el framework
+4. broker Kafka gestionado por el framework dentro de Kubernetes
 
-## Configuracion del Contenedor
+El modo por defecto para validaciones locales integradas es `kubernetes`. En ese
+modo, el framework crea temporalmente un `Deployment` y dos `Service` en el
+namespace del dataspace:
 
-El arranque del contenedor Kafka puede configurarse con:
+- `framework-kafka` para clientes dentro del cluster;
+- `framework-kafka-external` para el acceso temporal desde el host mediante
+  `kubectl port-forward`.
 
+El dataplane de los conectores debe usar el bootstrap interno:
+
+```text
+framework-kafka.<namespace>.svc.cluster.local:9092
+```
+
+El proceso Python del framework puede usar un `port-forward` temporal hacia
+`127.0.0.1:<puerto>` para crear topics, producir mensajes de prueba y consumir
+el topic destino desde el host. Ese `port-forward` es un detalle de soporte de
+la validacion, no el endpoint funcional que deben usar los conectores.
+
+## Configuracion del Broker
+
+El broker Kafka puede configurarse con:
+
+- `KAFKA_PROVISIONER`, con valor por defecto `kubernetes`;
+- `KAFKA_K8S_NAMESPACE`, por defecto el namespace del dataspace;
+- `KAFKA_K8S_SERVICE_NAME`, por defecto `framework-kafka`;
+- `KAFKA_K8S_LOCAL_PORT`, por defecto `39092`;
+- `KAFKA_MINIKUBE_PROFILE`, por defecto `minikube`;
 - `container_env_file`
 - `container_env`
 - `KAFKA_EDC_STARTUP_GRACE_SECONDS` cuando la transferencia Kafka necesita unos segundos extra para estabilizar el dataplane antes de empezar a producir mensajes de medida. El valor por defecto actual es `60` segundos y la suite usa mensajes sonda antes de empezar a medir latencias reales.
 - `KAFKA_EDC_PRE_RUN_SETTLE_SECONDS` cuando interesa dejar una pequeña ventana de asentamiento tras limpiar transferencias y recursos Kafka EDC anteriores. El valor por defecto actual es `10` segundos y ayuda a reducir flakes cuando el dataplane todavía está cerrando consumidores o productores viejos.
+- `KAFKA_EDC_MESSAGE_SAMPLE_LIMIT`, por defecto `5`, para limitar cuántos IDs de mensajes quedan como muestra en los artefactos y pueden imprimirse en consola cuando se habilita el modo verbose.
 
-Estas opciones se gestionan desde `framework/kafka_container_factory.py` y estan pensadas para entornos reproducibles con broker securizado, como pruebas locales basadas en SASL.
+El modo `docker` sigue disponible para desarrollo avanzado mediante
+`KAFKA_PROVISIONER=docker`, pero no es el default de `Level 6`. En local, usar
+Docker como broker externo puede dejar al dataplane apuntando a
+`host.minikube.internal:<puerto>` y provocar que la transferencia quede en
+`STARTED` sin mover mensajes si ese puerto no es alcanzable desde los pods.
 
-La fuente de verdad de esta configuracion puede vivir en `deployers/inesdata/deployer.config` mediante:
+La ruta local normal no requiere declarar variables Kafka en los
+`deployer.config`. El framework usa defaults reproducibles y los ficheros
+`deployer.config.example` se mantienen con las claves mínimas del adapter o de
+infraestructura.
 
+Si un entorno necesita overrides persistentes o experimentales, pueden definirse
+como variables de entorno `PIONERA_KAFKA_*` al entrar por `main.py`, como
+variables `KAFKA_*` al ejecutar helpers específicos, o como claves
+adapter-specific en el `deployer.config` del adapter correspondiente:
+
+- `KAFKA_PROVISIONER`
 - `KAFKA_BOOTSTRAP_SERVERS`
 - `KAFKA_CLUSTER_BOOTSTRAP_SERVERS`
 - `KAFKA_CLUSTER_ADVERTISED_HOST`
+- `KAFKA_K8S_NAMESPACE`
+- `KAFKA_K8S_SERVICE_NAME`
+- `KAFKA_K8S_LOCAL_PORT`
+- `KAFKA_MINIKUBE_PROFILE`
 - `KAFKA_TOPIC_NAME`
 - `KAFKA_TOPIC_STRATEGY`
 - `KAFKA_SECURITY_PROTOCOL`
@@ -94,7 +142,9 @@ La fuente de verdad de esta configuracion puede vivir en `deployers/inesdata/dep
 - `KAFKA_CONTAINER_IMAGE`
 - `KAFKA_CONTAINER_ENV_FILE`
 
-El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como para `main.py menu` en `Level 6`.
+El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como
+para `main.py menu` en `Level 6`. En EDC deben usarse solo cuando el runtime
+EDC desplegado exponga soporte Kafka equivalente.
 
 ## Runtime del Conector
 
@@ -109,16 +159,19 @@ Eso significa:
 
 ## Broker Autoaprovisionado
 
-Cuando la suite `EDC+Kafka` no recibe un broker accesible y el framework lo autoaprovisiona, el broker se levanta con dos listeners anunciados:
+Cuando la suite `EDC+Kafka` no recibe un broker accesible y el framework lo autoaprovisiona, el broker se levanta dentro de Kubernetes con dos listeners anunciados:
 
 - listener de host para el productor, consumidor y admin client locales
 - listener de cluster para el dataplane del conector dentro de Kubernetes
 
 Eso evita que el dataplane reciba `localhost:<puerto>` como metadato del broker, que era la causa principal de los fallos cuando la transferencia entraba en `STARTED` pero no movia mensajes reales.
 
+Al terminar, el framework debe eliminar el `Deployment`, los `Service` y el
+`port-forward` temporal asociados al broker gestionado.
+
 ## Notas
 
-- `kafka_metrics.json` y `kafka_edc_results.json` responden a preguntas distintas y no deben compararse directamente.
+- `kafka_metrics.json` y `kafka_transfer_results.json` responden a preguntas distintas y no deben compararse directamente.
 - `kafka_metrics.json` mide el broker.
-- `kafka_edc_results.json` mide el flujo EDC+Kafka mediado por el conector sobre un topic fuente y un topic destino.
+- `kafka_transfer_results.json` mide el flujo Kafka transfer mediado por el conector sobre un topic fuente y un topic destino.
 - Si la suite `EDC+Kafka` falla mientras el benchmark pasa, el problema suele estar en el flujo de transferencia o en el runtime del conector, no en el broker base.

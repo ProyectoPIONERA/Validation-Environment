@@ -41,9 +41,9 @@ En el estado actual del framework, un experimento de validacion puede generar ad
 - `test_results.json`
 - `negotiation_metrics.json`
 - `kafka_metrics.json`
-- `kafka_edc_results.json`
+- `kafka_transfer_results.json`
 - `ui/`
-- `kafka_edc/`
+- `kafka_transfer/`
 - `components/`
 - `storage_checks/`
 

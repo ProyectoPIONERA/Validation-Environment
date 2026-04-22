@@ -87,6 +87,32 @@ Comando de aplicacion:
 PIONERA_SYNC_HOSTS=true python3 main.py edc hosts --topology local
 ```
 
+## Hostnames, Ingress y Port-forwards
+
+En topologia `local`, los accesos funcionales deben resolverse mediante
+hostnames locales e Ingress. Esto aplica a Keycloak, MinIO, registration
+service, conectores y componentes cuando estan habilitados.
+
+Para que esos hostnames sean accesibles desde la maquina host, normalmente debe
+mantenerse `minikube tunnel` abierto en otra terminal:
+
+```bash
+minikube tunnel
+```
+
+Los `port-forward` no reemplazan los endpoints funcionales del dataspace. El
+framework puede usarlos como mecanismo de soporte interno para comprobaciones
+puntuales o para clientes host-side, por ejemplo durante la validacion
+EDC+Kafka, pero las validaciones de navegador y API deben ejercitar las rutas
+publicas por hostname siempre que sea posible.
+
+El fallback de `port-forward` para conectores queda desactivado por defecto. En
+diagnosticos de desarrollo puede habilitarse explicitamente con:
+
+```bash
+PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true
+```
+
 ## Artefactos Runtime
 
 Cada deployer escribe sus artefactos generados bajo:
@@ -103,6 +129,7 @@ Helm y configuraciones generadas. Por eso permanecen ignoradas por Git.
 `Level 6` ejecuta la validacion integral:
 
 - Newman para flujos API;
+- validacion funcional EDC+Kafka despues de Newman cuando el adapter la soporta;
 - Playwright del adapter activo;
 - comprobaciones MinIO/storage;
 - validaciones de componentes cuando el perfil las habilita;
