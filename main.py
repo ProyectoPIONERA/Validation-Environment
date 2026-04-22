@@ -46,6 +46,10 @@ from deployers.infrastructure.lib.hosts_manager import (
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
+from validation.orchestration.hosts import (
+    ensure_public_endpoints_accessible,
+    normalize_public_endpoint_url,
+)
 from validation.orchestration.kafka import run_kafka_edc_validation
 from validation.ui import interactive_menu as ui_interactive_menu
 from validation.ui.ui_runner import run_playwright_validation
@@ -688,16 +692,21 @@ def _format_console_metric(value, suffix=""):
     return f"{value}{suffix}"
 
 
+def _console_status_label(status):
+    status_labels = {
+        "passed": "✓ PASS",
+        "failed": "✗ FAIL",
+        "skipped": "- SKIP",
+    }
+    normalized = str(status or "unknown").lower()
+    return status_labels.get(normalized, f"? {str(status or 'unknown').upper()}")
+
+
 def _print_kafka_transfer_steps(result, indent="    "):
     steps = result.get("steps") if isinstance(result, dict) else None
     if not isinstance(steps, list) or not steps:
         return
 
-    status_labels = {
-        "passed": "PASS",
-        "failed": "FAIL",
-        "skipped": "SKIP",
-    }
     detail_keys = (
         "http_status",
         "state",
@@ -712,7 +721,7 @@ def _print_kafka_transfer_steps(result, indent="    "):
     for step in steps:
         if not isinstance(step, dict):
             continue
-        status = status_labels.get(str(step.get("status", "unknown")).lower(), str(step.get("status", "unknown")).upper())
+        status = _console_status_label(step.get("status", "unknown"))
         name = step.get("name", "unknown_step")
         details = [
             f"{key}={step[key]}"
@@ -736,7 +745,7 @@ def _print_kafka_edc_results(results):
         metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
         artifact_path = result.get("artifact_path")
         if status == "passed":
-            print(f"  PASS Kafka transfer: {provider} -> {consumer}")
+            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer}")
             _print_kafka_transfer_steps(result)
             if result.get("source_topic") or result.get("destination_topic"):
                 print(f"    Topics: {result.get('source_topic')} -> {result.get('destination_topic')}")
@@ -769,13 +778,13 @@ def _print_kafka_edc_results(results):
                 print(f"    Artifact: {artifact_path}")
         elif status == "failed":
             error = (result.get("error") or {}).get("message", "unknown reason")
-            print(f"  FAIL Kafka transfer: {provider} -> {consumer} ({error})")
+            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({error})")
             _print_kafka_transfer_steps(result)
             if artifact_path:
                 print(f"    Artifact: {artifact_path}")
         else:
             reason = result.get("reason", "unknown reason")
-            print(f"  SKIP Kafka transfer: {provider} -> {consumer} ({reason})")
+            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({reason})")
             _print_kafka_transfer_steps(result)
             if artifact_path:
                 print(f"    Artifact: {artifact_path}")
@@ -1250,6 +1259,120 @@ def _should_write_test_data_cleanup_report():
     return _env_flag("PIONERA_TEST_DATA_CLEANUP_REPORT", default=True)
 
 
+def _append_public_endpoint(endpoints, seen, label, url):
+    normalized_url = normalize_public_endpoint_url(url)
+    if not normalized_url or normalized_url in seen:
+        return
+    seen.add(normalized_url)
+    endpoints.append({"label": label, "url": normalized_url})
+
+
+def _level6_public_endpoint_candidates(adapter, connectors, deployer_context):
+    endpoints = []
+    seen = set()
+    config = dict(getattr(deployer_context, "config", {}) or {})
+    ds_domain = str(getattr(deployer_context, "ds_domain_base", "") or "").strip()
+    dataspace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
+
+    _append_public_endpoint(endpoints, seen, "Keycloak admin", config.get("KC_URL"))
+    _append_public_endpoint(endpoints, seen, "Keycloak public", config.get("KC_INTERNAL_URL"))
+    _append_public_endpoint(endpoints, seen, "Keycloak hostname", config.get("KEYCLOAK_HOSTNAME"))
+    _append_public_endpoint(endpoints, seen, "MinIO API", config.get("MINIO_HOSTNAME"))
+
+    if dataspace and ds_domain:
+        _append_public_endpoint(
+            endpoints,
+            seen,
+            "Registration service",
+            f"http://registration-service-{dataspace}.{ds_domain}",
+        )
+
+    connector_adapter = getattr(adapter, "connectors", None)
+    connector_base_url = getattr(connector_adapter, "connector_base_url", None)
+    build_connector_url = getattr(connector_adapter, "build_connector_url", None)
+    for connector in connectors or []:
+        url = None
+        if callable(connector_base_url):
+            try:
+                url = connector_base_url(connector)
+            except Exception:
+                url = None
+        if not url and callable(build_connector_url):
+            try:
+                url = build_connector_url(connector)
+            except Exception:
+                url = None
+        _append_public_endpoint(endpoints, seen, f"Connector {connector}", url)
+
+    return endpoints
+
+
+def _ensure_level6_public_endpoint_access(adapter, connectors, deployer_context):
+    if not _env_flag("PIONERA_LEVEL6_PUBLIC_ENDPOINT_PREFLIGHT", default=True):
+        return {"status": "skipped", "reason": "disabled"}
+    if deployer_context is None:
+        return {"status": "skipped", "reason": "missing-deployer-context"}
+    if getattr(adapter, "infrastructure", None) is None:
+        return {"status": "skipped", "reason": "adapter-has-no-infrastructure-adapter"}
+
+    topology = str(getattr(deployer_context, "topology", "local") or "local").strip().lower()
+    endpoints = _level6_public_endpoint_candidates(adapter, connectors, deployer_context)
+    if not endpoints:
+        return {"status": "skipped", "reason": "no-public-endpoints"}
+
+    print("\nVerifying public ingress hostnames...")
+    result = ensure_public_endpoints_accessible(endpoints, topology=topology)
+    print("Public ingress hostnames OK\n")
+    return result
+
+
+def _cleanup_failure_messages(cleanup_result):
+    messages = []
+    for connector in cleanup_result.get("connectors") or []:
+        for error in connector.get("errors") or []:
+            message = str(error.get("message") or "").strip()
+            if message:
+                messages.append(message)
+        storage = connector.get("storage") or {}
+        for error in storage.get("errors") or []:
+            message = str(error.get("message") or "").strip()
+            if message:
+                messages.append(message)
+    return messages
+
+
+def _test_data_cleanup_failure_hint(cleanup_result):
+    messages = _cleanup_failure_messages(cleanup_result)
+    if not messages:
+        return ""
+
+    joined = "\n".join(messages)
+    keycloak_credentials_mismatch = (
+        "invalid_grant" in joined
+        or "Invalid user credentials" in joined
+        or "Token request" in joined and "HTTP 401" in joined
+    )
+    minio_credentials_mismatch = "InvalidAccessKeyId" in joined
+
+    if keycloak_credentials_mismatch and minio_credentials_mismatch:
+        return (
+            " Local deployment artifacts are out of sync with the running dataspace "
+            "credentials in Keycloak and MinIO. Run Level 4 again from this same checkout "
+            "before Level 6, or run Level 6 from the checkout that deployed the current connectors."
+        )
+    if keycloak_credentials_mismatch:
+        return (
+            " Local connector credentials do not match Keycloak. Run Level 4 again from this "
+            "same checkout before Level 6, or validate from the checkout that deployed the connectors."
+        )
+    if minio_credentials_mismatch:
+        return (
+            " Local connector storage credentials do not match MinIO. Run Level 4 again from this "
+            "same checkout before Level 6, or validate from the checkout that deployed the connectors."
+        )
+    return ""
+
+
 def _run_test_data_cleanup_if_enabled(adapter, connectors, deployer_context, experiment_dir, validation_profile=None):
     if not _should_run_test_data_cleanup(validation_profile=validation_profile):
         return {
@@ -1280,8 +1403,9 @@ def _run_test_data_cleanup_if_enabled(adapter, connectors, deployer_context, exp
     )
     if cleanup_result.get("status") == "failed":
         report_path = cleanup_result.get("report_path")
+        hint = _test_data_cleanup_failure_hint(cleanup_result)
         detail = f" See {report_path} for details." if report_path else ""
-        raise RuntimeError(f"Pre-validation test data cleanup failed.{detail}")
+        raise RuntimeError(f"Pre-validation test data cleanup failed.{hint}{detail}")
     return cleanup_result
 
 
@@ -2105,6 +2229,11 @@ def run_validate(
             baseline=baseline,
         )
     experiment_storage.newman_reports_dir(experiment_dir)
+    public_endpoint_preflight = _ensure_level6_public_endpoint_access(
+        adapter,
+        connectors,
+        deployer_context,
+    )
     test_data_cleanup = _run_test_data_cleanup_if_enabled(
         adapter,
         connectors,
@@ -2243,6 +2372,7 @@ def run_validate(
         "storage_checks": list(getattr(validation_engine, "last_storage_checks", []) or []),
         "playwright": playwright_result,
         "test_data_cleanup": test_data_cleanup,
+        "public_endpoint_preflight": public_endpoint_preflight,
         "hosts_sync": hosts_sync,
         "validation_profile": (
             validation_profile.as_dict()
@@ -2718,7 +2848,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None):
     print("S - Select adapter")
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
-    print("M - Run metrics (Kafka optional)")
+    print("M - Run metrics / benchmarks")
     print()
     print("[More]")
     print("T - Tools")
@@ -2748,7 +2878,10 @@ def _print_interactive_help():
     print("S - Use when you want to switch between adapters, for example inesdata and edc.")
     print("P - Use before deploying to inspect the plan without changing the environment.")
     print("H - Use when browser or CLI access fails because local hostnames are missing.")
-    print("M - Use after deployment when you only need metrics; Kafka benchmark is optional.")
+    print(
+        "M - Use when you only need metrics or standalone benchmarks. "
+        "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
+    )
     print()
     print("[Tools Submenu]")
     print("T - Open Tools.")
@@ -3074,7 +3207,7 @@ def run_interactive_menu(
                 if not _interactive_confirm(f"Run metrics for {current_adapter}?", default=False):
                     print("Metrics cancelled.")
                     continue
-                kafka_enabled = _interactive_confirm("Enable Kafka benchmark?", default=False)
+                kafka_enabled = _interactive_confirm("Enable standalone Kafka broker benchmark?", default=False)
                 adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
                 _print_action_result(
                     run_metrics(

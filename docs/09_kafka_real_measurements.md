@@ -11,9 +11,9 @@ Esta fase mantiene el benchmark de broker Kafka como opcional, pero hace que su 
 
 - `python main.py inesdata metrics --kafka`
 - `python main.py inesdata run --kafka`
-- `python main.py menu` -> `M - Run metrics (Kafka optional)`
+- `python main.py menu` -> `M - Run metrics / benchmarks`
 
-La activacion del benchmark de broker para usuarios debe hacerse desde el CLI o el menu, no desde `deployer.config`. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y se ejecuta automaticamente en `Level 6`, despues de Newman, para los adaptadores `inesdata` y `edc`.
+La activacion del benchmark de broker para usuarios debe hacerse desde el CLI o el menu, no desde `deployer.config`. En el menu, la pregunta `Enable standalone Kafka broker benchmark?` se refiere solo a este benchmark independiente del broker. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y se ejecuta automaticamente en `Level 6`, despues de Newman, para los adaptadores `inesdata` y `edc`.
 
 ## Salida
 

@@ -51,6 +51,47 @@ class Level6HostsTests(unittest.TestCase):
             header_comment="# Dataspace Connector Hosts",
         )
 
+    def test_public_endpoint_check_accepts_any_http_response_as_reachable(self):
+        class Response:
+            status_code = 404
+
+        result = hosts.ensure_public_endpoints_accessible(
+            [{"label": "connector", "url": "http://conn-a.example.local"}],
+            requester=mock.Mock(return_value=Response()),
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["checked"][0]["status_code"], 404)
+
+    def test_public_endpoint_check_explains_minikube_tunnel_sudo_prompt(self):
+        requester = mock.Mock(side_effect=OSError("connection refused"))
+
+        with self.assertRaisesRegex(RuntimeError, "minikube tunnel") as exc:
+            hosts.ensure_public_endpoints_accessible(
+                [{"label": "Keycloak", "url": "http://keycloak.example.local"}],
+                requester=requester,
+                topology="local",
+            )
+
+        message = str(exc.exception)
+        self.assertIn("[sudo] password", message)
+        self.assertIn("does not collect", message)
+
+    def test_public_endpoint_check_skips_loopback_and_cluster_internal_urls(self):
+        requester = mock.Mock()
+
+        result = hosts.ensure_public_endpoints_accessible(
+            [
+                {"label": "local", "url": "http://localhost:8200"},
+                {"label": "cluster", "url": "http://vault.common-srvs.svc:8200"},
+            ],
+            requester=requester,
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["checked"], [])
+        requester.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

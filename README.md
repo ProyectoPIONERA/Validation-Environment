@@ -339,7 +339,7 @@ python3 main.py inesdata metrics --topology local
 python3 main.py edc metrics --topology local
 ```
 
-Ejecutar métricas con Kafka:
+Ejecutar métricas con benchmark standalone de broker Kafka:
 
 ```bash
 python3 main.py inesdata metrics --topology local --kafka
@@ -354,9 +354,10 @@ bash scripts/run_kafka_benchmark.sh --prepare-only
 bash scripts/run_kafka_benchmark.sh --teardown-only
 ```
 
-El benchmark puede generar `kafka_metrics.json`. Además, `Level 6` ejecuta la
-validación funcional EDC+Kafka después de Newman para adapters compatibles y
-puede generar `kafka_transfer_results.json`.
+El benchmark standalone puede generar `kafka_metrics.json` y mide el broker
+Kafka, no el flujo E2E del dataspace. Además, `Level 6` ejecuta la validación
+funcional EDC+Kafka después de Newman para adapters compatibles y puede generar
+`kafka_transfer_results.json`.
 
 En local, esa validación usa por defecto un broker Kafka temporal dentro de
 Kubernetes. Los conectores acceden al broker por DNS de cluster y el proceso

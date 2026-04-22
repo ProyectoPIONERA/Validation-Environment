@@ -69,9 +69,9 @@ Muestra un plan de despliegue sin modificar el entorno. Úsalo antes de ejecutar
 
 Planifica o aplica entradas del fichero `hosts`. Por defecto solo planifica. Para aplicar cambios debes habilitar sincronización explícita con `PIONERA_SYNC_HOSTS=true` y `PIONERA_HOSTS_FILE`.
 
-`M - Run metrics (Kafka optional)`
+`M - Run metrics / benchmarks`
 
-Ejecuta métricas sobre el adapter activo. El benchmark Kafka es opcional y los resultados se guardan en `experiments/`.
+Ejecuta métricas o benchmarks independientes sobre el adapter activo. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.
 
 ## More
 

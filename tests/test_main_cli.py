@@ -87,6 +87,12 @@ class FakeAdapter:
         return ["conn-a", "conn-b"]
 
 
+class FakeAdapterWithInfrastructure(FakeAdapter):
+    def __init__(self):
+        super().__init__()
+        self.infrastructure = object()
+
+
 class KafkaTransferConsoleOutputTests(unittest.TestCase):
     def test_kafka_transfer_results_are_printed_with_neutral_summary(self):
         results = [
@@ -136,8 +142,10 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertIn("Kafka transfer validation results", output)
+        self.assertIn("✓ PASS Kafka transfer: conn-provider -> conn-consumer", output)
         self.assertIn("PASS Kafka transfer: conn-provider -> conn-consumer", output)
         self.assertIn("Steps:", output)
+        self.assertIn("✓ PASS create_kafka_asset", output)
         self.assertIn("PASS create_kafka_asset", output)
         self.assertIn("PASS measure_kafka_transfer_latency", output)
         self.assertIn("Messages: produced=10 consumed=10", output)
@@ -145,6 +153,34 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Throughput: 18.5 msg/s", output)
         self.assertNotIn("EDC+Kafka", output)
         self.assertNotIn("Message: id=msg-1", output)
+
+    def test_kafka_transfer_results_mark_failed_and_skipped_status_with_icons(self):
+        results = [
+            {
+                "provider": "conn-provider",
+                "consumer": "conn-consumer",
+                "status": "failed",
+                "error": {"message": "boom"},
+                "steps": [{"name": "create_asset", "status": "failed"}],
+            },
+            {
+                "provider": "conn-provider",
+                "consumer": "conn-consumer",
+                "status": "skipped",
+                "reason": "not_supported",
+                "steps": [{"name": "create_asset", "status": "skipped"}],
+            },
+        ]
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_kafka_edc_results(results)
+
+        output = stdout.getvalue()
+        self.assertIn("✗ FAIL Kafka transfer: conn-provider -> conn-consumer (boom)", output)
+        self.assertIn("✗ FAIL create_asset", output)
+        self.assertIn("- SKIP Kafka transfer: conn-provider -> conn-consumer (not_supported)", output)
+        self.assertIn("- SKIP create_asset", output)
 
     def test_kafka_transfer_results_can_print_message_samples_when_enabled(self):
         results = [
@@ -1628,6 +1664,70 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(cleanup_kwargs["connectors"], ["conn-deployer-a", "conn-deployer-b"])
         self.assertEqual(cleanup_kwargs["mode"], "dry-run")
         self.assertTrue(cleanup_kwargs["report_enabled"])
+
+    def test_level6_public_endpoint_preflight_builds_dataspace_and_connector_urls(self):
+        adapter = FakeAdapterWithInfrastructure()
+        context = types.SimpleNamespace(
+            topology="local",
+            dataspace_name="fake-ds",
+            ds_domain_base="example.local",
+            config={
+                "KC_URL": "http://keycloak-admin.example.local",
+                "KC_INTERNAL_URL": "http://keycloak.example.local",
+                "MINIO_HOSTNAME": "minio.example.local",
+            },
+        )
+
+        with mock.patch.object(
+            main,
+            "ensure_public_endpoints_accessible",
+            return_value={"status": "passed", "checked": []},
+        ) as preflight:
+            result = main._ensure_level6_public_endpoint_access(
+                adapter,
+                ["conn-a"],
+                context,
+            )
+
+        self.assertEqual(result["status"], "passed")
+        endpoints = preflight.call_args.args[0]
+        urls = {endpoint["url"] for endpoint in endpoints}
+        self.assertIn("http://keycloak-admin.example.local", urls)
+        self.assertIn("http://keycloak.example.local", urls)
+        self.assertIn("http://minio.example.local", urls)
+        self.assertIn("http://registration-service-fake-ds.example.local", urls)
+        self.assertIn("http://conn-a.example.local/interface", urls)
+
+    def test_cleanup_failure_hint_explains_local_artifact_credential_mismatch(self):
+        cleanup_result = {
+            "connectors": [
+                {
+                    "errors": [
+                        {
+                            "message": (
+                                "Token request for conn-a failed with HTTP 401: "
+                                '{"error":"invalid_grant","error_description":"Invalid user credentials"}'
+                            )
+                        }
+                    ],
+                    "storage": {
+                        "errors": [
+                            {
+                                "message": (
+                                    "S3 operation failed; code: InvalidAccessKeyId, "
+                                    "message: The Access Key Id you provided does not exist"
+                                )
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        hint = main._test_data_cleanup_failure_hint(cleanup_result)
+
+        self.assertIn("Local deployment artifacts are out of sync", hint)
+        self.assertIn("Run Level 4 again from this same checkout", hint)
 
     def test_validate_command_runs_test_data_cleanup_when_profile_enables_it_by_default(self):
         with mock.patch.object(
