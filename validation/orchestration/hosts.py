@@ -34,10 +34,13 @@ def ensure_connector_hosts(
     resolver: Callable[[str], str],
     header_comment: str = "# Dataspace Connector Hosts",
 ) -> None:
+    infra_hosts = config_adapter.generate_hosts(infrastructure_adapter._dataspace_name())
     connector_hosts = config_adapter.generate_connector_hosts(connectors)
-    if connector_hosts:
+    all_hosts = list(dict.fromkeys(infra_hosts + connector_hosts))
+
+    if all_hosts:
         infrastructure_adapter.manage_hosts_entries(
-            connector_hosts,
+            all_hosts,
             header_comment=header_comment,
         )
 

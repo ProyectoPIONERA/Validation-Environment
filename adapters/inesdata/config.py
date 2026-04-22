@@ -39,7 +39,7 @@ class InesdataConfig:
     PORT_MINIO = 9000
     PORT_REGISTRATION_SERVICE = 18080
 
-    TIMEOUT_POD_WAIT = 120
+    TIMEOUT_POD_WAIT = 300
     TIMEOUT_PORT = 30
     TIMEOUT_NAMESPACE = 90
 
@@ -364,7 +364,7 @@ class INESDataConfigAdapter:
 
         runtime = {
             "provisioner": config.get("KAFKA_PROVISIONER", "kubernetes"),
-            "bootstrap_servers": config.get("KAFKA_BOOTSTRAP_SERVERS", ""),
+            "bootstrap_servers": config.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
             "topic_name": config.get("KAFKA_TOPIC_NAME", "kafka-stream-topic"),
             "topic_strategy": config.get("KAFKA_TOPIC_STRATEGY", "STATIC_TOPIC"),
             "security_protocol": config.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
@@ -427,30 +427,39 @@ class INESDataConfigAdapter:
             return configured
         return self.primary_dataspace_name()
 
-    def generate_hosts(self, ds_name=None):
+    def generate_hosts(self, ds_name=None, target_ip=None):
+        target_ip = target_ip or self.config.MINIKUBE_IP
         config = self.load_deployer_config()
         ds_name = ds_name or self.primary_dataspace_name()
         hosts = []
 
         if config.get("KEYCLOAK_HOSTNAME"):
-            hosts.append(f"127.0.0.1 {config.get('KEYCLOAK_HOSTNAME')}")
+            hosts.append(f"{target_ip} {config.get('KEYCLOAK_HOSTNAME')}")
 
         if config.get("MINIO_HOSTNAME"):
-            hosts.append(f"127.0.0.1 {config.get('MINIO_HOSTNAME')}")
+            hosts.append(f"{target_ip} {config.get('MINIO_HOSTNAME')}")
 
         domain = config.get("DOMAIN_BASE")
         ds_domain = config.get("DS_DOMAIN_BASE")
 
         if domain:
-            hosts.append(f"127.0.0.1 keycloak-admin.{domain}")
-            hosts.append(f"127.0.0.1 console.minio-s3.{domain}")
+            hosts.append(f"{target_ip} keycloak-admin.{domain}")
+            hosts.append(f"{target_ip} console.minio-s3.{domain}")
 
         if ds_domain and ds_name:
-            hosts.append(f"127.0.0.1 registration-service-{ds_name}.{ds_domain}")
+            hosts.append(f"{target_ip} registration-service-{ds_name}.{ds_domain}")
+
+            # Add optional components hosts
+            raw_components = config.get("COMPONENTS") or ""
+            components = [c.strip().lower().replace("_", "-") for c in raw_components.split(",") if c.strip()]
+            for comp in components:
+                # Component hostname convention: {comp}-{ds_name}.{ds_domain}
+                hosts.append(f"{target_ip} {comp}-{ds_name}.{ds_domain}")
 
         return hosts
 
-    def generate_connector_hosts(self, connectors):
+    def generate_connector_hosts(self, connectors, target_ip=None):
+        target_ip = target_ip or self.config.MINIKUBE_IP
         config = self.load_deployer_config()
         ds_domain = config.get("DS_DOMAIN_BASE")
         if not ds_domain:
@@ -458,7 +467,7 @@ class INESDataConfigAdapter:
 
         hosts = []
         for connector in connectors or []:
-            hosts.append(f"127.0.0.1 {connector}.{ds_domain}")
+            hosts.append(f"{target_ip} {connector}.{ds_domain}")
         return hosts
 
     def ds_domain_base(self):
@@ -467,4 +476,3 @@ class INESDataConfigAdapter:
 
     def describe(self) -> str:
         return "INESDataConfigAdapter contains configuration logic for INESData."
-

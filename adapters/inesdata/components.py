@@ -819,7 +819,7 @@ class INESDataComponentsAdapter:
             for host in sorted(set(inferred_hosts.values())):
                 print(f"- {host}")
 
-            desired_entries = [f"127.0.0.1 {h}" for h in sorted(set(inferred_hosts.values()))]
+            desired_entries = [f"{self.config.MINIKUBE_IP} {h}" for h in sorted(set(inferred_hosts.values()))]
             self.infrastructure.manage_hosts_entries(
                 desired_entries,
                 header_comment="# Components",

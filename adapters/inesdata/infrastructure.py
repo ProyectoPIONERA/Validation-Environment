@@ -140,6 +140,33 @@ class INESDataInfrastructureAdapter:
         print(f"Removed credsStore=desktop from {docker_config_path}")
         return True
 
+    def get_vm_ip(self):
+        """Fetch the primary IP address of the VM using 'hostname -I'."""
+        result = self.run("hostname -I", capture=True, silent=True)
+        if result:
+            ips = result.split()
+            if ips:
+                primary_ip = ips[0].strip()
+                print(f"Detected VM External IP: {primary_ip}")
+                return primary_ip
+        return None
+
+    def patch_ingress_external_ip(self):
+        """Patches the Ingress Controller LoadBalancer with the VM's external IP."""
+        vm_ip = self.get_vm_ip()
+        if not vm_ip:
+            print("Warning: Could not determine VM IP for ingress patching.")
+            return
+
+        print(f"Patching Ingress Controller with LoadBalancer IP: {vm_ip}")
+        patch_json = json.dumps({"spec": {"externalIPs": [vm_ip]}})
+
+        cmd = (
+            f"kubectl patch svc ingress-nginx-controller "
+            f"-n ingress-nginx --patch {shlex.quote(patch_json)}"
+        )
+        self.run(cmd, check=False)
+
     def get_hosts_path(self):
         import sys
 
@@ -241,6 +268,7 @@ class INESDataInfrastructureAdapter:
 
         if choice == "S":
             choice = "Y"
+            return
 
         if choice != "Y":
             print("No changes made to hosts file")
@@ -321,15 +349,35 @@ class INESDataInfrastructureAdapter:
 
                     cleaned[insert_at:insert_at] = entries_to_add
 
-                with open(hosts_path, "w") as f:
-                    f.write("\n".join(cleaned).rstrip("\n") + "\n")
+                new_content = "\n".join(cleaned).rstrip("\n") + "\n"
+                try:
+                    with open(hosts_path, "w") as f:
+                        f.write(new_content)
+                except PermissionError:
+                    import tempfile
+                    fd, temp_path = tempfile.mkstemp()
+                    try:
+                        with os.fdopen(fd, 'w') as tmp:
+                            tmp.write(new_content)
+                        self.run(f"cat {temp_path} | sudo tee {hosts_path} > /dev/null", check=True)
+                    finally:
+                        os.remove(temp_path)
 
                 print("Hosts file updated successfully")
             else:
-                with open(hosts_path, "a") as f:
-                    f.write(f"\n{header_comment}\n")
-                    for line in missing:
-                        f.write(line + "\n")
+                new_entries = f"\n{header_comment}\n" + "\n".join(missing) + "\n"
+                try:
+                    with open(hosts_path, "a") as f:
+                        f.write(new_entries)
+                except PermissionError:
+                    import tempfile
+                    fd, temp_path = tempfile.mkstemp()
+                    try:
+                        with os.fdopen(fd, 'w') as tmp:
+                            tmp.write(new_entries)
+                        self.run(f"cat {temp_path} | sudo tee -a {hosts_path} > /dev/null", check=True)
+                    finally:
+                        os.remove(temp_path)
                 print("Entries added successfully")
         except PermissionError:
             print("Permission denied writing to hosts file.")
@@ -1692,10 +1740,12 @@ class INESDataInfrastructureAdapter:
                 "verifying ingress controller readiness directly."
             )
         self.run("kubectl get pods -n ingress-nginx", check=False)
+        self.patch_ingress_external_ip()
         cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
         if not cluster_ready:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         self.complete_level(1)
+
 
     def deploy_infrastructure(self):
         self.announce_level(2, "DEPLOY COMMON SERVICES")
@@ -1726,6 +1776,8 @@ class INESDataInfrastructureAdapter:
         self.reconcile_common_services_source_of_truth()
 
         print("\nConfiguring hosts...")
+        print("[Networking] Configuring hosts for internal VM access...")
+        print(f"Using internal Minikube IP {self.config.MINIKUBE_IP} for local resolution.")
         hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
         self.manage_hosts_entries(hosts_entries)
 
@@ -1774,4 +1826,3 @@ class INESDataInfrastructureAdapter:
 
     def describe(self) -> str:
         return "INESDataInfrastructureAdapter contains infrastructure logic for INESData."
-
