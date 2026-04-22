@@ -27,6 +27,9 @@ RUN_LOAD=1
 MANIFEST_FILE=""
 TARGET="TODO"
 PRUNE_REPLACED_IMAGES=1
+PRESERVE_DEPLOYED_VALUES=0
+PRESERVE_DEPLOYED_RELEASES=0
+PRESERVE_SKIPPED_RELEASES=()
 LEGACY_DATASPACE_TARGET="__legacy-dataspace__"
 LEGACY_CONNECTORS_TARGET="__legacy-connectors__"
 
@@ -50,6 +53,8 @@ Options:
   --target <value>            Update target. Use TODO for all images, CHANGED for modified source components, or one component key.
   --component <value>         Alias for --target (kept for backwards compatibility).
   --deploy-target <target>    Deprecated alias; mapped to --target when possible.
+  --preserve-values           Redeploy only existing releases with --reuse-values; never reinstall with base values.
+  --preserve-data             Alias for --preserve-values.
   --no-prune                  Keep replaced images in minikube cache (default prunes replaced image tags).
   -h, --help                  Show help.
 
@@ -111,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-prune)
       PRUNE_REPLACED_IMAGES=0
+      shift
+      ;;
+    --preserve-values|--preserve-data)
+      PRESERVE_DEPLOYED_VALUES=1
       shift
       ;;
     --deploy-target)
@@ -175,6 +184,33 @@ release_exists() {
   local release="$1"
   local namespace="$2"
   helm status "$release" -n "$namespace" >/dev/null 2>&1
+}
+
+helm_upgrade_with_local_override() {
+  local release="$1"
+  local chart_dir="$2"
+  local override_file="$3"
+  local base_values_file="$4"
+  local reuse_existing="$5"
+
+  if [[ "$PRESERVE_DEPLOYED_VALUES" -eq 1 ]]; then
+    if release_exists "$release" "$K8S_NAMESPACE"; then
+      echo "Preserving deployed values for Helm release '$release'"
+      run_cmd "helm upgrade --install \"$release\" \"$chart_dir\" -n \"$K8S_NAMESPACE\" --create-namespace --reuse-values -f \"$override_file\""
+      PRESERVE_DEPLOYED_RELEASES=$((PRESERVE_DEPLOYED_RELEASES + 1))
+    else
+      echo "Skipping Helm release '$release' because it is not deployed in namespace '$K8S_NAMESPACE'."
+      echo "Run the corresponding framework level first if this component must be created."
+      PRESERVE_SKIPPED_RELEASES+=("$release")
+    fi
+    return
+  fi
+
+  if [[ "$reuse_existing" == "yes" ]] && release_exists "$release" "$K8S_NAMESPACE"; then
+    run_cmd "helm upgrade --install \"$release\" \"$chart_dir\" -n \"$K8S_NAMESPACE\" --create-namespace --reuse-values -f \"$override_file\""
+  else
+    run_cmd "helm upgrade --install \"$release\" \"$chart_dir\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$base_values_file\" -f \"$override_file\""
+  fi
 }
 
 ALL_COMPONENTS=(
@@ -320,6 +356,7 @@ echo "Minikube profile: $MINIKUBE_PROFILE"
 echo "Local image prefix: $LOCAL_REGISTRY_HOST/$LOCAL_NAMESPACE"
 echo "Target: $TARGET"
 echo "Prune replaced images: $([[ "$PRUNE_REPLACED_IMAGES" -eq 1 ]] && echo "yes" || echo "no")"
+echo "Preserve deployed values: $([[ "$PRESERVE_DEPLOYED_VALUES" -eq 1 ]] && echo "yes" || echo "no")"
 
 case "$TARGET" in
   TODO|CHANGED|changed|connector|connector-interface|registration-service|public-portal-backend|public-portal-frontend|$LEGACY_DATASPACE_TARGET|$LEGACY_CONNECTORS_TARGET)
@@ -558,21 +595,21 @@ CONNECTOR_DIR="$PLATFORM_DIR/connector"
 if has_required_component "registration-service"; then
   require_file "$RS_BASE_VALUES"
   rs_release="$K8S_NAMESPACE-dataspace-rs"
-  if [[ "$TARGET" == "registration-service" ]] && release_exists "$rs_release" "$K8S_NAMESPACE"; then
-    run_cmd "helm upgrade --install \"$rs_release\" \"$PLATFORM_DIR/dataspace/registration-service\" -n \"$K8S_NAMESPACE\" --create-namespace --reuse-values -f \"$RS_OVERRIDE\""
-  else
-    run_cmd "helm upgrade --install \"$rs_release\" \"$PLATFORM_DIR/dataspace/registration-service\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$RS_BASE_VALUES\" -f \"$RS_OVERRIDE\""
+  reuse_existing="no"
+  if [[ "$TARGET" == "registration-service" ]]; then
+    reuse_existing="yes"
   fi
+  helm_upgrade_with_local_override "$rs_release" "$PLATFORM_DIR/dataspace/registration-service" "$RS_OVERRIDE" "$RS_BASE_VALUES" "$reuse_existing"
 fi
 
 if has_required_component "public-portal-backend" || has_required_component "public-portal-frontend"; then
   require_file "$PP_BASE_VALUES"
   pp_release="$K8S_NAMESPACE-dataspace-pp"
-  if [[ "$TARGET" == "public-portal-backend" || "$TARGET" == "public-portal-frontend" ]] && release_exists "$pp_release" "$K8S_NAMESPACE"; then
-    run_cmd "helm upgrade --install \"$pp_release\" \"$PLATFORM_DIR/dataspace/public-portal\" -n \"$K8S_NAMESPACE\" --create-namespace --reuse-values -f \"$PP_OVERRIDE\""
-  else
-    run_cmd "helm upgrade --install \"$pp_release\" \"$PLATFORM_DIR/dataspace/public-portal\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$PP_BASE_VALUES\" -f \"$PP_OVERRIDE\""
+  reuse_existing="no"
+  if [[ "$TARGET" == "public-portal-backend" || "$TARGET" == "public-portal-frontend" ]]; then
+    reuse_existing="yes"
   fi
+  helm_upgrade_with_local_override "$pp_release" "$PLATFORM_DIR/dataspace/public-portal" "$PP_OVERRIDE" "$PP_BASE_VALUES" "$reuse_existing"
 fi
 
 if has_required_component "connector" || has_required_component "connector-interface"; then
@@ -589,13 +626,23 @@ if has_required_component "connector" || has_required_component "connector-inter
       connector_name="${connector_name#values-}"
       connector_name="${connector_name%.yaml}"
       release_name="${connector_name}-${K8S_NAMESPACE}"
-      if [[ "$TARGET" == "connector" || "$TARGET" == "connector-interface" ]] && release_exists "$release_name" "$K8S_NAMESPACE"; then
-        run_cmd "helm upgrade --install \"$release_name\" \"$CONNECTOR_DIR\" -n \"$K8S_NAMESPACE\" --create-namespace --reuse-values -f \"$CONNECTOR_OVERRIDE\""
-      else
-        run_cmd "helm upgrade --install \"$release_name\" \"$CONNECTOR_DIR\" -n \"$K8S_NAMESPACE\" --create-namespace -f \"$values_file\" -f \"$CONNECTOR_OVERRIDE\""
+      reuse_existing="no"
+      if [[ "$TARGET" == "connector" || "$TARGET" == "connector-interface" ]]; then
+        reuse_existing="yes"
       fi
+      helm_upgrade_with_local_override "$release_name" "$CONNECTOR_DIR" "$CONNECTOR_OVERRIDE" "$values_file" "$reuse_existing"
     done
   fi
+fi
+
+if [[ "$PRESERVE_DEPLOYED_VALUES" -eq 1 && "$RUN_DEPLOY" -eq 1 && "$DRY_RUN" -eq 0 && "$PRESERVE_DEPLOYED_RELEASES" -eq 0 ]]; then
+  echo
+  echo "No existing Helm releases were redeployed in preserve-values mode." >&2
+  if [[ "${#PRESERVE_SKIPPED_RELEASES[@]}" -gt 0 ]]; then
+    echo "Skipped releases: ${PRESERVE_SKIPPED_RELEASES[*]}" >&2
+  fi
+  echo "Run Level 4 or Level 5 first, then use this developer workflow for iterative redeploys." >&2
+  exit 1
 fi
 
 if [[ "$PRUNE_REPLACED_IMAGES" -eq 1 && "$DRY_RUN" -eq 0 && -n "$PRE_DEPLOY_IMAGES_FILE" ]]; then

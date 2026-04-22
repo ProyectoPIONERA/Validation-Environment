@@ -2849,10 +2849,19 @@ def _print_interactive_menu(adapter_name, adapter_registry=None):
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
     print("M - Run metrics / benchmarks")
+    print("X - Recreate dataspace")
     print()
-    print("[More]")
-    print("T - Tools")
-    print("U - UI Validation")
+    print("[Developer]")
+    print("B - Bootstrap Framework Dependencies")
+    print("D - Run Framework Doctor")
+    print("R - Recover Connectors After WSL Restart")
+    print("C - Cleanup Workspace")
+    print("L - Build and Deploy Local Images")
+    print()
+    print("[UI Validation]")
+    print("I - INESData Tests (Normal/Live/Debug)")
+    print("O - Ontology Hub Tests (Normal/Live/Debug)")
+    print("A - AI Model Hub Tests (Normal/Live/Debug)")
     print()
     print("[Control]")
     print("? - Help")
@@ -2882,28 +2891,24 @@ def _print_interactive_help():
         "M - Use when you only need metrics or standalone benchmarks. "
         "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
     )
+    print("X - Use only when you intentionally want to destroy and recreate the selected dataspace.")
     print()
-    print("[Tools Submenu]")
-    print("T - Open Tools.")
-    print("  1 - Use on a clean machine or after dependency issues to install/repair framework dependencies.")
-    print("  2 - Use when diagnosing local readiness issues before deploying or validating.")
-    print("  3 - Use after a WSL restart when connectors are still deployed but local access needs recovery.")
-    print("  4 - Use when generated files, caches or previous results make the workspace hard to reason about.")
-    print("  5 - Use during development after changing local images that must be rebuilt and loaded.")
-    print("      In the image submenu, options 1-3 keep the legacy INESData shortcuts.")
-    print("      Options 4-7 use explicit image recipes for the active adapter.")
-    print("  6/X - Use only when you intentionally want to destroy and recreate the selected dataspace.")
-    print("  B - Back to the main menu.")
+    print("[Developer]")
+    print("B - Use on a clean machine or after dependency issues to install/repair framework dependencies.")
+    print("D - Use when diagnosing local readiness issues before deploying or validating.")
+    print("R - Use after a WSL restart when connectors are still deployed but local access needs recovery.")
+    print("C - Use when generated files, caches or previous results make the workspace hard to reason about.")
+    print("L - Use during development after changing local images that must be rebuilt and loaded.")
+    print("    In the image submenu, options 1-3 keep the INESData developer redeploy shortcuts.")
+    print("    Advanced options use explicit image recipes for the active adapter.")
     print()
-    print("[UI Validation Submenu]")
-    print("U - Open UI Validation.")
-    print("  1 - Use to validate the INESData portal experience independently from full Level 6.")
-    print("  2 - Use when Ontology Hub UI changed or after deploying ontology-related components.")
-    print("  3 - Use when AI Model Hub UI changed or after deploying AI Model Hub components.")
-    print("  B - Back to the main menu.")
+    print("[UI Validation]")
+    print("I - Use to validate the INESData portal experience independently from full Level 6.")
+    print("O - Use when Ontology Hub UI changed or after deploying ontology-related components.")
+    print("A - Use when AI Model Hub UI changed or after deploying AI Model Hub components.")
     print()
     print("[Compatibility]")
-    print("Legacy shortcuts still work from the main menu: B, D, R, C, L, I, O and A.")
+    print("All developer and UI validation shortcuts are available directly from the main menu.")
     print("Q - Exit the menu.")
     print("=" * 50)
 
@@ -2939,33 +2944,6 @@ def _print_action_result(result):
         print(json.dumps(result, indent=2, default=str))
     elif result is not None:
         print(result)
-
-
-def _print_tools_menu():
-    print()
-    print("=" * 50)
-    print("TOOLS")
-    print("=" * 50)
-    print("1 - Bootstrap Framework Dependencies")
-    print("2 - Run Framework Doctor")
-    print("3 - Recover Connectors After WSL Restart")
-    print("4 - Cleanup Workspace")
-    print("5 - Build and Deploy Local Images")
-    print("6/X - Recreate Dataspace")
-    print("B - Back")
-    print("=" * 50)
-
-
-def _print_ui_validation_menu():
-    print()
-    print("=" * 50)
-    print("UI VALIDATION")
-    print("=" * 50)
-    print("1 - INESData Tests (Normal/Live/Debug)")
-    print("2 - Ontology Hub Tests (Normal/Live/Debug)")
-    print("3 - AI Model Hub Tests (Normal/Live/Debug)")
-    print("B - Back")
-    print("=" * 50)
 
 
 def _run_recreate_dataspace_interactive(
@@ -3013,65 +2991,6 @@ def _run_recreate_dataspace_interactive(
         confirm_dataspace=confirmation,
         with_connectors=with_connectors,
     )
-
-
-def _run_tools_submenu(
-    current_adapter="inesdata",
-    adapter_registry=None,
-    deployer_registry=None,
-    topology="local",
-):
-    actions = {
-        "1": "bootstrap",
-        "2": "doctor",
-        "3": "recover",
-        "4": "cleanup",
-        "5": "local_images",
-    }
-    recreate_choices = {"6", "X"}
-
-    while True:
-        _print_tools_menu()
-        choice = _interactive_read("\nTools selection: ").strip().upper()
-        if not choice or choice == "B":
-            return
-
-        if choice in recreate_choices:
-            _print_action_result(
-                _run_recreate_dataspace_interactive(
-                    current_adapter=current_adapter,
-                    adapter_registry=adapter_registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                )
-            )
-            continue
-
-        action_name = actions.get(choice)
-        if action_name is None:
-            print("Invalid tools selection. Please try again.")
-            continue
-        _run_legacy_menu_action(action_name, current_adapter=current_adapter)
-
-
-def _run_ui_validation_submenu():
-    actions = {
-        "1": "inesdata_ui",
-        "2": "ontology_hub_ui",
-        "3": "ai_model_hub_ui",
-    }
-
-    while True:
-        _print_ui_validation_menu()
-        choice = _interactive_read("\nUI validation selection: ").strip().upper()
-        if not choice or choice == "B":
-            return
-
-        action_name = actions.get(choice)
-        if action_name is None:
-            print("Invalid UI validation selection. Please try again.")
-            continue
-        _run_legacy_menu_action(action_name)
 
 
 def _run_legacy_menu_action(action_name, current_adapter="inesdata"):
@@ -3125,19 +3044,6 @@ def run_interactive_menu(
                 current_adapter = _select_adapter_interactive(current_adapter, adapter_registry=registry)
                 continue
 
-            if choice == "T":
-                _run_tools_submenu(
-                    current_adapter=current_adapter,
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                )
-                continue
-
-            if choice == "U":
-                _run_ui_validation_submenu()
-                continue
-
             if choice == "B":
                 _run_legacy_menu_action("bootstrap")
                 continue
@@ -3168,6 +3074,17 @@ def run_interactive_menu(
 
             if choice == "A":
                 _run_legacy_menu_action("ai_model_hub_ui")
+                continue
+
+            if choice == "X":
+                _print_action_result(
+                    _run_recreate_dataspace_interactive(
+                        current_adapter=current_adapter,
+                        adapter_registry=registry,
+                        deployer_registry=deployer_registry,
+                        topology=topology,
+                    )
+                )
                 continue
 
             if choice == "P":

@@ -11,10 +11,10 @@ class MainMenuMigrationTests(unittest.TestCase):
         self.adapter_registry = {"fake": "fake_adapter_module:FakeAdapter"}
         self.deployer_registry = {"fake": "fake_deployer_module:FakeDeployer"}
 
-    def test_tools_submenu_runs_migrated_action_without_inesdata_py(self):
+    def test_developer_shortcut_runs_migrated_action_without_inesdata_py(self):
         with mock.patch.dict(sys.modules, {"inesdata": None}), mock.patch(
             "builtins.input",
-            side_effect=["T", "1", "B", "Q"],
+            side_effect=["B", "Q"],
         ), mock.patch.object(
             main.local_menu_tools,
             "run_framework_bootstrap_interactive",
@@ -32,10 +32,10 @@ class MainMenuMigrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "exited")
         bootstrap.assert_called_once_with()
 
-    def test_ui_submenu_runs_migrated_action_without_inesdata_py(self):
+    def test_ui_shortcut_runs_migrated_action_without_inesdata_py(self):
         with mock.patch.dict(sys.modules, {"inesdata": None}), mock.patch(
             "builtins.input",
-            side_effect=["U", "3", "B", "Q"],
+            side_effect=["A", "Q"],
         ), mock.patch.object(
             main.ui_interactive_menu,
             "run_ai_model_hub_ui_tests_interactive",

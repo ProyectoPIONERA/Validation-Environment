@@ -192,8 +192,9 @@ Opciones operativas del menú:
 | `P` | Previsualizar el plan de despliegue. |
 | `H` | Planificar o aplicar entradas de hosts. |
 | `M` | Ejecutar métricas, con Kafka opcional. |
-| `T` | Abrir herramientas locales. |
-| `U` | Ejecutar validaciones UI. |
+| `X` | Recrear el dataspace seleccionado. |
+| `B/D/R/C/L` | Accesos de desarrollo: bootstrap, doctor, recovery, cleanup e imágenes locales. |
+| `I/O/A` | Validaciones UI de INESData, Ontology Hub y AI Model Hub. |
 | `?` | Mostrar ayuda. |
 | `Q` | Salir. |
 
@@ -372,13 +373,18 @@ topics y verificar mensajes desde el host.
 
 ## Imágenes Locales
 
-Durante desarrollo, usa la opción `T -> 5 - Build and Deploy Local Images` del
-menú para construir y cargar imágenes locales del adapter activo.
+Durante desarrollo, usa la opción `L - Build and Deploy Local Images` del menú
+para construir, cargar y redesplegar imágenes locales del adapter activo.
 
 En topología `local`, `Level 4` de INESData prepara automáticamente
 `inesdata-connector` e `inesdata-connector-interface` desde las fuentes locales
 antes de crear los conectores. Esto evita validar con imágenes remotas antiguas
 cuando `Level 6` ejecuta flujos como Kafka o Playwright.
+
+La opción `L` está pensada para iteración de desarrollo y preserva datos en
+redeploys INESData: reutiliza los valores existentes de Helm y no recrea
+credenciales, dataspace ni servicios comunes. Si un release todavía no existe,
+ejecuta primero el nivel correspondiente.
 
 Si la receta corresponde a un componente de `Level 5` ya desplegado, como
 `Ontology Hub` o `AI Model Hub`, el framework reinicia su deployment para que
@@ -418,7 +424,7 @@ https://github.com/ProyectoPIONERA/EDC-asset-filter-dashboard
 
 ## Limpieza y Doctor
 
-El menú incluye herramientas locales:
+El menú incluye accesos directos de desarrollo:
 
 | Herramienta | Uso |
 | --- | --- |

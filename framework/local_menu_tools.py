@@ -834,7 +834,34 @@ def _run_command_interactive(command, cwd=None, env=None) -> bool:
     return result.returncode == 0
 
 
-def _execute_registered_local_image_recipe(recipe: LocalImageRecipe, platform_dir=None) -> bool:
+def _shell_script_has_crlf(script_path: str) -> bool:
+    try:
+        with open(script_path, "rb") as handle:
+            return b"\r\n" in handle.read()
+    except OSError:
+        return False
+
+
+def _validate_local_shell_script(script_path: str) -> bool:
+    if not _shell_script_has_crlf(script_path):
+        return True
+
+    rel_path = os.path.relpath(script_path, project_root())
+    print(
+        "\nLocal workflow script has Windows CRLF line endings and cannot be executed safely in WSL/Linux:"
+    )
+    print(f"  {rel_path}")
+    print("Normalize it to LF, for example: dos2unix " + rel_path + "\n")
+    return False
+
+
+def _execute_registered_local_image_recipe(
+    recipe: LocalImageRecipe,
+    platform_dir=None,
+    *,
+    deploy=True,
+    preserve_values=True,
+) -> bool:
     """Build and load one registered local image recipe."""
     root_dir = project_root()
     minikube_profile = _minikube_profile_for_local_images(recipe.adapter)
@@ -850,14 +877,26 @@ def _execute_registered_local_image_recipe(recipe: LocalImageRecipe, platform_di
         if not resolved_platform_dir:
             platform_dirs = _detect_platform_dirs_from_adapter_configs()
             resolved_platform_dir = platform_dirs[0] if platform_dirs else os.path.join("deployers", "inesdata")
+        context = _dataspace_context_for_local_images(recipe.adapter)
         return _execute_local_images_workflow(
-            ["--platform-dir", resolved_platform_dir, "--component", recipe.workflow_component]
+            [
+                "--platform-dir",
+                resolved_platform_dir,
+                "--namespace",
+                context["namespace"],
+                "--component",
+                recipe.workflow_component,
+            ],
+            deploy=deploy,
+            preserve_values=preserve_values,
         )
 
     if recipe.script_rel_path:
         script_path = os.path.join(root_dir, recipe.script_rel_path)
         if not os.path.isfile(script_path):
             print(f"\nLocal image script not found: {script_path}\n")
+            return False
+        if not _validate_local_shell_script(script_path):
             return False
 
         command = ["bash", script_path, "--apply", *recipe.script_args]
@@ -889,20 +928,37 @@ def _execute_registered_local_image_recipe(recipe: LocalImageRecipe, platform_di
             print("\nImage load failed. Check logs above.\n")
             return False
 
-    _restart_registered_recipe_deployment_if_running(recipe)
+    if deploy:
+        _restart_registered_recipe_deployment_if_running(recipe)
+    else:
+        print("\nRedeploy skipped. Image was built and loaded only.\n")
 
     print("\nRegistered local image workflow completed successfully.\n")
     return True
 
 
-def _execute_registered_local_image_recipes(recipes: list[LocalImageRecipe], platform_dir=None) -> bool:
+def _execute_registered_local_image_recipes(
+    recipes: list[LocalImageRecipe],
+    platform_dir=None,
+    *,
+    deploy=True,
+    preserve_values=True,
+) -> bool:
     if not recipes:
         print("\nNo registered local image recipes selected.\n")
         return False
 
     ok = True
     for recipe in recipes:
-        ok = _execute_registered_local_image_recipe(recipe, platform_dir=platform_dir) and ok
+        ok = (
+            _execute_registered_local_image_recipe(
+                recipe,
+                platform_dir=platform_dir,
+                deploy=deploy,
+                preserve_values=preserve_values,
+            )
+            and ok
+        )
     return ok
 
 
@@ -951,15 +1007,23 @@ def _confirm_local_workflow():
         print("Please answer Y or N.")
 
 
-def _execute_local_images_workflow(extra_args):
+def _execute_local_images_workflow(extra_args, *, deploy=True, preserve_values=False):
     """Execute local build/load/deploy script with --apply and provided args."""
     root_dir = project_root()
     script_path = os.path.join(root_dir, LOCAL_WORKFLOW_SCRIPT_REL_PATH)
     if not os.path.isfile(script_path):
         print(f"\nLocal workflow script not found: {script_path}\n")
         return False
+    if not _validate_local_shell_script(script_path):
+        return False
 
-    command = ["bash", script_path, "--apply", *extra_args]
+    workflow_args = list(extra_args or [])
+    if preserve_values and "--preserve-values" not in workflow_args and "--preserve-data" not in workflow_args:
+        workflow_args.append("--preserve-values")
+    if not deploy and "--skip-deploy" not in workflow_args and "--build-only" not in workflow_args:
+        workflow_args.append("--skip-deploy")
+
+    command = ["bash", script_path, "--apply", *workflow_args]
 
     print(f"\nLaunching local workflow: {' '.join(command)}\n")
     result = subprocess.run(command, cwd=root_dir)
@@ -989,16 +1053,18 @@ def run_local_images_workflow_interactive(active_adapter="inesdata"):
         print("=" * 50)
         print(f"Active adapter: {active_adapter}")
         print()
-        print("[Legacy INESData Shortcuts]")
-        print("1 - Build and deploy ALL legacy INESData local images")
-        print("2 - Build and deploy ONLY INESData connectors")
-        print("3 - Build and deploy ONLY inesdata-connector-interface")
+        print("[Quick actions]")
+        print("Data is preserved. Existing Helm values are reused.")
+        print("1 - All local images")
+        print("2 - Connectors")
+        print("3 - Connector interface")
         print()
-        print("[Registered Recipes]")
-        print("4 - Build/load CHANGED registered images for active adapter")
-        print("5 - Build/load ALL registered images for active adapter")
-        print("6 - Select registered image to build/load")
-        print("7 - Show registered image recipes")
+        print("[Advanced recipes]")
+        print("4 - Changed recipes")
+        print("5 - All recipes")
+        print("6 - Pick recipe and redeploy")
+        print("7 - Pick recipe, build/load only")
+        print("8 - Show recipes")
         print("B - Back")
 
         try:
@@ -1009,45 +1075,57 @@ def run_local_images_workflow_interactive(active_adapter="inesdata"):
 
         if sub_choice == "B":
             return None
-        if sub_choice not in {"1", "2", "3", "4", "5", "6", "7"}:
+        if sub_choice not in {"1", "2", "3", "4", "5", "6", "7", "8"}:
             print("\nInvalid selection. Please try again.\n")
             continue
 
-        if sub_choice == "7":
+        if sub_choice == "8":
             print_local_image_recipes(active_adapter=active_adapter)
             continue
 
-        if sub_choice in {"4", "5", "6"}:
+        if sub_choice in {"4", "5", "6", "7"}:
             recipes = collect_local_image_recipes(active_adapter=active_adapter)
             if sub_choice == "4":
                 recipes = [recipe for recipe in recipes if _recipe_has_changes(recipe)]
                 if not recipes:
                     print(f"\nNo changed registered images detected for adapter '{active_adapter}'.\n")
                     return None
-            elif sub_choice == "6":
+            elif sub_choice in {"6", "7"}:
                 recipe = _select_registered_local_image_recipe(recipes)
                 if recipe is None:
                     return None
                 recipes = [recipe]
+            deploy = sub_choice != "7"
 
             if not _confirm_local_workflow():
                 print("\nExecution cancelled.\n")
                 return None
 
-            _execute_registered_local_image_recipes(recipes, platform_dir=platform_dir)
+            _execute_registered_local_image_recipes(
+                recipes,
+                platform_dir=platform_dir,
+                deploy=deploy,
+                preserve_values=True,
+            )
             return None
 
         if not _confirm_local_workflow():
             print("\nExecution cancelled.\n")
             return None
 
-        extra_args = ["--platform-dir", platform_dir]
+        context = _dataspace_context_for_local_images("inesdata")
+        extra_args = [
+            "--platform-dir",
+            platform_dir,
+            "--namespace",
+            context["namespace"],
+        ]
         if sub_choice == "2":
             extra_args += ["--component", "connector"]
         elif sub_choice == "3":
             extra_args += ["--component", "connector-interface"]
 
-        _execute_local_images_workflow(extra_args)
+        _execute_local_images_workflow(extra_args, deploy=True, preserve_values=True)
         return None
 
 

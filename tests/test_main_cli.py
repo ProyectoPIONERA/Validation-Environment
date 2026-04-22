@@ -572,9 +572,11 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("Active adapter: fake", stdout.getvalue())
         self.assertIn("[Full Deployment]", stdout.getvalue())
         self.assertIn("[Operations]", stdout.getvalue())
-        self.assertIn("[More]", stdout.getvalue())
-        self.assertIn("T - Tools", stdout.getvalue())
-        self.assertIn("U - UI Validation", stdout.getvalue())
+        self.assertIn("X - Recreate dataspace", stdout.getvalue())
+        self.assertIn("[Developer]", stdout.getvalue())
+        self.assertIn("L - Build and Deploy Local Images", stdout.getvalue())
+        self.assertIn("[UI Validation]", stdout.getvalue())
+        self.assertIn("I - INESData Tests", stdout.getvalue())
         self.assertIn("? - Help", stdout.getvalue())
 
     def test_menu_help_explains_available_options(self):
@@ -594,17 +596,17 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("0 - Use for a fresh or full rebuild", stdout.getvalue())
         self.assertIn("4 - Use when connector deployments changed", stdout.getvalue())
         self.assertIn("H - Use when browser or CLI access fails", stdout.getvalue())
-        self.assertIn("[Tools Submenu]", stdout.getvalue())
-        self.assertIn("1 - Use on a clean machine or after dependency issues", stdout.getvalue())
-        self.assertIn("5 - Use during development after changing local images", stdout.getvalue())
-        self.assertIn("6/X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
-        self.assertIn("[UI Validation Submenu]", stdout.getvalue())
-        self.assertIn("1 - Use to validate the INESData portal experience", stdout.getvalue())
-        self.assertIn("3 - Use when AI Model Hub UI changed", stdout.getvalue())
-        self.assertIn("Legacy shortcuts still work", stdout.getvalue())
+        self.assertIn("X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
+        self.assertIn("[Developer]", stdout.getvalue())
+        self.assertIn("B - Use on a clean machine or after dependency issues", stdout.getvalue())
+        self.assertIn("L - Use during development after changing local images", stdout.getvalue())
+        self.assertIn("[UI Validation]", stdout.getvalue())
+        self.assertIn("I - Use to validate the INESData portal experience", stdout.getvalue())
+        self.assertIn("A - Use when AI Model Hub UI changed", stdout.getvalue())
+        self.assertIn("shortcuts are available directly", stdout.getvalue())
 
-    def test_tools_submenu_delegates_setup_and_developer_actions(self):
-        with mock.patch("builtins.input", side_effect=["T", "1", "5", "B", "Q"]), mock.patch.object(
+    def test_developer_shortcuts_delegate_setup_and_developer_actions(self):
+        with mock.patch("builtins.input", side_effect=["B", "L", "Q"]), mock.patch.object(
             main,
             "_run_legacy_menu_action",
             return_value=None,
@@ -624,9 +626,9 @@ class MainCliTests(unittest.TestCase):
             ["bootstrap", "local_images"],
         )
 
-    def test_tools_submenu_recreate_dataspace_requires_exact_name(self):
+    def test_recreate_dataspace_shortcut_requires_exact_name(self):
         stdout = io.StringIO()
-        with mock.patch("builtins.input", side_effect=["T", "6", "wrong-ds", "B", "Q"]), mock.patch.object(
+        with mock.patch("builtins.input", side_effect=["X", "wrong-ds", "Q"]), mock.patch.object(
             main,
             "run_recreate_dataspace",
             return_value={"status": "completed"},
@@ -644,8 +646,8 @@ class MainCliTests(unittest.TestCase):
         recreate.assert_not_called()
         self.assertIn("Dataspace recreation cancelled", stdout.getvalue())
 
-    def test_tools_submenu_recreate_dataspace_dispatches_when_confirmed(self):
-        with mock.patch("builtins.input", side_effect=["T", "X", "fake-ds", "N", "B", "Q"]), mock.patch.object(
+    def test_recreate_dataspace_shortcut_dispatches_when_confirmed(self):
+        with mock.patch("builtins.input", side_effect=["X", "fake-ds", "N", "Q"]), mock.patch.object(
             main,
             "run_recreate_dataspace",
             return_value={"status": "completed", "dataspace": "fake-ds"},
@@ -664,8 +666,8 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(recreate.call_args.kwargs["confirm_dataspace"], "fake-ds")
         self.assertFalse(recreate.call_args.kwargs["with_connectors"])
 
-    def test_tools_submenu_recreate_dataspace_can_recreate_connectors(self):
-        with mock.patch("builtins.input", side_effect=["T", "X", "fake-ds", "Y", "B", "Q"]), mock.patch.object(
+    def test_recreate_dataspace_shortcut_can_recreate_connectors(self):
+        with mock.patch("builtins.input", side_effect=["X", "fake-ds", "Y", "Q"]), mock.patch.object(
             main,
             "run_recreate_dataspace",
             return_value={"status": "completed", "dataspace": "fake-ds"},
@@ -704,8 +706,8 @@ class MainCliTests(unittest.TestCase):
             ["bootstrap", "local_images"],
         )
 
-    def test_ui_validation_submenu_delegates_component_actions(self):
-        with mock.patch("builtins.input", side_effect=["U", "1", "2", "3", "B", "Q"]), mock.patch.object(
+    def test_ui_validation_shortcuts_delegate_component_actions(self):
+        with mock.patch("builtins.input", side_effect=["I", "O", "A", "Q"]), mock.patch.object(
             main,
             "_run_legacy_menu_action",
             return_value=None,

@@ -79,37 +79,42 @@ Planifica o aplica entradas del fichero `hosts`. Por defecto solo planifica. Par
 
 Ejecuta métricas o benchmarks independientes sobre el adapter activo. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.
 
-## More
+`X - Recreate dataspace`
 
-`T - Tools`
+Destruye y recrea el dataspace seleccionado preservando servicios comunes. Requiere escribir el nombre exacto del dataspace. Invalida conectores de nivel 4 y permite recrearlos inmediatamente si se confirma.
 
-Abre herramientas locales de soporte.
+## Developer
 
-`U - UI Validation`
-
-Abre suites UI específicas para portales y componentes.
-
-## Tools
-
-`1 - Bootstrap Framework Dependencies`
+`B - Bootstrap Framework Dependencies`
 
 Instala o repara dependencias del framework. Úsalo en una máquina limpia o tras problemas de dependencias; en Linux/WSL también prepara las dependencias de sistema necesarias para Playwright.
 
-`2 - Run Framework Doctor`
+`D - Run Framework Doctor`
 
 Ejecuta checks de preparación local. Úsalo antes de desplegar o para diagnosticar fallos de entorno.
 
-`3 - Recover Connectors After WSL Restart`
+`R - Recover Connectors After WSL Restart`
 
 Recupera acceso local tras reiniciar WSL cuando los recursos del cluster siguen desplegados pero el acceso local queda roto.
 
-`4 - Cleanup Workspace`
+`C - Cleanup Workspace`
 
 Limpia artefactos generados, caches o salidas previas que dificultan razonar sobre el estado actual.
 
-`5 - Build and Deploy Local Images`
+`L - Build and Deploy Local Images`
 
 Construye y carga imágenes locales. Úsalo durante desarrollo cuando hayas modificado código fuente de conectores, dashboards o componentes que deban probarse en el cluster.
+
+El submenú separa la ruta habitual de desarrollo de las recetas avanzadas:
+
+- `Quick actions`: acciones rápidas para INESData. Hacen `build/load/redeploy`
+  preservando datos: el redeploy usa `helm upgrade --reuse-values` sobre
+  releases existentes y no reinstala releases ausentes con values base.
+- `Advanced recipes`: recetas registradas para construir, cargar y, cuando se
+  seleccione, redesplegar una fuente concreta del adapter activo.
+
+Si el release no existe, ejecuta primero el nivel correspondiente (`Level 4`
+para conectores o `Level 5` para componentes).
 
 Para recetas registradas de componentes, como `Ontology Hub` o `AI Model Hub`,
 si el deployment ya existe en el namespace del dataspace activo, el framework lo
@@ -117,31 +122,19 @@ reinicia para que tome la imagen local cargada en Minikube. Si no existe, la
 opción solo prepara la imagen; después ejecuta `Level 5` para desplegar el
 componente.
 
-`6/X - Recreate Dataspace`
-
-Destruye y recrea el dataspace seleccionado preservando servicios comunes. Requiere escribir el nombre exacto del dataspace. Invalida conectores de nivel 4 y permite recrearlos inmediatamente si se confirma.
-
-`B - Back`
-
-Vuelve al menú principal.
-
 ## UI Validation
 
-`1 - INESData Tests (Normal/Live/Debug)`
+`I - INESData Tests (Normal/Live/Debug)`
 
 Ejecuta validaciones UI del portal INESData de forma independiente del nivel 6 completo.
 
-`2 - Ontology Hub Tests (Normal/Live/Debug)`
+`O - Ontology Hub Tests (Normal/Live/Debug)`
 
 Ejecuta validaciones UI de Ontology Hub.
 
-`3 - AI Model Hub Tests (Normal/Live/Debug)`
+`A - AI Model Hub Tests (Normal/Live/Debug)`
 
 Ejecuta validaciones UI de AI Model Hub.
-
-`B - Back`
-
-Vuelve al menú principal.
 
 ## Control
 
@@ -152,23 +145,6 @@ Muestra ayuda resumida dentro del propio menú.
 `Q - Exit`
 
 Sale del menú.
-
-## Atajos Legacy
-
-Los atajos legacy siguen funcionando aunque no se muestren como opciones principales:
-
-```text
-B  Bootstrap Framework Dependencies
-D  Run Framework Doctor
-R  Recover Connectors After WSL Restart
-C  Cleanup Workspace
-L  Build and Deploy Local Images
-I  INESData UI tests
-O  Ontology Hub UI tests
-A  AI Model Hub UI tests
-```
-
-Estos atajos existen para compatibilidad durante la transición hacia `main.py`.
 
 ## Topología
 

@@ -16,7 +16,7 @@ Para cambios UI, ejecuta la suite Playwright relevante desde `validation/ui/`.
 
 ## Probar Imágenes Locales
 
-Usa `T -> 5 - Build and Deploy Local Images` cuando modifiques fuentes bajo
+Usa `L - Build and Deploy Local Images` cuando modifiques fuentes bajo
 `adapters/<adapter>/sources/` y quieras probarlas en el cluster local.
 
 Comportamiento esperado:
@@ -31,6 +31,9 @@ Comportamiento esperado:
   desplegarse con `Level 5`;
 - para cambios en conectores INESData, el script de build recompila el runtime
   Java cuando falta el artefacto o detecta cambios locales.
+- las opciones rápidas de INESData en `L` hacen redeploy preservando datos:
+  reutilizan los valores existentes de Helm y no recrean credenciales ni
+  servicios comunes.
 
 Modos disponibles para `Level 4 local`:
 
