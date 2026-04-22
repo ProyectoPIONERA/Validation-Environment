@@ -1385,17 +1385,43 @@ class INESDataConnectorsAdapter:
                 print(f"Warning: could not remove stale values file {values_file}: {exc}")
         return values_file
 
+    def _wait_for_connector_pods_deleted(self, connector_name, namespace, timeout=60, poll_interval=3):
+        """Wait briefly for a previous connector release to stop holding DB sessions."""
+        start = time.time()
+        reported_wait = False
+
+        while time.time() - start < timeout:
+            pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
+            connector_pods = [
+                line.split()[0]
+                for line in pods.splitlines()
+                if line.split() and line.split()[0].startswith(f"{connector_name}-")
+            ]
+            if not connector_pods:
+                if reported_wait:
+                    print(f"Previous connector pods terminated: {connector_name}")
+                return True
+
+            if not reported_wait:
+                print(f"Waiting for previous connector pods to terminate: {connector_name}")
+                reported_wait = True
+            time.sleep(poll_interval)
+
+        print(f"Warning: previous connector pods still visible before cleanup: {connector_name}")
+        return False
+
     def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec, namespace=None):
         values_file = self._remove_connector_values_file(connector_name)
         self.invalidate_management_api_token(connector_name)
 
         print(f"Cleaning connector: {connector_name}")
-        delete_cmd = self._bootstrap_connector_delete_command(python_exec, connector_name, ds_name)
-        self.run(delete_cmd, cwd=repo_dir, check=False)
-
         release_name = f"{connector_name}-{ds_name}"
         ns = namespace or self.config.namespace_demo()
         self.run(f"helm uninstall {release_name} -n {ns}", check=False)
+        self._wait_for_connector_pods_deleted(connector_name, ns)
+
+        delete_cmd = self._bootstrap_connector_delete_command(python_exec, connector_name, ds_name)
+        self.run(delete_cmd, cwd=repo_dir, check=False)
 
         connector_db = connector_name.replace("-", "_")
         self.force_clean_postgres_db(connector_db, connector_db)

@@ -112,6 +112,38 @@ class ConnectorCreationRetryTests(unittest.TestCase):
 
             self.assertEqual(infra.calls, [])
 
+    def test_cleanup_uninstalls_release_before_bootstrap_delete(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            calls = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(cmd)
+                return object()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+
+            adapter._cleanup_connector_state(
+                "conn-a-demo",
+                tmpdir,
+                "demo",
+                "python3",
+                namespace="demo",
+            )
+
+            helm_index = next(i for i, call in enumerate(calls) if call.startswith("helm uninstall"))
+            delete_index = next(i for i, call in enumerate(calls) if "bootstrap.py connector delete" in call)
+            self.assertLess(helm_index, delete_index)
+
     def test_create_connector_uses_configured_keycloak_url_for_bootstrap(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)

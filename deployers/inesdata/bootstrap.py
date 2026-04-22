@@ -20,6 +20,7 @@
 
 import click
 import psycopg2
+from psycopg2 import sql
 from keycloak import KeycloakAdmin,KeycloakOpenID
 from keycloak.exceptions import KeycloakGetError,KeycloakPostError
 import json
@@ -496,8 +497,17 @@ def delete_database(pg_user, pg_password, pg_host, database, username):
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
     try:
-        cur.execute(f"DROP DATABASE {database};")
-        cur.execute(f"DROP USER {username};")
+        cur.execute(
+            """
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = %s
+              AND pid <> pg_backend_pid();
+            """,
+            (database,),
+        )
+        cur.execute(sql.SQL("DROP DATABASE IF EXISTS {};").format(sql.Identifier(database)))
+        cur.execute(sql.SQL("DROP USER IF EXISTS {};").format(sql.Identifier(username)))
     except Exception as e:
         # Handle other exceptions here
         print(f"An error occurred deleting the database '{database}' and user '{username}': {str(e)}")
