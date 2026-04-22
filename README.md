@@ -255,6 +255,12 @@ navegador o API. El fallback de `port-forward` para conectores está desactivado
 por defecto y solo debe habilitarse temporalmente con
 `PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true`.
 
+`Level 6` comprueba esos hostnames antes de ejecutar la limpieza y las suites de
+validación. Si vas a validar conectores ya desplegados, ejecuta `Level 6` desde
+el mismo checkout que ejecutó `Level 4`, porque las credenciales locales
+generadas para Keycloak, MinIO y conectores viven bajo
+`deployers/<adapter>/deployments/`.
+
 ## CLI Principal
 
 Listar adapters:

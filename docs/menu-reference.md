@@ -55,6 +55,12 @@ Despliega componentes opcionales configurados, como Ontology Hub o AI Model Hub 
 
 Ejecuta la validación integral del adapter activo. Puede incluir limpieza previa, Newman, checks de almacenamiento, Playwright, componentes y métricas según el perfil de validación.
 
+En topología `local`, esta opción espera que los hostnames publicados por
+Ingress estén accesibles. Mantén `minikube tunnel` abierto y responde la
+contraseña en esa terminal si aparece el prompt de sudo. Para conectores ya
+desplegados, ejecuta `Level 6` desde el mismo checkout que ejecutó `Level 4`,
+porque ahí se generan las credenciales locales usadas por la validación.
+
 ## Operations
 
 `S - Select adapter`

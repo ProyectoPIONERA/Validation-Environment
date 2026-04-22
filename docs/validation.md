@@ -14,6 +14,20 @@ Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 - recolección de métricas;
 - generación de reportes de experimento.
 
+En topología `local`, antes de limpiar datos o ejecutar suites, `Level 6`
+comprueba que los hostnames públicos del entorno sean accesibles desde la
+máquina que lanza el framework. Si esta comprobación falla, revisa que
+`minikube tunnel` siga abierto en otra terminal. Si esa terminal muestra
+`[sudo] password for <user>:`, introduce la contraseña Linux/WSL en esa misma
+terminal y vuelve a lanzar el nivel.
+
+Para validaciones sobre conectores ya desplegados, ejecuta `Level 6` desde el
+mismo checkout que ejecutó `Level 4`. Los artefactos locales bajo
+`deployers/<adapter>/deployments/<environment>/<dataspace>/` contienen
+credenciales generadas para Keycloak, MinIO y conectores. Si se valida desde
+otro checkout con artefactos distintos, pueden aparecer errores como
+`invalid_grant`, `Invalid user credentials` o `InvalidAccessKeyId`.
+
 ## Newman
 
 Newman valida comportamiento API y flujos end-to-end del dataspace.
