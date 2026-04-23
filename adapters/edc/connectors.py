@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import shlex
 import sys
 
 import requests
@@ -22,6 +23,8 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
     def __init__(self, run, run_silent, auto_mode_getter, infrastructure_adapter, config_adapter=None, config_cls=None, topology="local"):
         self.topology = topology or EdcConfig.DEFAULT_TOPOLOGY
+        self._last_runtime_prerequisite_error = None
+        self._last_runtime_prerequisite_code = None
         super().__init__(
             run=run,
             run_silent=run_silent,
@@ -30,6 +33,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             config_adapter=config_adapter or EDCConfigAdapter(config_cls or EdcConfig, topology=self.topology),
             config_cls=config_cls or EdcConfig,
         )
+
+    def _fail_runtime_prerequisite(self, message, code=None):
+        self._last_runtime_prerequisite_error = message
+        self._last_runtime_prerequisite_code = code
+        print(message)
+        return None, None
 
     def build_connector_url(self, connector_name):
         ds_domain = self.config_adapter.ds_domain_base()
@@ -91,6 +100,246 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
     def _edc_runtime_dir(self, ds_name=None):
         return self.config_adapter.edc_dataspace_runtime_dir(ds_name=ds_name)
+
+    def _framework_root_dir(self):
+        resolver = getattr(self.config, "script_dir", None)
+        if callable(resolver):
+            return resolver()
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    def _level4_edc_local_images_mode(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        raw_value = (
+            os.environ.get("PIONERA_EDC_LOCAL_IMAGES_MODE")
+            or os.environ.get("EDC_LOCAL_IMAGES_MODE")
+            or deployer_config.get("EDC_LOCAL_IMAGES_MODE")
+            or deployer_config.get("LEVEL4_EDC_LOCAL_IMAGES_MODE")
+            or deployer_config.get("LEVEL4_LOCAL_IMAGES_MODE")
+            or "auto"
+        )
+        mode = str(raw_value or "auto").strip().lower()
+        if mode in {"0", "false", "no", "off", "disabled", "disable"}:
+            return "disabled"
+        if mode in {"1", "true", "yes", "on", "auto", ""}:
+            return "auto"
+        if mode in {"required", "require", "strict"}:
+            return "required"
+        print(f"Unknown EDC local images mode '{raw_value}'. Falling back to auto.")
+        return "auto"
+
+    def _edc_local_minikube_profile(self):
+        env_profile = os.getenv("PIONERA_MINIKUBE_PROFILE") or os.getenv("MINIKUBE_PROFILE")
+        if env_profile:
+            return env_profile.strip() or "minikube"
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        return str(deployer_config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
+
+    def _edc_connector_image_override_configured(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        image_name = str(
+            os.environ.get("PIONERA_EDC_CONNECTOR_IMAGE_NAME")
+            or deployer_config.get("EDC_CONNECTOR_IMAGE_NAME")
+            or ""
+        ).strip()
+        image_tag = str(
+            os.environ.get("PIONERA_EDC_CONNECTOR_IMAGE_TAG")
+            or deployer_config.get("EDC_CONNECTOR_IMAGE_TAG")
+            or ""
+        ).strip()
+        return bool(image_name and image_tag)
+
+    def _edc_local_connector_image_defaults(self):
+        return {
+            "name": str(
+                os.environ.get("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_NAME")
+                or "validation-environment/edc-connector"
+            ).strip(),
+            "tag": str(
+                os.environ.get("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_TAG")
+                or "local"
+            ).strip(),
+        }
+
+    def _edc_dashboard_image_values(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        return {
+            "dashboard_name": str(
+                os.environ.get("PIONERA_EDC_DASHBOARD_IMAGE_NAME")
+                or deployer_config.get("EDC_DASHBOARD_IMAGE_NAME")
+                or self.config_adapter.edc_dashboard_image_name()
+                or "validation-environment/edc-dashboard"
+            ).strip(),
+            "dashboard_tag": str(
+                os.environ.get("PIONERA_EDC_DASHBOARD_IMAGE_TAG")
+                or deployer_config.get("EDC_DASHBOARD_IMAGE_TAG")
+                or self.config_adapter.edc_dashboard_image_tag()
+                or "latest"
+            ).strip(),
+            "proxy_name": str(
+                os.environ.get("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME")
+                or deployer_config.get("EDC_DASHBOARD_PROXY_IMAGE_NAME")
+                or self.config_adapter.edc_dashboard_proxy_image_name()
+                or "validation-environment/edc-dashboard-proxy"
+            ).strip(),
+            "proxy_tag": str(
+                os.environ.get("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG")
+                or deployer_config.get("EDC_DASHBOARD_PROXY_IMAGE_TAG")
+                or self.config_adapter.edc_dashboard_proxy_image_tag()
+                or "latest"
+            ).strip(),
+        }
+
+    def _run_level4_edc_image_script(self, script_path, args=None):
+        root_dir = self._framework_root_dir()
+        command = " ".join(
+            shlex.quote(part)
+            for part in [
+                "bash",
+                script_path,
+                "--apply",
+                *(args or []),
+            ]
+        )
+        return self.run(command, cwd=root_dir, check=False) is not None
+
+    def _maybe_prepare_level4_local_edc_connector_image(self, mode):
+        if self._is_truthy(os.environ.get("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_PREPARED")):
+            print("Level 4 local EDC connector image already prepared for this execution.")
+            return True
+
+        skip_build = self._is_truthy(os.environ.get("PIONERA_SKIP_EDC_LOCAL_CONNECTOR_IMAGE_BUILD"))
+        if skip_build and mode != "required":
+            if self._edc_connector_image_override_configured():
+                print("Skipping Level 4 local EDC connector image preparation; disabled by environment.")
+                return True
+            print(
+                "EDC Level 4 local connector image preparation is disabled, "
+                "but no explicit EDC connector image override is configured."
+            )
+            return False
+
+        if self._edc_connector_image_override_configured() and mode != "required":
+            print("Skipping Level 4 local EDC connector image preparation; explicit image override is configured.")
+            return True
+
+        image = self._edc_local_connector_image_defaults()
+        if not image["name"] or not image["tag"]:
+            print("EDC local connector image name/tag are not configured.")
+            return False
+
+        root_dir = self._framework_root_dir()
+        script_path = os.path.join(root_dir, "adapters", "edc", "scripts", "build_image.sh")
+        if not os.path.isfile(script_path):
+            detail = os.path.relpath(script_path, root_dir)
+            print(f"Required EDC connector local image script is missing: {detail}")
+            return False
+
+        minikube_profile = self._edc_local_minikube_profile()
+        print("\nPreparing local EDC connector image for Level 4...")
+        print(f"This builds and loads {image['name']}:{image['tag']} before Helm deploy.")
+        if not self._run_level4_edc_image_script(
+            script_path,
+            args=[
+                "--image",
+                image["name"],
+                "--tag",
+                image["tag"],
+                "--minikube-profile",
+                minikube_profile,
+            ],
+        ):
+            print("Error preparing local EDC connector image for Level 4.")
+            return False
+
+        os.environ["PIONERA_EDC_CONNECTOR_IMAGE_NAME"] = image["name"]
+        os.environ["PIONERA_EDC_CONNECTOR_IMAGE_TAG"] = image["tag"]
+        os.environ.setdefault("PIONERA_EDC_CONNECTOR_IMAGE_PULL_POLICY", "IfNotPresent")
+        os.environ["PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_PREPARED"] = "true"
+        return True
+
+    def _maybe_prepare_level4_local_edc_dashboard_images(self, mode):
+        if not self.config_adapter.edc_dashboard_enabled():
+            return True
+        if self._is_truthy(os.environ.get("PIONERA_EDC_LOCAL_DASHBOARD_IMAGES_PREPARED")):
+            print("Level 4 local EDC dashboard images already prepared for this execution.")
+            return True
+
+        if self._is_truthy(os.environ.get("PIONERA_SKIP_EDC_LOCAL_DASHBOARD_IMAGE_BUILD")) and mode != "required":
+            print("Skipping Level 4 local EDC dashboard image preparation; disabled by environment.")
+            return True
+
+        images = self._edc_dashboard_image_values()
+        missing = [key for key, value in images.items() if not value]
+        if missing:
+            print("EDC dashboard local image values are incomplete: " + ", ".join(sorted(missing)))
+            return False
+
+        root_dir = self._framework_root_dir()
+        scripts = [
+            os.path.join(root_dir, "adapters", "edc", "scripts", "build_dashboard_image.sh"),
+            os.path.join(root_dir, "adapters", "edc", "scripts", "build_dashboard_proxy_image.sh"),
+        ]
+        for script_path in scripts:
+            if not os.path.isfile(script_path):
+                detail = os.path.relpath(script_path, root_dir)
+                print(f"Required EDC dashboard local image script is missing: {detail}")
+                return False
+
+        minikube_profile = self._edc_local_minikube_profile()
+        os.environ["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
+        os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
+        os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME"] = images["proxy_name"]
+        os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"] = images["proxy_tag"]
+
+        print("\nPreparing local EDC dashboard images for Level 4...")
+        print(
+            "This builds and loads "
+            f"{images['dashboard_name']}:{images['dashboard_tag']} and "
+            f"{images['proxy_name']}:{images['proxy_tag']} before Helm deploy."
+        )
+        for script_path in scripts:
+            if not self._run_level4_edc_image_script(
+                script_path,
+                args=["--minikube-profile", minikube_profile],
+            ):
+                print("Error preparing local EDC dashboard images for Level 4.")
+                return False
+
+        os.environ.setdefault("PIONERA_EDC_DASHBOARD_IMAGE_PULL_POLICY", "IfNotPresent")
+        os.environ.setdefault("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_PULL_POLICY", "IfNotPresent")
+        os.environ["PIONERA_EDC_LOCAL_DASHBOARD_IMAGES_PREPARED"] = "true"
+        return True
+
+    def _maybe_prepare_level4_local_edc_images(self):
+        if str(getattr(self, "topology", "local") or "local").strip().lower() != "local":
+            return True
+        mode = self._level4_edc_local_images_mode()
+        if mode == "disabled":
+            if not self._edc_connector_image_override_configured():
+                print(
+                    "Level 4 local EDC images are disabled, but no explicit EDC connector "
+                    "image override is configured."
+                )
+                return False
+            print("Level 4 local EDC images disabled by configuration.")
+            return True
+        if not self._maybe_prepare_level4_local_edc_connector_image(mode):
+            return False
+        if not self._maybe_prepare_level4_local_edc_dashboard_images(mode):
+            return False
+        return True
 
     def _should_sync_vault_token_to_deployer_config(self):
         # EDC composes shared credentials at runtime; only mutate a local config
@@ -801,20 +1050,19 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         return preview
 
     def _prepare_runtime_prerequisites(self):
+        self._last_runtime_prerequisite_error = None
+        self._last_runtime_prerequisite_code = None
         repo_dir = self.config.repo_dir()
         native_bootstrap = bool(getattr(self.config, "EDC_NATIVE_BOOTSTRAP", False))
         python_exec = self.config.python_exec() if hasattr(self.config, "python_exec") else sys.executable
         if not os.path.exists(repo_dir):
-            print(f"EDC deployment directory not found: {repo_dir}")
-            return None, None
+            return self._fail_runtime_prerequisite(f"EDC deployment directory not found: {repo_dir}")
         bootstrap_script = self.config_adapter.edc_bootstrap_script()
         if not os.path.exists(bootstrap_script):
-            print(f"EDC bootstrap deployer not found: {bootstrap_script}")
-            return None, None
+            return self._fail_runtime_prerequisite(f"EDC bootstrap deployer not found: {bootstrap_script}")
         if not native_bootstrap:
             if not os.path.exists(self.config.venv_path()):
-                print("Python environment not found. Run Level 3 first")
-                return None, None
+                return self._fail_runtime_prerequisite("Python environment not found. Run Level 3 first")
             ensure_python_requirements(
                 python_exec,
                 self.config.repo_requirements_path(),
@@ -822,19 +1070,40 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 quiet=True,
             )
         if not os.path.isdir(self._edc_connector_dir()):
-            print(f"EDC connector chart directory not found: {self._edc_connector_dir()}")
-            return None, None
+            return self._fail_runtime_prerequisite(
+                f"EDC connector chart directory not found: {self._edc_connector_dir()}"
+            )
         if not self.infrastructure.ensure_local_infra_access():
-            return None, None
+            return self._fail_runtime_prerequisite(
+                "EDC Level 4 cannot continue because local access to PostgreSQL, Vault or MinIO is not ready."
+            )
         if not self.infrastructure.ensure_vault_unsealed():
-            return None, None
+            return self._fail_runtime_prerequisite(
+                "EDC Level 4 cannot continue because Vault is not ready and unsealed."
+            )
         if self._should_sync_vault_token_to_deployer_config():
+            reconcile_vault_state = getattr(self.infrastructure, "reconcile_vault_state_for_local_runtime", None)
             sync_vault_token = getattr(self.infrastructure, "sync_vault_token_to_deployer_config", None)
-            if callable(sync_vault_token) and not sync_vault_token():
-                print("Could not synchronize Vault token into deployer.config")
-                return None, None
+            if callable(reconcile_vault_state):
+                synchronized = reconcile_vault_state()
+            elif callable(sync_vault_token):
+                synchronized = sync_vault_token()
+            else:
+                synchronized = True
+            if not synchronized:
+                return self._fail_runtime_prerequisite(
+                    "EDC Level 4 cannot continue because the local Vault token does not match "
+                    "the running common services. Restore deployers/shared/common/init-keys-vault.json "
+                    "from the environment that created common-srvs, or recreate Level 2 common services "
+                    "and then rerun Level 3 and Level 4.",
+                    code="vault_token_mismatch",
+                )
         if not self._verify_vault_management_token():
-            return None, None
+            return self._fail_runtime_prerequisite(
+                "EDC Level 4 cannot continue because deployer.config does not contain a valid "
+                "Vault management token for the running common services.",
+                code="vault_token_invalid",
+            )
         return repo_dir, python_exec
 
     def _prepare_connector_prerequisites(self, connector_name, ds_name, namespace, repo_dir, python_exec):
@@ -940,22 +1209,63 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
         return existing
 
-    def _wait_for_edc_deployment_rollout(self, connector_name, namespace, timeout=300):
+    def _wait_for_edc_deployment_rollout(self, deployment_name, namespace, timeout=300, label=None):
         rollout_waiter = getattr(self.infrastructure, "wait_for_deployment_rollout", None)
         timeout = max(int(timeout or 300), 1)
+        rollout_label = label or f"EDC connector runtime '{deployment_name}'"
         if callable(rollout_waiter):
             return bool(
                 rollout_waiter(
                     namespace,
-                    connector_name,
+                    deployment_name,
                     timeout_seconds=timeout,
-                    label=f"EDC connector runtime '{connector_name}'",
+                    label=rollout_label,
                 )
             )
         wait_for_namespace_pods = getattr(self.infrastructure, "wait_for_namespace_pods", None)
         if callable(wait_for_namespace_pods):
             return bool(wait_for_namespace_pods(namespace, timeout=timeout))
         return False
+
+    def _restart_local_edc_deployments_if_needed(self, connector_name, namespace, rollout_timeout=300):
+        if str(getattr(self, "topology", "local") or "local").strip().lower() != "local":
+            return True
+
+        restart_targets = []
+        if self._is_truthy(os.environ.get("PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_PREPARED")):
+            restart_targets.append(("connector runtime", connector_name))
+
+        if (
+            self._is_truthy(os.environ.get("PIONERA_EDC_LOCAL_DASHBOARD_IMAGES_PREPARED"))
+            and self.config_adapter.edc_dashboard_enabled()
+        ):
+            restart_targets.extend(
+                [
+                    ("dashboard", f"{connector_name}-dashboard"),
+                    ("dashboard proxy", f"{connector_name}-dashboard-proxy"),
+                ]
+            )
+
+        for target_label, deployment_name in restart_targets:
+            print(
+                f"Restarting EDC {target_label} deployment to apply local image updates: "
+                f"{deployment_name}"
+            )
+            if self.run(f"kubectl rollout restart deployment/{deployment_name} -n {namespace}") is None:
+                print(f"Error restarting EDC {target_label} deployment: {deployment_name}")
+                return False
+            if not self._wait_for_edc_deployment_rollout(
+                deployment_name,
+                namespace,
+                timeout=rollout_timeout,
+                label=f"EDC {target_label} '{deployment_name}'",
+            ):
+                print(
+                    f"Timeout waiting for EDC {target_label} deployment rollout after restart: "
+                    f"{deployment_name}"
+                )
+                return False
+        return True
 
     def deploy_connectors(self):
         print("\n========================================")
@@ -964,7 +1274,10 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
         repo_dir, python_exec = self._prepare_runtime_prerequisites()
         if not repo_dir or not python_exec:
-            return []
+            raise RuntimeError(
+                self._last_runtime_prerequisite_error
+                or "EDC Level 4 prerequisites are not ready."
+            )
 
         dataspaces = self.load_dataspace_connectors()
         if not dataspaces:
@@ -991,6 +1304,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                         "remove the conflicting runtime first."
                     )
 
+            if not self._maybe_prepare_level4_local_edc_images():
+                return []
+
             for connector in connectors:
                 if not self._prepare_connector_prerequisites(connector, ds_name, namespace, repo_dir, python_exec):
                     return []
@@ -1011,6 +1327,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
                 if not self._wait_for_edc_deployment_rollout(connector, namespace, timeout=rollout_timeout):
                     print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
+                    return []
+                if not self._restart_local_edc_deployments_if_needed(
+                    connector,
+                    namespace,
+                    rollout_timeout=rollout_timeout,
+                ):
                     return []
 
                 all_connectors.append(connector)

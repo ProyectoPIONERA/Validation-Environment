@@ -6,6 +6,7 @@ KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.dev.ed.dataspaceunit.upm
 KC_USER=admin
 KC_PASSWORD=change-me
 PG_HOST=localhost
+PG_PORT=5432
 DATABASE_HOSTNAME=common-srvs-postgresql.common-srvs.svc
 PG_USER=postgres
 PG_PASSWORD=change-me

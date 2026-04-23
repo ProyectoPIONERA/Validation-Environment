@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import shutil
 import sys
@@ -106,6 +107,9 @@ class LevelOutputConfigAdapter:
     def get_pg_credentials(self):
         return ("127.0.0.1", "postgres", "postgres")
 
+    def get_pg_port(self):
+        return "5432"
+
 
 class FakeConnectorsAdapter:
     def force_clean_postgres_db(self, _db_name, _db_user):
@@ -194,6 +198,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
         infrastructure.setup_vault = lambda *_args, **_kwargs: True
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (False, "pods unstable")
 
         output = io.StringIO()
@@ -358,6 +363,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
         infrastructure.setup_vault = lambda *_args, **_kwargs: True
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
 
         output = io.StringIO()
@@ -367,6 +373,100 @@ class InesdataLevelOutputTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("Helm reported a post-install failure", rendered)
         self.assertIn("LEVEL 2 COMPLETE", rendered)
+
+    def test_deploy_infrastructure_repairs_failed_helm_release_after_runtime_readiness(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: True
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure._common_services_release_status = mock.Mock(side_effect=["failed", "deployed"])
+        infrastructure.deploy_helm_release = mock.Mock(side_effect=[False, True])
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure()
+
+        self.assertEqual(infrastructure.deploy_helm_release.call_count, 2)
+        repair_call = infrastructure.deploy_helm_release.call_args_list[1]
+        self.assertEqual(repair_call.kwargs["timeout_seconds"], 180)
+        rendered = output.getvalue()
+        self.assertIn("Re-running Helm after runtime readiness", rendered)
+        self.assertIn("Helm release status recovered to deployed", rendered)
+        self.assertIn("LEVEL 2 COMPLETE", rendered)
+
+    def test_common_services_release_status_parses_helm_json(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(return_value='{"info":{"status":"deployed"}}')
+
+        self.assertEqual(infrastructure.common_services_release_status(), "deployed")
+        infrastructure.run_silent.assert_called_once_with("helm status common-srvs -n common -o json")
+
+    def test_verify_common_services_ready_for_level3_fails_when_helm_release_failed(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_common_services_ready_for_level3()
+
+        self.assertFalse(ready)
+        self.assertEqual(root_cause, "common services Helm release is failed")
+        infrastructure.wait_for_level2_service_pods.assert_not_called()
+        infrastructure.wait_for_namespace_stability.assert_not_called()
+        infrastructure.ensure_vault_unsealed.assert_not_called()
+
+    def test_reset_common_services_for_level4_repair_uses_temporary_vault_backup(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.stop_port_forward_service = mock.Mock()
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(return_value="")
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"root_token":"stale"}')
+
+        result = infrastructure.reset_common_services_for_level4_repair(reason="test mismatch")
+
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(self.config.vault_keys_path()))
+        self.assertIsNotNone(infrastructure._vault_repair_temp_backup)
+        self.assertTrue(os.path.exists(infrastructure._vault_repair_temp_backup["backup_path"]))
+        infrastructure.stop_port_forward_service.assert_has_calls(
+            [
+                mock.call("common", "postgresql", quiet=True),
+                mock.call("common", "vault", quiet=True),
+                mock.call("common", "minio", quiet=True),
+            ]
+        )
+        commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("helm uninstall common-srvs -n common", commands)
+        self.assertIn("kubectl delete namespace common --ignore-not-found=true", commands)
+        infrastructure.finalize_common_services_level4_repair(success=True)
+        self.assertIsNone(infrastructure._vault_repair_temp_backup)
+
+    def test_failed_common_services_repair_restores_temporary_vault_backup(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.stop_port_forward_service = mock.Mock()
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(return_value="common Active")
+        infrastructure._wait_for_namespace_absent = mock.Mock(return_value=False)
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"root_token":"stale"}')
+
+        result = infrastructure.reset_common_services_for_level4_repair(reason="test mismatch")
+
+        self.assertFalse(result)
+        self.assertTrue(os.path.exists(self.config.vault_keys_path()))
+        with open(self.config.vault_keys_path(), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), '{"root_token":"stale"}')
+        self.assertIsNone(infrastructure._vault_repair_temp_backup)
 
     def test_deploy_infrastructure_uses_extended_pre_vault_timeout_for_service_readiness(self):
         infrastructure = self._make_infrastructure()
@@ -379,6 +479,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
         infrastructure.setup_vault = lambda *_args, **_kwargs: True
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
         infrastructure.config.TIMEOUT_POD_WAIT = 120
 
@@ -411,8 +512,10 @@ class InesdataLevelOutputTests(unittest.TestCase):
         deployment.connectors_adapter = FakeConnectorsAdapter()
         infrastructure.ensure_local_infra_access = lambda: True
         infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=True)
         infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
-        infrastructure.wait_for_namespace_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_dataspace_level3_pods = lambda *_args, **_kwargs: True
         infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
         deployment.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
         deployment.restart_registration_service = lambda: None
@@ -433,6 +536,9 @@ class InesdataLevelOutputTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertEqual(rendered.count("LEVEL 3 - DATASPACE"), 1)
         self.assertEqual(rendered.count("LEVEL 3 COMPLETE"), 1)
+        self.assertIn("Next step: run Level 4", rendered)
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_called_once()
+        infrastructure.sync_common_credentials_from_kubernetes.assert_called_once()
 
     def test_wait_for_keycloak_admin_ready_retries_until_token_is_available(self):
         deployment = INESDataDeploymentAdapter(
@@ -484,6 +590,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure = self._make_infrastructure()
         infrastructure.wait_for_port = mock.Mock(side_effect=[False, True, True])
         infrastructure.port_forward_service = mock.Mock(return_value=True)
+        infrastructure._postgres_connection_works = mock.Mock(return_value=True)
 
         result = infrastructure.ensure_local_infra_access()
 
@@ -499,6 +606,45 @@ class InesdataLevelOutputTests(unittest.TestCase):
             quiet=False,
             wait_timeout=30,
         )
+
+    def test_ensure_local_infra_access_releases_stale_postgres_port_forward(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_port = mock.Mock(side_effect=[True, True, True])
+        infrastructure._postgres_connection_works = mock.Mock(side_effect=[False, True])
+        infrastructure._release_stale_postgres_port_forward = mock.Mock(return_value=True)
+        infrastructure.port_forward_service = mock.Mock(return_value=True)
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            result = infrastructure.ensure_local_infra_access()
+
+            self.assertTrue(result)
+            self.assertEqual(os.environ.get("PIONERA_PG_PORT"), "5432")
+
+        infrastructure.port_forward_service.assert_called_once_with(
+            "common",
+            "postgresql",
+            5432,
+            5432,
+            quiet=False,
+            wait_timeout=30,
+        )
+        self.assertFalse(os.path.exists(self.config.deployer_config_path()))
+
+    def test_ensure_local_infra_access_fails_when_postgres_port_is_external(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.wait_for_port = mock.Mock(side_effect=[True, True])
+        infrastructure._postgres_connection_works = mock.Mock(return_value=False)
+        infrastructure._release_stale_postgres_port_forward = mock.Mock(return_value=False)
+        infrastructure._describe_local_port_listener = mock.Mock(return_value="postgres pid=123")
+        infrastructure.port_forward_service = mock.Mock(return_value=True)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.ensure_local_infra_access()
+
+        self.assertFalse(result)
+        infrastructure.port_forward_service.assert_not_called()
+        self.assertIn("did not terminate unknown processes", output.getvalue())
 
     def test_apply_sync_updates_minio_values_from_shared_config(self):
         infrastructure = self._make_infrastructure()
@@ -541,6 +687,109 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertEqual(updated["minio"]["rootUser"], "minio-admin")
         self.assertEqual(updated["minio"]["rootPassword"], "minio-secret")
+
+    def test_sync_vault_token_validates_artifact_before_updating_config(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = mock.Mock(return_value="vault-0")
+        infrastructure._vault_root_token_valid = mock.Mock(return_value=True)
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"root_token": "artifact-token"}\n')
+        with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
+            handle.write("VT_TOKEN=old-token\n")
+
+        result = infrastructure.sync_vault_token_to_deployer_config()
+
+        self.assertTrue(result)
+        with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "VT_TOKEN=artifact-token\n")
+        infrastructure._vault_root_token_valid.assert_called_once_with("vault-0", "common", "artifact-token")
+
+    def test_sync_vault_token_keeps_existing_valid_config_when_artifact_is_stale(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = mock.Mock(return_value="vault-0")
+        infrastructure._vault_root_token_valid = mock.Mock(side_effect=[False, True, True])
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"unseal_keys_hex":["abc"],"root_token": "stale-artifact-token"}\n')
+        with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
+            handle.write("VT_TOKEN=current-valid-token\n")
+
+        result = infrastructure.sync_vault_token_to_deployer_config()
+
+        self.assertTrue(result)
+        with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "VT_TOKEN=current-valid-token\n")
+        with open(self.config.vault_keys_path(), encoding="utf-8") as handle:
+            vault_data = json.load(handle)
+        self.assertEqual(vault_data["root_token"], "current-valid-token")
+        self.assertEqual(infrastructure._vault_root_token_valid.call_count, 3)
+
+    def test_sync_vault_token_does_not_overwrite_config_when_artifact_and_config_are_stale(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.get_pod_by_name = mock.Mock(return_value="vault-0")
+        infrastructure._vault_root_token_valid = mock.Mock(side_effect=[False, False])
+        with open(self.config.vault_keys_path(), "w", encoding="utf-8") as handle:
+            handle.write('{"root_token": "stale-artifact-token"}\n')
+        with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
+            handle.write("VT_TOKEN=stale-config-token\n")
+
+        result = infrastructure.sync_vault_token_to_deployer_config()
+
+        self.assertFalse(result)
+        with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "VT_TOKEN=stale-config-token\n")
+
+    def test_sync_common_credentials_from_kubernetes_replaces_local_placeholders(self):
+        infrastructure = self._make_infrastructure()
+        with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
+            handle.write(
+                "PG_HOST=localhost\n"
+                "PG_USER=postgres\n"
+                "PG_PASSWORD=CHANGE_ME\n"
+                "KC_USER=admin\n"
+                "KC_PASSWORD=change-me\n"
+                "MINIO_USER=admin\n"
+                "MINIO_PASSWORD=CHANGE_ME\n"
+                "MINIO_ADMIN_USER=admin\n"
+                "MINIO_ADMIN_PASS=CHANGE_ME\n"
+            )
+        secret_values = {
+            ("common", "common-srvs-postgresql", "postgres-password"): "real-pg",
+            ("common", "common-srvs-keycloak", "admin-user"): "admin",
+            ("common", "common-srvs-keycloak", "admin-password"): "real-kc",
+            ("common", "common-srvs-minio", "rootUser"): "minio-admin",
+            ("common", "common-srvs-minio", "rootPassword"): "real-minio",
+        }
+        infrastructure._secret_value = lambda namespace, secret, key: secret_values.get((namespace, secret, key))
+
+        result = infrastructure.sync_common_credentials_from_kubernetes()
+
+        self.assertTrue(result)
+        with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
+            config_text = handle.read()
+        self.assertIn("PG_PASSWORD=real-pg\n", config_text)
+        self.assertIn("KC_PASSWORD=real-kc\n", config_text)
+        self.assertIn("MINIO_USER=minio-admin\n", config_text)
+        self.assertIn("MINIO_PASSWORD=real-minio\n", config_text)
+        self.assertIn("MINIO_ADMIN_USER=minio-admin\n", config_text)
+        self.assertIn("MINIO_ADMIN_PASS=real-minio\n", config_text)
+        self.assertIn("PG_HOST=localhost\n", config_text)
+
+    def test_sync_common_credentials_from_kubernetes_updates_stale_local_values(self):
+        infrastructure = self._make_infrastructure()
+        with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
+            handle.write("PG_PASSWORD=custom-pg\nKC_PASSWORD=custom-kc\n")
+        secret_values = {
+            ("common", "common-srvs-postgresql", "postgres-password"): "real-pg",
+            ("common", "common-srvs-keycloak", "admin-user"): "admin",
+            ("common", "common-srvs-keycloak", "admin-password"): "real-kc",
+        }
+        infrastructure._secret_value = lambda namespace, secret, key: secret_values.get((namespace, secret, key))
+
+        result = infrastructure.sync_common_credentials_from_kubernetes()
+
+        self.assertTrue(result)
+        with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "PG_PASSWORD=real-pg\nKC_PASSWORD=real-kc\nKC_USER=admin\n")
 
     def test_port_forward_service_waits_for_port_to_open(self):
         infrastructure = self._make_infrastructure()
@@ -661,7 +910,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
     def test_verify_dataspace_ready_for_level4_skips_liquibase_when_schema_probe_passes(self):
         infrastructure = self._make_infrastructure()
-        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.wait_for_dataspace_level3_pods = mock.Mock(return_value=True)
         infrastructure.wait_for_registration_service_schema = mock.Mock(return_value=True)
         infrastructure.wait_for_registration_service_liquibase = mock.Mock(return_value=True)
 
@@ -669,6 +918,10 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(ready)
         self.assertIsNone(root_cause)
+        infrastructure.wait_for_dataspace_level3_pods.assert_called_once_with(
+            "demo-ns",
+            dataspace_name="demo",
+        )
         infrastructure.wait_for_registration_service_schema.assert_called_once_with(
             timeout=15,
             poll_interval=3,
@@ -678,7 +931,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
     def test_verify_dataspace_ready_for_level4_uses_quick_then_remaining_schema_timeouts(self):
         infrastructure = self._make_infrastructure()
-        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.wait_for_dataspace_level3_pods = mock.Mock(return_value=True)
         infrastructure.wait_for_registration_service_schema = mock.Mock(side_effect=[False, True])
         infrastructure.wait_for_registration_service_liquibase = mock.Mock(return_value=True)
 
@@ -799,6 +1052,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
         infrastructure.setup_vault = lambda *_args, **_kwargs: True
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
 
         seen = {}
@@ -825,6 +1079,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
         infrastructure.setup_vault = lambda *_args, **_kwargs: True
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
 
         seen = {}
@@ -970,6 +1225,60 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertIn("Pods ready:", output.getvalue())
+
+    def test_wait_for_dataspace_level3_pods_ignores_existing_connector_pods(self):
+        infrastructure = self._make_infrastructure()
+        snapshots = iter([
+            "\n".join([
+                "conn-citycouncil-demo-6b54bbfc5b-mrclj 0/1 Init:0/1 59 24h",
+                "conn-company-demo-ff686689d-h2t5q 0/1 Init:0/1 36 24h",
+                "demo-registration-service-58d99859cd-wqz8g 1/1 Running 0 91s",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_dataspace_level3_pods(
+                "demo",
+                dataspace_name="demo",
+                timeout=1,
+            )
+
+        self.assertTrue(result)
+        rendered = output.getvalue()
+        self.assertIn("Level 3 dataspace pods ready", rendered)
+        self.assertIn("Ignoring non-Level 3 pods", rendered)
+
+    def test_wait_for_dataspace_level3_pods_waits_for_stale_rollout_error_to_disappear(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run = mock.Mock(return_value=object())
+        snapshots = iter([
+            "\n".join([
+                "demoedc-registration-service-5b67fb6944-djqgd 0/1 Error 0 19s",
+                "demoedc-registration-service-5795c78bbb-vz97j 0/1 ContainerCreating 0 5s",
+            ]),
+            "\n".join([
+                "demoedc-registration-service-5b67fb6944-djqgd 0/1 Error 0 19s",
+                "demoedc-registration-service-5795c78bbb-vz97j 1/1 Running 0 19s",
+            ]),
+            "demoedc-registration-service-5795c78bbb-vz97j 1/1 Running 0 20s",
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with mock.patch("adapters.inesdata.infrastructure.time.sleep", return_value=None), contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_dataspace_level3_pods(
+                "demoedc",
+                dataspace_name="demoedc",
+                timeout=3,
+            )
+
+        self.assertTrue(result)
+        rendered = output.getvalue()
+        self.assertIn("Waiting for stale Level 3 rollout pods to disappear", rendered)
+        self.assertIn("Level 3 dataspace pods ready", rendered)
+        infrastructure.run.assert_called_once_with("kubectl get pods -n demoedc", check=False)
 
 
 if __name__ == "__main__":

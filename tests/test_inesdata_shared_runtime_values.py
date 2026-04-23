@@ -29,10 +29,10 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
 
         self.assertEqual(
             values_path,
-            root / "deployers" / "inesdata" / "deployments" / "DEV" / "demo" / "shared" / "common" / "values.yaml",
+            root / "deployers" / "shared" / "deployments" / "DEV" / "common" / "values.yaml",
         )
 
-    def test_common_values_are_copied_to_runtime_when_shared_artifacts_enabled(self):
+    def test_common_values_are_copied_to_shared_runtime_when_shared_artifacts_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             shared_common = root / "deployers" / "shared" / "common"
@@ -51,7 +51,7 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
 
             self.assertEqual(
                 values_path,
-                root / "deployers" / "inesdata" / "deployments" / "DEV" / "demo" / "shared" / "common" / "values.yaml",
+                root / "deployers" / "shared" / "deployments" / "DEV" / "common" / "values.yaml",
             )
             self.assertEqual(copied_values, "postgresql:\n  auth: {}\n")
             self.assertEqual(source_values, "postgresql:\n  auth: {}\n")
@@ -84,14 +84,13 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
                 / "deployments"
                 / "DEV"
                 / "demo"
-                / "shared"
                 / "dataspace"
                 / "registration-service"
                 / "values-demo.yaml",
             )
             self.assertEqual(copied_values, "dataspace:\n  name: demo\n")
 
-    def test_vault_keys_are_copied_from_legacy_to_shared_common_when_shared_artifacts_enabled(self):
+    def test_vault_keys_use_shared_common_without_copying_legacy_runtime_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             self._write_chart(root / "deployers" / "shared" / "common")
@@ -109,13 +108,12 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
                 clear=True,
             ):
                 vault_path = Path(config.ensure_vault_keys_file())
-                copied_values = vault_path.read_text(encoding="utf-8")
 
             self.assertEqual(
                 vault_path,
                 root / "deployers" / "shared" / "common" / "init-keys-vault.json",
             )
-            self.assertEqual(copied_values, '{"root_token": "token", "unseal_keys_hex": ["key"]}\n')
+            self.assertFalse(vault_path.exists())
 
     def test_edc_vault_keys_runtime_uses_shared_common_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -157,7 +155,7 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
                 root / "deployers" / "shared" / "common" / "init-keys-vault.json",
             )
 
-    def test_edc_vault_keys_can_migrate_from_previous_deployer_runtime_folder(self):
+    def test_edc_vault_keys_do_not_migrate_from_previous_deployer_runtime_folder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             self._write_chart(root / "deployers" / "shared" / "common")
@@ -200,13 +198,12 @@ class InesdataSharedRuntimeValuesTests(unittest.TestCase):
                 clear=True,
             ):
                 vault_path = Path(TestEdcConfig.ensure_vault_keys_file())
-                copied_values = vault_path.read_text(encoding="utf-8")
 
             self.assertEqual(
                 vault_path,
                 root / "deployers" / "shared" / "common" / "init-keys-vault.json",
             )
-            self.assertEqual(copied_values, '{"root_token": "edc-token", "unseal_keys_hex": ["edc-key"]}\n')
+            self.assertFalse(vault_path.exists())
 
     @staticmethod
     def _write_chart(path: Path, values: str = "name: value\n"):

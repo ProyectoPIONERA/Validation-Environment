@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -94,6 +95,50 @@ class FakeAdapterWithInfrastructure(FakeAdapter):
 
 
 class KafkaTransferConsoleOutputTests(unittest.TestCase):
+    def test_action_result_prints_compact_level_summary_instead_of_raw_json(self):
+        payload = {
+            "status": "completed",
+            "adapter": "edc",
+            "topology": "local",
+            "levels": [
+                {
+                    "level": 4,
+                    "name": "Deploy Connectors",
+                    "status": "completed",
+                    "result": ["conn-a", "conn-b"],
+                }
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertTrue(output.startswith("\nResult: Succeeded\n"))
+        self.assertIn("Result: Succeeded", output)
+        self.assertIn("Adapter: edc", output)
+        self.assertIn("Level 4 - Deploy Connectors: Succeeded (2 items)", output)
+        self.assertNotIn("{", output)
+
+    def test_action_result_prints_compact_next_step_summary(self):
+        payload = {
+            "status": "completed",
+            "deployer_name": "fake",
+            "topology": "local",
+            "dataspace": "fake-ds",
+            "next_step": "Run Level 6 to validate the recreated dataspace and connectors.",
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Result: Succeeded", output)
+        self.assertIn("Dataspace: fake-ds", output)
+        self.assertIn("Next step: Run Level 6 to validate the recreated dataspace and connectors.", output)
+
     def test_kafka_transfer_results_are_printed_with_neutral_summary(self):
         results = [
             {
@@ -142,17 +187,19 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertIn("Kafka transfer validation results", output)
-        self.assertIn("✓ PASS Kafka transfer: conn-provider -> conn-consumer", output)
-        self.assertIn("PASS Kafka transfer: conn-provider -> conn-consumer", output)
+        self.assertIn("✓ Kafka transfer: conn-provider -> conn-consumer", output)
         self.assertIn("Steps:", output)
-        self.assertIn("✓ PASS create_kafka_asset", output)
-        self.assertIn("PASS create_kafka_asset", output)
-        self.assertIn("PASS measure_kafka_transfer_latency", output)
+        self.assertIn("✓ create_kafka_asset", output)
+        self.assertIn("✓ measure_kafka_transfer_latency", output)
         self.assertIn("Messages: produced=10 consumed=10", output)
         self.assertIn("Latency: avg=7.2ms p50=6.8ms p95=9.1ms p99=9.8ms", output)
         self.assertIn("Throughput: 18.5 msg/s", output)
+        self.assertIn("Summary: ✓ 1  ✗ 0  - 0", output)
         self.assertNotIn("EDC+Kafka", output)
         self.assertNotIn("Message: id=msg-1", output)
+        self.assertNotIn("PASS", output)
+        self.assertNotIn("FAIL", output)
+        self.assertNotIn("SKIP", output)
 
     def test_kafka_transfer_results_mark_failed_and_skipped_status_with_icons(self):
         results = [
@@ -177,10 +224,13 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
             main._print_kafka_edc_results(results)
 
         output = stdout.getvalue()
-        self.assertIn("✗ FAIL Kafka transfer: conn-provider -> conn-consumer (boom)", output)
-        self.assertIn("✗ FAIL create_asset", output)
-        self.assertIn("- SKIP Kafka transfer: conn-provider -> conn-consumer (not_supported)", output)
-        self.assertIn("- SKIP create_asset", output)
+        self.assertIn("✗ Kafka transfer: conn-provider -> conn-consumer (boom)", output)
+        self.assertIn("✗ create_asset", output)
+        self.assertIn("- Kafka transfer: conn-provider -> conn-consumer (not_supported)", output)
+        self.assertIn("- create_asset", output)
+        self.assertIn("Summary: ✓ 0  ✗ 1  - 1", output)
+        self.assertNotIn("FAIL", output)
+        self.assertNotIn("SKIP", output)
 
     def test_kafka_transfer_results_can_print_message_samples_when_enabled(self):
         results = [
@@ -213,6 +263,154 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
                 main._print_kafka_edc_results(results)
 
         self.assertIn("Message: id=msg-1 status=consumed latency=3.4ms", stdout.getvalue())
+
+
+class EdcDashboardReadinessTests(unittest.TestCase):
+    def _context(self):
+        return types.SimpleNamespace(
+            dataspace_name="demoedc",
+            ds_domain_base="dev.ds.dataspaceunit.upm",
+            connectors=["conn-citycounciledc-demoedc", "conn-companyedc-demoedc"],
+            namespace_roles=types.SimpleNamespace(
+                registration_service_namespace="demoedc",
+                provider_namespace="demoedc",
+                consumer_namespace="demoedc",
+            ),
+            config={
+                "KC_INTERNAL_URL": "http://common-srvs-keycloak.common-srvs.svc.cluster.local",
+                "KC_URL": "http://keycloak.dev.ed.dataspaceunit.upm",
+            },
+        )
+
+    def test_probe_edc_dashboard_readiness_requires_public_http_routes(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/edc-dashboard"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/edc-dashboard-api/auth/me"):
+                return types.SimpleNamespace(status_code=401, headers={})
+            if url.endswith("/management/v3/assets/request"):
+                return types.SimpleNamespace(status_code=405, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+            readiness = main._probe_edc_dashboard_readiness(context)
+
+        self.assertEqual(readiness["status"], "passed")
+        http_gates = [gate for gate in readiness["gates"] if gate["gate"].startswith("dashboard-route:")]
+        self.assertEqual(len(http_gates), 2)
+        keycloak_gate = next(gate for gate in readiness["gates"] if gate["gate"] == "keycloak-metadata")
+        self.assertEqual(
+            keycloak_gate["url"],
+            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demoedc/.well-known/openid-configuration",
+        )
+
+    def test_probe_edc_dashboard_readiness_rejects_http_503_even_with_ready_endpoints(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/edc-dashboard"):
+                return types.SimpleNamespace(status_code=503, headers={})
+            if url.endswith("/edc-dashboard-api/auth/me"):
+                return types.SimpleNamespace(status_code=401, headers={})
+            if url.endswith("/management/v3/assets/request"):
+                return types.SimpleNamespace(status_code=405, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+            readiness = main._probe_edc_dashboard_readiness(context)
+
+        self.assertEqual(readiness["status"], "failed")
+        failing_gate = next(
+            gate
+            for gate in readiness["gates"]
+            if gate["gate"] == "dashboard-route:conn-citycounciledc-demoedc"
+        )
+        self.assertFalse(failing_gate["ready"])
+        self.assertEqual(failing_gate["detail"], "HTTP 503")
+
+
+class InesdataPortalReadinessTests(unittest.TestCase):
+    def _context(self):
+        return types.SimpleNamespace(
+            dataspace_name="demo",
+            ds_domain_base="dev.ds.dataspaceunit.upm",
+            connectors=["conn-citycouncil-demo", "conn-company-demo"],
+            namespace_roles=types.SimpleNamespace(
+                registration_service_namespace="demo",
+                provider_namespace="demo",
+                consumer_namespace="demo",
+            ),
+            config={
+                "KC_INTERNAL_URL": "http://common-srvs-keycloak.common-srvs.svc.cluster.local",
+                "KC_URL": "http://keycloak.dev.ed.dataspaceunit.upm",
+            },
+        )
+
+    def test_probe_inesdata_portal_readiness_requires_public_http_routes(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/inesdata-connector-interface/") or url.endswith("/inesdata-connector-interface"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_probe_service_ready_across_namespaces",
+            return_value=(True, "1 endpoint address(es)", "demo"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+            readiness = main._probe_inesdata_portal_readiness(context)
+
+        self.assertEqual(readiness["status"], "passed")
+        portal_gates = [gate for gate in readiness["gates"] if gate["gate"].startswith("portal-route:")]
+        self.assertEqual(len(portal_gates), 2)
+        keycloak_gate = next(gate for gate in readiness["gates"] if gate["gate"] == "keycloak-metadata")
+        self.assertEqual(
+            keycloak_gate["url"],
+            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/.well-known/openid-configuration",
+        )
+
+    def test_probe_inesdata_portal_readiness_rejects_http_503_even_with_ready_services(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/inesdata-connector-interface/") or url.endswith("/inesdata-connector-interface"):
+                return types.SimpleNamespace(status_code=503, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_probe_service_ready_across_namespaces",
+            return_value=(True, "1 endpoint address(es)", "demo"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+            readiness = main._probe_inesdata_portal_readiness(context)
+
+        self.assertEqual(readiness["status"], "failed")
+        failing_gate = next(
+            gate
+            for gate in readiness["gates"]
+            if gate["gate"] == "portal-route:conn-citycouncil-demo"
+        )
+        self.assertFalse(failing_gate["ready"])
+        self.assertEqual(failing_gate["detail"], "HTTP 503")
 
 
 class NoConnectorDeployAdapter:
@@ -569,7 +767,6 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "exited")
         self.assertEqual(result["adapter"], "fake")
         self.assertIn("DATASPACE VALIDATION ENVIRONMENT", stdout.getvalue())
-        self.assertIn("Active adapter: fake", stdout.getvalue())
         self.assertIn("[Full Deployment]", stdout.getvalue())
         self.assertIn("[Operations]", stdout.getvalue())
         self.assertIn("X - Recreate dataspace", stdout.getvalue())
@@ -595,8 +792,10 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("MENU HELP", stdout.getvalue())
         self.assertIn("0 - Use for a fresh or full rebuild", stdout.getvalue())
         self.assertIn("4 - Use when connector deployments changed", stdout.getvalue())
-        self.assertIn("H - Use when browser or CLI access fails", stdout.getvalue())
+        self.assertIn("S - Use when you want to preselect the adapter", stdout.getvalue())
+        self.assertIn("H - Use before EDC Levels 3-6", stdout.getvalue())
         self.assertIn("X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
+        self.assertIn("asks for one automatically", stdout.getvalue())
         self.assertIn("[Developer]", stdout.getvalue())
         self.assertIn("B - Use on a clean machine or after dependency issues", stdout.getvalue())
         self.assertIn("L - Use during development after changing local images", stdout.getvalue())
@@ -604,6 +803,257 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("I - Use to validate the INESData portal experience", stdout.getvalue())
         self.assertIn("A - Use when AI Model Hub UI changed", stdout.getvalue())
         self.assertIn("shortcuts are available directly", stdout.getvalue())
+
+    def test_menu_level3_adapter_prompt_can_print_hosts_hint_for_edc(self):
+        registry = {
+            "edc": "fake_adapter_module:FakeAdapter",
+            "inesdata": "fake_adapter_module:FakeAdapter",
+        }
+        deployer_registry = {
+            "edc": "fake_deployer_module:FakeDeployer",
+            "inesdata": "fake_deployer_module:FakeDeployer",
+        }
+
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["3", "1", "Y", "Q"]), mock.patch.object(
+            main,
+            "_interactive_ensure_hosts_ready_for_levels",
+            return_value=True,
+        ), mock.patch.object(
+            main,
+            "run_levels",
+            return_value={"status": "completed", "levels": []},
+        ), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["adapter"], "edc")
+        self.assertIn("EDC adapter selected", stdout.getvalue())
+        self.assertIn("use H to plan/apply host entries", stdout.getvalue())
+
+    def test_menu_with_multiple_adapters_defers_selection_until_level3(self):
+        registry = {
+            "edc": "fake_adapter_module:FakeAdapter",
+            "inesdata": "fake_adapter_module:FakeAdapter",
+        }
+        deployer_registry = {
+            "edc": "fake_deployer_module:FakeDeployer",
+            "inesdata": "fake_deployer_module:FakeDeployer",
+        }
+
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["Q"]), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertIsNone(result["adapter"])
+        rendered = stdout.getvalue()
+        self.assertNotIn("Shared foundation adapter", rendered)
+        self.assertNotIn("Adapter for Levels 3-6", rendered)
+        self.assertNotIn("Available adapters:", rendered)
+        self.assertIn("S - Select adapter", rendered)
+
+    def test_menu_can_preselect_adapter_with_shortcut_s(self):
+        registry = {
+            "edc": "fake_adapter_module:FakeAdapter",
+            "inesdata": "fake_adapter_module:FakeAdapter",
+        }
+        deployer_registry = {
+            "edc": "fake_deployer_module:FakeDeployer",
+            "inesdata": "fake_deployer_module:FakeDeployer",
+        }
+
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["S", "1", "Q"]), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertEqual(result["adapter"], "edc")
+        self.assertIn("S - Select adapter", stdout.getvalue())
+        self.assertIn("EDC adapter selected", stdout.getvalue())
+        self.assertIn("Available adapters:", stdout.getvalue())
+
+    def test_menu_level3_prompts_for_adapter_selection_when_missing(self):
+        registry = {
+            "edc": "fake_adapter_module:FakeAdapter",
+            "inesdata": "fake_adapter_module:FakeAdapter",
+        }
+        deployer_registry = {
+            "edc": "fake_deployer_module:FakeDeployer",
+            "inesdata": "fake_deployer_module:FakeDeployer",
+        }
+
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["3", "Y", "Q"]), mock.patch.object(
+            main,
+            "_select_adapter_interactive",
+            return_value="inesdata",
+        ) as selector, mock.patch.object(
+            main,
+            "_interactive_ensure_hosts_ready_for_levels",
+            return_value=True,
+        ), mock.patch.object(
+            main,
+            "run_levels",
+            return_value={"status": "completed", "levels": []},
+        ) as run_levels, contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        selector.assert_called_once()
+        run_levels.assert_called_once()
+        self.assertEqual(run_levels.call_args.args[0], "inesdata")
+        self.assertIn("This action needs an adapter selection for Levels 3-6.", stdout.getvalue())
+
+    def test_interactive_level2_reuses_healthy_shared_common_services(self):
+        class SharedInfrastructure:
+            def __init__(self):
+                self.announced = []
+                self.completed = []
+
+            def verify_common_services_ready_for_level3(self):
+                return True, None
+
+            def announce_level(self, level, name):
+                self.announced.append((level, name))
+
+            def complete_level(self, level):
+                self.completed.append(level)
+
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = SharedInfrastructure()
+
+        with mock.patch.object(main, "build_adapter", return_value=adapter), mock.patch.object(
+            main,
+            "_interactive_confirm",
+            return_value=True,
+        ) as confirm, mock.patch.object(main, "run_level") as run_level:
+            result = main._run_interactive_level2_with_shared_foundation(
+                adapter_registry={"fake": "fake_adapter_module:FakeAdapterWithInfrastructure"},
+                deployer_registry=self.deployer_registry,
+            )
+
+        self.assertEqual(result["level"], 2)
+        self.assertEqual(result["result"]["action"], "reuse")
+        self.assertEqual(result["result"]["shared_adapter"], "fake")
+        self.assertEqual(adapter.infrastructure.announced, [(2, "DEPLOY COMMON SERVICES")])
+        self.assertEqual(adapter.infrastructure.completed, [2])
+        self.assertEqual(confirm.call_count, 1)
+        run_level.assert_not_called()
+
+    def test_interactive_level2_can_recreate_healthy_shared_common_services(self):
+        class SharedInfrastructure:
+            def __init__(self):
+                self.reset_reasons = []
+
+            def verify_common_services_ready_for_level3(self):
+                return True, None
+
+            def reset_local_shared_common_services(self, reason=None):
+                self.reset_reasons.append(reason)
+                return True
+
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = SharedInfrastructure()
+
+        with mock.patch.object(main, "build_adapter", return_value=adapter), mock.patch.object(
+            main,
+            "_interactive_confirm",
+            side_effect=[False, True],
+        ), mock.patch.object(
+            main,
+            "run_level",
+            return_value={"level": 2, "status": "completed", "result": True},
+        ) as run_level:
+            result = main._run_interactive_level2_with_shared_foundation(
+                adapter_registry={"fake": "fake_adapter_module:FakeAdapterWithInfrastructure"},
+                deployer_registry=self.deployer_registry,
+            )
+
+        self.assertEqual(result["level"], 2)
+        self.assertEqual(adapter.infrastructure.reset_reasons, ["Interactive Level 2 recreate requested"])
+        run_level.assert_called_once()
+
+    def test_edc_interactive_hosts_preflight_applies_only_missing_entries(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write("127.0.0.1 localhost\n127.0.0.1 conn-a.example.local\n")
+            hosts_file.flush()
+
+            stdout = io.StringIO()
+            with mock.patch("builtins.input", side_effect=["Y"]), contextlib.redirect_stdout(stdout):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "edc",
+                    levels=[4],
+                    adapter_registry={"edc": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"edc": "fake_deployer_module:FakeDeployer"},
+                    topology="local",
+                )
+
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertTrue(result)
+        self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
+        self.assertIn("registration-service-fake-ds.example.local", hosts_content)
+        self.assertIn("conn-b.example.local", hosts_content)
+        self.assertIn("EDC host entries are missing", stdout.getvalue())
+
+    def test_edc_interactive_hosts_preflight_can_cancel_level(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write("127.0.0.1 localhost\n")
+            hosts_file.flush()
+
+            stdout = io.StringIO()
+            with mock.patch("builtins.input", side_effect=["N"]), contextlib.redirect_stdout(stdout):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "edc",
+                    levels=[3],
+                    adapter_registry={"edc": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"edc": "fake_deployer_module:FakeDeployer"},
+                    topology="local",
+                )
+
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertFalse(result)
+        self.assertNotIn("registration-service-fake-ds.example.local", hosts_content)
+        self.assertIn("Level execution cancelled", stdout.getvalue())
 
     def test_developer_shortcuts_delegate_setup_and_developer_actions(self):
         with mock.patch("builtins.input", side_effect=["B", "L", "Q"]), mock.patch.object(
@@ -1478,6 +1928,7 @@ class MainCliTests(unittest.TestCase):
             result = main._prepare_edc_local_dashboard_images(adapter, config)
             dashboard_tag = os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"]
             proxy_tag = os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"]
+            prepared_flag = os.environ["PIONERA_EDC_LOCAL_DASHBOARD_IMAGES_PREPARED"]
 
         self.assertEqual(result["status"], "prepared")
         self.assertEqual(result["dashboard_image"], "validation-environment/edc-dashboard:local-ui")
@@ -1487,6 +1938,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("build_dashboard_proxy_image.sh", run_command.call_args_list[1].args[0][1])
         self.assertEqual(dashboard_tag, "local-ui")
         self.assertEqual(proxy_tag, "local-proxy")
+        self.assertEqual(prepared_flag, "true")
 
     def test_deploy_command_refuses_real_edc_execution_on_shared_demo_dataspace(self):
         adapter = FakeAdapter()
@@ -1600,8 +2052,9 @@ class MainCliTests(unittest.TestCase):
                     "playwright_enabled": False,
                 }
 
-        def run_kafka(connectors, experiment_dir, *, validator, experiment_storage):
+        def run_kafka(connectors, experiment_dir, *, validator, experiment_storage, progress_callback=None):
             events.append("kafka_edc")
+            self.assertTrue(callable(progress_callback))
             return [{"status": "passed", "provider": connectors[0], "consumer": connectors[1]}]
 
         self.fake_module.KafkaReadyAdapter = KafkaReadyAdapter
@@ -1638,6 +2091,103 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(events, ["validation", "newman_metrics", "kafka_edc"])
         self.assertEqual(result["kafka_edc_results"][0]["status"], "passed")
+
+    def test_run_validate_prepares_kafka_in_background_without_blocking_newman(self):
+        events = []
+        validation_started = threading.Event()
+        allow_kafka_finish = threading.Event()
+
+        class KafkaReadyAdapter(FakeAdapter):
+            def get_kafka_config(self):
+                return {"bootstrap_servers": "localhost:9092"}
+
+        class InesdataValidationDeployer(FakeDeployer):
+            def get_validation_profile(self, context):
+                return {
+                    "adapter": "inesdata",
+                    "newman_enabled": True,
+                    "test_data_cleanup_enabled": False,
+                    "playwright_enabled": False,
+                }
+
+        class RecordingValidationEngine(FakeValidationEngine):
+            def run(self, connectors):
+                events.append("validation")
+                validation_started.set()
+                return super().run(connectors)
+
+        class RecordingMetricsCollector:
+            def collect_experiment_newman_metrics(self, experiment_dir):
+                events.append("newman_metrics")
+                allow_kafka_finish.set()
+                return [{"request": "login"}]
+
+        class BlockingKafkaManager:
+            def __init__(self, *args, **kwargs):
+                self.bootstrap_servers = None
+                self.cluster_bootstrap_servers = None
+                self.started_by_framework = False
+                self.provisioning_mode = None
+                self.last_error = None
+
+            def ensure_kafka_running(self):
+                events.append("kafka_prepare_start")
+                validation_started.wait(timeout=2)
+                events.append("kafka_prepare_running")
+                allow_kafka_finish.wait(timeout=2)
+                self.bootstrap_servers = "127.0.0.1:39092"
+                self.cluster_bootstrap_servers = "framework-kafka.fake-ds.svc.cluster.local:9092"
+                self.started_by_framework = True
+                self.provisioning_mode = "kubernetes"
+                events.append("kafka_prepare_finish")
+                return self.bootstrap_servers
+
+            def stop_kafka(self):
+                events.append("kafka_stop")
+
+        def run_kafka(connectors, experiment_dir, *, validator, experiment_storage, progress_callback=None):
+            events.append("kafka_edc")
+            self.assertTrue(callable(progress_callback))
+            return [{"status": "passed", "provider": connectors[0], "consumer": connectors[1]}]
+
+        adapter = KafkaReadyAdapter()
+        self.fake_deployer_module.InesdataValidationDeployer = InesdataValidationDeployer
+
+        with mock.patch.object(
+            main,
+            "build_metrics_collector",
+            return_value=RecordingMetricsCollector(),
+        ), mock.patch.object(
+            main,
+            "build_kafka_edc_validation_suite",
+            return_value=mock.Mock(),
+        ) as build_suite, mock.patch.object(
+            main,
+            "run_kafka_edc_validation",
+            side_effect=run_kafka,
+        ):
+            result = main.run_validate(
+                adapter,
+                deployer_name="fake",
+                deployer_registry={
+                    **self.deployer_registry,
+                    "fake": "fake_deployer_module:InesdataValidationDeployer",
+                },
+                validation_engine_cls=RecordingValidationEngine,
+                experiment_storage=FakeStorage,
+                kafka_manager_cls=BlockingKafkaManager,
+            )
+
+        self.assertEqual(result["kafka_edc_results"][0]["status"], "passed")
+        self.assertIn("kafka_prepare_start", events)
+        self.assertIn("validation", events)
+        self.assertIn("newman_metrics", events)
+        self.assertIn("kafka_prepare_finish", events)
+        self.assertIn("kafka_edc", events)
+        self.assertLess(events.index("validation"), events.index("kafka_prepare_finish"))
+        self.assertLess(events.index("newman_metrics"), events.index("kafka_prepare_finish"))
+        self.assertLess(events.index("kafka_prepare_finish"), events.index("kafka_edc"))
+        self.assertIsInstance(build_suite.call_args.kwargs["kafka_manager"], BlockingKafkaManager)
 
     def test_validate_command_runs_test_data_cleanup_when_enabled(self):
         with mock.patch.object(
@@ -2117,6 +2667,83 @@ class MainCliTests(unittest.TestCase):
 
         self.assertIn("dashboard and dashboard-proxy services", str(exc.exception))
         self.assertIn("conn-a-dashboard: service has no ready endpoints", str(exc.exception))
+        playwright_runner.assert_not_called()
+
+    def test_validate_command_waits_for_inesdata_portal_readiness_before_playwright(self):
+        with mock.patch.object(
+            FakeDeployer,
+            "get_validation_profile",
+            return_value={
+                "adapter": "inesdata",
+                "newman_enabled": True,
+                "playwright_enabled": True,
+                "playwright_config": "validation/ui/playwright.config.ts",
+            },
+        ), mock.patch.object(
+            main,
+            "_wait_for_inesdata_portal_readiness",
+            return_value={"status": "passed", "gates": []},
+        ) as readiness_probe, mock.patch.object(
+            main,
+            "run_playwright_validation",
+            return_value={"status": "passed", "summary": {"total_specs": 3}},
+        ) as playwright_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_ENABLE_DEPLOYER_PLAYWRIGHT": "true"},
+            clear=False,
+        ):
+            result = main.main(
+                ["fake", "validate"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["playwright"]["status"], "passed")
+        readiness_probe.assert_called_once()
+        playwright_runner.assert_called_once()
+
+    def test_validate_command_fails_clearly_when_inesdata_portal_is_not_ready(self):
+        with mock.patch.object(
+            FakeDeployer,
+            "get_validation_profile",
+            return_value={
+                "adapter": "inesdata",
+                "newman_enabled": True,
+                "playwright_enabled": True,
+                "playwright_config": "validation/ui/playwright.config.ts",
+            },
+        ), mock.patch.object(
+            main,
+            "_wait_for_inesdata_portal_readiness",
+            return_value={
+                "status": "failed",
+                "artifact": "/tmp/portal_readiness.json",
+                "gates": [
+                    {
+                        "service": "conn-a-interface",
+                        "ready": False,
+                        "detail": "demo: service has no ready endpoints",
+                    }
+                ],
+            },
+        ), mock.patch.object(main, "run_playwright_validation") as playwright_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_ENABLE_DEPLOYER_PLAYWRIGHT": "true"},
+            clear=False,
+        ):
+            with self.assertRaises(RuntimeError) as exc:
+                main.main(
+                    ["fake", "validate"],
+                    adapter_registry=self.registry,
+                    deployer_registry=self.deployer_registry,
+                    validation_engine_cls=FakeValidationEngine,
+                    experiment_storage=FakeStorage,
+                )
+
+        self.assertIn("connector interface services and public portal routes", str(exc.exception))
+        self.assertIn("conn-a-interface: demo: service has no ready endpoints", str(exc.exception))
         playwright_runner.assert_not_called()
 
     def test_metrics_command_uses_metrics_collector(self):

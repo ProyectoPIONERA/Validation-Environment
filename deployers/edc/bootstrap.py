@@ -52,6 +52,7 @@ def load_config() -> dict[str, str]:
     values: dict[str, str] = {
         "ENVIRONMENT": "DEV",
         "PG_HOST": "localhost",
+        "PG_PORT": "5432",
         "PG_USER": "postgres",
         "PG_PASSWORD": "aPassword1234",
         "KC_URL": "http://localhost:8080",
@@ -204,6 +205,8 @@ def run_psql(config: dict[str, str], sql: str, database: str = "postgres", captu
         "psql",
         "-h",
         config.get("PG_HOST", "localhost"),
+        "-p",
+        str(config.get("PG_PORT", "5432")),
         "-U",
         config.get("PG_USER", "postgres"),
         "-d",

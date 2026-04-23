@@ -792,6 +792,10 @@ class INESDataComponentsAdapter:
         if not self.infrastructure.ensure_vault_unsealed():
             self._fail("Vault is not initialized or unsealed")
 
+        reconcile_vault_state = getattr(self.infrastructure, "reconcile_vault_state_for_local_runtime", None)
+        if callable(reconcile_vault_state) and not reconcile_vault_state():
+            self._fail("Vault token could not be synchronized with the shared local runtime")
+
         ds_name = self._dataspace_name()
         namespace = self.config.namespace_demo()
 

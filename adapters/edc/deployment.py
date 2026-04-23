@@ -86,52 +86,7 @@ class EDCDeploymentAdapter:
                 print(f"Warning: could not clean transitional EDC Level 3 artifact {source_file}: {exc}")
         return target_file
 
-    def _dataspace_namespace(self):
-        namespace_getter = getattr(self.config, "namespace_demo", None)
-        if callable(namespace_getter):
-            namespace = namespace_getter()
-            if namespace:
-                return namespace
-
-        config_adapter = getattr(self, "config_adapter", None)
-        namespace_getter = getattr(config_adapter, "primary_dataspace_namespace", None)
-        if callable(namespace_getter):
-            namespace = namespace_getter()
-            if namespace:
-                return namespace
-
-        return "demo"
-
-    def _dataspace_ready_for_edc_level4(self):
-        registration_pod_getter = getattr(self.infrastructure, "get_pod_by_name", None)
-        schema_waiter = getattr(self.infrastructure, "wait_for_registration_service_schema", None)
-
-        if not callable(registration_pod_getter):
-            return False
-
-        registration_pod = registration_pod_getter(self._dataspace_namespace(), "registration-service")
-        if not registration_pod:
-            return False
-
-        if callable(schema_waiter):
-            return bool(
-                schema_waiter(
-                    timeout=1,
-                    poll_interval=1,
-                    quiet=True,
-                )
-            )
-
-        return True
-
     def deploy_dataspace(self):
-        if self._dataspace_ready_for_edc_level4():
-            self.infrastructure.announce_level(3, "DATASPACE")
-            print("Existing shared dataspace is already ready for Level 4. Reusing it for EDC mode.")
-            self._stage_shared_dataspace_credentials()
-            self.infrastructure.complete_level(3)
-            return True
-
         self._delegate.connectors_adapter = self.connectors_adapter
         result = self._delegate.deploy_dataspace()
         self._stage_shared_dataspace_credentials()

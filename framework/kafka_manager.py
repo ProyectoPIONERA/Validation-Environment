@@ -20,7 +20,7 @@ class KafkaManager:
         container_factory=None,
         command_runner=None,
         image="confluentinc/cp-kafka:latest",
-        wait_timeout_seconds=60,
+        wait_timeout_seconds=90,
         poll_interval_seconds=1,
     ):
         self.bootstrap_servers = bootstrap_servers
@@ -166,6 +166,7 @@ class KafkaManager:
             "deployment_name": service_name,
             "local_port": local_port,
             "internal_bootstrap": internal_bootstrap,
+            "external_service_bootstrap": f"{service_name}-external.{namespace}.svc.cluster.local:9094",
             "external_bootstrap": external_bootstrap,
         }
 
@@ -299,7 +300,23 @@ class KafkaManager:
             """
         ).strip()
 
-    def _start_kubernetes_port_forward(self, ids):
+    def _stop_kubernetes_port_forward(self):
+        if self.port_forward_process is None:
+            return
+        try:
+            if self.port_forward_process.poll() is None:
+                self.port_forward_process.terminate()
+                try:
+                    self.port_forward_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.port_forward_process.kill()
+        finally:
+            self.port_forward_process = None
+
+    def _start_kubernetes_port_forward(self, ids, restart_existing=False):
+        if restart_existing:
+            self._stop_kubernetes_port_forward()
+
         if self.port_forward_process is not None and self.port_forward_process.poll() is None:
             return self.port_forward_process
 
@@ -330,6 +347,23 @@ class KafkaManager:
 
         raise RuntimeError("Kafka port-forward did not expose the external bootstrap server in time")
 
+    def _kubernetes_resources_exist(self, ids):
+        try:
+            self._run_command(
+                [
+                    "kubectl",
+                    "get",
+                    f"deployment/{ids['deployment_name']}",
+                    f"service/{ids['service_name']}",
+                    f"service/{ids['external_service_name']}",
+                    "-n",
+                    ids["namespace"],
+                ]
+            )
+            return True
+        except Exception:
+            return False
+
     def _list_kubernetes_probe_pods(self, namespace, excluded_prefixes=None):
         excluded_prefixes = tuple(excluded_prefixes or ())
         result = self._run_command(["kubectl", "get", "pods", "-n", namespace, "--no-headers"])
@@ -355,6 +389,23 @@ class KafkaManager:
 
     def _wait_for_kubernetes_internal_bootstrap(self, ids):
         host, port = self._parse_host_port(ids["internal_bootstrap"])
+        return self._wait_for_kubernetes_namespace_listener(
+            ids,
+            host=host,
+            port=port,
+            listener_label="internal bootstrap server",
+        )
+
+    def _wait_for_kubernetes_external_service_bootstrap(self, ids):
+        host, port = self._parse_host_port(ids["external_service_bootstrap"])
+        return self._wait_for_kubernetes_namespace_listener(
+            ids,
+            host=host,
+            port=port,
+            listener_label="external service listener",
+        )
+
+    def _wait_for_kubernetes_namespace_listener(self, ids, *, host, port, listener_label):
         deadline = time.time() + self.wait_timeout_seconds
         excluded_prefixes = (ids["deployment_name"],)
 
@@ -389,30 +440,47 @@ class KafkaManager:
                         "pod": pod_name,
                         "host": host,
                         "port": port,
+                        "listener": listener_label,
                     }
             time.sleep(self.poll_interval_seconds)
 
-        raise RuntimeError("Kafka internal bootstrap server did not become reachable from namespace pods in time")
+        raise RuntimeError(
+            f"Kafka {listener_label} did not become reachable from namespace pods in time"
+        )
 
     def _start_kafka_kubernetes(self):
         config = self._load_manager_config()
         manifest = self._build_kubernetes_manifest(config)
         ids = self._kubernetes_identifiers(config)
+        self.bootstrap_servers = ids["external_bootstrap"]
+        self.cluster_bootstrap_servers = ids["internal_bootstrap"]
+        self.provisioning_mode = "kubernetes"
+        rollout_error = None
 
         self._run_command(["kubectl", "apply", "-f", "-"], input_text=manifest)
-        self._run_command(
-            [
-                "kubectl",
-                "rollout",
-                "status",
-                f"deployment/{ids['deployment_name']}",
-                "-n",
-                ids["namespace"],
-                f"--timeout={self.wait_timeout_seconds}s",
-            ]
-        )
-        self._start_kubernetes_port_forward(ids)
-        self._wait_for_kubernetes_internal_bootstrap(ids)
+        try:
+            self._run_command(
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    f"deployment/{ids['deployment_name']}",
+                    "-n",
+                    ids["namespace"],
+                    f"--timeout={self.wait_timeout_seconds}s",
+                ]
+            )
+        except Exception as exc:
+            rollout_error = str(exc)
+
+        try:
+            self._wait_for_kubernetes_internal_bootstrap(ids)
+            self._wait_for_kubernetes_external_service_bootstrap(ids)
+            self._start_kubernetes_port_forward(ids)
+        except Exception as exc:
+            if rollout_error:
+                raise RuntimeError(f"{exc}. Earlier deployment rollout error: {rollout_error}") from exc
+            raise
 
         deadline = time.time() + self.wait_timeout_seconds
         while time.time() < deadline:
@@ -426,7 +494,38 @@ class KafkaManager:
                 return ids["external_bootstrap"]
             time.sleep(self.poll_interval_seconds)
 
+        if rollout_error:
+            raise RuntimeError(
+                "Kafka Kubernetes broker was deployed but the external bootstrap server did not become reachable in time. "
+                f"Earlier deployment rollout error: {rollout_error}"
+            )
         raise RuntimeError("Kafka Kubernetes broker was deployed but the external bootstrap server did not become reachable in time")
+
+    def _recover_existing_kubernetes_runtime(self):
+        config = self._load_manager_config()
+        ids = self._kubernetes_identifiers(config)
+        if not self._kubernetes_resources_exist(ids):
+            return None
+
+        self._wait_for_kubernetes_internal_bootstrap(ids)
+        self._wait_for_kubernetes_external_service_bootstrap(ids)
+        self._start_kubernetes_port_forward(ids, restart_existing=True)
+
+        deadline = time.time() + self.wait_timeout_seconds
+        while time.time() < deadline:
+            if self.is_kafka_available(ids["external_bootstrap"]):
+                self.container = None
+                self.started_by_framework = True
+                self.bootstrap_servers = ids["external_bootstrap"]
+                self.cluster_bootstrap_servers = ids["internal_bootstrap"]
+                self.provisioning_mode = "kubernetes"
+                self.last_error = None
+                return ids["external_bootstrap"]
+            time.sleep(self.poll_interval_seconds)
+
+        raise RuntimeError(
+            "Kafka Kubernetes broker exists but the external bootstrap server did not recover in time"
+        )
 
     def _start_kafka_container(self):
         """Start a Kafka container and wait until the broker becomes available."""
@@ -492,34 +591,50 @@ class KafkaManager:
                     and self.port_forward_process is not None
                     and self.port_forward_process.poll() is None
                 )
+                framework_managed_container = self.container is not None
                 self.started_by_framework = (
-                    previous_started_by_framework
-                    and candidate == previous_bootstrap_servers
-                    and (self.container is not None or framework_managed_kubernetes)
+                    candidate == previous_bootstrap_servers
+                    and (
+                        (previous_started_by_framework and (framework_managed_container or framework_managed_kubernetes))
+                        or (previous_provisioning_mode == "kubernetes" and framework_managed_kubernetes)
+                    )
                 )
                 self.last_error = None
                 return candidate
 
+        recovery_error = None
+        framework_managed_kubernetes = previous_provisioning_mode == "kubernetes" and (
+            previous_started_by_framework
+            or previous_cluster_bootstrap_servers
+            or previous_bootstrap_servers
+            or self.port_forward_process is not None
+        )
+        if framework_managed_kubernetes:
+            try:
+                recovered_bootstrap = self._recover_existing_kubernetes_runtime()
+                if recovered_bootstrap:
+                    return recovered_bootstrap
+            except Exception as exc:
+                recovery_error = str(exc)
+
         try:
             return self.start_kafka()
         except Exception as exc:
-            self.last_error = str(exc)
-            print(f"[WARNING] Kafka auto-provisioning failed: {exc}")
+            if recovery_error:
+                self.last_error = f"{recovery_error}; restart fallback failed: {exc}"
+            else:
+                self.last_error = str(exc)
+            print(f"[WARNING] Kafka auto-provisioning failed: {self.last_error}")
             return None
 
     def stop_kafka(self):
         """Stop the Kafka container only if it was started by the framework."""
-        if not self.started_by_framework or self.container is None:
-            if self.started_by_framework and self.provisioning_mode == "kubernetes":
+        if self.provisioning_mode == "kubernetes":
+            try:
                 config = self._load_manager_config()
                 ids = self._kubernetes_identifiers(config)
                 try:
-                    if self.port_forward_process is not None:
-                        self.port_forward_process.terminate()
-                        try:
-                            self.port_forward_process.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            self.port_forward_process.kill()
+                    self._stop_kubernetes_port_forward()
                     self._run_command(
                         [
                             "kubectl",
@@ -534,11 +649,16 @@ class KafkaManager:
                     )
                 except Exception as exc:
                     print(f"[WARNING] Failed to stop Kafka Kubernetes broker cleanly: {exc}")
-                finally:
-                    self.port_forward_process = None
-                    self.started_by_framework = False
-                    self.cluster_bootstrap_servers = None
-                    self.provisioning_mode = None
+            finally:
+                self.container = None
+                self.port_forward_process = None
+                self.started_by_framework = False
+                self.bootstrap_servers = None
+                self.cluster_bootstrap_servers = None
+                self.provisioning_mode = None
+            return
+
+        if not self.started_by_framework or self.container is None:
             return
 
         try:
@@ -551,6 +671,7 @@ class KafkaManager:
             self.container = None
             self.port_forward_process = None
             self.started_by_framework = False
+            self.bootstrap_servers = None
             self.cluster_bootstrap_servers = None
             self.provisioning_mode = None
 

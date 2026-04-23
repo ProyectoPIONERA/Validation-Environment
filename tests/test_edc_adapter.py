@@ -239,7 +239,7 @@ class EdcAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.infrastructure.deploy_calls, 0)
         self.assertEqual(adapter.infrastructure.announced, [(2, "DEPLOY COMMON SERVICES")])
         self.assertEqual(adapter.infrastructure.completed, [2])
-        self.assertIn("Reusing them for EDC mode", output.getvalue())
+        self.assertIn("Reusing them for the shared local foundation", output.getvalue())
 
     def test_preview_common_services_ignores_transient_minio_post_job(self):
         class PreviewConfig:
@@ -271,41 +271,135 @@ class EdcAdapterTests(unittest.TestCase):
         self.assertTrue(preview["services"]["minio"]["ready"])
         self.assertEqual(preview["issues"], [])
 
+    def test_preview_common_services_marks_failed_helm_release_not_ready(self):
+        class PreviewConfig:
+            NS_COMMON = "common-srvs"
+
+            @staticmethod
+            def helm_release_common():
+                return "common-srvs"
+
+        class PreviewInfrastructure(SharedInfrastructureStub):
+            @staticmethod
+            def common_services_release_status():
+                return "failed"
+
+        def run_silent(cmd, **_kwargs):
+            if cmd == "kubectl get pods -n common-srvs --no-headers":
+                return (
+                    "common-srvs-keycloak-0 1/1 Running 0 1d\n"
+                    "common-srvs-minio-56c96fbbdf-77qkg 1/1 Running 0 1d\n"
+                    "common-srvs-postgresql-0 1/1 Running 0 1d\n"
+                    "common-srvs-vault-0 1/1 Running 0 1d"
+                )
+            if cmd == "kubectl exec common-srvs-vault-0 -n common-srvs -- vault status -format=json":
+                return '{"initialized": true, "sealed": false}'
+            return ""
+
+        adapter = EdcAdapter.__new__(EdcAdapter)
+        adapter.config = PreviewConfig
+        adapter.infrastructure = PreviewInfrastructure()
+        adapter.run_silent = run_silent
+
+        preview = adapter._preview_common_services()
+
+        self.assertEqual(preview["status"], "missing")
+        self.assertEqual(preview["action"], "deploy_infrastructure")
+        self.assertEqual(preview["helm_release"], {"name": "common-srvs", "status": "failed"})
+        self.assertIn("common services Helm release is failed", preview["issues"])
+
+    def test_deploy_connectors_repairs_common_services_when_vault_token_mismatch_is_confirmed_by_env(self):
+        class Connectors:
+            def __init__(self):
+                self.calls = 0
+                self._last_runtime_prerequisite_code = None
+
+            def deploy_connectors(self):
+                self.calls += 1
+                if self.calls == 1:
+                    self._last_runtime_prerequisite_code = "vault_token_mismatch"
+                    raise RuntimeError("EDC Level 4 cannot continue because the local Vault token does not match")
+                return ["conn-citycounciledc-demoedc"]
+
+        adapter = EdcAdapter.__new__(EdcAdapter)
+        adapter.topology = "local"
+        adapter.connectors = Connectors()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.reset_local_shared_common_services.return_value = True
+        adapter.deploy_infrastructure = mock.Mock(return_value=None)
+        adapter.deploy_dataspace = mock.Mock(return_value=None)
+
+        with mock.patch.dict(os.environ, {"PIONERA_LEVEL4_REPAIR_COMMON_SERVICES": "true"}):
+            result = adapter.deploy_connectors()
+
+        self.assertEqual(result, ["conn-citycounciledc-demoedc"])
+        self.assertEqual(adapter.connectors.calls, 2)
+        adapter.infrastructure.reset_local_shared_common_services.assert_called_once()
+        adapter.deploy_infrastructure.assert_called_once()
+        adapter.deploy_dataspace.assert_called_once()
+
+    def test_deploy_connectors_does_not_repair_common_services_without_confirmation(self):
+        class Connectors:
+            _last_runtime_prerequisite_code = "vault_token_mismatch"
+
+            def __init__(self):
+                self.calls = 0
+
+            def deploy_connectors(self):
+                self.calls += 1
+                raise RuntimeError("EDC Level 4 cannot continue because the local Vault token does not match")
+
+        adapter = EdcAdapter.__new__(EdcAdapter)
+        adapter.topology = "local"
+        adapter.connectors = Connectors()
+        adapter.infrastructure = mock.Mock()
+
+        with mock.patch.dict(os.environ, {"PIONERA_LEVEL4_REPAIR_COMMON_SERVICES": "false"}):
+            with self.assertRaisesRegex(RuntimeError, "local Vault token does not match"):
+                adapter.deploy_connectors()
+
+        self.assertEqual(adapter.connectors.calls, 1)
+        adapter.infrastructure.reset_local_shared_common_services.assert_not_called()
+        adapter.infrastructure.reset_common_services_for_level4_repair.assert_not_called()
+
 
 class EdcDeploymentTests(unittest.TestCase):
-    def test_edc_deployment_reuses_dataspace_when_ready(self):
+    def test_edc_deployment_runs_level3_even_when_dataspace_is_ready(self):
         deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
         deployment.infrastructure = SharedInfrastructureStub()
         deployment._delegate = DeploymentDelegateStub()
         deployment.config = type("Config", (), {"namespace_demo": staticmethod(lambda: "demoedc")})
         deployment.config_adapter = None
+        deployment.connectors_adapter = object()
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             result = deployment.deploy_dataspace()
 
-        self.assertTrue(result)
-        self.assertEqual(deployment._delegate.deploy_calls, 0)
-        self.assertEqual(deployment.infrastructure.announced, [(3, "DATASPACE")])
-        self.assertEqual(deployment.infrastructure.completed, [3])
-        self.assertIn("Reusing it for EDC mode", output.getvalue())
+        self.assertEqual(result, "dataspace-deploy-called")
+        self.assertEqual(deployment._delegate.deploy_calls, 1)
+        self.assertEqual(deployment._delegate.connectors_adapter, deployment.connectors_adapter)
+        self.assertEqual(deployment.infrastructure.announced, [])
+        self.assertEqual(deployment.infrastructure.completed, [])
+        self.assertNotIn("Skipping Level 3 redeploy", output.getvalue())
 
-    def test_edc_deployment_reuses_dataspace_when_registration_service_is_ready_even_if_namespace_is_unstable(self):
+    def test_edc_deployment_delegates_level3_even_if_registration_service_is_ready(self):
         deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
         deployment.infrastructure = SharedInfrastructureStub(dataspace_ready=False, registration_pod="demoedc-registration-service-0", schema_ready=True)
         deployment._delegate = DeploymentDelegateStub()
         deployment.config = type("Config", (), {"namespace_demo": staticmethod(lambda: "demoedc")})
         deployment.config_adapter = None
+        deployment.connectors_adapter = object()
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             result = deployment.deploy_dataspace()
 
-        self.assertTrue(result)
-        self.assertEqual(deployment._delegate.deploy_calls, 0)
-        self.assertEqual(deployment.infrastructure.announced, [(3, "DATASPACE")])
-        self.assertEqual(deployment.infrastructure.completed, [3])
-        self.assertIn("Reusing it for EDC mode", output.getvalue())
+        self.assertEqual(result, "dataspace-deploy-called")
+        self.assertEqual(deployment._delegate.deploy_calls, 1)
+        self.assertEqual(deployment.infrastructure.announced, [])
+        self.assertEqual(deployment.infrastructure.completed, [])
+        self.assertNotIn("Skipping Level 3 redeploy", output.getvalue())
 
     def test_edc_deployment_uses_shared_dataspace_runtime_for_level3_only(self):
         deployment = EDCDeploymentAdapter(
@@ -493,6 +587,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             infrastructure = mock.Mock()
             infrastructure.ensure_local_infra_access.return_value = True
             infrastructure.ensure_vault_unsealed.return_value = True
+            infrastructure.reconcile_vault_state_for_local_runtime.return_value = True
             infrastructure.sync_vault_token_to_deployer_config.return_value = True
             adapter.infrastructure = infrastructure
 
@@ -506,6 +601,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             label="EDC runtime",
             quiet=True,
         )
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
         infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
 
     def test_prepare_runtime_prerequisites_syncs_vault_token_when_local_edc_config_exists(self):
@@ -536,6 +632,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             infrastructure = mock.Mock()
             infrastructure.ensure_local_infra_access.return_value = True
             infrastructure.ensure_vault_unsealed.return_value = True
+            infrastructure.reconcile_vault_state_for_local_runtime.return_value = True
             infrastructure.sync_vault_token_to_deployer_config.return_value = True
             adapter.infrastructure = infrastructure
 
@@ -549,7 +646,8 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             label="EDC runtime",
             quiet=True,
         )
-        infrastructure.sync_vault_token_to_deployer_config.assert_called_once()
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_called_once()
+        infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
 
     def test_prepare_runtime_prerequisites_syncs_vault_token_when_shared_infrastructure_config_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -579,6 +677,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             infrastructure = mock.Mock()
             infrastructure.ensure_local_infra_access.return_value = True
             infrastructure.ensure_vault_unsealed.return_value = True
+            infrastructure.reconcile_vault_state_for_local_runtime.return_value = True
             infrastructure.sync_vault_token_to_deployer_config.return_value = True
             adapter.infrastructure = infrastructure
 
@@ -586,7 +685,8 @@ class EdcConnectorAdapterTests(unittest.TestCase):
                 result = adapter._prepare_runtime_prerequisites()
 
         self.assertEqual(result, (repo_dir, "/usr/bin/python3"))
-        infrastructure.sync_vault_token_to_deployer_config.assert_called_once()
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_called_once()
+        infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
 
     def test_prepare_runtime_prerequisites_fails_when_vault_token_is_stale(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -620,6 +720,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             infrastructure = mock.Mock()
             infrastructure.ensure_local_infra_access.return_value = True
             infrastructure.ensure_vault_unsealed.return_value = True
+            infrastructure.reconcile_vault_state_for_local_runtime.return_value = True
             infrastructure.sync_vault_token_to_deployer_config.return_value = True
             adapter.infrastructure = infrastructure
 
@@ -656,6 +757,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             infrastructure = mock.Mock()
             infrastructure.ensure_local_infra_access.return_value = True
             infrastructure.ensure_vault_unsealed.return_value = True
+            infrastructure.reconcile_vault_state_for_local_runtime.return_value = True
             infrastructure.sync_vault_token_to_deployer_config.return_value = True
             adapter.infrastructure = infrastructure
 
@@ -664,6 +766,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
 
         self.assertEqual(result, (repo_dir, "/usr/bin/python3"))
         requirements_mock.assert_not_called()
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
         infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
 
     def test_connector_values_payload_maps_edc_runtime_and_shared_services(self):
@@ -948,6 +1051,119 @@ class EdcConnectorAdapterTests(unittest.TestCase):
 
         self.assertIn("Refusing to deploy generic EDC connector", str(ctx.exception))
         self.assertIn("deployment/conn-citycouncil-demo", str(ctx.exception))
+
+    def test_deploy_connectors_raises_prerequisite_error_with_root_cause(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter._last_runtime_prerequisite_error = "Vault token is stale for the running common services"
+        adapter._prepare_runtime_prerequisites = lambda: (None, None)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            adapter.deploy_connectors()
+
+        self.assertIn("Vault token is stale", str(ctx.exception))
+
+    def test_deploy_connectors_prepares_local_edc_images_before_runtime_deploy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scripts_dir = os.path.join(tmpdir, "adapters", "edc", "scripts")
+            os.makedirs(scripts_dir, exist_ok=True)
+            for script_name in (
+                "build_image.sh",
+                "build_dashboard_image.sh",
+                "build_dashboard_proxy_image.sh",
+            ):
+                with open(os.path.join(scripts_dir, script_name), "w", encoding="utf-8") as handle:
+                    handle.write("#!/usr/bin/env bash\n")
+
+            events = []
+            adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+            adapter.topology = "local"
+            adapter.config = type(
+                "Config",
+                (),
+                {
+                    "script_dir": staticmethod(lambda: tmpdir),
+                    "TIMEOUT_POD_WAIT": 120,
+                    "NS_COMMON": "common-srvs",
+                },
+            )
+            adapter.config_adapter = type(
+                "ConfigAdapter",
+                (),
+                {
+                    "load_deployer_config": staticmethod(
+                        lambda: {
+                            "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+                            "EDC_DASHBOARD_ENABLED": "true",
+                        }
+                    ),
+                    "edc_dashboard_enabled": staticmethod(lambda: True),
+                    "edc_dashboard_image_name": staticmethod(lambda: "validation-environment/edc-dashboard"),
+                    "edc_dashboard_image_tag": staticmethod(lambda: "latest"),
+                    "edc_dashboard_proxy_image_name": staticmethod(
+                        lambda: "validation-environment/edc-dashboard-proxy"
+                    ),
+                    "edc_dashboard_proxy_image_tag": staticmethod(lambda: "latest"),
+                    "edc_connector_dir": staticmethod(lambda: tmpdir),
+                    "generate_connector_hosts": staticmethod(lambda connectors: list(connectors)),
+                },
+            )()
+
+            def fake_run(command, **_kwargs):
+                if "build_image.sh" in command:
+                    events.append("build-connector-image")
+                elif "build_dashboard_image.sh" in command:
+                    events.append("build-dashboard-image")
+                elif "build_dashboard_proxy_image.sh" in command:
+                    events.append("build-dashboard-proxy-image")
+                elif command.startswith("kubectl rollout restart deployment/"):
+                    events.append(command)
+                return object()
+
+            adapter.run = fake_run
+            adapter.run_silent = lambda *_args, **_kwargs: ""
+            adapter._prepare_runtime_prerequisites = lambda: ("/tmp/repo", "/tmp/python")
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demoedc",
+                    "namespace": "demoedc",
+                    "connectors": ["conn-citycounciledc-demoedc"],
+                }
+            ]
+            adapter._conflicting_runtime_resources = lambda connector, namespace: []
+            adapter._prepare_connector_prerequisites = lambda connector, ds_name, namespace, repo_dir, python_exec: (
+                events.append("prepare-prerequisites") or True
+            )
+            adapter._render_values_file = lambda connector, ds_name, connectors: "/tmp/values.yaml"
+            adapter._wait_for_edc_deployment_rollout = (
+                lambda deployment, namespace, timeout=300, label=None: (
+                    events.append(f"wait-rollout:{deployment}") or True
+                )
+            )
+            adapter.wait_for_all_connectors = lambda connectors: True
+            adapter.infrastructure = mock.Mock()
+            adapter.infrastructure.deploy_helm_release.return_value = True
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                deployed = adapter.deploy_connectors()
+
+        self.assertEqual(deployed, ["conn-citycounciledc-demoedc"])
+        self.assertEqual(
+            events,
+            [
+                "build-connector-image",
+                "build-dashboard-image",
+                "build-dashboard-proxy-image",
+                "prepare-prerequisites",
+                "wait-rollout:conn-citycounciledc-demoedc",
+                "kubectl rollout restart deployment/conn-citycounciledc-demoedc -n demoedc",
+                "wait-rollout:conn-citycounciledc-demoedc",
+                "kubectl rollout restart deployment/conn-citycounciledc-demoedc-dashboard -n demoedc",
+                "wait-rollout:conn-citycounciledc-demoedc-dashboard",
+                "kubectl rollout restart deployment/conn-citycounciledc-demoedc-dashboard-proxy -n demoedc",
+                "wait-rollout:conn-citycounciledc-demoedc-dashboard-proxy",
+            ],
+        )
+        adapter.infrastructure.deploy_helm_release.assert_called_once()
 
     def test_preview_deploy_connectors_reports_render_summary_without_secrets(self):
         with tempfile.TemporaryDirectory() as tmpdir:

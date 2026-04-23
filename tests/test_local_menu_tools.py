@@ -264,7 +264,7 @@ class LocalMenuToolsTests(unittest.TestCase):
             preserve_values=True,
         )
 
-    def test_local_images_workflow_keeps_legacy_connector_shortcut(self):
+    def test_local_images_workflow_keeps_inesdata_connector_shortcut(self):
         with (
             mock.patch.object(
                 local_menu_tools,
@@ -279,7 +279,7 @@ class LocalMenuToolsTests(unittest.TestCase):
             mock.patch("builtins.input", side_effect=["2", "Y"]),
             mock.patch.object(local_menu_tools, "_execute_local_images_workflow", return_value=True) as execute,
         ):
-            local_menu_tools.run_local_images_workflow_interactive(active_adapter="edc")
+            local_menu_tools.run_local_images_workflow_interactive(active_adapter="inesdata")
 
         execute.assert_called_once_with(
             [
@@ -290,6 +290,71 @@ class LocalMenuToolsTests(unittest.TestCase):
                 "--component",
                 "connector",
             ],
+            deploy=True,
+            preserve_values=True,
+        )
+
+    def test_local_images_workflow_edc_quick_connector_uses_edc_recipe(self):
+        recipe = local_menu_tools.LocalImageRecipe(
+            key="edc/connector",
+            adapter="edc",
+            label="EDC connector",
+            source_rel_path=os.path.join("adapters", "edc", "sources", "connector"),
+            image_ref="validation-environment/edc-connector:local",
+        )
+
+        with (
+            mock.patch.object(
+                local_menu_tools,
+                "_detect_platform_dirs_from_adapter_configs",
+                return_value=[os.path.join("deployers", "inesdata")],
+            ),
+            mock.patch.object(local_menu_tools, "collect_local_image_recipes", return_value=[recipe]),
+            mock.patch("builtins.input", side_effect=["1", "Y"]),
+            mock.patch.object(local_menu_tools, "_execute_registered_local_image_recipes", return_value=True) as execute,
+            mock.patch.object(local_menu_tools, "_execute_local_images_workflow", return_value=True) as legacy_execute,
+        ):
+            local_menu_tools.run_local_images_workflow_interactive(active_adapter="edc")
+
+        execute.assert_called_once_with(
+            [recipe],
+            platform_dir=os.path.join("deployers", "inesdata"),
+            deploy=True,
+            preserve_values=True,
+        )
+        legacy_execute.assert_not_called()
+
+    def test_local_images_workflow_edc_quick_dashboard_uses_dashboard_and_proxy_recipes(self):
+        dashboard = local_menu_tools.LocalImageRecipe(
+            key="edc/dashboard",
+            adapter="edc",
+            label="EDC dashboard",
+            source_rel_path=os.path.join("adapters", "edc", "sources", "dashboard"),
+            image_ref="validation-environment/edc-dashboard:latest",
+        )
+        proxy = local_menu_tools.LocalImageRecipe(
+            key="edc/dashboard-proxy",
+            adapter="edc",
+            label="EDC dashboard proxy",
+            source_rel_path=os.path.join("adapters", "edc", "build", "dashboard-proxy"),
+            image_ref="validation-environment/edc-dashboard-proxy:latest",
+        )
+
+        with (
+            mock.patch.object(
+                local_menu_tools,
+                "_detect_platform_dirs_from_adapter_configs",
+                return_value=[os.path.join("deployers", "inesdata")],
+            ),
+            mock.patch.object(local_menu_tools, "collect_local_image_recipes", return_value=[dashboard, proxy]),
+            mock.patch("builtins.input", side_effect=["2", "Y"]),
+            mock.patch.object(local_menu_tools, "_execute_registered_local_image_recipes", return_value=True) as execute,
+        ):
+            local_menu_tools.run_local_images_workflow_interactive(active_adapter="edc")
+
+        execute.assert_called_once_with(
+            [dashboard, proxy],
+            platform_dir=os.path.join("deployers", "inesdata"),
             deploy=True,
             preserve_values=True,
         )
@@ -367,6 +432,40 @@ class LocalMenuToolsTests(unittest.TestCase):
 
         self.assertFalse(result)
         run.assert_not_called()
+
+    def test_execute_edc_script_recipe_restarts_matching_deployments(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_dir = os.path.join(tmpdir, "adapters", "edc", "scripts")
+            os.makedirs(script_dir, exist_ok=True)
+            script_path = os.path.join(script_dir, "build_image.sh")
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/usr/bin/env bash\n")
+
+            recipe = local_menu_tools.LocalImageRecipe(
+                key="edc/connector",
+                adapter="edc",
+                label="EDC connector",
+                source_rel_path=os.path.join("adapters", "edc", "sources", "connector"),
+                image_ref="validation-environment/edc-connector:local",
+                script_rel_path=os.path.join("adapters", "edc", "scripts", "build_image.sh"),
+            )
+
+            with (
+                mock.patch.object(local_menu_tools, "project_root", return_value=tmpdir),
+                mock.patch.object(local_menu_tools, "_minikube_profile_for_local_images", return_value="dev"),
+                mock.patch.object(local_menu_tools.subprocess, "run") as run,
+                mock.patch.object(local_menu_tools, "_restart_edc_deployments_for_local_image_keys") as restart,
+            ):
+                run.return_value = mock.Mock(returncode=0)
+
+                result = local_menu_tools._execute_registered_local_image_recipe(recipe, deploy=True)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            run.call_args.args[0],
+            ["bash", script_path, "--apply", "--minikube-profile", "dev"],
+        )
+        restart.assert_called_once_with(["edc/connector"])
 
     def test_recover_connectors_restarts_detected_connector_deployments(self):
         adapter = _FakeRecoveryAdapter(connectors=["conn-a", "conn-b"])

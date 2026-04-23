@@ -304,6 +304,14 @@ class INESDataDeploymentAdapter:
         if not self.infrastructure.ensure_vault_unsealed():
             self._fail("Vault is not initialized or unsealed")
 
+        reconcile_vault_state = getattr(self.infrastructure, "reconcile_vault_state_for_local_runtime", None)
+        if callable(reconcile_vault_state) and not reconcile_vault_state():
+            self._fail("Vault token could not be synchronized with the shared local runtime")
+
+        sync_common_credentials = getattr(self.infrastructure, "sync_common_credentials_from_kubernetes", None)
+        if callable(sync_common_credentials):
+            sync_common_credentials()
+
         print("Verifying Keycloak access...")
         deployer_config = self.config_adapter.load_deployer_config()
         kc_url = deployer_config.get("KC_URL")
@@ -384,7 +392,10 @@ class INESDataDeploymentAdapter:
 
         self.restart_registration_service()
 
-        if not self.infrastructure.wait_for_namespace_pods(self.config.namespace_demo()):
+        if not self.infrastructure.wait_for_dataspace_level3_pods(
+            self.config.namespace_demo(),
+            dataspace_name=ds_name,
+        ):
             self._fail("Timeout waiting for dataspace pods")
 
         dataspace_ready, root_cause = self.infrastructure.verify_dataspace_ready_for_level4()
@@ -392,6 +403,7 @@ class INESDataDeploymentAdapter:
             self._fail("Level 3 did not leave the dataspace ready for Level 4", root_cause=root_cause)
 
         self.infrastructure.complete_level(3)
+        print("Next step: run Level 4 to deploy or update the connectors for this dataspace.")
 
     def describe(self) -> str:
         return "INESDataDeploymentAdapter contains deployment logic for INESData."

@@ -129,6 +129,10 @@ class InesdataAdapter:
     def _preview_common_services(self):
         namespace = self.config.NS_COMMON
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
+        release_status_getter = getattr(self.infrastructure, "common_services_release_status", None)
+        release_status = release_status_getter() if callable(release_status_getter) else None
+        release_name_getter = getattr(self.config, "helm_release_common", None)
+        release_name = release_name_getter() if callable(release_name_getter) else "common-srvs"
         ignored_hook_pod = getattr(self.infrastructure, "_is_ignored_transient_hook_pod", None)
         services = {
             "keycloak": {"pod": None, "status": "missing", "ready": False},
@@ -208,17 +212,22 @@ class InesdataAdapter:
         if services["vault"]["pod"] and not vault_state["ready"]:
             issues.append("Vault is present but not initialized/unsealed")
 
+        if release_status and release_status != "deployed":
+            issues.append(f"common services Helm release is {release_status}")
+
         ready = (
             services["keycloak"]["ready"]
             and services["minio"]["ready"]
             and services["postgresql"]["ready"]
             and services["vault"]["pod"] is not None
             and vault_state["ready"]
+            and (not release_status or release_status == "deployed")
         )
         return {
             "status": "ready" if ready else "missing",
             "action": "reuse" if ready else "deploy_infrastructure",
             "namespace": namespace,
+            "helm_release": {"name": release_name, "status": release_status or "missing"},
             "services": services,
             "vault": vault_state,
             "issues": issues,

@@ -61,7 +61,7 @@ class InesdataConfig:
     @classmethod
     def values_path(cls):
         if cls.use_shared_deployer_artifacts():
-            return os.path.join(cls.shared_runtime_dir("common"), "values.yaml")
+            return os.path.join(cls.shared_deployment_runtime_dir("common"), "values.yaml")
         return os.path.join(cls.common_dir(), "values.yaml")
 
     @classmethod
@@ -111,32 +111,11 @@ class InesdataConfig:
         return str(shared_artifact_dir("common", "init-keys-vault.json"))
 
     @classmethod
-    def adapter_runtime_vault_keys_path(cls):
-        return os.path.join(cls.shared_runtime_dir("common"), "init-keys-vault.json")
-
-    @classmethod
-    def legacy_vault_keys_path(cls):
-        return str(legacy_deployer_artifact_dir("inesdata", "common", "init-keys-vault.json"))
-
-    @classmethod
     def ensure_vault_keys_file(cls):
         vault_keys_path = cls.vault_keys_path()
         if not cls.use_shared_deployer_artifacts():
             return vault_keys_path
 
-        if os.path.exists(vault_keys_path):
-            return vault_keys_path
-
-        candidate_paths = [
-            cls.adapter_runtime_vault_keys_path(),
-            cls.legacy_vault_keys_path(),
-        ]
-        for legacy_path in candidate_paths:
-            if not os.path.exists(legacy_path):
-                continue
-            os.makedirs(os.path.dirname(vault_keys_path), exist_ok=True)
-            shutil.copy2(legacy_path, vault_keys_path)
-            break
         return vault_keys_path
 
     @classmethod
@@ -166,8 +145,15 @@ class InesdataConfig:
         )
 
     @classmethod
-    def shared_runtime_dir(cls, *parts):
-        return os.path.join(cls.deployment_runtime_dir(), "shared", *parts)
+    def shared_deployment_runtime_dir(cls, *parts):
+        return os.path.join(
+            cls.script_dir(),
+            "deployers",
+            "shared",
+            "deployments",
+            cls.deployment_environment_name(),
+            *parts,
+        )
 
     @classmethod
     def venv_path(cls):
@@ -211,7 +197,7 @@ class InesdataConfig:
     def registration_values_file(cls):
         values_name = f"values-{cls.dataspace_name()}.yaml"
         if cls.use_shared_deployer_artifacts():
-            return os.path.join(cls.shared_runtime_dir("dataspace", "registration-service"), values_name)
+            return os.path.join(cls.deployment_runtime_dir(), "dataspace", "registration-service", values_name)
         return os.path.join(cls.registration_service_dir(), values_name)
 
     @classmethod
@@ -411,6 +397,10 @@ class INESDataConfigAdapter:
             config.get("PG_USER", "postgres"),
             config.get("PG_PASSWORD")
         )
+
+    def get_pg_port(self):
+        config = self.load_deployer_config()
+        return str(config.get("PG_PORT") or "5432").strip() or "5432"
 
     def primary_dataspace_name(self):
         config = self.load_deployer_config()

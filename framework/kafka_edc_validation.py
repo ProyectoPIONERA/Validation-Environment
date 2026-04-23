@@ -34,6 +34,9 @@ class KafkaEdcValidationSuite:
     DEFAULT_REQUEST_RETRY_SECONDS = 2
     DEFAULT_PAIR_ATTEMPTS = 2
     DEFAULT_PAIR_RETRY_SECONDS = 5
+    DEFAULT_STABILIZATION_GROUP_WAIT_SECONDS = 10
+    DEFAULT_STABILIZATION_PROBE_TIMEOUT_SECONDS = 30
+    DEFAULT_STABILIZATION_REQUEST_TIMEOUT_MS = 5000
 
     def __init__(
         self,
@@ -475,6 +478,12 @@ class KafkaEdcValidationSuite:
                 bootstrap_servers = resolved
 
         if not bootstrap_servers:
+            kafka_error = getattr(kafka_manager, "last_error", None) if kafka_manager is not None else None
+            if kafka_error:
+                raise RuntimeError(
+                    "Kafka bootstrap_servers not configured for Kafka transfer validation. "
+                    f"Last runtime preparation error: {kafka_error}"
+                )
             raise RuntimeError("Kafka bootstrap_servers not configured for Kafka transfer validation")
 
         runtime["host_bootstrap_servers"] = bootstrap_servers
@@ -527,11 +536,44 @@ class KafkaEdcValidationSuite:
             time.sleep(1)
         return False
 
+    def _refresh_kafka_runtime(self, runtime, *, restart=False):
+        kafka_manager = self.kafka_manager
+        if kafka_manager is None:
+            return False
+
+        if restart:
+            stop_method = getattr(kafka_manager, "stop_kafka", None)
+            if callable(stop_method):
+                stop_method()
+
+        resolved_bootstrap = kafka_manager.ensure_kafka_running()
+        if not resolved_bootstrap:
+            return False
+
+        runtime["bootstrap_servers"] = resolved_bootstrap
+        runtime["host_bootstrap_servers"] = resolved_bootstrap
+        cluster_bootstrap = getattr(kafka_manager, "cluster_bootstrap_servers", None)
+        if cluster_bootstrap:
+            runtime["cluster_bootstrap_servers"] = cluster_bootstrap
+        return True
+
+    def _can_hard_restart_kafka_runtime(self):
+        kafka_manager = self.kafka_manager
+        if kafka_manager is None:
+            return False
+
+        if bool(getattr(kafka_manager, "started_by_framework", False)):
+            return True
+
+        provisioning_mode = str(getattr(kafka_manager, "provisioning_mode", "") or "").strip().lower()
+        return provisioning_mode == "kubernetes"
+
     def _ensure_topic_with_runtime(self, runtime, topic_name):
         admin_client_class, new_topic_class = self._load_kafka_admin_classes()
         last_exc = None
+        hard_restart_attempted = False
 
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             admin_client = None
             try:
                 admin_client = admin_client_class(**self._build_kafka_client_kwargs(runtime))
@@ -558,19 +600,13 @@ class KafkaEdcValidationSuite:
                 return True
             except Exception as exc:
                 last_exc = exc
-                kafka_manager = self.kafka_manager
-                if attempt == 1 and kafka_manager is not None:
-                    stop_method = getattr(kafka_manager, "stop_kafka", None)
-                    if callable(stop_method):
-                        stop_method()
-                    resolved_bootstrap = kafka_manager.ensure_kafka_running()
-                    if resolved_bootstrap:
-                        runtime["bootstrap_servers"] = resolved_bootstrap
-                        runtime["host_bootstrap_servers"] = resolved_bootstrap
-                    cluster_bootstrap = getattr(kafka_manager, "cluster_bootstrap_servers", None)
-                    if cluster_bootstrap:
-                        runtime["cluster_bootstrap_servers"] = cluster_bootstrap
+                if attempt == 1 and self._refresh_kafka_runtime(runtime, restart=False):
                     continue
+
+                if not hard_restart_attempted and self._can_hard_restart_kafka_runtime():
+                    hard_restart_attempted = True
+                    if self._refresh_kafka_runtime(runtime, restart=True):
+                        continue
                 raise
             finally:
                 close_method = getattr(admin_client, "close", None) if admin_client is not None else None
@@ -1185,8 +1221,12 @@ class KafkaEdcValidationSuite:
     def _wait_for_transfer_runtime_stabilization(self, runtime, transfer_process, source_topic):
         timeout_seconds = max(int(runtime.get("startup_grace_seconds", 0)), 0)
         correlation_id = None
+        destination_topic = None
         if isinstance(transfer_process, dict):
             correlation_id = transfer_process.get("correlationId")
+            data_destination = transfer_process.get("dataDestination")
+            if isinstance(data_destination, dict):
+                destination_topic = data_destination.get("topic")
 
         if timeout_seconds <= 0:
             return {
@@ -1195,9 +1235,19 @@ class KafkaEdcValidationSuite:
             }
 
         admin_client_class, _ = self._load_kafka_admin_classes()
-        admin_client = admin_client_class(**self._build_kafka_client_kwargs(runtime))
+        stabilization_runtime = dict(runtime)
+        stabilization_runtime["request_timeout_ms"] = min(
+            int(stabilization_runtime.get("request_timeout_ms", 60000)),
+            self.DEFAULT_STABILIZATION_REQUEST_TIMEOUT_MS,
+        )
+        stabilization_runtime["api_timeout_ms"] = min(
+            int(stabilization_runtime.get("api_timeout_ms", 60000)),
+            self.DEFAULT_STABILIZATION_REQUEST_TIMEOUT_MS,
+        )
+        admin_client = admin_client_class(**self._build_kafka_client_kwargs(stabilization_runtime))
         started_at = time.time()
-        deadline = started_at + timeout_seconds
+        group_wait_seconds = min(timeout_seconds, self.DEFAULT_STABILIZATION_GROUP_WAIT_SECONDS)
+        deadline = started_at + group_wait_seconds
         last_state = None
         last_member_count = 0
         matched_group_id = None
@@ -1248,16 +1298,6 @@ class KafkaEdcValidationSuite:
                         }
 
                 time.sleep(max(1, int(runtime.get("poll_interval_seconds", 1))))
-
-            return {
-                "strategy": "timeout_without_ready_group",
-                "seconds_waited": round(time.time() - started_at, 2),
-                "correlation_id": correlation_id,
-                "group_id": matched_group_id,
-                "last_state": last_state,
-                "last_member_count": last_member_count,
-                "source_topic": source_topic,
-            }
         finally:
             close_method = getattr(admin_client, "close", None)
             if callable(close_method):
@@ -1266,8 +1306,58 @@ class KafkaEdcValidationSuite:
                 except Exception:
                     pass
 
-    def _wait_for_end_to_end_probe(self, runtime, producer, consumer, source_topic):
-        timeout_seconds = max(int(runtime.get("startup_grace_seconds", 0)), 0)
+        if destination_topic:
+            producer = None
+            consumer = None
+            probe_timeout_seconds = min(timeout_seconds, self.DEFAULT_STABILIZATION_PROBE_TIMEOUT_SECONDS)
+            try:
+                producer, consumer, probe_group_id = self._open_probe_clients(runtime, destination_topic)
+                probe_result = self._wait_for_end_to_end_probe(
+                    runtime,
+                    producer,
+                    consumer,
+                    source_topic,
+                    timeout_seconds=probe_timeout_seconds,
+                )
+                return {
+                    "strategy": "probe_ready",
+                    "seconds_waited": round(max(0.0, time.time() - started_at), 2),
+                    "group_id": probe_group_id,
+                    "state": "ProbeRelayed",
+                    "member_count": 0,
+                    "source_topic": source_topic,
+                    "destination_topic": destination_topic,
+                    "probe": probe_result,
+                }
+            except Exception as probe_exc:
+                probe_error = str(probe_exc)
+            finally:
+                for client in (producer, consumer):
+                    close_method = getattr(client, "close", None) if client is not None else None
+                    if callable(close_method):
+                        try:
+                            close_method()
+                        except Exception:
+                            pass
+        else:
+            probe_error = "destination_topic_missing"
+
+        return {
+            "strategy": "timeout_without_ready_group",
+            "seconds_waited": round(max(0.0, time.time() - started_at), 2),
+            "correlation_id": correlation_id,
+            "group_id": matched_group_id,
+            "last_state": last_state,
+            "last_member_count": last_member_count,
+            "source_topic": source_topic,
+            "destination_topic": destination_topic,
+            "probe_error": probe_error,
+        }
+
+    def _wait_for_end_to_end_probe(self, runtime, producer, consumer, source_topic, *, timeout_seconds=None):
+        if timeout_seconds is None:
+            timeout_seconds = runtime.get("startup_grace_seconds", 0)
+        timeout_seconds = max(int(timeout_seconds), 0)
         if timeout_seconds <= 0:
             return {
                 "status": "skipped",
@@ -1304,22 +1394,22 @@ class KafkaEdcValidationSuite:
                             return {
                                 "status": "ready",
                                 "attempts": attempts,
-                                "seconds_waited": round(time.time() - started_at, 2),
+                                "seconds_waited": round(max(0.0, time.time() - started_at), 2),
                                 "probe_message_id": probe_payload["message_id"],
                             }
             time.sleep(1)
 
         raise RuntimeError("Kafka transfer path did not relay a probe message in time")
 
-    def _measure_transfer_latency(self, runtime, source_topic, destination_topic):
+    def _open_probe_clients(self, runtime, destination_topic):
         producer_class, consumer_class = self._load_kafka_classes()
         producer_kwargs = self._build_kafka_client_kwargs(runtime)
         producer_kwargs.setdefault("acks", "all")
         producer_kwargs.setdefault("retries", 5)
         producer_kwargs.setdefault("max_block_ms", runtime.get("max_block_ms", 60000))
         producer = producer_class(**producer_kwargs)
-        group_id = f"{runtime.get('consumer_group_prefix', 'framework-edc-kafka')}-{str(self.uuid_factory())[:12]}"
 
+        group_id = f"{runtime.get('consumer_group_prefix', 'framework-edc-kafka')}-{str(self.uuid_factory())[:12]}"
         consumer_kwargs = self._build_kafka_client_kwargs(runtime)
         consumer_kwargs.setdefault("group_id", group_id)
         consumer_kwargs.setdefault("auto_offset_reset", "earliest")
@@ -1329,6 +1419,12 @@ class KafkaEdcValidationSuite:
 
         if hasattr(consumer, "subscribe"):
             consumer.subscribe([destination_topic])
+        return producer, consumer, group_id
+
+    def _measure_transfer_latency(self, runtime, source_topic, destination_topic, probe_result=None):
+        producer = None
+        consumer = None
+        group_id = None
 
         message_count = int(runtime["message_count"])
         message_sample_limit = max(int(runtime.get("message_sample_limit", 5)), 0)
@@ -1338,11 +1434,12 @@ class KafkaEdcValidationSuite:
         latencies_ms = []
         message_samples = []
         sample_ids = set()
-        start_ms = self.time_provider()
-        probe_result = None
 
         try:
-            probe_result = self._wait_for_end_to_end_probe(runtime, producer, consumer, source_topic)
+            producer, consumer, group_id = self._open_probe_clients(runtime, destination_topic)
+            if probe_result is None:
+                probe_result = self._wait_for_end_to_end_probe(runtime, producer, consumer, source_topic)
+            start_ms = self.time_provider()
             for index in range(message_count):
                 message_id = f"kafka-transfer-{index}-{self.uuid_factory()}"
                 payload = {
@@ -1399,11 +1496,13 @@ class KafkaEdcValidationSuite:
                         break
         finally:
             try:
-                producer.close()
+                if producer is not None:
+                    producer.close()
             except Exception:
                 pass
             try:
-                consumer.close()
+                if consumer is not None:
+                    consumer.close()
             except Exception:
                 pass
 
@@ -1451,6 +1550,10 @@ class KafkaEdcValidationSuite:
         if callable(stop_method):
             stop_method()
 
+    def _wait_for_post_run_settlement(self, runtime, payload):
+        cleanup = (payload or {}).get("cleanup") or {}
+        return self._wait_for_cleanup_settlement(runtime, cleanup.get("after_run"))
+
     @staticmethod
     def _pair_error_message(payload):
         error = payload.get("error")
@@ -1472,6 +1575,7 @@ class KafkaEdcValidationSuite:
             "failed with HTTP 504",
             "Unable to obtain credentials",
             "Kafka transfer path did not relay a probe message in time",
+            "No Kafka messages were consumed through the EDC transfer",
         )
         if any(fragment in error_message for fragment in transient_fragments):
             return True
@@ -1655,14 +1759,21 @@ class KafkaEdcValidationSuite:
                 transfer_result["raw"],
                 source_topic,
             )
+            stabilization_probe = stabilization.get("probe")
             if stabilization.get("strategy") != "disabled":
+                stabilization_step = {key: value for key, value in stabilization.items() if key != "probe"}
                 record_step(
                     "wait_for_transfer_runtime_stabilization",
                     "passed",
-                    **stabilization,
+                    **stabilization_step,
                 )
 
-            metrics = self._measure_transfer_latency(runtime, source_topic, destination_topic)
+            metrics = self._measure_transfer_latency(
+                runtime,
+                source_topic,
+                destination_topic,
+                probe_result=stabilization_probe,
+            )
             payload["metrics"] = metrics
             record_step(
                 "measure_kafka_transfer_latency",
@@ -1701,10 +1812,12 @@ class KafkaEdcValidationSuite:
             if artifact_path:
                 payload["artifact_path"] = artifact_path
 
-    def run_all(self, connectors, experiment_dir=None):
+    def run_all(self, connectors, experiment_dir=None, progress_callback=None):
         connectors = list(connectors or [])
         results = []
-        for provider, consumer in permutations(connectors, 2):
+        settle_runtime = self._load_kafka_runtime()
+        pairings = list(permutations(connectors, 2))
+        for index, (provider, consumer) in enumerate(pairings):
             result = None
             attempts = 0
             retry_reason = None
@@ -1712,12 +1825,7 @@ class KafkaEdcValidationSuite:
 
             while attempts < max_attempts:
                 attempts += 1
-                try:
-                    result = self.run_pair(provider, consumer, experiment_dir=experiment_dir)
-                finally:
-                    # Keep bidirectional runs isolated from any broker or port-forward state
-                    # created by the previous pair execution.
-                    self._reset_framework_managed_kafka()
+                result = self.run_pair(provider, consumer, experiment_dir=experiment_dir)
 
                 if result.get("status") == "passed":
                     break
@@ -1725,6 +1833,8 @@ class KafkaEdcValidationSuite:
                     break
 
                 retry_reason = self._pair_error_message(result)
+                self._wait_for_post_run_settlement(settle_runtime, result)
+                self._reset_framework_managed_kafka()
                 time.sleep(self.DEFAULT_PAIR_RETRY_SECONDS)
 
             if result is None:
@@ -1737,4 +1847,8 @@ class KafkaEdcValidationSuite:
                 if artifact_path:
                     result["artifact_path"] = artifact_path
             results.append(result)
+            if callable(progress_callback):
+                progress_callback(result)
+            if index < len(pairings) - 1:
+                self._wait_for_post_run_settlement(settle_runtime, result)
         return results

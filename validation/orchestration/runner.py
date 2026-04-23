@@ -8,6 +8,7 @@ the orchestration moves into the validation layer.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -46,16 +47,36 @@ def _format_console_metric(value: Any, suffix: str = "") -> str:
     return f"{value}{suffix}"
 
 
+def _console_supports_color(stream=None) -> bool:
+    if os.getenv("NO_COLOR") is not None:
+        return False
+
+    force_color = os.getenv("FORCE_COLOR")
+    if force_color is not None:
+        return str(force_color).strip().lower() not in ("0", "false", "no", "off", "")
+
+    stream = stream or sys.stdout
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def _console_status_icon(status: Any, *, stream=None) -> str:
+    status_icons = {
+        "passed": ("✓", "\033[32m"),
+        "failed": ("✗", "\033[31m"),
+        "skipped": ("-", "\033[33m"),
+    }
+    normalized = str(status or "unknown").lower()
+    icon, color = status_icons.get(normalized, ("?", "\033[36m"))
+    if not _console_supports_color(stream=stream):
+        return icon
+    return f"{color}{icon}\033[0m"
+
+
 def _print_kafka_transfer_steps(result: dict[str, Any], indent: str = "    ") -> None:
     steps = result.get("steps") if isinstance(result, dict) else None
     if not isinstance(steps, list) or not steps:
         return
 
-    status_labels = {
-        "passed": "PASS",
-        "failed": "FAIL",
-        "skipped": "SKIP",
-    }
     detail_keys = (
         "http_status",
         "state",
@@ -70,7 +91,7 @@ def _print_kafka_transfer_steps(result: dict[str, Any], indent: str = "    ") ->
     for step in steps:
         if not isinstance(step, dict):
             continue
-        status = status_labels.get(str(step.get("status", "unknown")).lower(), str(step.get("status", "unknown")).upper())
+        status = _console_status_icon(step.get("status", "unknown"))
         name = step.get("name", "unknown_step")
         details = [
             f"{key}={step[key]}"
@@ -202,7 +223,7 @@ def run_level6(runtime: Level6Runtime) -> None:
                 status = result.get("status", "unknown")
                 metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
                 if status == "passed":
-                    print(f"  PASS Kafka transfer: {provider} -> {consumer}")
+                    print(f"  {_console_status_icon(status)} Kafka transfer: {provider} -> {consumer}")
                     _print_kafka_transfer_steps(result)
                     if metrics:
                         print(
@@ -219,11 +240,11 @@ def run_level6(runtime: Level6Runtime) -> None:
                         )
                 elif status == "failed":
                     error = (result.get("error") or {}).get("message", "unknown reason")
-                    print(f"  FAIL Kafka transfer: {provider} -> {consumer} ({error})")
+                    print(f"  {_console_status_icon(status)} Kafka transfer: {provider} -> {consumer} ({error})")
                     _print_kafka_transfer_steps(result)
                 else:
                     reason = result.get("reason", "unknown reason")
-                    print(f"  SKIP Kafka transfer: {provider} -> {consumer} ({reason})")
+                    print(f"  {_console_status_icon(status)} Kafka transfer: {provider} -> {consumer} ({reason})")
                     _print_kafka_transfer_steps(result)
 
             runtime.save_experiment_state(

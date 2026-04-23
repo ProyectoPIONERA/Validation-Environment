@@ -12,6 +12,7 @@ IMAGE_TAG="local"
 MINIKUBE_PROFILE="minikube"
 GRADLE_TASK=":transfer:transfer-00-prerequisites:connector:shadowJar"
 CONNECTOR_JAR="transfer/transfer-00-prerequisites/connector/build/libs/connector.jar"
+CONNECTOR_RUNTIME_DIR="transfer/transfer-00-prerequisites/connector"
 
 APPLY=0
 FORCE_BUILD=0
@@ -50,6 +51,15 @@ run_cmd() {
   echo "+ $cmd"
   if [[ "$APPLY" -eq 1 ]]; then
     bash -lc "$cmd"
+  fi
+}
+
+remove_minikube_image_if_present() {
+  local image_ref="$1"
+  local cmd="minikube -p \"$MINIKUBE_PROFILE\" ssh \"docker image rm -f '$image_ref' >/dev/null 2>&1 || true\""
+  echo "+ $cmd"
+  if [[ "$APPLY" -eq 1 ]]; then
+    minikube -p "$MINIKUBE_PROFILE" ssh "docker image rm -f '$image_ref' >/dev/null 2>&1 || true"
   fi
 }
 
@@ -153,6 +163,7 @@ fi
 
 FULL_IMAGE="$IMAGE_NAME:$IMAGE_TAG"
 ABSOLUTE_CONNECTOR_JAR="$SOURCE_DIR/$CONNECTOR_JAR"
+ABSOLUTE_CONNECTOR_RUNTIME_DIR="$SOURCE_DIR/$CONNECTOR_RUNTIME_DIR"
 GRADLE_WRAPPER_JAR="$SOURCE_DIR/gradle/wrapper/gradle-wrapper.jar"
 GRADLE_USER_HOME="$SOURCE_DIR/.gradle-user-home"
 
@@ -163,9 +174,51 @@ echo "Connector jar:     $CONNECTOR_JAR"
 echo "Image:             $FULL_IMAGE"
 echo "Minikube profile:  $MINIKUBE_PROFILE"
 
-if [[ -f "$ABSOLUTE_CONNECTOR_JAR" && "$FORCE_BUILD" -eq 0 ]]; then
+connector_jar_rebuild_reason() {
+  local jar_path="$1"
+  if [[ ! -f "$jar_path" ]]; then
+    echo "connector jar is missing"
+    return 0
+  fi
+
+  local inputs=(
+    "$SOURCE_DIR/settings.gradle.kts"
+    "$SOURCE_DIR/gradle/libs.versions.toml"
+    "$ABSOLUTE_CONNECTOR_RUNTIME_DIR/build.gradle.kts"
+  )
+
+  if [[ -d "$ABSOLUTE_CONNECTOR_RUNTIME_DIR/src" ]]; then
+    while IFS= read -r input_path; do
+      inputs+=("$input_path")
+    done < <(find "$ABSOLUTE_CONNECTOR_RUNTIME_DIR/src" -type f | sort)
+  fi
+
+  for input_path in "${inputs[@]}"; do
+    if [[ ! -e "$input_path" ]]; then
+      continue
+    fi
+    if [[ "$input_path" -nt "$jar_path" ]]; then
+      echo "source changed: ${input_path#$SOURCE_DIR/}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+REBUILD_REASON=""
+if [[ "$FORCE_BUILD" -eq 1 ]]; then
+  REBUILD_REASON="force build requested"
+else
+  REBUILD_REASON="$(connector_jar_rebuild_reason "$ABSOLUTE_CONNECTOR_JAR" || true)"
+fi
+
+if [[ -f "$ABSOLUTE_CONNECTOR_JAR" && -z "$REBUILD_REASON" ]]; then
   echo "Reusing existing connector jar: $ABSOLUTE_CONNECTOR_JAR"
 else
+  if [[ -n "$REBUILD_REASON" ]]; then
+    echo "Connector jar is outdated and will be rebuilt: $REBUILD_REASON"
+  fi
   if [[ ! -f "$GRADLE_WRAPPER_JAR" ]]; then
     echo "Gradle wrapper jar not found: $GRADLE_WRAPPER_JAR" >&2
     exit 1
@@ -183,6 +236,7 @@ fi
 run_cmd "cd \"$SOURCE_DIR\" && docker build -f \"$DOCKERFILE\" --build-arg CONNECTOR_JAR=\"$CONNECTOR_JAR\" -t \"$FULL_IMAGE\" ."
 
 if [[ "$SKIP_MINIKUBE_LOAD" -eq 0 ]]; then
+  remove_minikube_image_if_present "$FULL_IMAGE"
   run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$FULL_IMAGE\""
 fi
 

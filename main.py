@@ -6,7 +6,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+import urllib.parse
 
 from runtime_dependencies import ensure_runtime_dependencies
 
@@ -42,6 +44,7 @@ from deployers.infrastructure.lib.hosts_manager import (
     blocks_as_dict,
     build_context_host_blocks,
     hostnames_by_level,
+    parse_hostnames,
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
@@ -53,6 +56,7 @@ from validation.orchestration.hosts import (
 from validation.orchestration.kafka import run_kafka_edc_validation
 from validation.ui import interactive_menu as ui_interactive_menu
 from validation.ui.ui_runner import run_playwright_validation
+import requests
 
 
 ADAPTER_REGISTRY = {
@@ -174,6 +178,19 @@ def _mapping_flag(mapping, key, default=False):
     return str(raw_value).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _mapping_value(mapping, *keys, default=None):
+    if not isinstance(mapping, dict):
+        return default
+    for key in keys:
+        raw_value = mapping.get(key)
+        if raw_value is None:
+            continue
+        value = str(raw_value).strip()
+        if value:
+            return value
+    return default
+
+
 def _edc_dashboard_runtime_present(deployer_context):
     runtime_dir = str(getattr(deployer_context, "runtime_dir", "") or "").strip()
     connectors = list(getattr(deployer_context, "connectors", []) or [])
@@ -274,10 +291,176 @@ def _kubectl_endpoint_ready(namespace, service_name):
     return False, "service has no ready endpoints"
 
 
+def _probe_service_ready_across_namespaces(service_name, namespaces):
+    unique_namespaces = []
+    for namespace in namespaces or []:
+        normalized = str(namespace or "").strip()
+        if normalized and normalized not in unique_namespaces:
+            unique_namespaces.append(normalized)
+
+    if not unique_namespaces:
+        return False, "no namespaces configured", None
+
+    details = []
+    for namespace in unique_namespaces:
+        ready, detail = _kubectl_endpoint_ready(namespace, service_name)
+        if ready:
+            return True, detail, namespace
+        details.append(f"{namespace}: {detail}")
+
+    return False, "; ".join(details), unique_namespaces[0]
+
+
+def _edc_dashboard_public_base_url(connector_name, deployer_context):
+    ds_domain = str(getattr(deployer_context, "ds_domain_base", "") or "").strip()
+    connector = str(connector_name or "").strip()
+    if not connector or not ds_domain:
+        return None
+    return normalize_public_endpoint_url(f"http://{connector}.{ds_domain}")
+
+
+def _public_keycloak_base_url(deployer_context):
+    config = dict(getattr(deployer_context, "config", {}) or {})
+    for key in ("KC_INTERNAL_URL", "KC_URL", "KEYCLOAK_HOSTNAME"):
+        normalized = normalize_public_endpoint_url(_mapping_value(config, key))
+        if normalized:
+            return normalized
+    return None
+
+
+def _edc_keycloak_public_base_url(deployer_context):
+    return _public_keycloak_base_url(deployer_context)
+
+
+def _http_readiness_gate(label, url, expected_statuses, timeout_seconds):
+    normalized_url = normalize_public_endpoint_url(url)
+    if not normalized_url:
+        return {
+            "gate": label,
+            "url": url,
+            "ready": False,
+            "detail": "public URL is empty or not resolvable from the local machine",
+        }
+
+    try:
+        response = requests.get(
+            normalized_url,
+            timeout=timeout_seconds,
+            allow_redirects=False,
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        return {
+            "gate": label,
+            "url": normalized_url,
+            "ready": False,
+            "detail": f"HTTP probe failed: {exc}",
+        }
+
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    ready = status_code in set(expected_statuses)
+    detail = f"HTTP {status_code}"
+    location = str(getattr(response, "headers", {}).get("Location") or "").strip()
+    if location:
+        detail = f"{detail} -> {location}"
+
+    return {
+        "gate": label,
+        "url": normalized_url,
+        "status_code": status_code,
+        "ready": ready,
+        "detail": detail,
+    }
+
+
+def _edc_http_readiness_gate(label, url, expected_statuses, timeout_seconds):
+    return _http_readiness_gate(label, url, expected_statuses, timeout_seconds)
+
+
+def _inesdata_connector_public_base_url(connector_name, deployer_context):
+    ds_domain = str(getattr(deployer_context, "ds_domain_base", "") or "").strip()
+    connector = str(connector_name or "").strip()
+    if not connector or not ds_domain:
+        return None
+    return normalize_public_endpoint_url(
+        f"http://{connector}.{ds_domain}/inesdata-connector-interface/"
+    )
+
+
+def _edc_dashboard_http_gates(deployer_context, connectors, timeout_seconds):
+    dataspace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
+    gates = []
+
+    keycloak_base_url = _public_keycloak_base_url(deployer_context)
+    if keycloak_base_url and dataspace:
+        metadata_url = (
+            f"{keycloak_base_url}/realms/"
+            f"{urllib.parse.quote(dataspace, safe='')}/.well-known/openid-configuration"
+        )
+        gates.append(
+            _http_readiness_gate(
+                "keycloak-metadata",
+                metadata_url,
+                expected_statuses={200},
+                timeout_seconds=timeout_seconds,
+            )
+        )
+    else:
+        gates.append(
+            {
+                "gate": "keycloak-metadata",
+                "url": keycloak_base_url,
+                "ready": False,
+                "detail": "Keycloak public URL is not configured",
+            }
+        )
+
+    for connector in connectors:
+        base_url = _edc_dashboard_public_base_url(connector, deployer_context)
+        if not base_url:
+            gates.append(
+                {
+                    "gate": f"dashboard-route:{connector}",
+                    "url": None,
+                    "ready": False,
+                    "detail": "connector public URL is not configured",
+                }
+            )
+            continue
+
+        gates.append(
+            _http_readiness_gate(
+                f"dashboard-route:{connector}",
+                f"{base_url}/edc-dashboard/",
+                expected_statuses={200, 301, 302, 303, 307, 308},
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        gates.append(
+            _http_readiness_gate(
+                f"dashboard-auth-me:{connector}",
+                f"{base_url}/edc-dashboard-api/auth/me",
+                expected_statuses={200, 401},
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        gates.append(
+            _http_readiness_gate(
+                f"connector-management:{connector}",
+                f"{base_url}/management/v3/assets/request",
+                expected_statuses={200, 400, 401, 403, 404, 405},
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+    return gates
+
+
 def _probe_edc_dashboard_readiness(deployer_context):
     namespace = _edc_dashboard_namespace(deployer_context)
     connectors = list(getattr(deployer_context, "connectors", []) or [])
     gates = []
+    http_timeout = _positive_float_env("PIONERA_EDC_DASHBOARD_HTTP_TIMEOUT_SECONDS", 5)
 
     if not namespace:
         return {
@@ -306,6 +489,8 @@ def _probe_edc_dashboard_readiness(deployer_context):
                 "ready": ready,
                 "detail": detail,
             })
+
+    gates.extend(_edc_dashboard_http_gates(deployer_context, connectors, http_timeout))
 
     status = "passed" if all(gate["ready"] for gate in gates) else "failed"
     return {
@@ -369,7 +554,144 @@ def _edc_dashboard_readiness_failure_message(readiness):
     artifact_text = f" Details saved in {artifact}." if artifact else ""
     return (
         "Playwright validation for 'edc' requires the dashboard and dashboard-proxy "
-        "services to have ready endpoints. Missing readiness: "
+        "services to have ready endpoints and public HTTP routes. Missing readiness: "
+        + "; ".join(details)
+        + artifact_text
+    )
+
+
+def _probe_inesdata_portal_readiness(deployer_context):
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    namespace_roles = getattr(deployer_context, "namespace_roles", None)
+    namespaces = []
+    if namespace_roles is not None:
+        for attribute in ("provider_namespace", "consumer_namespace", "registration_service_namespace"):
+            value = getattr(namespace_roles, attribute, None)
+            if value:
+                namespaces.append(value)
+    http_timeout = _positive_float_env("PIONERA_INESDATA_PORTAL_HTTP_TIMEOUT_SECONDS", 5)
+    dataspace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
+    gates = []
+
+    if not connectors:
+        return {
+            "status": "failed",
+            "namespaces": namespaces,
+            "connectors": connectors,
+            "gates": [{"gate": "connectors", "ready": False, "detail": "no connectors resolved"}],
+        }
+
+    keycloak_base_url = _public_keycloak_base_url(deployer_context)
+    if keycloak_base_url and dataspace:
+        metadata_url = (
+            f"{keycloak_base_url}/realms/"
+            f"{urllib.parse.quote(dataspace, safe='')}/.well-known/openid-configuration"
+        )
+        gates.append(
+            _http_readiness_gate(
+                "keycloak-metadata",
+                metadata_url,
+                expected_statuses={200},
+                timeout_seconds=http_timeout,
+            )
+        )
+    else:
+        gates.append(
+            {
+                "gate": "keycloak-metadata",
+                "url": keycloak_base_url,
+                "ready": False,
+                "detail": "Keycloak public URL is not configured",
+            }
+        )
+
+    for connector in connectors:
+        service_name = f"{connector}-interface"
+        service_ready, service_detail, namespace = _probe_service_ready_across_namespaces(
+            service_name,
+            namespaces,
+        )
+        gates.append(
+            {
+                "gate": f"interface:{connector}",
+                "namespace": namespace,
+                "service": service_name,
+                "ready": service_ready,
+                "detail": service_detail,
+            }
+        )
+        gates.append(
+            _http_readiness_gate(
+                f"portal-route:{connector}",
+                _inesdata_connector_public_base_url(connector, deployer_context),
+                expected_statuses={200, 301, 302, 303, 307, 308},
+                timeout_seconds=http_timeout,
+            )
+        )
+
+    status = "passed" if all(gate["ready"] for gate in gates) else "failed"
+    return {
+        "status": status,
+        "namespaces": namespaces,
+        "connectors": connectors,
+        "gates": gates,
+    }
+
+
+def _write_inesdata_portal_readiness(experiment_dir, readiness):
+    if not experiment_dir:
+        return None
+    output_dir = os.path.join(experiment_dir, "ui", "inesdata")
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "portal_readiness.json")
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(readiness, handle, indent=2)
+    return output_path
+
+
+def _wait_for_inesdata_portal_readiness(deployer_context, experiment_dir=None):
+    timeout = _positive_float_env("PIONERA_INESDATA_PORTAL_READINESS_TIMEOUT_SECONDS", 90)
+    poll_interval = _positive_float_env("PIONERA_INESDATA_PORTAL_READINESS_POLL_SECONDS", 3)
+    deadline = time.monotonic() + timeout
+    readiness = None
+
+    while True:
+        readiness = _probe_inesdata_portal_readiness(deployer_context)
+        readiness["timeout_seconds"] = timeout
+        readiness["poll_interval_seconds"] = poll_interval
+        if readiness.get("status") == "passed":
+            readiness["artifact"] = _write_inesdata_portal_readiness(experiment_dir, readiness)
+            return readiness
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            readiness["artifact"] = _write_inesdata_portal_readiness(experiment_dir, readiness)
+            return readiness
+
+        time.sleep(min(poll_interval, remaining))
+
+
+def _inesdata_portal_readiness_failure_message(readiness):
+    failed_gates = [
+        gate for gate in readiness.get("gates", [])
+        if not gate.get("ready")
+    ]
+    if not failed_gates:
+        return "INESData portal readiness did not pass"
+
+    details = []
+    for gate in failed_gates[:6]:
+        service = gate.get("service") or gate.get("gate")
+        detail = gate.get("detail") or "not ready"
+        details.append(f"{service}: {detail}")
+    if len(failed_gates) > 6:
+        details.append(f"... and {len(failed_gates) - 6} more")
+
+    artifact = readiness.get("artifact")
+    artifact_text = f" Details saved in {artifact}." if artifact else ""
+    return (
+        "Playwright validation for 'inesdata' requires the connector interface services "
+        "and public portal routes to be ready. Missing readiness: "
         + "; ".join(details)
         + artifact_text
     )
@@ -578,6 +900,133 @@ def build_kafka_manager(adapter, manager_cls=KafkaManager, kafka_runtime_config=
     )
 
 
+class _Level6KafkaPreparationHandle:
+    """Prepare Kafka in the background while Newman keeps running in the foreground."""
+
+    def __init__(self, kafka_manager):
+        self.kafka_manager = kafka_manager
+        self._lock = threading.Lock()
+        self._thread = None
+        self._result = {
+            "status": "pending",
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "finished_at": None,
+            "duration_seconds": None,
+            "bootstrap_servers": None,
+            "cluster_bootstrap_servers": None,
+            "started_by_framework": False,
+            "provisioning_mode": None,
+            "error": None,
+        }
+
+    def start(self):
+        if self._thread is not None:
+            return self
+        self._thread = threading.Thread(
+            target=self._run,
+            name="level6-kafka-preparation",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def _run(self):
+        started = time.time()
+        error_payload = None
+        try:
+            resolved = self.kafka_manager.ensure_kafka_running()
+            if resolved:
+                status = "ready"
+            else:
+                status = "failed"
+                error_message = getattr(self.kafka_manager, "last_error", None) or "Kafka runtime did not become available"
+                error_payload = {
+                    "type": "RuntimeError",
+                    "message": str(error_message),
+                }
+        except Exception as exc:
+            resolved = None
+            status = "failed"
+            error_payload = {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
+
+        payload = {
+            "status": status,
+            "started_at": self._result.get("started_at"),
+            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "duration_seconds": round(time.time() - started, 2),
+            "bootstrap_servers": resolved or getattr(self.kafka_manager, "bootstrap_servers", None),
+            "cluster_bootstrap_servers": getattr(self.kafka_manager, "cluster_bootstrap_servers", None),
+            "started_by_framework": bool(getattr(self.kafka_manager, "started_by_framework", False)),
+            "provisioning_mode": getattr(self.kafka_manager, "provisioning_mode", None),
+            "error": error_payload,
+        }
+        with self._lock:
+            self._result = payload
+
+    def wait(self):
+        if self._thread is not None:
+            self._thread.join()
+        with self._lock:
+            return dict(self._result)
+
+    def stop_runtime(self):
+        stop_method = getattr(self.kafka_manager, "stop_kafka", None)
+        if callable(stop_method):
+            stop_method()
+
+
+def _save_level6_kafka_preparation_artifact(preparation, experiment_dir):
+    if not experiment_dir or not isinstance(preparation, dict):
+        return None
+
+    path = os.path.join(experiment_dir, "kafka_runtime_preparation.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(preparation, handle, indent=2, ensure_ascii=False)
+    print(f"Kafka runtime preparation saved to {path}")
+    return path
+
+
+def _start_level6_kafka_preparation(
+    adapter,
+    connectors,
+    *,
+    validation_profile=None,
+    deployer_name=None,
+    kafka_manager_cls=KafkaManager,
+):
+    if len(list(connectors or [])) < 2:
+        return None
+    if not _supports_level6_kafka_edc(
+        adapter,
+        validation_profile=validation_profile,
+        deployer_name=deployer_name,
+    ):
+        return None
+
+    kafka_manager = build_kafka_manager(adapter, manager_cls=kafka_manager_cls)
+    print("\nPreparing Kafka runtime in background while Newman validation runs...")
+    return _Level6KafkaPreparationHandle(kafka_manager).start()
+
+
+def _finalize_level6_kafka_preparation(
+    kafka_preparation,
+    experiment_dir,
+    *,
+    cleanup=False,
+):
+    if kafka_preparation is None:
+        return None
+
+    result = kafka_preparation.wait()
+    _save_level6_kafka_preparation_artifact(result, experiment_dir)
+    if cleanup:
+        kafka_preparation.stop_runtime()
+    return result
+
+
 def _adapter_level6_kafka_name(adapter, validation_profile=None, deployer_name=None):
     candidates = []
     if validation_profile is not None:
@@ -627,6 +1076,7 @@ def build_kafka_edc_validation_suite(
     suite_cls=KafkaEdcValidationSuite,
     experiment_storage=ExperimentStorage,
     kafka_manager_cls=KafkaManager,
+    kafka_manager=None,
 ):
     """Build the Level 6 functional EDC+Kafka validator from adapter hooks."""
     load_connector_credentials = _resolve_adapter_callable(
@@ -667,7 +1117,7 @@ def build_kafka_edc_validation_suite(
         missing = ", ".join(missing_dependencies)
         raise RuntimeError(f"Kafka transfer validation cannot run because adapter is missing: {missing}")
 
-    kafka_manager = build_kafka_manager(adapter, manager_cls=kafka_manager_cls)
+    kafka_manager = kafka_manager or build_kafka_manager(adapter, manager_cls=kafka_manager_cls)
     return suite_cls(
         load_connector_credentials=load_connector_credentials,
         load_deployer_config=load_deployer_config,
@@ -692,14 +1142,40 @@ def _format_console_metric(value, suffix=""):
     return f"{value}{suffix}"
 
 
-def _console_status_label(status):
-    status_labels = {
-        "passed": "✓ PASS",
-        "failed": "✗ FAIL",
-        "skipped": "- SKIP",
+def _console_supports_color(stream=None):
+    if os.getenv("NO_COLOR") is not None:
+        return False
+
+    force_color = os.getenv("FORCE_COLOR")
+    if force_color is not None:
+        return str(force_color).strip().lower() not in ("0", "false", "no", "off", "")
+
+    stream = stream or sys.stdout
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def _colorize_console_icon(icon, status, *, stream=None):
+    color_codes = {
+        "passed": "\033[32m",
+        "failed": "\033[31m",
+        "skipped": "\033[33m",
+        "unknown": "\033[36m",
     }
     normalized = str(status or "unknown").lower()
-    return status_labels.get(normalized, f"? {str(status or 'unknown').upper()}")
+    if not _console_supports_color(stream=stream):
+        return icon
+    return f"{color_codes.get(normalized, color_codes['unknown'])}{icon}\033[0m"
+
+
+def _console_status_label(status, *, stream=None):
+    status_labels = {
+        "passed": "✓",
+        "failed": "✗",
+        "skipped": "-",
+    }
+    normalized = str(status or "unknown").lower()
+    icon = status_labels.get(normalized, "?")
+    return _colorize_console_icon(icon, normalized, stream=stream)
 
 
 def _print_kafka_transfer_steps(result, indent="    "):
@@ -732,62 +1208,95 @@ def _print_kafka_transfer_steps(result, indent="    "):
         print(f"{indent}  {status} {name}{suffix}")
 
 
-def _print_kafka_edc_results(results):
-    print("Kafka transfer validation results:")
+def _print_kafka_edc_result(result, *, indent="  ", verbose_messages=None):
+    verbose_messages = bool(verbose_messages)
+    provider = result.get("provider", "unknown-provider")
+    consumer = result.get("consumer", "unknown-consumer")
+    status = result.get("status", "unknown")
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    artifact_path = result.get("artifact_path")
+
+    if status == "passed":
+        print(f"{indent}{_console_status_label(status)} Kafka transfer: {provider} -> {consumer}")
+        _print_kafka_transfer_steps(result, indent=f"{indent}  ")
+        if result.get("source_topic") or result.get("destination_topic"):
+            print(f"{indent}  Topics: {result.get('source_topic')} -> {result.get('destination_topic')}")
+        if metrics:
+            print(
+                f"{indent}  Messages: "
+                f"produced={_format_console_metric(metrics.get('messages_produced'))} "
+                f"consumed={_format_console_metric(metrics.get('messages_consumed'))}"
+            )
+            print(
+                f"{indent}  Latency: "
+                f"avg={_format_console_metric(metrics.get('average_latency_ms'), 'ms')} "
+                f"p50={_format_console_metric(metrics.get('p50_latency_ms'), 'ms')} "
+                f"p95={_format_console_metric(metrics.get('p95_latency_ms'), 'ms')} "
+                f"p99={_format_console_metric(metrics.get('p99_latency_ms'), 'ms')}"
+            )
+            print(
+                f"{indent}  Throughput: "
+                f"{_format_console_metric(metrics.get('throughput_messages_per_second'), ' msg/s')}"
+            )
+            if verbose_messages:
+                for sample in metrics.get("message_samples") or []:
+                    print(
+                        f"{indent}  Message: "
+                        f"id={sample.get('message_id')} "
+                        f"status={sample.get('status')} "
+                        f"latency={sample.get('latency_ms', 'n/a')}ms"
+                    )
+        if artifact_path:
+            print(f"{indent}  Artifact: {artifact_path}")
+        return
+
+    if status == "failed":
+        error = (result.get("error") or {}).get("message", "unknown reason")
+        print(f"{indent}{_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({error})")
+        _print_kafka_transfer_steps(result, indent=f"{indent}  ")
+        if artifact_path:
+            print(f"{indent}  Artifact: {artifact_path}")
+        return
+
+    reason = result.get("reason", "unknown reason")
+    print(f"{indent}{_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({reason})")
+    _print_kafka_transfer_steps(result, indent=f"{indent}  ")
+    if artifact_path:
+        print(f"{indent}  Artifact: {artifact_path}")
+
+
+def _print_kafka_edc_summary(results, *, indent="  "):
+    counts = {"passed": 0, "failed": 0, "skipped": 0}
+    unknown_count = 0
+    for result in results or []:
+        normalized = str(result.get("status", "unknown")).lower()
+        if normalized in counts:
+            counts[normalized] += 1
+        else:
+            unknown_count += 1
+
+    summary_parts = [
+        f"{_console_status_label('passed')} {counts['passed']}",
+        f"{_console_status_label('failed')} {counts['failed']}",
+        f"{_console_status_label('skipped')} {counts['skipped']}",
+    ]
+    if unknown_count:
+        summary_parts.append(f"{_console_status_label('unknown')} {unknown_count}")
+    print(f"{indent}Summary: {'  '.join(summary_parts)}")
+
+
+def _print_kafka_edc_results(results, *, include_heading=True, include_results=True, include_summary=True):
+    if include_heading:
+        print("Kafka transfer validation results:")
     verbose_messages = _env_flag(
         "PIONERA_KAFKA_TRANSFER_LOG_MESSAGES",
         _env_flag("KAFKA_TRANSFER_LOG_MESSAGES", False),
     )
-    for result in results or []:
-        provider = result.get("provider", "unknown-provider")
-        consumer = result.get("consumer", "unknown-consumer")
-        status = result.get("status", "unknown")
-        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
-        artifact_path = result.get("artifact_path")
-        if status == "passed":
-            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer}")
-            _print_kafka_transfer_steps(result)
-            if result.get("source_topic") or result.get("destination_topic"):
-                print(f"    Topics: {result.get('source_topic')} -> {result.get('destination_topic')}")
-            if metrics:
-                print(
-                    "    Messages: "
-                    f"produced={_format_console_metric(metrics.get('messages_produced'))} "
-                    f"consumed={_format_console_metric(metrics.get('messages_consumed'))}"
-                )
-                print(
-                    "    Latency: "
-                    f"avg={_format_console_metric(metrics.get('average_latency_ms'), 'ms')} "
-                    f"p50={_format_console_metric(metrics.get('p50_latency_ms'), 'ms')} "
-                    f"p95={_format_console_metric(metrics.get('p95_latency_ms'), 'ms')} "
-                    f"p99={_format_console_metric(metrics.get('p99_latency_ms'), 'ms')}"
-                )
-                print(
-                    "    Throughput: "
-                    f"{_format_console_metric(metrics.get('throughput_messages_per_second'), ' msg/s')}"
-                )
-                if verbose_messages:
-                    for sample in metrics.get("message_samples") or []:
-                        print(
-                            "    Message: "
-                            f"id={sample.get('message_id')} "
-                            f"status={sample.get('status')} "
-                            f"latency={sample.get('latency_ms', 'n/a')}ms"
-                        )
-            if artifact_path:
-                print(f"    Artifact: {artifact_path}")
-        elif status == "failed":
-            error = (result.get("error") or {}).get("message", "unknown reason")
-            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({error})")
-            _print_kafka_transfer_steps(result)
-            if artifact_path:
-                print(f"    Artifact: {artifact_path}")
-        else:
-            reason = result.get("reason", "unknown reason")
-            print(f"  {_console_status_label(status)} Kafka transfer: {provider} -> {consumer} ({reason})")
-            _print_kafka_transfer_steps(result)
-            if artifact_path:
-                print(f"    Artifact: {artifact_path}")
+    if include_results:
+        for result in results or []:
+            _print_kafka_edc_result(result, verbose_messages=verbose_messages)
+    if include_summary and results:
+        _print_kafka_edc_summary(results)
 
 
 def run_level6_kafka_edc_after_newman(
@@ -800,6 +1309,7 @@ def run_level6_kafka_edc_after_newman(
     experiment_storage=ExperimentStorage,
     suite_cls=KafkaEdcValidationSuite,
     kafka_manager_cls=KafkaManager,
+    kafka_preparation=None,
 ):
     """Run the functional EDC+Kafka suite automatically after Newman in Level 6."""
     if not _supports_level6_kafka_edc(
@@ -810,18 +1320,45 @@ def run_level6_kafka_edc_after_newman(
         return []
 
     print("\nRunning Kafka transfer validation suite...")
+    kafka_preparation_result = _finalize_level6_kafka_preparation(
+        kafka_preparation,
+        experiment_dir,
+    )
+    prepared_kafka_manager = getattr(kafka_preparation, "kafka_manager", None) if kafka_preparation is not None else None
+    if isinstance(kafka_preparation_result, dict):
+        if kafka_preparation_result.get("status") == "ready":
+            print("Kafka runtime preparation completed while Newman was running.")
+        elif kafka_preparation_result.get("status") == "failed":
+            error = kafka_preparation_result.get("error") if isinstance(kafka_preparation_result.get("error"), dict) else {}
+            message = error.get("message") or "unknown reason"
+            print(f"Kafka runtime preparation did not complete during Newman: {message}")
+            print("Performing a final Kafka readiness check now...")
+    progress_state = {"heading_printed": False}
+
+    def _print_progress_result(result):
+        if not progress_state["heading_printed"]:
+            print("Kafka transfer validation results:")
+            progress_state["heading_printed"] = True
+        verbose_messages = _env_flag(
+            "PIONERA_KAFKA_TRANSFER_LOG_MESSAGES",
+            _env_flag("KAFKA_TRANSFER_LOG_MESSAGES", False),
+        )
+        _print_kafka_edc_result(result, verbose_messages=verbose_messages)
+
     try:
         validator = build_kafka_edc_validation_suite(
             adapter,
             suite_cls=suite_cls,
             experiment_storage=experiment_storage,
             kafka_manager_cls=kafka_manager_cls,
+            kafka_manager=prepared_kafka_manager,
         )
         results = run_kafka_edc_validation(
             list(connectors or []),
             experiment_dir,
             validator=validator,
             experiment_storage=experiment_storage,
+            progress_callback=_print_progress_result,
         )
     except Exception as exc:
         results = [
@@ -837,7 +1374,12 @@ def run_level6_kafka_edc_after_newman(
         ]
         _save_kafka_edc_results(results, experiment_dir, experiment_storage=experiment_storage)
 
-    _print_kafka_edc_results(results)
+    _print_kafka_edc_results(
+        results,
+        include_heading=not progress_state["heading_printed"],
+        include_results=not progress_state["heading_printed"],
+        include_summary=True,
+    )
     return list(results or [])
 
 
@@ -1598,6 +2140,74 @@ def _build_shadow_host_sync_plan(context):
     }
 
 
+def _interactive_hosts_file_path():
+    return _deployer_hosts_file() or local_menu_tools.get_hosts_path()
+
+
+def _read_hosts_file_hostnames(hosts_file):
+    if not hosts_file:
+        return set()
+    try:
+        with open(hosts_file, "r", encoding="utf-8") as handle:
+            return parse_hostnames(handle.read())
+    except OSError:
+        return set()
+
+
+def _dedupe_ordered(values):
+    deduped = []
+    seen = set()
+    for value in values or []:
+        normalized = str(value or "").strip()
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped
+
+
+def _host_plan_levels_required_for_levels(levels):
+    selected_levels = {int(level) for level in (levels or [])}
+    if not selected_levels:
+        selected_levels = {3, 4, 5, 6}
+
+    required = []
+    if selected_levels.intersection({3, 4, 5, 6}):
+        required.extend(["level_1_2", "level_3"])
+    if selected_levels.intersection({4, 6}):
+        required.append("level_4")
+    if selected_levels.intersection({5, 6}):
+        required.append("level_5")
+    return _dedupe_ordered(required)
+
+
+def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
+    plan = _build_shadow_host_sync_plan(context)
+    resolved_hosts_file = hosts_file or _interactive_hosts_file_path()
+    existing_hostnames = _read_hosts_file_hostnames(resolved_hosts_file)
+    required_keys = _host_plan_levels_required_for_levels(levels)
+    required_hostnames = _dedupe_ordered(
+        hostname
+        for key in required_keys
+        for hostname in list(plan.get(key) or [])
+    )
+    missing_hostnames = [
+        hostname
+        for hostname in required_hostnames
+        if hostname.lower() not in existing_hostnames
+    ]
+
+    return {
+        "status": "missing" if missing_hostnames else "ready",
+        "hosts_file": resolved_hosts_file,
+        "required_levels": required_keys,
+        "required_hostnames": required_hostnames,
+        "missing_hostnames": missing_hostnames,
+        "hosts_plan": plan,
+    }
+
+
 def _sync_deployer_hosts_if_enabled(context):
     plan = _build_shadow_host_sync_plan(context)
     if not _should_sync_deployer_hosts():
@@ -1826,6 +2436,7 @@ def _prepare_edc_local_connector_image_override(adapter):
     os.environ["PIONERA_EDC_CONNECTOR_IMAGE_NAME"] = image_name
     os.environ["PIONERA_EDC_CONNECTOR_IMAGE_TAG"] = image_tag
     os.environ.setdefault("PIONERA_EDC_CONNECTOR_IMAGE_PULL_POLICY", "IfNotPresent")
+    os.environ["PIONERA_EDC_LOCAL_CONNECTOR_IMAGE_PREPARED"] = "true"
     return {
         "image_name": image_name,
         "image_tag": image_tag,
@@ -1893,6 +2504,7 @@ def _prepare_edc_local_dashboard_images(adapter, config):
     os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"] = images["proxy_tag"]
     os.environ.setdefault("PIONERA_EDC_DASHBOARD_IMAGE_PULL_POLICY", "IfNotPresent")
     os.environ.setdefault("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_PULL_POLICY", "IfNotPresent")
+    os.environ["PIONERA_EDC_LOCAL_DASHBOARD_IMAGES_PREPARED"] = "true"
     return {
         "status": "prepared",
         "dashboard_image": f"{images['dashboard_name']}:{images['dashboard_tag']}",
@@ -2229,6 +2841,13 @@ def run_validate(
             baseline=baseline,
         )
     experiment_storage.newman_reports_dir(experiment_dir)
+    kafka_preparation = _start_level6_kafka_preparation(
+        adapter,
+        connectors,
+        validation_profile=validation_profile,
+        deployer_name=validation_runtime.get("deployer_name") or deployer_name,
+        kafka_manager_cls=kafka_manager_cls,
+    )
     public_endpoint_preflight = _ensure_level6_public_endpoint_access(
         adapter,
         connectors,
@@ -2283,6 +2902,11 @@ def run_validate(
         newman_request_metrics = []
 
     if validation_error is not None:
+        _finalize_level6_kafka_preparation(
+            kafka_preparation,
+            experiment_dir,
+            cleanup=True,
+        )
         raise validation_error
 
     kafka_edc_results = run_level6_kafka_edc_after_newman(
@@ -2294,6 +2918,7 @@ def run_validate(
         experiment_storage=experiment_storage,
         suite_cls=kafka_edc_validation_suite_cls,
         kafka_manager_cls=kafka_manager_cls,
+        kafka_preparation=kafka_preparation,
     )
 
     playwright_result = None
@@ -2314,7 +2939,9 @@ def run_validate(
                 "reason": "disabled",
             }
         else:
-            is_edc_playwright = getattr(validation_profile, "adapter", "").strip().lower() == "edc"
+            adapter_name = getattr(validation_profile, "adapter", "").strip().lower()
+            is_edc_playwright = adapter_name == "edc"
+            is_inesdata_playwright = adapter_name == "inesdata"
             dashboard_runtime_present = _edc_dashboard_runtime_present(deployer_context) if is_edc_playwright else False
             if (
                 is_edc_playwright
@@ -2354,6 +2981,13 @@ def run_validate(
                 )
                 if readiness.get("status") != "passed":
                     raise RuntimeError(_edc_dashboard_readiness_failure_message(readiness))
+            elif is_inesdata_playwright:
+                readiness = _wait_for_inesdata_portal_readiness(
+                    deployer_context,
+                    experiment_dir=experiment_dir,
+                )
+                if readiness.get("status") != "passed":
+                    raise RuntimeError(_inesdata_portal_readiness_failure_message(readiness))
             playwright_result = run_playwright_validation(
                 profile=validation_profile,
                 context=deployer_context,
@@ -2827,15 +3461,194 @@ def _interactive_confirm(prompt, default=False):
     return answer in {"y", "yes", "s", "si", "sí"}
 
 
-def _print_interactive_menu(adapter_name, adapter_registry=None):
+def _shared_foundation_adapter_name(adapter_registry=None):
     registry = adapter_registry or ADAPTER_REGISTRY
-    adapters = ", ".join(sorted(registry))
+    if not registry:
+        raise RuntimeError("No adapters are registered.")
+    if "inesdata" in registry:
+        return "inesdata"
+    return sorted(registry)[0]
+
+
+def _interactive_require_adapter_selection(current_adapter, adapter_registry=None):
+    registry = adapter_registry or ADAPTER_REGISTRY
+    if current_adapter:
+        return current_adapter
+    if len(registry) == 1:
+        return sorted(registry)[0]
+
+    print()
+    print("This action needs an adapter selection for Levels 3-6.")
+    selected_adapter = _select_adapter_interactive(None, adapter_registry=registry)
+    if not selected_adapter:
+        print("Adapter-specific action cancelled.")
+        return None
+
+    _print_adapter_selection_hint(selected_adapter)
+    return selected_adapter
+
+
+def _run_interactive_level2_with_shared_foundation(
+    adapter_registry=None,
+    deployer_registry=None,
+    topology="local",
+    validation_engine_cls=ValidationEngine,
+    metrics_collector_cls=MetricsCollector,
+    experiment_storage=ExperimentStorage,
+    baseline=False,
+):
+    shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=adapter_registry)
+    adapter = build_adapter(
+        shared_adapter_name,
+        adapter_registry=adapter_registry,
+        dry_run=False,
+        topology=topology,
+    )
+
+    infrastructure = getattr(adapter, "infrastructure", None)
+    verify_common_services = getattr(infrastructure, "verify_common_services_ready_for_level3", None)
+    if callable(verify_common_services):
+        common_ready, _root_cause = verify_common_services()
+        if common_ready:
+            print()
+            print("Shared common services are already healthy.")
+            print("Level 2 manages the shared foundation used by all local adapters.")
+
+            if _interactive_confirm("Reuse shared common services?", default=True):
+                announcer = getattr(infrastructure, "announce_level", None)
+                if callable(announcer):
+                    announcer(2, "DEPLOY COMMON SERVICES")
+                print("Reusing existing shared common services.")
+                completer = getattr(infrastructure, "complete_level", None)
+                if callable(completer):
+                    completer(2)
+                return {
+                    "level": 2,
+                    "name": LEVEL_DESCRIPTIONS[2],
+                    "status": "completed",
+                    "result": {
+                        "action": "reuse",
+                        "shared_adapter": shared_adapter_name,
+                    },
+                }
+
+            if not _interactive_confirm(
+                "Recreate shared common services now? This resets common-srvs for all local adapters.",
+                default=False,
+            ):
+                print("Level 2 cancelled.")
+                return None
+
+            resetter = getattr(infrastructure, "reset_local_shared_common_services", None)
+            if not callable(resetter):
+                resetter = getattr(infrastructure, "reset_common_services_for_level4_repair", None)
+            if not callable(resetter):
+                raise RuntimeError(
+                    "Shared infrastructure does not expose a controlled common-services reset operation."
+                )
+            if not resetter(reason="Interactive Level 2 recreate requested"):
+                raise RuntimeError("Could not reset shared common services safely.")
+
+    return run_level(
+        adapter,
+        2,
+        deployer_name=shared_adapter_name,
+        deployer_registry=deployer_registry,
+        topology=topology,
+        validation_engine_cls=validation_engine_cls,
+        metrics_collector_cls=metrics_collector_cls,
+        experiment_storage=experiment_storage,
+        baseline=baseline,
+    )
+
+
+def _run_interactive_full_levels(
+    adapter_name,
+    adapter_registry=None,
+    deployer_registry=None,
+    topology="local",
+    validation_engine_cls=ValidationEngine,
+    metrics_collector_cls=MetricsCollector,
+    experiment_storage=ExperimentStorage,
+    baseline=False,
+):
+    selected_adapter = str(adapter_name or "").strip()
+    if not selected_adapter:
+        raise RuntimeError("Full deployment requires selecting an adapter for Levels 3-6.")
+
+    shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=adapter_registry)
+    completed = []
+
+    shared_adapter = build_adapter(
+        shared_adapter_name,
+        adapter_registry=adapter_registry,
+        dry_run=False,
+        topology=topology,
+    )
+    completed.append(
+        run_level(
+            shared_adapter,
+            1,
+            deployer_name=shared_adapter_name,
+            deployer_registry=deployer_registry,
+            topology=topology,
+            validation_engine_cls=validation_engine_cls,
+            metrics_collector_cls=metrics_collector_cls,
+            experiment_storage=experiment_storage,
+            baseline=baseline,
+        )
+    )
+
+    level2_result = _run_interactive_level2_with_shared_foundation(
+        adapter_registry=adapter_registry,
+        deployer_registry=deployer_registry,
+        topology=topology,
+        validation_engine_cls=validation_engine_cls,
+        metrics_collector_cls=metrics_collector_cls,
+        experiment_storage=experiment_storage,
+        baseline=baseline,
+    )
+    if level2_result is None:
+        return None
+    completed.append(level2_result)
+
+    target_adapter = shared_adapter
+    if selected_adapter != shared_adapter_name:
+        target_adapter = build_adapter(
+            selected_adapter,
+            adapter_registry=adapter_registry,
+            dry_run=False,
+            topology=topology,
+        )
+
+    for level_id in (3, 4, 5, 6):
+        completed.append(
+            run_level(
+                target_adapter,
+                level_id,
+                deployer_name=selected_adapter,
+                deployer_registry=deployer_registry,
+                topology=topology,
+                validation_engine_cls=validation_engine_cls,
+                metrics_collector_cls=metrics_collector_cls,
+                experiment_storage=experiment_storage,
+                baseline=baseline,
+            )
+        )
+
+    return {
+        "status": "completed",
+        "adapter": selected_adapter,
+        "topology": topology,
+        "levels": completed,
+    }
+
+
+def _print_interactive_menu(adapter_name, adapter_registry=None):
     print()
     print("=" * 50)
     print("DATASPACE VALIDATION ENVIRONMENT")
     print("=" * 50)
-    print(f"Active adapter: {adapter_name}")
-    print(f"Available adapters: {adapters}")
     print()
     print("[Full Deployment]")
     print("0 - Run All Levels (1-6) sequentially")
@@ -2877,16 +3690,20 @@ def _print_interactive_help():
     print("[Deployment]")
     print("0 - Use for a fresh or full rebuild when you want Levels 1-6 executed in order.")
     print("1 - Use when the local Kubernetes/Minikube cluster is missing or needs to be prepared.")
-    print("2 - Use when shared services such as Keycloak, MinIO, PostgreSQL or Vault are missing or outdated.")
-    print("3 - Use when the dataspace base or registration-service must be deployed or refreshed.")
+    print("2 - Use when shared services such as Keycloak, MinIO, PostgreSQL or Vault are missing, outdated, or must be recreated.")
+    print("    If shared common services are already healthy, the menu offers reuse or recreate with reuse as the recommended path.")
+    print("3 - Use when the dataspace base or registration-service must be deployed or refreshed for the selected adapter.")
     print("4 - Use when connector deployments changed, or when switching/redeploying the selected adapter.")
     print("5 - Use when optional component services changed, for example AI Model Hub or Ontology Hub.")
     print("6 - Use after deployment changes to validate the selected adapter with cleanup, Newman, storage checks and Playwright when enabled.")
     print()
     print("[Operations]")
-    print("S - Use when you want to switch between adapters, for example inesdata and edc.")
+    print("S - Use when you want to preselect the adapter for upcoming Levels 3-6 or adapter-specific operations.")
+    print("    If you skip it, the menu still asks automatically when an action needs an adapter.")
     print("P - Use before deploying to inspect the plan without changing the environment.")
-    print("H - Use when browser or CLI access fails because local hostnames are missing.")
+    print("    If Levels 3-6 need an adapter and none has been chosen yet, the menu asks for one automatically.")
+    print("H - Use before EDC Levels 3-6, or when browser/API access fails because local hostnames are missing.")
+    print("    If the operation needs an adapter and none has been chosen yet, the menu asks for one automatically.")
     print(
         "M - Use when you only need metrics or standalone benchmarks. "
         "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
@@ -2908,6 +3725,7 @@ def _print_interactive_help():
     print("A - Use when AI Model Hub UI changed or after deploying AI Model Hub components.")
     print()
     print("[Compatibility]")
+    print("Levels 1-2 belong to the shared local foundation; the menu asks for an adapter only when an operation needs Levels 3-6, unless you preselect one with S.")
     print("All developer and UI validation shortcuts are available directly from the main menu.")
     print("Q - Exit the menu.")
     print("=" * 50)
@@ -2918,7 +3736,7 @@ def _select_adapter_interactive(current_adapter, adapter_registry=None):
     print()
     print("Available adapters:")
     for index, adapter_name in enumerate(sorted(registry), start=1):
-        marker = " (current)" if adapter_name == current_adapter else ""
+        marker = " (current)" if current_adapter and adapter_name == current_adapter else ""
         print(f"{index} - {adapter_name}{marker}")
     print("B - Back")
 
@@ -2939,11 +3757,197 @@ def _select_adapter_interactive(current_adapter, adapter_registry=None):
     return adapters[index]
 
 
+def _print_adapter_selection_hint(adapter_name):
+    if str(adapter_name or "").strip().lower() != "edc":
+        return
+    print()
+    print("EDC adapter selected.")
+    print("Before Levels 3-6, use H to plan/apply host entries if this machine does not resolve EDC public hostnames.")
+
+
+def _interactive_ensure_hosts_ready_for_levels(
+    current_adapter,
+    levels,
+    adapter_registry=None,
+    deployer_registry=None,
+    topology="local",
+):
+    normalized_adapter = str(current_adapter or "").strip().lower()
+    normalized_topology = str(topology or "local").strip().lower()
+    if normalized_adapter != "edc" or normalized_topology != "local":
+        return True
+
+    selected_levels = {int(level) for level in (levels or [])}
+    if not selected_levels.intersection({3, 4, 5, 6}):
+        return True
+
+    adapter = build_adapter(current_adapter, adapter_registry=adapter_registry, topology=topology)
+    resolved_deployer_name, context = _resolve_deployer_context(
+        adapter,
+        deployer_name=current_adapter,
+        deployer_registry=deployer_registry,
+        topology=topology,
+    )
+    readiness = _build_hosts_readiness_plan(context, levels=selected_levels)
+    missing_hostnames = list(readiness.get("missing_hostnames") or [])
+    if not missing_hostnames:
+        return True
+
+    hosts_file = readiness.get("hosts_file") or "(not detected)"
+    print()
+    print("EDC host entries are missing for this execution.")
+    print(f"Hosts file: {hosts_file}")
+    for hostname in missing_hostnames:
+        print(f"- {hostname}")
+    print()
+    print("The framework will only add missing entries and will not duplicate existing hostnames.")
+
+    if not _interactive_confirm("Apply missing host entries now?", default=False):
+        print("Level execution cancelled. Run H first, then retry the selected level.")
+        return False
+
+    if not readiness.get("hosts_file"):
+        print("Cannot detect a hosts file automatically. Set PIONERA_HOSTS_FILE and run H.")
+        return False
+
+    try:
+        with _temporary_environment(
+            {
+                "PIONERA_SYNC_HOSTS": "true",
+                "PIONERA_HOSTS_FILE": readiness["hosts_file"],
+            }
+        ):
+            result = run_hosts(
+                adapter,
+                deployer_name=resolved_deployer_name,
+                deployer_registry=deployer_registry,
+                topology=topology,
+            )
+        _print_action_result(result)
+    except Exception as exc:
+        print(f"Could not apply host entries automatically: {exc}")
+        print("Run H with the required permissions, then retry the selected level.")
+        return False
+
+    refreshed = _build_hosts_readiness_plan(context, levels=selected_levels, hosts_file=readiness["hosts_file"])
+    if refreshed.get("missing_hostnames"):
+        print("Some EDC hostnames are still missing after applying hosts:")
+        for hostname in refreshed["missing_hostnames"]:
+            print(f"- {hostname}")
+        print("Run H with the required permissions, then retry the selected level.")
+        return False
+
+    return True
+
+
 def _print_action_result(result):
-    if isinstance(result, (dict, list)):
-        print(json.dumps(result, indent=2, default=str))
-    elif result is not None:
-        print(result)
+    def _console_result_label(status):
+        normalized = str(status or "").strip().lower()
+        if (
+            normalized in {
+                "completed",
+                "updated",
+                "unchanged",
+                "ready",
+                "available",
+                "planned",
+                "dry-run",
+                "prepared",
+                "recreated",
+                "passed",
+            }
+            or normalized.endswith("-ok")
+        ):
+            return "Succeeded"
+        if normalized in {"skipped", "not-applicable"}:
+            return "Skipped"
+        if normalized in {"failed", "unavailable", "error"} or normalized.endswith("-failed"):
+            return "Failed"
+        return str(status or "Unknown").strip().title() or "Unknown"
+
+    def _append_if_value(lines, label, value):
+        if value in (None, "", [], {}):
+            return
+        lines.append(f"{label}: {value}")
+
+    def _summarize_level_result(level_result):
+        if not isinstance(level_result, dict):
+            return None
+        level_id = level_result.get("level")
+        name = level_result.get("name") or LEVEL_DESCRIPTIONS.get(level_id, "Unknown")
+        status_label = _console_result_label(level_result.get("status"))
+        prefix = f"Level {level_id} - {name}" if level_id is not None else str(name)
+        details = level_result.get("result")
+        suffix = ""
+        if isinstance(details, list) and details:
+            suffix = f" ({len(details)} items)"
+        return f"{prefix}: {status_label}{suffix}"
+
+    def _format_action_result_lines(payload):
+        if isinstance(payload, list):
+            if not payload:
+                return ["Result: Succeeded"]
+            return [f"Result: Succeeded", f"Items: {len(payload)}"]
+
+        if not isinstance(payload, dict):
+            return [str(payload)]
+
+        lines = [f"Result: {_console_result_label(payload.get('status'))}"]
+        _append_if_value(lines, "Adapter", payload.get("adapter") or payload.get("deployer_name"))
+        _append_if_value(lines, "Topology", payload.get("topology"))
+        _append_if_value(lines, "Dataspace", payload.get("dataspace"))
+
+        levels = payload.get("levels")
+        if isinstance(levels, list) and levels:
+            for level_payload in levels:
+                summary = _summarize_level_result(level_payload)
+                if summary:
+                    lines.append(summary)
+        elif payload.get("level") is not None and payload.get("name"):
+            summary = _summarize_level_result(payload)
+            if summary and summary not in lines:
+                lines.append(summary)
+
+        if isinstance(payload.get("connectors"), list):
+            lines.append(f"Connectors: {len(payload['connectors'])}")
+        elif isinstance(payload.get("result"), list):
+            lines.append(f"Items: {len(payload['result'])}")
+
+        validation = payload.get("validation")
+        if isinstance(validation, dict) and validation:
+            lines.append("Validation: Succeeded")
+
+        playwright = payload.get("playwright")
+        if isinstance(playwright, dict) and playwright.get("status") in {"passed", "failed", "skipped"}:
+            lines.append(f"Playwright: {_console_result_label(playwright.get('status'))}")
+
+        kafka_results = payload.get("kafka_edc_results")
+        if isinstance(kafka_results, list) and kafka_results:
+            statuses = {str(item.get("status", "")).strip().lower() for item in kafka_results if isinstance(item, dict)}
+            if "failed" in statuses:
+                lines.append("Kafka: Failed")
+            elif "passed" in statuses:
+                lines.append("Kafka: Passed")
+            elif "skipped" in statuses:
+                lines.append("Kafka: Skipped")
+
+        cleanup = payload.get("test_data_cleanup")
+        if isinstance(cleanup, dict) and cleanup.get("status") not in (None, "skipped"):
+            lines.append(f"Cleanup: {_console_result_label(cleanup.get('status'))}")
+
+        _append_if_value(lines, "Next step", payload.get("next_step"))
+        return lines
+
+    if result is None:
+        return
+
+    lines = _format_action_result_lines(result)
+    if not lines:
+        return
+
+    print()
+    for line in lines:
+        print(line)
 
 
 def _run_recreate_dataspace_interactive(
@@ -3025,7 +4029,9 @@ def run_interactive_menu(
 ):
     """Run a guided menu equivalent to the legacy numbered-level workflow."""
     registry = adapter_registry or ADAPTER_REGISTRY
-    current_adapter = "inesdata" if "inesdata" in registry else sorted(registry)[0]
+    current_adapter = None
+    if len(registry) == 1:
+        current_adapter = sorted(registry)[0]
 
     while True:
         _print_interactive_menu(current_adapter, adapter_registry=registry)
@@ -3041,7 +4047,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "S":
-                current_adapter = _select_adapter_interactive(current_adapter, adapter_registry=registry)
+                selected_adapter = _select_adapter_interactive(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if selected_adapter != current_adapter:
+                    current_adapter = selected_adapter
+                    _print_adapter_selection_hint(current_adapter)
                 continue
 
             if choice == "B":
@@ -3061,6 +4073,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "L":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 _run_legacy_menu_action("local_images", current_adapter=current_adapter)
                 continue
 
@@ -3077,6 +4096,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "X":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 _print_action_result(
                     _run_recreate_dataspace_interactive(
                         current_adapter=current_adapter,
@@ -3088,6 +4114,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "P":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 preview = build_dry_run_preview(
                     adapter_name=current_adapter,
                     command="deploy",
@@ -3103,6 +4136,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "H":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
                 if _should_sync_deployer_hosts() and not _interactive_confirm(
                     "PIONERA_SYNC_HOSTS is enabled. Apply changes to the hosts file?",
@@ -3121,6 +4161,13 @@ def run_interactive_menu(
                 continue
 
             if choice == "M":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 if not _interactive_confirm(f"Run metrics for {current_adapter}?", default=False):
                     print("Metrics cancelled.")
                     continue
@@ -3141,16 +4188,102 @@ def run_interactive_menu(
                 continue
 
             if choice == "0":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
                 if not _interactive_confirm(
-                    f"Run all levels 1-6 for {current_adapter}?",
+                    f"Run all levels 1-6 with adapter {current_adapter} for Levels 3-6?",
                     default=False,
                 ):
                     print("Full level execution cancelled.")
                     continue
-                _print_action_result(
-                    run_levels(
+                if not _interactive_ensure_hosts_ready_for_levels(
+                    current_adapter,
+                    levels=sorted(LEVEL_DESCRIPTIONS),
+                    adapter_registry=registry,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                ):
+                    continue
+                result = _run_interactive_full_levels(
+                    current_adapter,
+                    adapter_registry=registry,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                    validation_engine_cls=validation_engine_cls,
+                    metrics_collector_cls=metrics_collector_cls,
+                    experiment_storage=experiment_storage,
+                )
+                if result is not None:
+                    _print_action_result(result)
+                continue
+
+            if choice in {str(level_id) for level_id in LEVEL_DESCRIPTIONS}:
+                level_id = int(choice)
+                level_adapter = current_adapter
+                level_scope = ""
+                if level_id in {1, 2}:
+                    level_adapter = _shared_foundation_adapter_name(adapter_registry=registry)
+                    level_scope = " (shared foundation)"
+                else:
+                    selected_adapter = _interactive_require_adapter_selection(
                         current_adapter,
-                        levels=sorted(LEVEL_DESCRIPTIONS),
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    level_adapter = selected_adapter
+                    level_scope = f" for {selected_adapter}"
+                if not _interactive_confirm(
+                    f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]}{level_scope}?",
+                    default=False,
+                ):
+                    print(f"Level {level_id} cancelled.")
+                    continue
+                if level_id >= 3 and not _interactive_ensure_hosts_ready_for_levels(
+                    level_adapter,
+                    levels=[level_id],
+                    adapter_registry=registry,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                ):
+                    continue
+
+                if level_id == 1:
+                    shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=registry)
+                    shared_adapter = build_adapter(
+                        shared_adapter_name,
+                        adapter_registry=registry,
+                        topology=topology,
+                    )
+                    _print_action_result(
+                        {
+                            "status": "completed",
+                            "adapter": level_adapter,
+                            "topology": topology,
+                            "levels": [
+                                run_level(
+                                    shared_adapter,
+                                    1,
+                                    deployer_name=shared_adapter_name,
+                                    deployer_registry=deployer_registry,
+                                    topology=topology,
+                                    validation_engine_cls=validation_engine_cls,
+                                    metrics_collector_cls=metrics_collector_cls,
+                                    experiment_storage=experiment_storage,
+                                )
+                            ],
+                        }
+                    )
+                    continue
+
+                if level_id == 2:
+                    result = _run_interactive_level2_with_shared_foundation(
                         adapter_registry=registry,
                         deployer_registry=deployer_registry,
                         topology=topology,
@@ -3158,20 +4291,20 @@ def run_interactive_menu(
                         metrics_collector_cls=metrics_collector_cls,
                         experiment_storage=experiment_storage,
                     )
-                )
-                continue
-
-            if choice in {str(level_id) for level_id in LEVEL_DESCRIPTIONS}:
-                level_id = int(choice)
-                if not _interactive_confirm(
-                    f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]} for {current_adapter}?",
-                    default=False,
-                ):
-                    print(f"Level {level_id} cancelled.")
+                    if result is not None:
+                        _print_action_result(
+                            {
+                                "status": "completed",
+                                "adapter": level_adapter,
+                                "topology": topology,
+                                "levels": [result],
+                            }
+                        )
                     continue
+
                 _print_action_result(
                     run_levels(
-                        current_adapter,
+                        level_adapter,
                         levels=[level_id],
                         adapter_registry=registry,
                         deployer_registry=deployer_registry,

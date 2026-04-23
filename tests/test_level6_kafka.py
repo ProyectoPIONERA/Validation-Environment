@@ -50,6 +50,26 @@ class Level6KafkaTests(unittest.TestCase):
             "/tmp/experiment",
         )
 
+    def test_run_kafka_edc_validation_forwards_progress_callback(self):
+        validator = mock.Mock()
+        validator.run_all.return_value = [{"status": "passed"}]
+        experiment_storage = mock.Mock()
+        progress_callback = mock.Mock()
+
+        kafka.run_kafka_edc_validation(
+            ["conn-a", "conn-b"],
+            "/tmp/experiment",
+            validator=validator,
+            experiment_storage=experiment_storage,
+            progress_callback=progress_callback,
+        )
+
+        validator.run_all.assert_called_once_with(
+            ["conn-a", "conn-b"],
+            experiment_dir="/tmp/experiment",
+            progress_callback=progress_callback,
+        )
+
     def test_run_kafka_edc_validation_persists_execution_errors(self):
         validator = mock.Mock()
         validator.run_all.side_effect = RuntimeError("broker unavailable")

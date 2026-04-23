@@ -14,6 +14,7 @@ INFRASTRUCTURE_MANAGED_KEYS = frozenset(
         "KC_USER",
         "KC_PASSWORD",
         "PG_HOST",
+        "PG_PORT",
         "PG_USER",
         "PG_PASSWORD",
         "VT_URL",

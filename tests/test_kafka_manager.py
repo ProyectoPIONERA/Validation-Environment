@@ -120,8 +120,9 @@ class KafkaManagerTests(unittest.TestCase):
 
         with mock.patch.object(KafkaManager, "_start_kubernetes_port_forward", return_value=object()) as mocked_port_forward:
             with mock.patch.object(KafkaManager, "_wait_for_kubernetes_internal_bootstrap", return_value={"pod": "conn-a"}) as mocked_internal_wait:
-                with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=[False, True]):
-                    bootstrap = manager.ensure_kafka_running()
+                with mock.patch.object(KafkaManager, "_wait_for_kubernetes_external_service_bootstrap", return_value={"pod": "conn-a"}) as mocked_external_wait:
+                    with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=[False, True]):
+                        bootstrap = manager.ensure_kafka_running()
 
         self.assertEqual(bootstrap, "127.0.0.1:32092")
         self.assertEqual(manager.cluster_bootstrap_servers, "framework-kafka.demo.svc.cluster.local:9092")
@@ -129,10 +130,72 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertTrue(manager.started_by_framework)
         mocked_port_forward.assert_called_once()
         mocked_internal_wait.assert_called_once()
+        mocked_external_wait.assert_called_once()
         apply_call = next(call for call in commands if call["args"] == ["kubectl", "apply", "-f", "-"])
         self.assertIn("kind: Deployment", apply_call["input"])
         self.assertIn("framework-kafka.demo.svc.cluster.local:9092", apply_call["input"])
         self.assertIn("127.0.0.1:32092", apply_call["input"])
+
+    def test_kubernetes_start_tolerates_rollout_timeout_when_listener_checks_succeed(self):
+        commands = []
+
+        def fake_runner(args, input_text=None):
+            commands.append({"args": list(args), "input": input_text})
+            if args[:3] == ["kubectl", "rollout", "status"]:
+                return _FakeCompletedProcess(
+                    returncode=1,
+                    stderr="Waiting for deployment \"framework-kafka\" rollout to finish: 0 of 1 updated replicas are available...\nerror: timed out waiting for the condition",
+                )
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+                "k8s_local_port": "39092",
+            },
+            command_runner=fake_runner,
+        )
+
+        with mock.patch.object(KafkaManager, "_wait_for_kubernetes_internal_bootstrap", return_value={"pod": "conn-a"}):
+            with mock.patch.object(KafkaManager, "_wait_for_kubernetes_external_service_bootstrap", return_value={"pod": "conn-a"}):
+                with mock.patch.object(KafkaManager, "_start_kubernetes_port_forward", return_value=object()):
+                    with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=[False, True]):
+                        bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:39092")
+        self.assertEqual(manager.cluster_bootstrap_servers, "framework-kafka.demo.svc.cluster.local:9092")
+        self.assertTrue(manager.started_by_framework)
+        self.assertEqual(manager.provisioning_mode, "kubernetes")
+        self.assertTrue(any(call["args"][:3] == ["kubectl", "rollout", "status"] for call in commands))
+
+    def test_wait_for_kubernetes_external_service_bootstrap_uses_external_service_dns(self):
+        exec_calls = []
+
+        def fake_runner(args, input_text=None):
+            if args[:4] == ["kubectl", "get", "pods", "-n"]:
+                return _FakeCompletedProcess(stdout="conn-a 1/1 Running 0 1m\n")
+            if args[:4] == ["kubectl", "exec", "-n", "demo"]:
+                exec_calls.append(list(args))
+                return _FakeCompletedProcess(returncode=0)
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={"provisioner": "kubernetes", "k8s_namespace": "demo"},
+            command_runner=fake_runner,
+            wait_timeout_seconds=1,
+            poll_interval_seconds=0.01,
+        )
+
+        ids = manager._kubernetes_identifiers(manager._load_manager_config())
+        result = manager._wait_for_kubernetes_external_service_bootstrap(ids)
+
+        self.assertEqual(result["listener"], "external service listener")
+        self.assertEqual(result["host"], "framework-kafka-external.demo.svc.cluster.local")
+        self.assertEqual(result["port"], 9094)
+        self.assertTrue(exec_calls)
+        self.assertIn("framework-kafka-external.demo.svc.cluster.local", exec_calls[0][-1])
 
     def test_stop_kafka_only_stops_framework_managed_container(self):
         manager = KafkaManager(container_class=_FakeKafkaContainer)
@@ -196,6 +259,24 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertTrue(manager.started_by_framework)
         self.assertEqual(manager.provisioning_mode, "kubernetes")
 
+    def test_reuses_partially_started_framework_kubernetes_broker_after_timeout(self):
+        manager = KafkaManager(bootstrap_servers="127.0.0.1:32092")
+        manager.cluster_bootstrap_servers = "framework-kafka.demo.svc.cluster.local:9092"
+        manager.started_by_framework = False
+        manager.provisioning_mode = "kubernetes"
+
+        fake_port_forward = mock.Mock()
+        fake_port_forward.poll.return_value = None
+        manager.port_forward_process = fake_port_forward
+
+        with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=lambda value: value == "127.0.0.1:32092"):
+            bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:32092")
+        self.assertEqual(manager.cluster_bootstrap_servers, "framework-kafka.demo.svc.cluster.local:9092")
+        self.assertTrue(manager.started_by_framework)
+        self.assertEqual(manager.provisioning_mode, "kubernetes")
+
     def test_start_kafka_uses_container_factory_with_runtime_config(self):
         factory = _RecordingFactory()
         manager = KafkaManager(
@@ -239,6 +320,60 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
         self.assertTrue(kwargs["text"])
 
+    def test_kubernetes_port_forward_can_restart_existing_process(self):
+        manager = KafkaManager()
+        ids = {
+            "namespace": "demo",
+            "external_service_name": "framework-kafka-external",
+            "local_port": 32092,
+            "external_bootstrap": "127.0.0.1:32092",
+        }
+        existing_process = mock.Mock()
+        existing_process.poll.return_value = None
+        existing_process.wait.return_value = None
+        manager.port_forward_process = existing_process
+
+        new_process = mock.Mock()
+        new_process.poll.return_value = None
+
+        with mock.patch("framework.kafka_manager.subprocess.Popen", return_value=new_process):
+            with mock.patch.object(KafkaManager, "is_kafka_available", return_value=True):
+                returned = manager._start_kubernetes_port_forward(ids, restart_existing=True)
+
+        self.assertIs(returned, new_process)
+        existing_process.terminate.assert_called_once()
+        self.assertIs(manager.port_forward_process, new_process)
+
+    def test_ensure_kafka_running_recovers_existing_kubernetes_runtime_before_restart(self):
+        manager = KafkaManager(bootstrap_servers="127.0.0.1:32092")
+        manager.cluster_bootstrap_servers = "framework-kafka.demo.svc.cluster.local:9092"
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes"
+
+        with mock.patch.object(KafkaManager, "is_kafka_available", return_value=False):
+            with mock.patch.object(manager, "_recover_existing_kubernetes_runtime", return_value="127.0.0.1:32092") as mocked_recover:
+                with mock.patch.object(manager, "start_kafka", return_value="127.0.0.1:39092") as mocked_start:
+                    bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:32092")
+        mocked_recover.assert_called_once()
+        mocked_start.assert_not_called()
+
+    def test_ensure_kafka_running_falls_back_to_restart_after_recovery_failure(self):
+        manager = KafkaManager(bootstrap_servers="127.0.0.1:32092")
+        manager.cluster_bootstrap_servers = "framework-kafka.demo.svc.cluster.local:9092"
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes"
+
+        with mock.patch.object(KafkaManager, "is_kafka_available", return_value=False):
+            with mock.patch.object(manager, "_recover_existing_kubernetes_runtime", side_effect=RuntimeError("transient failure")) as mocked_recover:
+                with mock.patch.object(manager, "start_kafka", return_value="127.0.0.1:39092") as mocked_start:
+                    bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:39092")
+        mocked_recover.assert_called_once()
+        mocked_start.assert_called_once()
+
     def test_stop_kafka_kubernetes_deletes_deployment_and_services(self):
         commands = []
 
@@ -257,6 +392,7 @@ class KafkaManagerTests(unittest.TestCase):
         manager.started_by_framework = True
         manager.provisioning_mode = "kubernetes"
         port_forward_process = mock.Mock()
+        port_forward_process.poll.return_value = None
         port_forward_process.wait.return_value = None
         manager.port_forward_process = port_forward_process
 
@@ -276,6 +412,50 @@ class KafkaManagerTests(unittest.TestCase):
             commands,
         )
         port_forward_process.terminate.assert_called_once()
+
+    def test_stop_kafka_kubernetes_cleans_partial_framework_startups(self):
+        commands = []
+
+        def fake_runner(args, input_text=None):
+            commands.append(list(args))
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            },
+            command_runner=fake_runner,
+        )
+        manager.started_by_framework = False
+        manager.provisioning_mode = "kubernetes"
+        manager.bootstrap_servers = "127.0.0.1:39092"
+        manager.cluster_bootstrap_servers = "framework-kafka.demo.svc.cluster.local:9092"
+        port_forward_process = mock.Mock()
+        port_forward_process.poll.return_value = None
+        port_forward_process.wait.return_value = None
+        manager.port_forward_process = port_forward_process
+
+        manager.stop_kafka()
+
+        self.assertIn(
+            [
+                "kubectl",
+                "delete",
+                "deployment/framework-kafka",
+                "service/framework-kafka",
+                "service/framework-kafka-external",
+                "-n",
+                "demo",
+                "--ignore-not-found=true",
+            ],
+            commands,
+        )
+        port_forward_process.terminate.assert_called_once()
+        self.assertIsNone(manager.bootstrap_servers)
+        self.assertIsNone(manager.cluster_bootstrap_servers)
+        self.assertIsNone(manager.provisioning_mode)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,12 @@ class INESDataConnectorsAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    def _pg_port(self):
+        getter = getattr(self.config_adapter, "get_pg_port", None)
+        if callable(getter):
+            return str(getter())
+        return str(getattr(self.config, "PORT_POSTGRES", 5432))
+
     @staticmethod
     def _first_config_value(config, *keys, default=None):
         for key in keys:
@@ -238,8 +244,15 @@ class INESDataConnectorsAdapter:
             return False
 
         if self._should_sync_vault_token_to_deployer_config():
+            reconcile_vault_state = getattr(self.infrastructure, "reconcile_vault_state_for_local_runtime", None)
             sync_vault_token = getattr(self.infrastructure, "sync_vault_token_to_deployer_config", None)
-            if callable(sync_vault_token) and not sync_vault_token():
+            if callable(reconcile_vault_state):
+                synchronized = reconcile_vault_state()
+            elif callable(sync_vault_token):
+                synchronized = sync_vault_token()
+            else:
+                synchronized = True
+            if not synchronized:
                 print("Could not synchronize Vault token into deployer.config")
                 return False
 
@@ -1043,6 +1056,7 @@ class INESDataConnectorsAdapter:
         ds_domain = deployer_config.get("DS_DOMAIN_BASE")
         domain_base = deployer_config.get("DOMAIN_BASE")
         pg_host, _, _ = self.config_adapter.get_pg_credentials()
+        pg_port = self._pg_port()
         minio_hostname = deployer_config.get("MINIO_HOSTNAME")
 
         if not ds_domain:
@@ -1075,7 +1089,7 @@ class INESDataConnectorsAdapter:
             print(f"  User: {db_creds.get('user', 'N/A')}")
             print(f"  Password: {'***REDACTED***' if db_creds.get('passwd') else 'N/A'}")
             print(f"  Host: {pg_host}")
-            print(f"  DSN: postgresql://{pg_host}:5432/{db_creds.get('name', 'N/A')}")
+            print(f"  DSN: postgresql://{pg_host}:{pg_port}/{db_creds.get('name', 'N/A')}")
 
             print("\nMinIO Credentials:")
             minio_creds = creds.get("minio", {})
@@ -1354,24 +1368,36 @@ class INESDataConnectorsAdapter:
         print(f"\nCleaning PostgreSQL database '{db_name}'...")
 
         pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
+        pg_port = self._pg_port()
         terminate_sql = f"""
         SELECT pg_terminate_backend(pid)
         FROM pg_stat_activity
         WHERE datname = '{db_name}';
         """
 
-        self.run(
-            f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} -d postgres -c \"{terminate_sql}\"",
-            check=False
-        )
-        self.run(
-            f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} -d postgres -c \"DROP DATABASE IF EXISTS {db_name};\"",
-            check=False
-        )
-        self.run(
-            f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} -d postgres -c \"DROP ROLE IF EXISTS {db_user};\"",
-            check=False
-        )
+        cleanup_steps = [
+            (
+                "terminate active sessions",
+                f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+                f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+                f"-d postgres -c \"{terminate_sql}\"",
+            ),
+            (
+                "drop database",
+                f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+                f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+                f"-d postgres -c \"DROP DATABASE IF EXISTS {db_name};\"",
+            ),
+            (
+                "drop role",
+                f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+                f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+                f"-d postgres -c \"DROP ROLE IF EXISTS {db_user};\"",
+            ),
+        ]
+        for label, command in cleanup_steps:
+            if self.run(command, check=False, silent=True) is None:
+                print(f"  Warning: PostgreSQL cleanup step failed: {label}")
 
         print("PostgreSQL cleanup complete\n")
 
@@ -1432,9 +1458,13 @@ class INESDataConnectorsAdapter:
             f"WHERE participant_id = '{connector_name}';"
         )
         pg_host, pg_user, pg_pass = self.config_adapter.get_pg_credentials()
+        pg_port = self._pg_port()
         self.run(
-            f'PGPASSWORD={pg_pass} psql -h {pg_host} -U {pg_user} -d {self.config.registration_db_name()} -c "{sql_del}"',
-            check=False
+            f"PGPASSWORD={shlex.quote(str(pg_pass))} psql -h {shlex.quote(str(pg_host))} "
+            f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+            f'-d {self.config.registration_db_name()} -c "{sql_del}"',
+            check=False,
+            silent=True,
         )
 
         return values_file
@@ -1580,14 +1610,16 @@ class INESDataConnectorsAdapter:
         db_user = db_creds.get("user")
         db_password = db_creds.get("passwd")
         pg_host, _, _ = self.config_adapter.get_pg_credentials()
+        pg_port = self._pg_port()
 
         if not db_name or not db_user or not db_password:
             print(f"Incomplete database credentials for connector: {connector_name}")
             return False
 
         result = self.run_silent(
-            f"PGPASSWORD={db_password} "
-            f"psql -h {pg_host} -U {db_user} -d {db_name} -t -A -c \"SELECT 1;\""
+            f"PGPASSWORD={shlex.quote(str(db_password))} "
+            f"psql -h {shlex.quote(str(pg_host))} -p {shlex.quote(str(pg_port))} "
+            f"-U {shlex.quote(str(db_user))} -d {shlex.quote(str(db_name))} -t -A -c \"SELECT 1;\""
         )
 
         if result and result.strip() == "1":

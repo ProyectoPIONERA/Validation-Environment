@@ -89,7 +89,7 @@ class EdcDeployerWrapperTests(unittest.TestCase):
         deployer = EdcDeployer(adapter=FakeAdapter(), config_cls=FakeConfig, topology="local")
 
         self.assertEqual(deployer.name(), "edc")
-        self.assertEqual(deployer.supported_topologies(), ["local"])
+        self.assertEqual(deployer.supported_topologies(), ["local", "vm-single", "vm-distributed"])
 
     def test_resolve_context_uses_existing_edc_conventions(self):
         deployer = EdcDeployer(adapter=FakeAdapter(), config_cls=FakeConfig, topology="local")

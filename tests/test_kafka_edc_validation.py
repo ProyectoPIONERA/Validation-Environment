@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 import requests
+from unittest import mock
 from unittest.mock import patch
 
 from framework.kafka_edc_validation import KafkaEdcValidationSuite
@@ -305,11 +306,22 @@ class _FlakyAdminClient(_FakeAdminClient):
         super().__init__(**kwargs)
 
 
+class _DoubleFlakyAdminClient(_FakeAdminClient):
+    init_calls = 0
+
+    def __init__(self, **kwargs):
+        type(self).init_calls += 1
+        if type(self).init_calls <= 2:
+            raise RuntimeError("NoBrokersAvailable")
+        super().__init__(**kwargs)
+
+
 class _FakeKafkaManager:
     def __init__(self):
         self.stop_calls = 0
         self.ensure_calls = 0
         self.started_by_framework = True
+        self.provisioning_mode = "kubernetes"
         self.cluster_bootstrap_servers = "host.minikube.internal:39093"
 
     def stop_kafka(self):
@@ -318,6 +330,26 @@ class _FakeKafkaManager:
     def ensure_kafka_running(self):
         self.ensure_calls += 1
         return "localhost:39093"
+
+
+class _StepwiseKafkaManager(_FakeKafkaManager):
+    def __init__(self, responses, *, started_by_framework=True, provisioning_mode="kubernetes"):
+        super().__init__()
+        self.responses = list(responses)
+        self.started_by_framework = started_by_framework
+        self.provisioning_mode = provisioning_mode
+
+    def ensure_kafka_running(self):
+        self.ensure_calls += 1
+        if not self.responses:
+            return None
+
+        response = self.responses.pop(0)
+        if isinstance(response, tuple):
+            bootstrap, cluster_bootstrap = response
+            self.cluster_bootstrap_servers = cluster_bootstrap
+            return bootstrap
+        return response
 
 
 class _RetryLoginSession(_FakeSession):
@@ -364,6 +396,9 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
         _FlakyAdminClient.created_topics = []
         _FlakyAdminClient.last_kwargs = None
         _FlakyAdminClient.init_calls = 0
+        _DoubleFlakyAdminClient.created_topics = []
+        _DoubleFlakyAdminClient.last_kwargs = None
+        _DoubleFlakyAdminClient.init_calls = 0
 
     def test_run_pair_executes_edc_kafka_flow_and_persists_artifact(self):
         ensured_topics = []
@@ -569,6 +604,32 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
             "host.minikube.internal:39092,host.docker.internal:39092",
         )
 
+    def test_runtime_surfaces_last_kafka_preparation_error_when_bootstrap_missing(self):
+        class _FailingKafkaManager:
+            cluster_bootstrap_servers = None
+            last_error = "Kafka port-forward did not expose the external bootstrap server in time"
+
+            @staticmethod
+            def ensure_kafka_running():
+                return None
+
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            kafka_manager=_FailingKafkaManager(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Last runtime preparation error: Kafka port-forward did not expose the external bootstrap server in time",
+        ):
+            suite._ensure_kafka_runtime(suite._load_kafka_runtime())
+
     def test_wait_for_transfer_runtime_stabilization_waits_for_consumer_group(self):
         suite = KafkaEdcValidationSuite(
             load_connector_credentials=lambda connector: {
@@ -602,6 +663,60 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
         self.assertEqual(result["group_id"], "corr-1:corr-1")
         self.assertEqual(result["state"], "Stable")
         self.assertEqual(result["member_count"], 1)
+        self.assertEqual(_FakeAdminClientWithConsumerGroup.last_kwargs["request_timeout_ms"], 5000)
+        self.assertEqual(_FakeAdminClientWithConsumerGroup.last_kwargs["api_version_auto_timeout_ms"], 5000)
+
+    def test_wait_for_transfer_runtime_stabilization_falls_back_to_probe(self):
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            session=_FakeSession(),
+        )
+
+        fake_clock = itertools.count(100)
+
+        with patch.object(suite, "_open_probe_clients", return_value=(mock.Mock(), mock.Mock(), "probe-group")):
+            with patch.object(
+                suite,
+                "_wait_for_end_to_end_probe",
+                return_value={
+                    "status": "ready",
+                    "attempts": 2,
+                    "seconds_waited": 4.0,
+                    "probe_message_id": "probe-1",
+                },
+            ) as probe_mock:
+                with patch("framework.kafka_edc_validation.time.time", side_effect=lambda: float(next(fake_clock))):
+                    with patch("framework.kafka_edc_validation.time.sleep", return_value=None):
+                        result = suite._wait_for_transfer_runtime_stabilization(
+                            {
+                                "bootstrap_servers": "broker-runtime:29092",
+                                "host_bootstrap_servers": "broker-runtime:29092",
+                                "startup_grace_seconds": 60,
+                                "poll_interval_seconds": 1,
+                            },
+                            {
+                                "correlationId": "corr-2",
+                                "dataDestination": {
+                                    "topic": "destination-topic",
+                                },
+                            },
+                            "source-topic",
+                        )
+
+        self.assertEqual(result["strategy"], "probe_ready")
+        self.assertEqual(result["group_id"], "probe-group")
+        self.assertEqual(result["state"], "ProbeRelayed")
+        self.assertEqual(result["destination_topic"], "destination-topic")
+        self.assertEqual(result["probe"]["probe_message_id"], "probe-1")
+        probe_mock.assert_called_once()
 
     def test_wait_for_cleanup_settlement_only_waits_when_cleanup_did_work(self):
         suite = KafkaEdcValidationSuite(
@@ -631,7 +746,7 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
         self.assertEqual(skipped["reason"], "no_cleanup_actions")
         sleep_mock.assert_called_once_with(7)
 
-    def test_ensure_topic_with_runtime_retries_after_broker_restart(self):
+    def test_ensure_topic_with_runtime_retries_after_soft_broker_refresh(self):
         kafka_manager = _FakeKafkaManager()
         suite = KafkaEdcValidationSuite(
             load_connector_credentials=lambda connector: {
@@ -654,8 +769,41 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
         }
 
         self.assertTrue(suite._ensure_topic_with_runtime(runtime, "topic-a"))
-        self.assertEqual(kafka_manager.stop_calls, 1)
+        self.assertEqual(kafka_manager.stop_calls, 0)
         self.assertEqual(kafka_manager.ensure_calls, 1)
+        self.assertEqual(runtime["bootstrap_servers"], "localhost:39093")
+        self.assertEqual(runtime["cluster_bootstrap_servers"], "host.minikube.internal:39093")
+
+    def test_ensure_topic_with_runtime_uses_hard_restart_only_after_soft_refresh_fails(self):
+        kafka_manager = _StepwiseKafkaManager(
+            [
+                ("localhost:39092", "host.minikube.internal:39092"),
+                ("localhost:39093", "host.minikube.internal:39093"),
+            ]
+        )
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_DoubleFlakyAdminClient,
+            new_topic_class=_FakeNewTopic,
+            kafka_manager=kafka_manager,
+            session=_FakeSession(),
+        )
+
+        runtime = {
+            "bootstrap_servers": "localhost:39091",
+            "host_bootstrap_servers": "localhost:39091",
+            "cluster_bootstrap_servers": "host.minikube.internal:39091",
+        }
+
+        self.assertTrue(suite._ensure_topic_with_runtime(runtime, "topic-b"))
+        self.assertEqual(kafka_manager.ensure_calls, 2)
+        self.assertEqual(kafka_manager.stop_calls, 1)
         self.assertEqual(runtime["bootstrap_servers"], "localhost:39093")
         self.assertEqual(runtime["cluster_bootstrap_servers"], "host.minikube.internal:39093")
 
@@ -700,7 +848,7 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
         self.assertIn("dcat:dataset", body)
         sleep_mock.assert_called_once_with(2)
 
-    def test_run_all_resets_framework_managed_kafka_between_pairs(self):
+    def test_run_all_preserves_framework_managed_kafka_between_successful_pairs(self):
         kafka_manager = _FakeKafkaManager()
         suite = KafkaEdcValidationSuite(
             load_connector_credentials=lambda connector: {
@@ -722,7 +870,7 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
         self.assertEqual(run_pair_mock.call_count, 2)
-        self.assertEqual(kafka_manager.stop_calls, 2)
+        self.assertEqual(kafka_manager.stop_calls, 0)
 
     def test_run_all_retries_transient_pair_failure_once(self):
         kafka_manager = _FakeKafkaManager()
@@ -764,11 +912,168 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
         self.assertEqual(run_pair_mock.call_count, 3)
-        self.assertEqual(kafka_manager.stop_calls, 3)
+        self.assertEqual(kafka_manager.stop_calls, 1)
         self.assertTrue(results[0]["retry_attempted"])
         self.assertEqual(results[0]["attempt_count"], 2)
         self.assertIn("Kafka transfer path did not relay", results[0]["retry_reason"])
         sleep_mock.assert_called_once_with(5)
+
+    def test_run_all_retries_when_first_attempt_consumes_no_messages(self):
+        kafka_manager = _FakeKafkaManager()
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            kafka_manager=kafka_manager,
+            session=_FakeSession(),
+        )
+
+        run_pair_results = [
+            {
+                "provider": "conn-a",
+                "consumer": "conn-b",
+                "status": "failed",
+                "error": {
+                    "type": "RuntimeError",
+                    "message": "No Kafka messages were consumed through the EDC transfer",
+                },
+                "steps": [],
+            },
+            {"provider": "conn-a", "consumer": "conn-b", "status": "passed", "steps": []},
+            {"provider": "conn-b", "consumer": "conn-a", "status": "passed", "steps": []},
+        ]
+
+        with patch.object(suite, "run_pair", side_effect=run_pair_results) as run_pair_mock:
+            with patch("framework.kafka_edc_validation.time.sleep", return_value=None) as sleep_mock:
+                results = suite.run_all(["conn-a", "conn-b"], experiment_dir=None)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(run_pair_mock.call_count, 3)
+        self.assertEqual(kafka_manager.stop_calls, 1)
+        self.assertTrue(results[0]["retry_attempted"])
+        self.assertEqual(results[0]["attempt_count"], 2)
+        self.assertIn("No Kafka messages were consumed", results[0]["retry_reason"])
+        sleep_mock.assert_called_once_with(5)
+
+    def test_run_all_waits_between_pairs_when_cleanup_after_run_exists(self):
+        kafka_manager = _FakeKafkaManager()
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {"pre_run_settle_seconds": 7},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            kafka_manager=kafka_manager,
+            session=_FakeSession(),
+        )
+
+        with patch.object(suite, "run_pair", side_effect=[
+            {
+                "provider": "conn-a",
+                "consumer": "conn-b",
+                "status": "passed",
+                "cleanup": {
+                    "after_run": [
+                        {"terminated_transfers": [{"transfer_id": "transfer-1"}]},
+                    ]
+                },
+            },
+            {"provider": "conn-b", "consumer": "conn-a", "status": "passed"},
+        ]):
+            with patch("framework.kafka_edc_validation.time.sleep", return_value=None) as sleep_mock:
+                results = suite.run_all(["conn-a", "conn-b"], experiment_dir=None)
+
+        self.assertEqual(len(results), 2)
+        sleep_mock.assert_called_once_with(7)
+        self.assertEqual(kafka_manager.stop_calls, 0)
+
+    def test_run_all_emits_progress_after_each_completed_pair(self):
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            session=_FakeSession(),
+        )
+
+        progress_events = []
+
+        with patch.object(suite, "run_pair", side_effect=[
+            {"provider": "conn-a", "consumer": "conn-b", "status": "passed", "steps": []},
+            {"provider": "conn-b", "consumer": "conn-a", "status": "failed", "steps": []},
+        ]):
+            results = suite.run_all(
+                ["conn-a", "conn-b"],
+                experiment_dir=None,
+                progress_callback=lambda result: progress_events.append(
+                    (
+                        result.get("provider"),
+                        result.get("consumer"),
+                        result.get("status"),
+                        result.get("attempt_count"),
+                    )
+                ),
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            progress_events,
+            [
+                ("conn-a", "conn-b", "passed", 1),
+                ("conn-b", "conn-a", "failed", 1),
+            ],
+        )
+
+    def test_measure_transfer_latency_reuses_existing_probe_result(self):
+        _FakeBrokerState.routes["source-topic"] = "destination-topic"
+        counter = itertools.count(1000, 5)
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: {
+                "connector_user": {"user": "user", "passwd": "pass"}
+            },
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {},
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            producer_class=_FakeProducer,
+            consumer_class=_FakeConsumer,
+            session=_FakeSession(),
+            time_provider=lambda: float(next(counter)),
+            uuid_factory=iter(["metriccase", "id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9"]).__next__,
+        )
+
+        with patch.object(suite, "_wait_for_end_to_end_probe") as probe_mock:
+            metrics = suite._measure_transfer_latency(
+                {
+                    "bootstrap_servers": "broker-runtime:29092",
+                    "host_bootstrap_servers": "broker-runtime:29092",
+                    "message_count": 3,
+                    "consumer_poll_timeout_seconds": 5,
+                },
+                "source-topic",
+                "destination-topic",
+                probe_result={
+                    "status": "ready",
+                    "attempts": 1,
+                    "seconds_waited": 2.0,
+                    "probe_message_id": "probe-ready",
+                },
+            )
+
+        probe_mock.assert_not_called()
+        self.assertEqual(metrics["messages_produced"], 3)
+        self.assertEqual(metrics["messages_consumed"], 3)
+        self.assertEqual(metrics["probe"]["probe_message_id"], "probe-ready")
+        self.assertGreater(metrics["throughput_messages_per_second"], 0)
 
 
 if __name__ == "__main__":

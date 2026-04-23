@@ -778,20 +778,45 @@ def _minikube_profile_for_local_images(active_adapter: str) -> str:
 
 
 def _dataspace_context_for_local_images(active_adapter: str) -> dict[str, str]:
+    normalized_adapter = (active_adapter or "").strip().lower()
+    default_dataspace = "demoedc" if normalized_adapter == "edc" else "demo"
     config_path = os.path.join(project_root(), "deployers", active_adapter, "deployer.config")
     config = _read_key_value_config(config_path)
     dataspace = (
         config.get("DS_1_NAME")
         or config.get("DS_NAME")
         or config.get("DATASPACE_NAME")
-        or "demo"
-    ).strip() or "demo"
+        or default_dataspace
+    ).strip() or default_dataspace
     namespace = (
         config.get("DS_1_NAMESPACE")
         or config.get("NAMESPACE")
         or dataspace
     ).strip() or dataspace
     return {"dataspace": dataspace, "namespace": namespace}
+
+
+def _configured_connector_names_for_local_images(active_adapter: str) -> list[str]:
+    context = _dataspace_context_for_local_images(active_adapter)
+    config_path = os.path.join(project_root(), "deployers", active_adapter, "deployer.config")
+    config = _read_key_value_config(config_path)
+    raw_connectors = (config.get("DS_1_CONNECTORS") or "").strip()
+    if not raw_connectors:
+        return []
+
+    dataspace = context["dataspace"]
+    connectors = []
+    for token in raw_connectors.split(","):
+        name = token.strip()
+        if not name:
+            continue
+        if name.startswith("conn-"):
+            connector_name = name
+        else:
+            connector_name = f"conn-{name}-{dataspace}"
+        if connector_name not in connectors:
+            connectors.append(connector_name)
+    return connectors
 
 
 def _restart_registered_recipe_deployment_if_running(recipe: LocalImageRecipe) -> None:
@@ -826,6 +851,68 @@ def _restart_registered_recipe_deployment_if_running(recipe: LocalImageRecipe) -
             "--timeout=10m",
         ]
     )
+
+
+def _edc_deployments_for_local_image_keys(recipe_keys: list[str]) -> tuple[str, list[str]]:
+    context = _dataspace_context_for_local_images("edc")
+    namespace = context["namespace"]
+    connectors = _configured_connector_names_for_local_images("edc")
+    deployments = []
+    selected_keys = set(recipe_keys or [])
+
+    for connector in connectors:
+        if "edc/connector" in selected_keys:
+            deployments.append(connector)
+        if "edc/dashboard" in selected_keys:
+            deployments.append(f"{connector}-dashboard")
+        if "edc/dashboard-proxy" in selected_keys:
+            deployments.append(f"{connector}-dashboard-proxy")
+
+    deduplicated = []
+    for deployment_name in deployments:
+        if deployment_name not in deduplicated:
+            deduplicated.append(deployment_name)
+    return namespace, deduplicated
+
+
+def _restart_edc_deployments_for_local_image_keys(recipe_keys: list[str]) -> None:
+    namespace, deployments = _edc_deployments_for_local_image_keys(recipe_keys)
+    if not deployments:
+        print("\nNo EDC connector deployments were resolved. Run Level 4 after loading the images if needed.\n")
+        return
+
+    restarted = 0
+    for deployment_name in deployments:
+        return_code, _ = _run_command_capture(["kubectl", "get", "deployment", deployment_name, "-n", namespace])
+        if return_code != 0:
+            print(
+                f"\nNo running EDC deployment found for {deployment_name} in namespace {namespace}. "
+                "Run Level 4 after loading the image if this runtime is not deployed yet.\n"
+            )
+            continue
+
+        print(f"\nRestarting EDC deployment/{deployment_name} in namespace {namespace} to pick up the local image...")
+        if not _run_command_interactive(
+            ["kubectl", "rollout", "restart", f"deployment/{deployment_name}", "-n", namespace]
+        ):
+            print(f"\nWarning: could not restart EDC deployment/{deployment_name}.\n")
+            continue
+
+        _run_command_interactive(
+            [
+                "kubectl",
+                "rollout",
+                "status",
+                f"deployment/{deployment_name}",
+                "-n",
+                namespace,
+                "--timeout=10m",
+            ]
+        )
+        restarted += 1
+
+    if restarted:
+        print(f"\nRestarted {restarted} EDC deployment(s) with local images.\n")
 
 
 def _run_command_interactive(command, cwd=None, env=None) -> bool:
@@ -902,7 +989,18 @@ def _execute_registered_local_image_recipe(
         command = ["bash", script_path, "--apply", *recipe.script_args]
         if recipe.key.startswith("edc/"):
             command.extend(["--minikube-profile", minikube_profile])
-        return _run_command_interactive(command, cwd=root_dir)
+        if not _run_command_interactive(command, cwd=root_dir):
+            print("\nImage build/load failed. Check logs above.\n")
+            return False
+        if deploy:
+            if recipe.key.startswith("edc/"):
+                _restart_edc_deployments_for_local_image_keys([recipe.key])
+            else:
+                _restart_registered_recipe_deployment_if_running(recipe)
+        else:
+            print("\nRedeploy skipped. Image was built and loaded only.\n")
+        print("\nRegistered local image workflow completed successfully.\n")
+        return True
 
     dockerfile_path = os.path.join(root_dir, recipe.dockerfile_rel_path)
     context_path = os.path.join(root_dir, recipe.context_rel_path)
@@ -960,6 +1058,41 @@ def _execute_registered_local_image_recipes(
             and ok
         )
     return ok
+
+
+def _local_image_recipes_by_key(recipe_keys: list[str], active_adapter: str) -> list[LocalImageRecipe]:
+    available = collect_local_image_recipes(active_adapter=active_adapter)
+    by_key = {recipe.key: recipe for recipe in available}
+    recipes = []
+    missing = []
+    for key in recipe_keys:
+        recipe = by_key.get(key)
+        if recipe is None:
+            missing.append(key)
+        else:
+            recipes.append(recipe)
+
+    if missing:
+        print(f"\nMissing local image recipe(s): {', '.join(missing)}\n")
+    return recipes
+
+
+def _execute_edc_quick_local_image_workflow(sub_choice: str, platform_dir: str) -> bool:
+    quick_recipes = {
+        "1": ["edc/connector"],
+        "2": ["edc/dashboard", "edc/dashboard-proxy"],
+        "3": ["edc/connector", "edc/dashboard", "edc/dashboard-proxy"],
+    }
+    recipe_keys = quick_recipes.get(sub_choice, [])
+    recipes = _local_image_recipes_by_key(recipe_keys, active_adapter="edc")
+    if len(recipes) != len(recipe_keys):
+        return False
+    return _execute_registered_local_image_recipes(
+        recipes,
+        platform_dir=platform_dir,
+        deploy=True,
+        preserve_values=True,
+    )
 
 
 def _select_registered_local_image_recipe(recipes: list[LocalImageRecipe]):
@@ -1054,10 +1187,16 @@ def run_local_images_workflow_interactive(active_adapter="inesdata"):
         print(f"Active adapter: {active_adapter}")
         print()
         print("[Quick actions]")
-        print("Data is preserved. Existing Helm values are reused.")
-        print("1 - All local images")
-        print("2 - Connectors")
-        print("3 - Connector interface")
+        if active_adapter == "edc":
+            print("Builds/loads EDC images. Running EDC deployments are restarted; data is preserved.")
+            print("1 - EDC connector")
+            print("2 - EDC dashboard")
+            print("3 - EDC connector + dashboard")
+        else:
+            print("Data is preserved. Existing Helm values are reused.")
+            print("1 - All local images")
+            print("2 - Connectors")
+            print("3 - Connector interface")
         print()
         print("[Advanced recipes]")
         print("4 - Changed recipes")
@@ -1111,6 +1250,10 @@ def run_local_images_workflow_interactive(active_adapter="inesdata"):
 
         if not _confirm_local_workflow():
             print("\nExecution cancelled.\n")
+            return None
+
+        if active_adapter == "edc":
+            _execute_edc_quick_local_image_workflow(sub_choice, platform_dir=platform_dir)
             return None
 
         context = _dataspace_context_for_local_images("inesdata")

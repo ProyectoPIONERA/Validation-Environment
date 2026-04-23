@@ -40,6 +40,7 @@ INFRASTRUCTURE_MANAGED_KEYS = {
     "KC_USER",
     "KC_PASSWORD",
     "PG_HOST",
+    "PG_PORT",
     "PG_USER",
     "PG_PASSWORD",
     "VT_URL",
@@ -175,6 +176,7 @@ def load_effective_deployer_config():
 @click.option('--pg-user', help='Postgres admin user', default='postgres')
 @click.option('--pg-password', help='Postgres admin password', default='aPassword1234')
 @click.option('--pg-host', help='Postgres host address', default='localhost')
+@click.option('--pg-port', help='Postgres port', default='5432')
 @click.option('--kc-user', help='Keycloak admin user', default='admin')
 @click.option('--kc-password', help='Keycloak admin password', default='aPassword1234')
 @click.option('--kc-url', help='Keycloak server admin API address', default='http://localhost:8080')
@@ -183,7 +185,7 @@ def load_effective_deployer_config():
 @click.option('--vt-url', help='Vault server address', default='http://localhost:8280')
 @click.option('--in_env', help='PRO or DEV environment', default='DEV')
 @click.pass_context
-def cli(ctx, pg_user, pg_password, pg_host, kc_user, kc_password, kc_url, kc_internal_url, vt_token, vt_url, in_env):
+def cli(ctx, pg_user, pg_password, pg_host, pg_port, kc_user, kc_password, kc_url, kc_internal_url, vt_token, vt_url, in_env):
     ctx.ensure_object(dict)
 
     # Load layered configuration. Shared credentials live in
@@ -195,6 +197,7 @@ def cli(ctx, pg_user, pg_password, pg_host, kc_user, kc_password, kc_url, kc_int
     ctx.obj['pg_user'] = config.get('PG_USER', pg_user)
     ctx.obj['pg_password'] = config.get('PG_PASSWORD', pg_password)
     ctx.obj['pg_host'] = config.get('PG_HOST', pg_host)
+    ctx.obj['pg_port'] = config.get('PG_PORT', pg_port)
     # KEYCLOAK
     ctx.obj['kc_user'] = config.get('KC_USER', kc_user)
     ctx.obj['kc_password'] = config.get('KC_PASSWORD', kc_password)
@@ -235,7 +238,7 @@ def create(ctx, name):
     dbuser = f'{name.replace("-", "_")}_rsusr'
     dbpassword = generate_password(16)
     #### DEV PROGRESS
-    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbuser, dbpassword)
+    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbuser, dbpassword)
     register_password(name, ctx.obj['in_env'], 'dataspace', name, 'registration_service_database', {'name': dbname, 'user': dbuser, 'passwd': dbpassword})
 
     # Generate Public Portal password and create database
@@ -245,7 +248,7 @@ def create(ctx, name):
     dbuser = f'{name.replace("-", "_")}_wpusr'
     dbpassword = generate_password(16)
     #### DEV PROGRESS
-    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbuser, dbpassword)
+    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbuser, dbpassword)
     register_password(name, ctx.obj['in_env'], 'dataspace', name, 'web_portal_database', {'name': dbname, 'user': dbuser, 'passwd': dbpassword})
 
     click.echo(f'  + Creating Web Portal secrets')
@@ -284,7 +287,7 @@ def delete(ctx, name):
     dbname = f'{name.replace("-", "_")}_rs'
     dbuser = f'{name.replace("-", "_")}_rsusr'
     try:
-        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbuser)
+        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbuser)
     except Exception as e:
         errors = True
         click.echo(f'Failed to delete {name} registration-service database: {str(e)}')
@@ -293,7 +296,7 @@ def delete(ctx, name):
     dbname = f'{name.replace("-", "_")}_wp'
     dbuser = f'{name.replace("-", "_")}_wpusr'
     try:
-        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbuser)
+        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbuser)
     except Exception as e:
         errors = True
         click.echo(f'Failed to delete {name} Web Portal database: {str(e)}')
@@ -335,7 +338,7 @@ def create(ctx, name, dataspace):
     click.echo(f'- Creating {name} database')
     dbpassword = generate_password(16)
     dbname = name.replace('-', '_')
-    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbname, dbpassword)
+    create_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbname, dbpassword)
     register_password(dataspace, environment, 'connector', name, 'database', {'name': dbname, 'user': dbname, 'passwd': dbpassword})
 
     # Generate certificates
@@ -389,7 +392,7 @@ def create(ctx, name, dataspace):
     # Register connector in registration-service
     click.echo(f'- Adding {name} into registration-service')
     dbname = f'{dataspace.replace("-", "_")}_rs'
-    register_connector_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, name, dataspace, environment)
+    register_connector_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, name, dataspace, environment)
 
     # Generate Helm values file
     create_connector_value_files(dataspace, name, environment)
@@ -414,7 +417,7 @@ def delete(ctx, name, dataspace):
     click.echo(f'- Deleting {name} database')
     dbname = name.replace('-', '_')
     try:
-        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname, dbname)
+        delete_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname, dbname)
     except Exception as e:
         click.echo(f'Failed to delete {name} connector database: {str(e)}')
 
@@ -433,7 +436,7 @@ def delete(ctx, name, dataspace):
 def fix(ctx, name, dataspace):
     # Register connector in registration-service
     dbname = name.replace('-', '_')
-    fix_connector_050_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], dbname)
+    fix_connector_050_database(ctx.obj['pg_user'], ctx.obj['pg_password'], ctx.obj['pg_host'], ctx.obj['pg_port'], dbname)
 
 @connector.command()
 @click.argument('name')
@@ -466,19 +469,20 @@ def checkdb(ctx, name, dataspace, environment):
     database_name = credentials['database']['name']
     database_user = credentials['database']['user']
     database_passwd = credentials['database']['passwd']
-    check_database_db(database_user, database_passwd, ctx.obj['pg_host'], database_name)
+    check_database_db(database_user, database_passwd, ctx.obj['pg_host'], ctx.obj['pg_port'], database_name)
 
 #######################################
 ### DATABASE FUNCTIONS
 #######################################
 import psycopg2
 
-def create_database(pg_user, pg_password, pg_host, database, username, password):
+def create_database(pg_user, pg_password, pg_host, pg_port, database, username, password):
     # Connect to the PostgreSQL server
     conn = psycopg2.connect(
             user=pg_user,
             password=pg_password,
-            host=pg_host)
+            host=pg_host,
+            port=pg_port)
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
     cur.execute(f"CREATE USER {username} with encrypted password '{password}';")
@@ -488,12 +492,13 @@ def create_database(pg_user, pg_password, pg_host, database, username, password)
     cur.close()
     conn.close()
 
-def delete_database(pg_user, pg_password, pg_host, database, username):
+def delete_database(pg_user, pg_password, pg_host, pg_port, database, username):
     # Connect to the PostgreSQL server
     conn = psycopg2.connect(
             user=pg_user,
             password=pg_password,
-            host=pg_host)
+            host=pg_host,
+            port=pg_port)
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
     try:
@@ -515,12 +520,13 @@ def delete_database(pg_user, pg_password, pg_host, database, username):
     cur.close()
     conn.close()
 
-def register_connector_database(pg_user, pg_password, pg_host, database, connector, dataspace, environment):
+def register_connector_database(pg_user, pg_password, pg_host, pg_port, database, connector, dataspace, environment):
     # Connect to the PostgreSQL server
     conn = psycopg2.connect(
             user=pg_user,
             password=pg_password,
             host=pg_host,
+            port=pg_port,
             database=database)
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
@@ -530,12 +536,13 @@ def register_connector_database(pg_user, pg_password, pg_host, database, connect
     cur.close()
     conn.close()
 
-def fix_connector_050_database(pg_user, pg_password, pg_host, database):
+def fix_connector_050_database(pg_user, pg_password, pg_host, pg_port, database):
     # Connect to the PostgreSQL server
     conn = psycopg2.connect(
             user=pg_user,
             password=pg_password,
             host=pg_host,
+            port=pg_port,
             database=database)
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()
@@ -543,12 +550,13 @@ def fix_connector_050_database(pg_user, pg_password, pg_host, database):
     cur.close()
     conn.close()
 
-def check_database_db(pg_user, pg_password, pg_host, database):
+def check_database_db(pg_user, pg_password, pg_host, pg_port, database):
     # Connect to the PostgreSQL server
     conn = psycopg2.connect(
             user=pg_user,
             password=pg_password,
             host=pg_host,
+            port=pg_port,
             database=database)
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     cur = conn.cursor()

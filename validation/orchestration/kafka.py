@@ -20,6 +20,7 @@ def run_kafka_edc_validation(
     *,
     validator: Any,
     experiment_storage: Any,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     if len(connectors) < 2:
         results = [
@@ -33,7 +34,12 @@ def run_kafka_edc_validation(
         return results
 
     try:
-        results = list(validator.run_all(connectors, experiment_dir=experiment_dir) or [])
+        run_kwargs = {
+            "experiment_dir": experiment_dir,
+        }
+        if progress_callback is not None:
+            run_kwargs["progress_callback"] = progress_callback
+        results = list(validator.run_all(connectors, **run_kwargs) or [])
     except Exception as exc:
         results = [
             {

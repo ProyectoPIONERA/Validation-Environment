@@ -1,6 +1,8 @@
 """Stable generic EDC adapter facade import path."""
 
 import json
+import os
+import sys
 
 from adapters.inesdata.adapter import InesdataAdapter
 from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
@@ -58,14 +60,113 @@ class EdcAdapter(InesdataAdapter):
         common_ready, _ = self.infrastructure.verify_common_services_ready_for_level3()
         if common_ready:
             self.infrastructure.announce_level(2, "DEPLOY COMMON SERVICES")
-            print("Existing shared common services are already ready for Level 3. Reusing them for EDC mode.")
+            print(
+                "Existing shared common services are already ready for Level 3. "
+                "Reusing them for the shared local foundation."
+            )
             self.infrastructure.complete_level(2)
             return True
         return self.infrastructure.deploy_infrastructure()
 
+    @staticmethod
+    def _truthy(value):
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _is_level4_common_services_repairable_error(self, error_message):
+        if str(getattr(self, "topology", "local") or "local").strip().lower() != "local":
+            return False
+
+        code = getattr(self.connectors, "_last_runtime_prerequisite_code", None)
+        if code in {"vault_token_mismatch", "vault_token_invalid"}:
+            return True
+
+        normalized = str(error_message or "").lower()
+        return (
+            "local vault token does not match" in normalized
+            or "valid vault management token" in normalized
+        )
+
+    def _level4_common_services_repair_approved(self, error_message):
+        env_value = os.getenv("PIONERA_LEVEL4_REPAIR_COMMON_SERVICES")
+        if env_value is not None:
+            return self._truthy(env_value)
+
+        print(
+            "\nEDC Level 4 detected that the local Vault token no longer matches "
+            "the running shared common services."
+        )
+        print(
+            "Repair requires recreating the local common-srvs namespace, regenerating "
+            "Vault credentials, rerunning Level 2, rerunning Level 3, and retrying Level 4."
+        )
+        print("This is only offered for local topology and can affect both EDC and INESData local deployments.")
+        print(f"Original error: {error_message}")
+
+        if not sys.stdin.isatty():
+            print(
+                "Non-interactive execution detected. Set "
+                "PIONERA_LEVEL4_REPAIR_COMMON_SERVICES=true to allow this local repair explicitly."
+            )
+            return False
+
+        response = input("Type RECREATE COMMON SERVICES to continue: ").strip()
+        return response == "RECREATE COMMON SERVICES"
+
+    def deploy_connectors(self):
+        try:
+            return self.connectors.deploy_connectors()
+        except RuntimeError as exc:
+            if not self._is_level4_common_services_repairable_error(str(exc)):
+                raise
+
+            if not self._level4_common_services_repair_approved(str(exc)):
+                raise
+
+            resetter = getattr(self.infrastructure, "reset_local_shared_common_services", None)
+            if not callable(resetter):
+                resetter = getattr(self.infrastructure, "reset_common_services_for_level4_repair", None)
+            if not callable(resetter):
+                raise RuntimeError(
+                    "EDC Level 4 cannot repair shared common services because the infrastructure "
+                    "adapter does not expose a controlled reset operation."
+                ) from exc
+
+            finalizer = getattr(self.infrastructure, "finalize_local_common_services_reset", None)
+            if not callable(finalizer):
+                finalizer = getattr(self.infrastructure, "finalize_common_services_level4_repair", None)
+            try:
+                print("\nRepairing local shared common services before retrying EDC Level 4...")
+                if not resetter(reason=str(exc)):
+                    raise RuntimeError("EDC Level 4 could not reset local shared common services safely.") from exc
+
+                print("\nRerunning Level 2 after common services repair...")
+                level2_result = self.deploy_infrastructure()
+                if level2_result is False:
+                    raise RuntimeError("EDC Level 4 repair failed while rerunning Level 2.") from exc
+
+                print("\nRerunning Level 3 after common services repair...")
+                level3_result = self.deploy_dataspace()
+                if level3_result is False:
+                    raise RuntimeError("EDC Level 4 repair failed while rerunning Level 3.") from exc
+
+                print("\nRetrying EDC Level 4 after common services repair...")
+                result = self.connectors.deploy_connectors()
+            except Exception:
+                if callable(finalizer):
+                    finalizer(success=False)
+                raise
+
+            if callable(finalizer):
+                finalizer(success=True)
+            return result
+
     def _preview_common_services(self):
         namespace = self.config.NS_COMMON
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
+        release_status_getter = getattr(self.infrastructure, "common_services_release_status", None)
+        release_status = release_status_getter() if callable(release_status_getter) else None
+        release_name_getter = getattr(self.config, "helm_release_common", None)
+        release_name = release_name_getter() if callable(release_name_getter) else "common-srvs"
         ignored_hook_pod = getattr(self.infrastructure, "_is_ignored_transient_hook_pod", None)
         services = {
             "keycloak": {"pod": None, "status": "missing", "ready": False},
@@ -144,18 +245,23 @@ class EdcAdapter(InesdataAdapter):
         if services["vault"]["pod"] and not vault_state["ready"]:
             issues.append("Vault is present but not initialized/unsealed")
 
+        if release_status and release_status != "deployed":
+            issues.append(f"common services Helm release is {release_status}")
+
         ready = (
             services["keycloak"]["ready"]
             and services["minio"]["ready"]
             and services["postgresql"]["ready"]
             and services["vault"]["pod"] is not None
             and vault_state["ready"]
+            and (not release_status or release_status == "deployed")
         )
 
         return {
             "status": "ready" if ready else "missing",
             "action": "reuse" if ready else "deploy_infrastructure",
             "namespace": namespace,
+            "helm_release": {"name": release_name, "status": release_status or "missing"},
             "services": services,
             "vault": vault_state,
             "issues": issues,

@@ -1,8 +1,10 @@
 import json
 import os
+import shutil
 import shlex
 import socket
 import subprocess
+import tempfile
 import time
 import requests
 
@@ -21,6 +23,18 @@ yaml_ruamel.indent(mapping=2, sequence=4, offset=2)
 class INESDataInfrastructureAdapter:
     """Contains INESData infrastructure logic."""
 
+    COMMON_CREDENTIAL_KEYS = (
+        "PG_PASSWORD",
+        "PG_PORT",
+        "KC_USER",
+        "KC_PASSWORD",
+        "MINIO_USER",
+        "MINIO_PASSWORD",
+        "MINIO_ADMIN_USER",
+        "MINIO_ADMIN_PASS",
+    )
+    POSTGRES_SERVICE_PORT = 5432
+
     def __init__(self, run, run_silent, auto_mode_getter, config_adapter=None, config_cls=None):
         self.run = run
         self.run_silent = run_silent
@@ -28,6 +42,7 @@ class INESDataInfrastructureAdapter:
         self.config = config_cls or InesdataConfig
         self.config_adapter = config_adapter or INESDataConfigAdapter(self.config)
         self._last_registration_service_liquibase_issue = None
+        self._vault_repair_temp_backup = None
         self._announced_levels = set()
         self._completed_levels = set()
 
@@ -578,6 +593,113 @@ class INESDataInfrastructureAdapter:
 
             time.sleep(1)
 
+    def wait_for_dataspace_level3_pods(self, namespace, dataspace_name=None, timeout=None):
+        """Wait only for Level 3 dataspace pods.
+
+        A dataspace namespace can already contain Level 4 connector pods from a
+        previous run. Level 3 should not fail because those connector pods are
+        initializing or unhealthy; connector health belongs to Level 4.
+        """
+        timeout = timeout or self.config.TIMEOUT_NAMESPACE
+        dataspace = str(dataspace_name or namespace or "").strip()
+        namespace = str(namespace or "").strip()
+        if not namespace:
+            return False
+
+        selected_prefixes = []
+        if dataspace:
+            selected_prefixes.append(f"{dataspace}-registration-service-")
+        selected_prefixes.append("registration-service-")
+
+        print(f"\nWaiting for Level 3 dataspace pods in namespace '{namespace}'...")
+        start = time.time()
+        last_stale_terminal_notice = None
+
+        while True:
+            result = self.run_silent(f"kubectl get pods -n {shlex.quote(namespace)} --no-headers")
+
+            if result:
+                selected = []
+                ignored = []
+
+                for line in result.splitlines():
+                    columns = line.split()
+                    if len(columns) < 3:
+                        continue
+                    name = columns[0]
+
+                    if any(name.startswith(prefix) for prefix in selected_prefixes):
+                        selected.append(columns)
+                    else:
+                        ignored.append(name)
+
+                if selected:
+                    all_ready = True
+                    ready_running = []
+                    terminal_error = []
+                    progressing = []
+                    for columns in selected:
+                        name = columns[0]
+                        ready = columns[1] if len(columns) > 1 else ""
+                        status = columns[2]
+
+                        is_ready = False
+                        if status == "Running" and "/" in ready:
+                            ready_current, ready_total = ready.split("/", 1)
+                            is_ready = ready_current == ready_total
+                        elif status == "Running" and ready:
+                            is_ready = True
+
+                        if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
+                            terminal_error.append((name, status))
+                            all_ready = False
+                            continue
+
+                        if status != "Running":
+                            progressing.append((name, status))
+                            all_ready = False
+                            continue
+
+                        if is_ready:
+                            ready_running.append(name)
+                            continue
+
+                        progressing.append((name, status))
+                        all_ready = False
+
+                    if all_ready:
+                        if ignored:
+                            print(
+                                "Ignoring non-Level 3 pods while checking dataspace readiness: "
+                                + ", ".join(ignored)
+                            )
+                        print("\nLevel 3 dataspace pods ready:")
+                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                        return True
+
+                    if terminal_error and (ready_running or progressing):
+                        stale_terminal_notice = ", ".join(
+                            f"{name} ({status})" for name, status in terminal_error
+                        )
+                        if stale_terminal_notice != last_stale_terminal_notice:
+                            print(
+                                "\nWaiting for stale Level 3 rollout pods to disappear: "
+                                f"{stale_terminal_notice}"
+                            )
+                            last_stale_terminal_notice = stale_terminal_notice
+                    elif terminal_error:
+                        name, status = terminal_error[0]
+                        print(f"\nLevel 3 pod in error state: {name} ({status})")
+                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                        return False
+
+            if time.time() - start > timeout:
+                print("Timeout waiting for Level 3 dataspace pods")
+                self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                return False
+
+            time.sleep(1)
+
     def port_forward_service(self, namespace, pattern, local_port, remote_port, quiet=False, wait_timeout=None):
         pod = self.get_pod_by_name(namespace, pattern)
 
@@ -662,6 +784,156 @@ class INESDataInfrastructureAdapter:
         if not quiet:
             print(f"{service_label} accessible via port-forward")
         return True, True
+
+    def _configured_pg_port(self):
+        getter = getattr(self.config_adapter, "get_pg_port", None)
+        if callable(getter):
+            return str(getter())
+        return str(getattr(self.config, "PORT_POSTGRES", 5432))
+
+    def _postgres_connection_works(self, host, port, user, password):
+        if not password:
+            return False
+        result = self.run_silent(
+            " ".join(
+                [
+                    f"PGPASSWORD={shlex.quote(str(password))}",
+                    "psql",
+                    "-h",
+                    shlex.quote(str(host)),
+                    "-p",
+                    shlex.quote(str(port)),
+                    "-U",
+                    shlex.quote(str(user)),
+                    "-d",
+                    "postgres",
+                    "-t",
+                    "-A",
+                    "-c",
+                    '"SELECT 1;"',
+                ]
+            )
+        )
+        return bool(result and result.strip() == "1")
+
+    def _set_local_pg_port_override(self, port, persist=False):
+        os.environ["PIONERA_PG_PORT"] = str(port)
+        if persist:
+            config_path = self._common_credentials_deployer_config_path()
+            try:
+                self._write_key_value_updates(config_path, {"PG_PORT": str(port)}, self.COMMON_CREDENTIAL_KEYS)
+            except OSError as exc:
+                print(f"Warning: could not persist PostgreSQL local port override: {exc}")
+
+    def _wait_for_local_port_closed(self, port, timeout=3):
+        deadline = time.time() + max(float(timeout or 3), 0.25)
+        while time.time() <= deadline:
+            if not self._port_is_open("127.0.0.1", port, connect_timeout=0.25):
+                return True
+            time.sleep(0.25)
+        return False
+
+    def _release_stale_postgres_port_forward(self, local_port):
+        """Release only framework-owned PostgreSQL port-forward processes."""
+        namespace = str(self.config.NS_COMMON)
+        local_port = str(local_port)
+        remote_port = str(self.POSTGRES_SERVICE_PORT)
+
+        released = False
+        if self.stop_port_forward_service(namespace, "postgresql", quiet=True):
+            released = True
+
+        # Covers stale port-forward processes whose pod name is no longer current.
+        pattern = (
+            f"kubectl port-forward .*postgresql.* -n {namespace} "
+            f".*{local_port}:{remote_port}"
+        )
+        if self.run(f"pkill -f {shlex.quote(pattern)}", check=False, silent=True) is not None:
+            released = True
+
+        if released and self._wait_for_local_port_closed(int(local_port), timeout=3):
+            return True
+
+        return False
+
+    def _describe_local_port_listener(self, port):
+        port = int(port)
+        probes = [
+            f"ss -ltnp 'sport = :{port}' 2>/dev/null",
+            f"lsof -nP -iTCP:{port} -sTCP:LISTEN 2>/dev/null",
+        ]
+        for command in probes:
+            result = self.run_silent(command)
+            if result:
+                return result.strip()
+        return "Port owner details unavailable. Try: ss -ltnp 'sport = :%s'" % port
+
+    def _ensure_local_postgres_access(self, full_timeout, probe_timeout):
+        pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
+        pg_port = self._configured_pg_port()
+        try:
+            local_pg_port = int(pg_port)
+        except (TypeError, ValueError):
+            print(f"Invalid PG_PORT value: {pg_port}")
+            return False
+
+        print(
+            f"PostgreSQL service port is {self.POSTGRES_SERVICE_PORT}; "
+            f"local client port is {local_pg_port}."
+        )
+
+        if self.wait_for_port("127.0.0.1", local_pg_port, timeout=probe_timeout):
+            if self._postgres_connection_works(pg_host, pg_port, pg_user, pg_password):
+                self._set_local_pg_port_override(pg_port)
+                print("PostgreSQL accessible")
+                return True
+
+            print(
+                f"PostgreSQL local port {pg_port} is open but does not authenticate "
+                "with framework credentials. Checking for stale framework port-forward..."
+            )
+            if self._release_stale_postgres_port_forward(local_pg_port):
+                print(
+                    f"Released stale framework PostgreSQL port-forward on local port {pg_port}."
+                )
+            elif self.wait_for_port("127.0.0.1", local_pg_port, timeout=1):
+                print(
+                    f"PostgreSQL local port {pg_port} is occupied by a process that "
+                    "is not the framework PostgreSQL port-forward."
+                )
+                print(self._describe_local_port_listener(local_pg_port))
+                print(
+                    "Stop that process or free the port manually, then rerun the level. "
+                    "The framework did not terminate unknown processes."
+                )
+                return False
+
+        print(
+            f"Creating port-forward 127.0.0.1:{pg_port} -> "
+            f"common-srvs-postgresql:{self.POSTGRES_SERVICE_PORT}..."
+        )
+        self._set_local_pg_port_override(pg_port)
+
+        if not self.port_forward_service(
+            self.config.NS_COMMON,
+            "postgresql",
+            local_pg_port,
+            self.POSTGRES_SERVICE_PORT,
+            quiet=False,
+            wait_timeout=full_timeout,
+        ):
+            print("Could not establish PostgreSQL access")
+            return False
+
+        if not self._postgres_connection_works(pg_host, pg_port, pg_user, pg_password):
+            print("PostgreSQL port-forward is active but authentication still fails")
+            return False
+
+        print(
+            f"PostgreSQL accessible via port-forward "
+            f"127.0.0.1:{local_pg_port} -> common-srvs-postgresql:{self.POSTGRES_SERVICE_PORT}"
+        )
+        return True
 
     def wait_for_port(self, host, port, timeout=None):
         timeout = timeout or self.config.TIMEOUT_PORT
@@ -946,13 +1218,23 @@ class INESDataInfrastructureAdapter:
             print("Vault already unsealed")
 
         if not self._vault_root_token_valid(pod_name, namespace, root_token):
-            print(
-                "Error: local Vault root token is not valid for the running Vault. "
-                "The Vault persistent state and deployers/shared/common/init-keys-vault.json "
-                "are out of sync. Recreate Level 2 common services or restore the current "
-                "Vault root token before continuing."
-            )
-            return False
+            print("Local Vault root token is not valid for the running Vault. Trying automatic reconciliation...")
+            if self.reconcile_vault_state_for_local_runtime(pod_name=pod_name, namespace=namespace, quiet=True):
+                try:
+                    with open(vault_file_path, "r") as f:
+                        keys = json.load(f)
+                    root_token = keys.get("root_token")
+                except (OSError, json.JSONDecodeError):
+                    root_token = None
+
+            if not self._vault_root_token_valid(pod_name, namespace, root_token):
+                print(
+                    "Error: local Vault root token is not valid for the running Vault. "
+                    "The Vault persistent state and deployers/shared/common/init-keys-vault.json "
+                    "are out of sync. Recreate Level 2 common services or restore the current "
+                    "Vault root token before continuing."
+                )
+                return False
 
         print("Checking KV engine...")
         secrets_list = self.run_silent(
@@ -1048,67 +1330,142 @@ class INESDataInfrastructureAdapter:
         return False
 
     def sync_vault_token_to_deployer_config(self):
+        print("\nSynchronizing Vault token with deployer config...")
+        return self.reconcile_vault_state_for_local_runtime()
+
+    @staticmethod
+    def _read_vault_token_from_deployer_config(config_path):
+        try:
+            with open(config_path, encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if line.startswith("VT_TOKEN="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            return None
+        return None
+
+    def _vault_keys_artifact_path(self):
         ensure_vault_keys_file = getattr(self.config, "ensure_vault_keys_file", None)
-        vault_json_path = ensure_vault_keys_file() if callable(ensure_vault_keys_file) else self.config.vault_keys_path()
+        return ensure_vault_keys_file() if callable(ensure_vault_keys_file) else self.config.vault_keys_path()
+
+    @staticmethod
+    def _read_vault_keys_artifact(vault_json_path):
+        if not vault_json_path or not os.path.exists(vault_json_path):
+            return None, "missing"
+        try:
+            with open(vault_json_path, encoding="utf-8") as handle:
+                return json.load(handle), None
+        except json.JSONDecodeError:
+            return None, "corrupted"
+        except OSError as exc:
+            return None, str(exc)
+
+    def _write_vault_token_to_deployer_config(self, config_path, token):
+        if not token:
+            return False
+        try:
+            self._write_key_value_updates(config_path, {"VT_TOKEN": token}, ("VT_TOKEN",))
+        except OSError as exc:
+            print(f"Error writing {config_path}: {exc}")
+            return False
+        return True
+
+    def _write_vault_keys_artifact_transactionally(self, vault_json_path, vault_data, pod_name, namespace):
+        if not vault_json_path or not vault_data:
+            return False
+
+        token = vault_data.get("root_token")
+        if not token:
+            return False
+
+        with tempfile.TemporaryDirectory(prefix="pionera-vault-artifact-") as temp_dir:
+            backup_path = None
+            if os.path.exists(vault_json_path):
+                backup_path = os.path.join(temp_dir, "init-keys-vault.backup.json")
+                shutil.copy2(vault_json_path, backup_path)
+
+            temp_path = os.path.join(temp_dir, "init-keys-vault.json")
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(vault_data, handle, indent=2)
+                handle.write("\n")
+
+            os.makedirs(os.path.dirname(vault_json_path), exist_ok=True)
+            os.replace(temp_path, vault_json_path)
+
+            if self._vault_root_token_valid(pod_name, namespace, token):
+                return True
+
+            if backup_path and os.path.exists(backup_path):
+                os.replace(backup_path, vault_json_path)
+            elif os.path.exists(vault_json_path):
+                os.remove(vault_json_path)
+            return False
+
+    def reconcile_vault_state_for_local_runtime(self, pod_name=None, namespace=None, quiet=False):
+        """Keep the shared local Vault token artifact and deployer.config aligned.
+
+        Vault does not expose the root token after initialization. This method
+        only reconciles already available local sources that validate against
+        the running Vault, and never logs token values.
+        """
+        namespace = namespace or self.config.NS_COMMON
+        vault_json_path = self._vault_keys_artifact_path()
         config_path = self._vault_token_deployer_config_path()
 
-        print("\nSynchronizing Vault token with deployer config...")
+        if not quiet:
+            print("Reconciling shared Vault token state...")
 
-        if not os.path.exists(vault_json_path):
-            print(f"File not found: {vault_json_path}")
+        pod_name = pod_name or self.get_pod_by_name(namespace, "vault")
+        if not pod_name:
+            if not quiet:
+                print(f"Vault pod not found in namespace {namespace}")
             return False
 
-        if not os.path.exists(config_path):
-            print(f"File not found: {config_path}")
-            return False
+        vault_data, vault_error = self._read_vault_keys_artifact(vault_json_path)
+        artifact_token = (vault_data or {}).get("root_token")
+        config_token = self._read_vault_token_from_deployer_config(config_path)
 
-        try:
-            with open(vault_json_path) as f:
-                vault_data = json.load(f)
-        except json.JSONDecodeError:
-            print(f"Error: {vault_json_path} is corrupted")
-            return False
+        if artifact_token and self._vault_root_token_valid(pod_name, namespace, artifact_token):
+            if not self._write_vault_token_to_deployer_config(config_path, artifact_token):
+                return False
+            if not quiet:
+                print("Vault token synchronized from shared artifact")
+            return True
 
-        new_token = vault_data.get("root_token")
-        if not new_token:
-            print(f"Error: root_token not found in {vault_json_path}")
-            return False
+        if config_token and self._vault_root_token_valid(pod_name, namespace, config_token):
+            if vault_data and vault_data.get("unseal_keys_hex"):
+                repaired_data = dict(vault_data)
+                repaired_data["root_token"] = config_token
+                if not self._write_vault_keys_artifact_transactionally(
+                    vault_json_path,
+                    repaired_data,
+                    pod_name,
+                    namespace,
+                ):
+                    if not quiet:
+                        print("Could not repair shared Vault keys artifact transactionally")
+                    return False
+                if not quiet:
+                    print("Shared Vault keys artifact repaired from valid deployer.config token")
+            elif not quiet:
+                print(
+                    "Valid Vault token found in deployer.config, but the shared keys artifact "
+                    f"is {vault_error or 'missing unseal keys'} and cannot be fully rebuilt automatically"
+                )
 
-        print("Token obtained from Vault keys artifact")
+            if not self._write_vault_token_to_deployer_config(config_path, config_token):
+                return False
+            if not quiet:
+                print("Vault token synchronized from deployer.config")
+            return True
 
-        try:
-            with open(config_path) as f:
-                lines = f.readlines()
-        except IOError as e:
-            print(f"Error reading {config_path}: {e}")
-            return False
-
-        found = False
-        updated_lines = []
-
-        for line in lines:
-            if line.strip().startswith("VT_TOKEN"):
-                updated_lines.append(f"VT_TOKEN={new_token}\n")
-                found = True
-                print("VT_TOKEN line updated")
-            else:
-                updated_lines.append(line)
-
-        if not found:
-            if updated_lines and updated_lines[-1].strip():
-                updated_lines.append("\n")
-            updated_lines.append(f"VT_TOKEN={new_token}\n")
-            print("VT_TOKEN line added")
-
-        try:
-            with open(config_path, "w") as f:
-                f.writelines(updated_lines)
-        except IOError as e:
-            print(f"Error writing {config_path}: {e}")
-            return False
-
-        print("Vault token synchronized\n")
-        return True
+        if not quiet:
+            print(
+                "No valid local Vault token candidate was found. The running Vault and local "
+                "artifacts are out of sync."
+            )
+        return False
 
     def _vault_token_deployer_config_path(self):
         infrastructure_config_path = getattr(self.config, "infrastructure_deployer_config_path", None)
@@ -1238,11 +1595,152 @@ class INESDataInfrastructureAdapter:
         decoded = self.run_silent(f"printf '%s' '{value}' | base64 -d")
         return decoded if decoded is not None else None
 
-    def _common_services_release_exists(self):
-        result = self.run_silent(
-            f"helm status {self.config.helm_release_common()} -n {self.config.NS_COMMON}"
+    def _common_credentials_deployer_config_path(self):
+        infrastructure_config_path = getattr(self.config, "infrastructure_deployer_config_path", None)
+        if callable(infrastructure_config_path):
+            return infrastructure_config_path()
+        return self.config.deployer_config_path()
+
+    @staticmethod
+    def _read_key_value_file(path):
+        values = {}
+        if not path or not os.path.isfile(path):
+            return values
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    values[key.strip()] = value.strip()
+        except OSError:
+            return values
+        return values
+
+    @staticmethod
+    def _write_key_value_updates(path, updates, preferred_order):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lines = []
+        seen = set()
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.rstrip("\n")
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        key, _value = stripped.split("=", 1)
+                        key = key.strip()
+                        if key in updates:
+                            lines.append(f"{key}={updates[key]}\n")
+                            seen.add(key)
+                            continue
+                    lines.append(raw_line if raw_line.endswith("\n") else f"{raw_line}\n")
+
+        ordered_keys = [key for key in preferred_order if key in updates and key not in seen]
+        ordered_keys.extend(sorted(key for key in updates if key not in seen and key not in ordered_keys))
+        for key in ordered_keys:
+            lines.append(f"{key}={updates[key]}\n")
+
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+
+    def sync_common_credentials_from_kubernetes(self):
+        """Recover local common-service credentials from the running cluster.
+
+        Level 3 must talk to the already deployed common services. If local
+        deployer.config was copied from examples or another checkout, the
+        Kubernetes secrets are the effective source of truth until Level 2 is
+        recreated.
+        """
+        config_path = self._common_credentials_deployer_config_path()
+        current = self._read_key_value_file(config_path)
+
+        recovered = {
+            "PG_PASSWORD": self._secret_value(
+                self.config.NS_COMMON,
+                "common-srvs-postgresql",
+                "postgres-password",
+            ),
+            "KC_USER": self._secret_value(
+                self.config.NS_COMMON,
+                "common-srvs-keycloak",
+                "admin-user",
+            ),
+            "KC_PASSWORD": self._secret_value(
+                self.config.NS_COMMON,
+                "common-srvs-keycloak",
+                "admin-password",
+            ),
+            "MINIO_USER": self._secret_value(
+                self.config.NS_COMMON,
+                "common-srvs-minio",
+                "rootUser",
+            ),
+            "MINIO_PASSWORD": self._secret_value(
+                self.config.NS_COMMON,
+                "common-srvs-minio",
+                "rootPassword",
+            ),
+        }
+        recovered["MINIO_ADMIN_USER"] = recovered["MINIO_USER"]
+        recovered["MINIO_ADMIN_PASS"] = recovered["MINIO_PASSWORD"]
+
+        updates = {}
+        for key, value in recovered.items():
+            if value in (None, ""):
+                continue
+            if current.get(key) != value:
+                updates[key] = value
+
+        if not updates:
+            return False
+
+        try:
+            self._write_key_value_updates(config_path, updates, self.COMMON_CREDENTIAL_KEYS)
+        except OSError as exc:
+            print(f"Warning: could not synchronize local common credentials: {exc}")
+            return False
+
+        print(
+            "Synchronized local common service credentials from Kubernetes secrets: "
+            + ", ".join(sorted(updates))
         )
-        return result is not None
+        return True
+
+    def _common_services_release_status(self):
+        release_name = self.config.helm_release_common()
+        namespace = self.config.NS_COMMON
+        result = self.run_silent(
+            f"helm status {shlex.quote(str(release_name))} -n {shlex.quote(str(namespace))} -o json"
+        )
+        if result:
+            try:
+                payload = json.loads(result)
+            except json.JSONDecodeError:
+                payload = None
+            if payload:
+                info = payload.get("info", {}) or {}
+                status = info.get("status") or payload.get("status")
+                if status:
+                    return str(status).strip().lower()
+
+        result = self.run_silent(
+            f"helm status {shlex.quote(str(release_name))} -n {shlex.quote(str(namespace))}"
+        )
+        if not result:
+            return None
+
+        for line in result.splitlines():
+            if line.strip().upper().startswith("STATUS:"):
+                return line.split(":", 1)[1].strip().lower() or "unknown"
+        return "unknown"
+
+    def common_services_release_status(self):
+        return self._common_services_release_status()
+
+    def _common_services_release_exists(self):
+        return self._common_services_release_status() is not None
 
     def _common_services_release_recoverable_after_helm_failure(self):
         if not self._common_services_release_exists():
@@ -1253,6 +1751,113 @@ class INESDataInfrastructureAdapter:
             "Continuing with framework-level checks."
         )
         return True
+
+    def _repair_failed_common_services_helm_release(self, values_path, common_dir):
+        status = self._common_services_release_status()
+        if status != "failed":
+            return True
+
+        print(
+            "\nCommon services are running, but Helm still marks release "
+            f"'{self.config.helm_release_common()}' as failed."
+        )
+        print("Re-running Helm after runtime readiness to reconcile release status...")
+
+        repair_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+        repaired = self.deploy_helm_release(
+            self.config.helm_release_common(),
+            self.config.NS_COMMON,
+            values_path,
+            cwd=common_dir,
+            wait=False,
+            timeout_seconds=repair_timeout,
+        )
+        if not repaired:
+            print("Helm release status repair failed")
+            return False
+
+        status = self._common_services_release_status()
+        if status != "deployed":
+            print(f"Helm release status is still {status or 'unknown'} after repair")
+            return False
+
+        print("Helm release status recovered to deployed")
+        return True
+
+    def _begin_temporary_vault_keys_backup_for_repair(self):
+        self.finalize_local_common_services_reset(success=True)
+        vault_json_path = self._vault_keys_artifact_path()
+        if not vault_json_path or not os.path.exists(vault_json_path):
+            return None
+
+        temp_dir = tempfile.TemporaryDirectory(prefix="pionera-vault-repair-")
+        backup_path = os.path.join(temp_dir.name, "init-keys-vault.json")
+        shutil.move(vault_json_path, backup_path)
+        self._vault_repair_temp_backup = {
+            "temp_dir": temp_dir,
+            "backup_path": backup_path,
+            "original_path": vault_json_path,
+        }
+        print("Temporarily moved stale Vault keys artifact for repair")
+        return backup_path
+
+    def finalize_local_common_services_reset(self, success=True):
+        backup = getattr(self, "_vault_repair_temp_backup", None)
+        if not backup:
+            return
+
+        temp_dir = backup.get("temp_dir")
+        backup_path = backup.get("backup_path")
+        original_path = backup.get("original_path")
+        try:
+            if not success and backup_path and original_path and os.path.exists(backup_path) and not os.path.exists(original_path):
+                os.makedirs(os.path.dirname(original_path), exist_ok=True)
+                shutil.move(backup_path, original_path)
+                print("Restored previous Vault keys artifact after failed repair")
+        finally:
+            if temp_dir:
+                temp_dir.cleanup()
+            self._vault_repair_temp_backup = None
+
+    def finalize_common_services_level4_repair(self, success=True):
+        self.finalize_local_common_services_reset(success=success)
+
+    def _wait_for_namespace_absent(self, namespace, timeout=120, poll_interval=3):
+        deadline = time.time() + max(int(timeout), 1)
+        namespace_arg = shlex.quote(str(namespace))
+        while time.time() <= deadline:
+            result = self.run_silent(f"kubectl get namespace {namespace_arg} --no-headers")
+            if not result:
+                return True
+            time.sleep(max(int(poll_interval), 1))
+        print(f"Namespace '{namespace}' did not disappear in time")
+        return False
+
+    def reset_local_shared_common_services(self, reason=None):
+        print("\nResetting local shared common services...")
+        if reason:
+            print(f"Reset reason: {reason}")
+        print("This removes the local common-srvs namespace and regenerates Vault credentials on the next Level 2 run.")
+
+        self.stop_port_forward_service(self.config.NS_COMMON, "postgresql", quiet=True)
+        self.stop_port_forward_service(self.config.NS_COMMON, "vault", quiet=True)
+        self.stop_port_forward_service(self.config.NS_COMMON, "minio", quiet=True)
+        self._begin_temporary_vault_keys_backup_for_repair()
+
+        release_arg = shlex.quote(str(self.config.helm_release_common()))
+        namespace_arg = shlex.quote(str(self.config.NS_COMMON))
+        self.run(f"helm uninstall {release_arg} -n {namespace_arg}", check=False)
+        self.run(f"kubectl delete namespace {namespace_arg} --ignore-not-found=true", check=False)
+
+        if not self._wait_for_namespace_absent(self.config.NS_COMMON):
+            self.finalize_local_common_services_reset(success=False)
+            return False
+
+        print("Local shared common services reset completed")
+        return True
+
+    def reset_common_services_for_level4_repair(self, reason=None):
+        return self.reset_local_shared_common_services(reason=reason)
 
     def _common_services_config_drift(self):
         if not self._common_services_release_exists():
@@ -1324,16 +1929,7 @@ class INESDataInfrastructureAdapter:
         full_timeout = max(int(getattr(self.config, "TIMEOUT_PORT", 30)), 1)
         probe_timeout = max(min(3, full_timeout), 1)
 
-        postgres_ok, _ = self._ensure_local_service_access(
-            "PostgreSQL",
-            self.config.NS_COMMON,
-            "postgresql",
-            self.config.PORT_POSTGRES,
-            5432,
-            probe_timeout=probe_timeout,
-            wait_timeout=full_timeout,
-        )
-        if not postgres_ok:
+        if not self._ensure_local_postgres_access(full_timeout, probe_timeout):
             return False
 
         vault_ok, _ = self._ensure_local_service_access(
@@ -1370,12 +1966,14 @@ class INESDataInfrastructureAdapter:
         start = time.time()
         next_progress = start + max(float(poll_interval) * 5, 15)
         pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
+        pg_port = self._configured_pg_port()
         registration_db = self.config.registration_db_name()
         sql = "SELECT to_regclass('public.edc_participant');"
 
         while time.time() - start <= timeout:
             result = self.run_silent(
-                f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
+                f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+                f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
                 f"-d {registration_db} -t -A -c \"{sql}\""
             )
 
@@ -1394,9 +1992,11 @@ class INESDataInfrastructureAdapter:
         if not quiet:
             print("Timeout waiting for registration-service schema readiness")
             self.run(
-                f"PGPASSWORD={pg_password} psql -h {pg_host} -U {pg_user} "
+                f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+                f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
                 f"-d {registration_db} -c \"\\dt public.*\"",
                 check=False,
+                silent=True,
             )
         return False
 
@@ -1598,6 +2198,10 @@ class INESDataInfrastructureAdapter:
         """Ensure Level 2 leaves common services stable enough for Level 3."""
         common_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
         common_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
+        release_status = self._common_services_release_status()
+        if release_status and release_status != "deployed":
+            return False, f"common services Helm release is {release_status}"
+
         if not self.wait_for_level2_service_pods(
             self.config.NS_COMMON,
             timeout=common_ready_timeout,
@@ -1621,8 +2225,17 @@ class INESDataInfrastructureAdapter:
     def verify_dataspace_ready_for_level4(self):
         """Ensure Level 3 leaves dataspace services stable enough for Level 4."""
         self._last_registration_service_liquibase_issue = None
-        if not self.wait_for_namespace_stability(self.config.namespace_demo(), duration=12, poll_interval=3):
-            return False, "dataspace namespace did not remain stable"
+        dataspace_name_getter = getattr(self.config, "dataspace_name", None)
+        dataspace_name = (
+            dataspace_name_getter()
+            if callable(dataspace_name_getter)
+            else getattr(self.config, "DS_NAME", self.config.namespace_demo())
+        )
+        if not self.wait_for_dataspace_level3_pods(
+            self.config.namespace_demo(),
+            dataspace_name=dataspace_name,
+        ):
+            return False, "Level 3 dataspace pods did not become ready"
 
         quick_schema_timeout = 15
         final_schema_timeout = 105
@@ -1763,8 +2376,14 @@ class INESDataInfrastructureAdapter:
         if not self.setup_vault(self.config.NS_COMMON):
             self._fail("Error configuring Vault")
 
-        if not self.sync_vault_token_to_deployer_config():
+        if not self.reconcile_vault_state_for_local_runtime():
             print("Warning: Could not synchronize Vault token")
+
+        if not self._repair_failed_common_services_helm_release(values_path, common_dir):
+            self._fail(
+                "Level 2 could not recover common services Helm release",
+                root_cause="Helm release remained failed after runtime services became ready",
+            )
 
         common_ready, root_cause = self.verify_common_services_ready_for_level3()
         if not common_ready:
