@@ -1,8 +1,8 @@
 ENVIRONMENT=DEV
-KC_URL=http://keycloak-admin.pionera.oeg.fi.upm.es
-KC_INTERNAL_URL=http://keycloak.pionera.oeg.fi.upm.es
-KEYCLOAK_HOSTNAME=keycloak.pionera.oeg.fi.upm.es
-KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.pionera.oeg.fi.upm.es
+KC_URL=http://auth.pionera.oeg.fi.upm.es
+KC_INTERNAL_URL=http://auth.pionera.oeg.fi.upm.es
+KEYCLOAK_HOSTNAME=auth.pionera.oeg.fi.upm.es
+KEYCLOAK_ADMIN_HOSTNAME=admin.auth.pionera.oeg.fi.upm.es
 KC_USER=admin
 KC_PASSWORD=change-me
 PG_HOST=localhost
