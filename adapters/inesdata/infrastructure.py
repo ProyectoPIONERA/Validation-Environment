@@ -1522,6 +1522,13 @@ class INESDataInfrastructureAdapter:
         minio_values = values.get("minio", {})
         add_row_value("MINIO_USER", "minio.rootUser", minio_user, minio_values.get("rootUser"))
         add_row_value("MINIO_PASSWORD", "minio.rootPassword", minio_password, minio_values.get("rootPassword"))
+        domain_base = config.get("DOMAIN_BASE")
+        if domain_base:
+            add_row_value("DOMAIN_BASE", "keycloak.ingress.hostname", f"auth.{domain_base}", values["keycloak"]["ingress"]["hostname"])
+            add_row_value("DOMAIN_BASE", "keycloak.adminIngress.hostname", f"admin.auth.{domain_base}", values["keycloak"]["adminIngress"]["hostname"])
+            add_row_value("DOMAIN_BASE", "minio.ingress.hosts", f"minio.{domain_base}", values.get("minio", {}).get("ingress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("ingress", {}).get("hosts") else "")
+            add_row_value("DOMAIN_BASE", "minio.consoleIngress.hosts", f"console.minio-s3.{domain_base}", values.get("minio", {}).get("consoleIngress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("consoleIngress", {}).get("hosts") else "")
+
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
@@ -1550,6 +1557,36 @@ class INESDataInfrastructureAdapter:
             values["minio"]["rootUser"] = minio_user
         if minio_password:
             values["minio"]["rootPassword"] = minio_password
+
+        domain_base = config.get("DOMAIN_BASE")
+        if domain_base:
+            values["keycloak"]["ingress"]["hostname"] = f"auth.{domain_base}"
+            values["keycloak"]["adminIngress"]["hostname"] = f"admin.auth.{domain_base}"
+            
+            master_json_str = values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"]
+            try:
+                import json
+                master_json_data = json.loads(master_json_str)
+                if "attributes" not in master_json_data:
+                    master_json_data["attributes"] = {}
+                master_json_data["attributes"]["frontendUrl"] = f"http://admin.auth.{domain_base}"
+                values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"] = json.dumps(master_json_data, indent=2)
+            except Exception as e:
+                print(f"Warning: Could not update frontendUrl in master.json: {e}")
+
+            if "minio" in values and "ingress" in values["minio"]:
+                values["minio"]["ingress"]["hosts"] = [f"minio.{domain_base}"]
+            if "minio" in values and "consoleIngress" in values["minio"]:
+                values["minio"]["consoleIngress"]["hosts"] = [f"console.minio-s3.{domain_base}"]
+
+            # Also update TLS hosts if they exist
+            if "extraTls" in values["keycloak"]["ingress"]:
+                for tls in values["keycloak"]["ingress"]["extraTls"]:
+                    tls["hosts"] = [f"auth.{domain_base}"]
+            if "extraTls" in values["keycloak"]["adminIngress"]:
+                for tls in values["keycloak"]["adminIngress"]["extraTls"]:
+                    tls["hosts"] = [f"admin.auth.{domain_base}"]
+
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
