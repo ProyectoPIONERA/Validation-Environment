@@ -6,35 +6,37 @@ import * as $rdf from "rdflib";
 })
 export class SemanticFileValidatorService {
 
+  // Formatos soportados por rdflib en navegador
   private readonly FORMATS = [
-    "text/turtle",
-    "application/rdf+xml",
-    "application/ld+json",
-    "text/n3"
+    "text/turtle",             // Turtle
+    "application/rdf+xml",     // RDF/XML
+    "application/ld+json",     // JSON-LD
+    "text/n3"                  // Notation3
   ];
 
-  private readonly BASE_IRI = "urn:semantic-file:";
+  private readonly BASE_IRI = "urn:semantic-file:"; // identificador ficticio
 
   constructor() {}
 
   async isASemanticFile(file: File): Promise<boolean> {
     try {
       const text = await file.text();
+      const store = $rdf.graph();
 
       for (const format of this.FORMATS) {
         try {
-          const store = $rdf.graph();
+          // Intentamos parsear en cada formato conocido
           $rdf.parse(text, store, this.BASE_IRI, format);
-          return true;
+          return true; // ✅ El archivo contiene RDF válido
         } catch (e) {
-          // Try the next RDF serialization supported by rdflib.
+          // fallo → probar siguiente formato
         }
       }
 
-      return false;
+      return false; // ❌ Ningún formato RDF lo pudo interpretar
 
     } catch {
-      return false;
+      return false; // ❌ error leyendo archivo → no es semántico
     }
   }
 }

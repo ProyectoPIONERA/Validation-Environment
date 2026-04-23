@@ -176,9 +176,9 @@ export class AssetService {
     );
   }
 
-  testRdfAsset(ontologyUrl: string,
+  testRdfAsset(ontologyUrl: string, 
                   shaclUrl: string,
-                      rdfFile: File,
+                      rdfFile: File,    
                         format: string): Observable<any> {
 
     const formData = new FormData();

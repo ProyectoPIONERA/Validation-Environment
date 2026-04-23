@@ -7,19 +7,21 @@ import { Observable } from 'rxjs';
 import { environment } from "src/environments/environment";
 import { Ontology } from '../models/ontology';
 
-const DEFAULT_LOCAL_BASE_URL = 'http://ontology-hub-demo.dev.ds.dataspaceunit.upm';
+const BASE_URL = 'http://ontology-hub-demo.dev.ds.dataspaceunit.upm';
+const ADMIN_USER = 'admin@gmail.com';
+const ADMIN_PASSWORD = 'admin1234';
 
 @Injectable({
   providedIn: 'root'
 })
 export class OntologyService{
-
+    
     public constructor(private http: HttpClient){
 
     }
 
     get ontologyBaseUrl(): string {
-        return environment.runtime.ontologyUrl || (environment.production ? '' : DEFAULT_LOCAL_BASE_URL);
+        return  environment.runtime.ontologyUrl || BASE_URL;
     }
 
     public getOntologyLists(): Observable<Ontology[]> {
@@ -30,32 +32,30 @@ export class OntologyService{
     public postUploadShacl(file: File, prefix: string, vocabUrl: string): Observable<any> {
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('user', ADMIN_USER);
+        formData.append('password', ADMIN_PASSWORD);
         formData.append('prefix', prefix);
         formData.append('vocabUrl', vocabUrl);
-
-        const adminUser = `${environment.runtime.ontologyAdminUser || ''}`.trim();
-        const adminPassword = `${environment.runtime.ontologyAdminPassword || ''}`.trim();
-        if (adminUser) {
-            formData.append('user', adminUser);
-        }
-        if (adminPassword) {
-            formData.append('password', adminPassword);
-        }
 
         const url = `${this.ontologyBaseUrl}/dataset/api/v2/vocabulary/artifacts/shapes`;
         return this.http.post(url, formData);
     }
 
     /**
-     * Builds Ontology Hub public URLs for ontology and SHACL artifacts.
+     * BuildingUrl
+     * For re construct ontology hub Urls for ontology and shacl files
      */
     public buildUrl(prefix: string, type: "ontology" | "shacl", version: string|null):string{
+        //Ontologia http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset/vocabs/s4auto/versions/2026-04-16.n3
+        //Shacl http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset/vocabs/s4auto/artifacts/shapes/TestGeneradosSaref4Grid.txt
+        console.log(prefix, type, version);
         let url = `${this.ontologyBaseUrl}/dataset/vocabs/${prefix}`;
         if(type === 'ontology'){
             url += `/versions/${version}.n3`;
         }else if(type === 'shacl' ){
             url += `/artifacts/shapes/${version}`;
         }
+        console.log(url);
         return url;
     }
 }

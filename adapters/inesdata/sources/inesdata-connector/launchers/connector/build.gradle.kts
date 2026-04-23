@@ -131,6 +131,7 @@ dependencies {
 
     // Ontology Validator
     implementation(project(":extensions:ontology-validator"))
+    implementation(project(":extensions:ontology-validator-dataplane-extension"))
 
     // Vulnerabilities
     implementation(libs.google.protobuf)
