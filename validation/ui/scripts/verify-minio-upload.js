@@ -58,7 +58,7 @@ async function main() {
   const reportPath = process.env.UPLOAD_REPORT_PATH || findLatestReport();
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
 
-  const endpoint = process.env.MINIO_ENDPOINT || "minio.dev.ed.dataspaceunit.upm";
+  const endpoint = process.env.MINIO_ENDPOINT || "minio.pionera.oeg.fi.upm.es";
   const port = Number.parseInt(process.env.MINIO_PORT || "80", 10);
   const useSSL = asBool(process.env.MINIO_USE_SSL, false);
 

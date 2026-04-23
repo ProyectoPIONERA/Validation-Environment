@@ -30,7 +30,7 @@ import warnings
 from urllib.parse import urlparse
 
 URL_PRO = '.dataspaceunit-project.eu'
-URL_DEV = '.dev.ds.dataspaceunit.upm'
+URL_DEV = '.pionera.oeg.fi.upm.es'
 
 
 INFRASTRUCTURE_MANAGED_KEYS = {
@@ -674,7 +674,7 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
 
 def common_access_urls(dataspace, environment, config):
     protocol = access_protocol(environment)
-    domain_base = str(config.get("DOMAIN_BASE", "dev.ed.dataspaceunit.upm")).strip() or "dev.ed.dataspaceunit.upm"
+    domain_base = str(config.get("DOMAIN_BASE", "pionera.oeg.fi.upm.es")).strip() or "pionera.oeg.fi.upm.es"
     keycloak_hostname = (
         clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
         or clean_hostname(config.get("KC_INTERNAL_URL"))
@@ -759,12 +759,13 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
     keycloak_admin.change_current_realm(realm_name)
 
     # Check if the client scope exists and create it if it doesn't
-    click.echo(f'  + Creating scope "dataspaceunit-dataspace-audience"' )
+    click.echo(f'  + Checking scope "dataspaceunit-dataspace-audience"' )
     client_scopes = keycloak_admin.get_client_scopes()
-    if not any(scope['name'] == 'dataspaceunit-dataspace-audience' for scope in client_scopes):
+    scope = next((s for s in client_scopes if s['name'] == 'dataspaceunit-dataspace-audience'), None)
+    if scope is None:
         dataspace_audience_payload = {
             "name": "dataspaceunit-dataspace-audience",
-            "description": f"Dataspaceunit: Add audience for {dataspace_name} dataspace",
+            "description": f"Dataspaceunit: Add audience for {realm_name} dataspace",
             "protocol": "openid-connect",
             "attributes": {
                 "display.on.consent.screen": "false",
@@ -775,17 +776,28 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                     "name": "add-namespace-audience",
                     "protocol": "openid-connect",
                     "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": False,
                     "config": {
-                        "included.client.audience": "",
-                        "included.custom.audience": f"{keycloak_url}/realms/{realm_name}",
                         "id.token.claim": "false",
+                        "token.introspection.claim": "true",
                         "access.token.claim": "true",
-                        "token.introspection.claim": "true"
+                        "included.custom.audience": f"{keycloak_url}/realms/{realm_name}",
+                        "userinfo.token.claim": "false"
                     }
                 }
             ]
         }
         keycloak_admin.create_client_scope(payload=dataspace_audience_payload)
+        click.echo(f'  + Created scope "dataspaceunit-dataspace-audience"' )
+    else:
+        # Update existing scope to ensure domain changes are propagated
+        mapper = next((m for m in scope.get('protocolMappers', []) if m['name'] == 'add-namespace-audience'), None)
+        if mapper:
+            if mapper['config'].get('included.custom.audience') != f"{keycloak_url}/realms/{realm_name}":
+                mapper['config']['included.custom.audience'] = f"{keycloak_url}/realms/{realm_name}"
+                # Use positional arguments for update_client_scope
+                keycloak_admin.update_client_scope(scope['id'], scope)
+                click.echo(f'  + Updated scope "dataspaceunit-dataspace-audience" with new domain' )
 
     click.echo(f'  + Creating scope "dataspaceunit-nbf-claim"' )
     if not any(scope['name'] == 'dataspaceunit-nbf-claim' for scope in client_scopes):
@@ -848,7 +860,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                 "post.logout.redirect.uris": "+",
                 "backchannel.logout.session.required": True
             },
-            "defaultClientScopes":["dataspaceunit-dataspace-audience","dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
+            "defaultClientScopes":["dataspaceunit-dataspace-audience", "profile", "email", "acr", "web-origins", "roles"]
         }
         keycloak_admin.create_client(payload=new_client)
 
@@ -933,7 +945,7 @@ def create_manager_group(keycloak_admin, realm_name):
 def create_client(keycloak_admin, dataspace, client_name, environment):
     clients = keycloak_admin.get_clients()
     client = next((client for client in clients if client['clientId'] == client_name), None)
-    default_scopes = ["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "roles"]
+    default_scopes = ["dataspaceunit-dataspace-audience", "profile", "email", "acr", "roles"]
     if client is None:
         new_client = {
             "clientId": client_name,

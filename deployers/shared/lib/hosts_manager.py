@@ -272,9 +272,9 @@ def _build_common_entries(config: dict[str, Any], *, address: str) -> list[HostE
     if domain_base:
         hostnames.extend(
             [
-                f"keycloak.{domain_base}",
+                f"auth.{domain_base}",
                 f"minio.{domain_base}",
-                f"keycloak-admin.{domain_base}",
+                f"admin.auth.{domain_base}",
                 f"console.minio-s3.{domain_base}",
             ]
         )

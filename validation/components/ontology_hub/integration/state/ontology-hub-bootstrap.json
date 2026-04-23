@@ -12,7 +12,7 @@
   "creationOutcome": {
     "created": true,
     "duplicateByPrefix": false,
-    "url": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset/vocabs/s4grid",
+    "url": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/dataset/vocabs/s4grid",
     "responseStatus": 200,
     "redirectTarget": "",
     "errorMessage": "",
@@ -20,7 +20,7 @@
     "creationNamespace": "https://saref.etsi.org/saref4grid/",
     "method": "uri"
   },
-  "editUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/edition/vocabs/s4grid",
+  "editUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/edition/vocabs/s4grid",
   "managedVocabulary": false,
   "workflow": {
     "created": true,
@@ -62,6 +62,6 @@
       "uri": "http://schema.org/Person"
     }
   },
-  "baseUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+  "baseUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es",
   "createdAt": "2026-04-06T14:31:31.445Z"
 }

@@ -40,7 +40,7 @@
     },
     {
       "key": "dsDomain",
-      "value": "dev.ds.dataspaceunit.upm",
+      "value": "pionera.oeg.fi.upm.es",
       "type": "text",
       "enabled": true
     },
@@ -52,7 +52,7 @@
     },
     {
       "key": "keycloakUrl",
-      "value": "http://keycloak.dev.ed.dataspaceunit.upm",
+      "value": "http://keycloak.pionera.oeg.fi.upm.es",
       "type": "text",
       "enabled": true
     },

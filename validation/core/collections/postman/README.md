@@ -67,9 +67,9 @@ Las variables base que debe contener son:
   "provider_password": "<copiar localmente>",
   "consumer_user": "user-conn-company-demo",
   "consumer_password": "<copiar localmente>",
-  "dsDomain": "dev.ds.dataspaceunit.upm",
+  "dsDomain": "pionera.oeg.fi.upm.es",
   "dataspace": "demo",
-  "keycloakUrl": "http://keycloak.dev.ed.dataspaceunit.upm",
+  "keycloakUrl": "http://keycloak.pionera.oeg.fi.upm.es",
   "keycloakClientId": "dataspace-users",
   "providerProtocolAddress": "http://conn-citycouncil-demo:19194/protocol",
   "consumerProtocolAddress": "http://conn-company-demo:19194/protocol"

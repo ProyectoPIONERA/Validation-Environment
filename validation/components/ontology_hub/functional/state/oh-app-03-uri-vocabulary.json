@@ -1,7 +1,7 @@
 {
   "prefix": "saref4grid",
   "title": "saref4grid",
-  "url": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset/vocabs/saref4grid",
+  "url": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/dataset/vocabs/saref4grid",
   "method": "uri",
   "reusedExistingImport": true,
   "catalogLabel": "saref4grid",

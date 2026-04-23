@@ -180,7 +180,7 @@ def resolve_ontology_hub_runtime(
     ds_domain = (
         current_env.get("UI_DS_DOMAIN")
         or deployer_config.get("DS_DOMAIN_BASE")
-        or "dev.ds.dataspaceunit.upm"
+        or "pionera.oeg.fi.upm.es"
     ).strip()
     resolved_base_url = (
         base_url

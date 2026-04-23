@@ -28,8 +28,8 @@ class InesdataConfig:
     }
 
     MINIKUBE_DRIVER = "docker"
-    MINIKUBE_CPUS = 6
-    MINIKUBE_MEMORY = 8192
+    MINIKUBE_CPUS = 2
+    MINIKUBE_MEMORY = 4096
     MINIKUBE_PROFILE = "minikube"
     MINIKUBE_ADDONS = ["ingress"]
     MINIKUBE_IP = "192.168.49.2"
@@ -283,13 +283,15 @@ class InesdataConfig:
     @classmethod
     def host_alias_domains(cls):
         ds_name = cls.dataspace_name()
-        ds_domain = cls.ds_domain_base() or "dev.ds.dataspaceunit.upm"
+        domain = cls.ds_domain_base() or "pionera.oeg.fi.upm.es"
         return [
-            "keycloak.dev.ed.dataspaceunit.upm",
-            "keycloak-admin.dev.ed.dataspaceunit.upm",
-            "minio.dev.ed.dataspaceunit.upm",
-            "console.minio-s3.dev.ed.dataspaceunit.upm",
-            f"registration-service-{ds_name}.{ds_domain}"
+            f"auth.{domain}",
+            f"admin.auth.{domain}",
+            f"minio.{domain}",
+            f"console.minio-s3.{domain}",
+            f"registration-service-{ds_name}.{domain}",
+            f"ontology-hub-{ds_name}.{domain}",
+            f"ai-model-hub-{ds_name}.{domain}"
         ]
 
     @classmethod
@@ -443,7 +445,7 @@ class INESDataConfigAdapter:
         ds_domain = config.get("DS_DOMAIN_BASE")
 
         if domain:
-            hosts.append(f"{target_ip} keycloak-admin.{domain}")
+            hosts.append(f"{target_ip} admin.auth.{domain}")
             hosts.append(f"{target_ip} console.minio-s3.{domain}")
 
         if ds_domain and ds_name:

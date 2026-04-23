@@ -130,12 +130,12 @@ function resolveDataspaceDefaults(): DataspaceDefaults {
     adapter,
     dataspace: process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo",
     environment: process.env.UI_ENVIRONMENT || deployerConfig.ENVIRONMENT || "DEV",
-    dsDomain: process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm",
+    dsDomain: process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "pionera.oeg.fi.upm.es",
     keycloakUrl:
       process.env.UI_KEYCLOAK_URL ||
       deployerConfig.KC_INTERNAL_URL ||
       deployerConfig.KC_URL ||
-      "http://keycloak.dev.ed.dataspaceunit.upm",
+      "http://keycloak.pionera.oeg.fi.upm.es",
     keycloakClientId: process.env.UI_KEYCLOAK_CLIENT_ID || "dataspace-users",
   };
 }
@@ -154,7 +154,7 @@ function resolveConnectorRuntime(
   const host = `${connectorName}.${dsDomain}`;
   const deployerConfigPath = path.join(projectRoot(), "deployers", "inesdata", "deployer.config");
   const deployerConfig = parseKeyValueFile(deployerConfigPath);
-  const minioHost = process.env.UI_MINIO_HOST || deployerConfig.MINIO_HOSTNAME || `minio.${deployerConfig.DOMAIN_BASE || "dev.ed.dataspaceunit.upm"}`;
+  const minioHost = process.env.UI_MINIO_HOST || deployerConfig.MINIO_HOSTNAME || `minio.${deployerConfig.DOMAIN_BASE || "pionera.oeg.fi.upm.es"}`;
   const minioProtocol = process.env.UI_MINIO_PROTOCOL || "http";
   const transferRegion = process.env.UI_TRANSFER_REGION || "us-east-1";
   const endpointOverride = `${minioProtocol}://${minioHost}`;

@@ -132,7 +132,7 @@ export function resolveMinioConsoleRuntime(overrides?: {
 
   const dataspace = process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo";
   const environment = process.env.UI_ENVIRONMENT || deployerConfig.ENVIRONMENT || "DEV";
-  const domainBase = process.env.UI_DOMAIN_BASE || deployerConfig.DOMAIN_BASE || "dev.ed.dataspaceunit.upm";
+  const domainBase = process.env.UI_DOMAIN_BASE || deployerConfig.DOMAIN_BASE || "pionera.oeg.fi.upm.es";
   const providerConnector = process.env.UI_PROVIDER_CONNECTOR || "conn-citycouncil-demo";
   const consumerConnector = process.env.UI_CONSUMER_CONNECTOR || "conn-company-demo";
   const consoleBaseUrl =

@@ -26,7 +26,7 @@ function buildIdentity() {
   return {
     agentName: "Testing User",
     updatedAgentName: "Testing User Admin",
-    prefUri: "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/testingUser",
+    prefUri: "http://ontology-hub-demo.pionera.oeg.fi.upm.es/testingUser",
     email: "testing@myemail.com",
     password: "testing123",
   };

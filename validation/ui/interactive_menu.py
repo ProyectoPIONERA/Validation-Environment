@@ -222,7 +222,7 @@ def _resolve_ai_model_hub_base_url(adapter=None):
     ).strip()
     ds_domain = (
         deployer_config.get("DS_DOMAIN_BASE")
-        or "dev.ds.dataspaceunit.upm"
+        or "pionera.oeg.fi.upm.es"
     ).strip()
 
     chart_dir = project_root() / "deployers" / "shared" / "components" / "ai-model-hub"

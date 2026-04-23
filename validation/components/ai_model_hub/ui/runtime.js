@@ -30,12 +30,12 @@ function resolveAIModelHubRuntime() {
     path.join(projectRoot(), "deployers", "inesdata", "deployer.config"),
   );
   const dataspace = (process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo").trim();
-  const dsDomain = (process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm").trim();
+  const dsDomain = (process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "pionera.oeg.fi.upm.es").trim();
   const keycloakBaseUrl = (
     process.env.AI_MODEL_HUB_KEYCLOAK_URL ||
     deployerConfig.KC_INTERNAL_URL ||
     deployerConfig.KC_URL ||
-    "http://keycloak.dev.ed.dataspaceunit.upm"
+    "http://keycloak.pionera.oeg.fi.upm.es"
   )
     .trim()
     .replace(/\/$/, "");
