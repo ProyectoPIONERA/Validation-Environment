@@ -106,6 +106,14 @@ puntuales o para clientes host-side, por ejemplo durante la validacion
 EDC+Kafka, pero las validaciones de navegador y API deben ejercitar las rutas
 publicas por hostname siempre que sea posible.
 
+Para PostgreSQL, el servicio del cluster sigue usando el puerto `5432`. El
+soporte interno intenta usar `PG_PORT=5432` como puerto local preferente para
+conectar con `common-srvs-postgresql` desde el proceso Python del framework. Si
+ese puerto local está ocupado por un PostgreSQL externo al entorno PIONERA, el
+framework falla con un diagnóstico y no termina procesos externos
+automáticamente. Solo libera `kubectl port-forward` antiguos que pertenezcan al
+propio framework.
+
 El fallback de `port-forward` para conectores queda desactivado por defecto. En
 diagnosticos de desarrollo puede habilitarse explicitamente con:
 

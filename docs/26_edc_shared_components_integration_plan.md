@@ -25,7 +25,7 @@ Estos charts no deben contener valores runtime, credenciales ni secretos. Los
 valores generados deben escribirse por deployer:
 
 ```text
-deployers/<adapter>/deployments/<ENV>/<dataspace>/shared/components/<component>/
+deployers/<adapter>/deployments/<ENV>/<dataspace>/components/<component>/
 ```
 
 ## Condiciones Para Activar EDC Level 5

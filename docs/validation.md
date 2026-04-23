@@ -21,6 +21,15 @@ máquina que lanza el framework. Si esta comprobación falla, revisa que
 `[sudo] password for <user>:`, introduce la contraseña Linux/WSL en esa misma
 terminal y vuelve a lanzar el nivel.
 
+Después de ese check general, `Level 6` hace preflights específicos del adapter
+antes de abrir Playwright:
+
+- `inesdata`: valida Keycloak, los servicios `*-interface` y la ruta pública
+  `http://<connector>.../inesdata-connector-interface/`. Si falla, deja
+  `ui/inesdata/portal_readiness.json` dentro del experimento.
+- `edc`: valida Keycloak, dashboard, proxy y rutas públicas del dashboard y
+  management API. Si falla, deja `ui/edc/dashboard_readiness.json`.
+
 Para validaciones sobre conectores ya desplegados, ejecuta `Level 6` desde el
 mismo checkout que ejecutó `Level 4`. Los artefactos locales bajo
 `deployers/<adapter>/deployments/<environment>/<dataspace>/` contienen
@@ -47,6 +56,11 @@ Playwright valida flujos visibles en navegador.
 
 Las suites UI son adapter-aware. Deben validar dashboards y portales de usuario sin sustituir las validaciones API.
 
+El framework no arranca Playwright solo porque Kubernetes reporte pods o
+endpoints listos. Primero espera a que las rutas HTTP públicas necesarias del
+adapter respondan realmente. Esto reduce flakes por `503`, proxys aún no
+sincronizados o portales todavía no accesibles a través de Ingress.
+
 Comandos típicos:
 
 ```bash
@@ -67,6 +81,11 @@ de broker. En `Level 6`, se ejecuta automáticamente después de Newman para los
 adapters compatibles y valida el recorrido `asset -> catalogo -> negociacion ->
 transferencia Kafka -> consumo del topic destino`.
 
+En la ruta local actual, la preparación del broker Kafka empieza al inicio de
+`Level 6` mientras Newman sigue ejecutándose en primer plano. Así se aprovecha
+ese tiempo de espera sin interrumpir Newman y se reduce la probabilidad de que
+Kafka falle solo por arranque lento.
+
 En topología `local`, el broker gestionado por defecto se despliega dentro de
 Kubernetes. Los conectores usan el endpoint interno de cluster:
 
@@ -80,9 +99,10 @@ Ese `port-forward` es un mecanismo de soporte interno de la validación, no un
 endpoint público del dataspace.
 
 La consola usa mensajes neutrales bajo el nombre `Kafka transfer validation`.
-Por defecto imprime resultado por par de conectores, pasos ejecutados, topics,
-mensajes producidos/consumidos, latencias y throughput. Para mostrar muestras de
-IDs de mensajes en consola durante diagnóstico:
+Por defecto imprime resultado por par de conectores a medida que cada prueba
+termina, con iconos y resumen final. El detalle incluye pasos ejecutados,
+topics, mensajes producidos/consumidos, latencias y throughput. Para mostrar
+muestras de IDs de mensajes en consola durante diagnóstico:
 
 ```bash
 PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true python3 main.py inesdata validate --topology local

@@ -163,6 +163,30 @@ En WSL, el fichero `hosts` de Windows suele estar en:
 La sincronización es idempotente: si una entrada ya existe, el framework la
 omite en lugar de duplicarla.
 
+En el menú interactivo, cuando el adapter activo es `edc`, los niveles `3-6`
+hacen una comprobación previa de hostnames en topología `local`. Si faltan
+entradas, el framework muestra cuáles son y pregunta si quieres aplicar solo las
+entradas ausentes antes de continuar.
+
+## Coexistencia de Adapters
+
+Los adapters pueden compartir los servicios comunes desplegados en
+`common-srvs` (`Keycloak`, `MinIO`, `PostgreSQL`, `Vault`), pero cada dataspace
+debe tener un nombre y namespace propios.
+
+Por ejemplo, es válido desplegar:
+
+```text
+inesdata -> DS_1_NAME=demo, DS_1_NAMESPACE=demo
+edc      -> DS_1_NAME=demoedc, DS_1_NAMESPACE=demoedc
+```
+
+No se debe reutilizar el mismo `DS_1_NAME` o `DS_1_NAMESPACE` para dos adapters
+distintos en el mismo cluster local, porque eso puede provocar colisiones de
+namespace, registration-service, bases de datos, usuarios y artefactos
+generados. Los conectores pueden tener nombres similares siempre que el
+dataspace resultante produzca hostnames distintos.
+
 ## Menú y Niveles
 
 El menú se abre con:
@@ -188,15 +212,21 @@ Opciones operativas del menú:
 
 | Opción | Uso |
 | --- | --- |
-| `S` | Seleccionar adapter activo. |
+| `S` | Preseleccionar adapter para la sesión actual del menú. |
 | `P` | Previsualizar el plan de despliegue. |
 | `H` | Planificar o aplicar entradas de hosts. |
-| `M` | Ejecutar métricas, con Kafka opcional. |
+| `M` | Ejecutar métricas o benchmarks independientes. |
 | `X` | Recrear el dataspace seleccionado. |
 | `B/D/R/C/L` | Accesos de desarrollo: bootstrap, doctor, recovery, cleanup e imágenes locales. |
 | `I/O/A` | Validaciones UI de INESData, Ontology Hub y AI Model Hub. |
 | `?` | Mostrar ayuda. |
 | `Q` | Salir. |
+
+Al seleccionar `edc`, el menú recuerda revisar `H` antes de ejecutar niveles que
+dependen de hostnames públicos.
+
+Si no preseleccionas adapter con `S`, el menú lo pedirá automáticamente cuando
+una operación de `Level 3` a `Level 6` lo necesite.
 
 La referencia completa está en [docs/menu-reference.md](./docs/menu-reference.md).
 
@@ -255,6 +285,15 @@ diagnósticos o clientes host-side, pero no debe sustituir los endpoints de
 navegador o API. El fallback de `port-forward` para conectores está desactivado
 por defecto y solo debe habilitarse temporalmente con
 `PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true`.
+
+PostgreSQL es una excepción operativa interna: el servicio PostgreSQL del
+cluster sigue usando el puerto `5432`. En topología `local`, el framework
+intenta usar `PG_PORT=5432` como puerto local preferente para `psql` y Python.
+Si ese puerto local está ocupado por un `kubectl port-forward` antiguo del
+framework, lo libera y lo recrea como
+`127.0.0.1:5432 -> common-srvs-postgresql:5432`. Si el puerto pertenece a
+Windows, WSL u otro proyecto, el framework no mata ese proceso: falla con un
+diagnóstico para que el usuario libere el puerto manualmente.
 
 `Level 6` comprueba esos hostnames antes de ejecutar la limpieza y las suites de
 validación. Si vas a validar conectores ya desplegados, ejecuta `Level 6` desde
@@ -385,6 +424,15 @@ La opción `L` está pensada para iteración de desarrollo y preserva datos en
 redeploys INESData: reutiliza los valores existentes de Helm y no recrea
 credenciales, dataspace ni servicios comunes. Si un release todavía no existe,
 ejecuta primero el nivel correspondiente.
+
+Cuando el adapter activo es `edc`, las acciones rápidas de `L` construyen y
+cargan imágenes locales del conector EDC, del dashboard EDC o de ambos. Si ya
+hay deployments EDC en ejecución, el framework los reinicia para que tomen la
+imagen nueva sin recrear datos.
+
+Además, `Level 4` de EDC prepara automáticamente esas imágenes locales en modo
+`auto` cuando se despliega en local y no hay una imagen explícita publicada que
+usar.
 
 Si la receta corresponde a un componente de `Level 5` ya desplegado, como
 `Ontology Hub` o `AI Model Hub`, el framework reinicia su deployment para que

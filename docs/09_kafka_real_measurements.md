@@ -15,6 +15,10 @@ Esta fase mantiene el benchmark de broker Kafka como opcional, pero hace que su 
 
 La activacion del benchmark de broker para usuarios debe hacerse desde el CLI o el menu, no desde `deployer.config`. En el menu, la pregunta `Enable standalone Kafka broker benchmark?` se refiere solo a este benchmark independiente del broker. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y se ejecuta automaticamente en `Level 6`, despues de Newman, para los adaptadores `inesdata` y `edc`.
 
+En la implementación actual de `Level 6`, la preparación del broker Kafka
+arranca en segundo plano al comenzar el nivel, mientras Newman sigue en primer
+plano. Esto reduce espera total sin alterar el flujo de Newman.
+
 ## Salida
 
 Toda ejecucion con Kafka habilitado debe dejar:
@@ -39,9 +43,11 @@ Cuando se ejecuta `Level 6`, la suite Kafka transfer deja además:
 
 En consola, la suite se muestra con una salida neutral como `Kafka transfer
 validation` para que el resultado no quede acoplado al nombre de un adapter. La
-salida normal incluye estado, par de conectores, pasos ejecutados, topics,
-mensajes producidos y consumidos, latencias y throughput. El detalle de muestras
-de mensajes puede habilitarse con `PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true`.
+salida normal imprime cada par proveedor-consumidor cuando termina, usando
+iconos de estado y un resumen final. El detalle incluye pasos ejecutados,
+topics, mensajes producidos y consumidos, latencias y throughput. El detalle de
+muestras de mensajes puede habilitarse con
+`PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true`.
 
 ## Payload Completado
 
@@ -95,6 +101,9 @@ El proceso Python del framework puede usar un `port-forward` temporal hacia
 `127.0.0.1:<puerto>` para crear topics, producir mensajes de prueba y consumir
 el topic destino desde el host. Ese `port-forward` es un detalle de soporte de
 la validacion, no el endpoint funcional que deben usar los conectores.
+
+Antes de dar el broker por listo, el framework valida tanto el listener interno
+del cluster como el listener externo usado por el `port-forward`.
 
 ## Configuracion del Broker
 
@@ -168,6 +177,11 @@ Eso evita que el dataplane reciba `localhost:<puerto>` como metadato del broker,
 
 Al terminar, el framework debe eliminar el `Deployment`, los `Service` y el
 `port-forward` temporal asociados al broker gestionado.
+
+Durante la ejecución secuencial de varios pares proveedor-consumidor, el
+framework intenta reutilizar el broker ya preparado en lugar de destruirlo al
+primer error transitorio. Esto reduce flakes en `minikube` y hace más estable la
+validación integrada de `Level 6`.
 
 ## Notas
 

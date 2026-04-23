@@ -34,6 +34,18 @@ kubectl get ingress -A
 helm list -A
 ```
 
+## Level 2 Muestra `failed post-install`
+
+En instalaciones locales limpias, Helm puede dejar `common-srvs` en estado
+`failed` si un hook tarda más que el timeout inicial, aunque los pods terminen
+arrancando correctamente unos segundos después.
+
+`Level 2` primero comprueba los servicios reales de `common-srvs`, configura
+Vault y, si el runtime está sano pero Helm sigue en `failed`, vuelve a ejecutar
+Helm con más margen para reconciliar el release a `deployed`. Si el release
+sigue fallando después de ese segundo intento, entonces el nivel falla porque el
+estado de Helm ya no es confiable para continuar con `Level 3`.
+
 ## Los Conectores Solo Funcionan con Port-forward
 
 En local, el resultado correcto es que los conectores sean accesibles por su
@@ -77,6 +89,39 @@ Comprueba que:
 - el fichero `hosts` contiene las entradas de Keycloak;
 - el túnel local o ingress está disponible.
 
+## Level 3 Falla con PostgreSQL `password authentication failed`
+
+Si `Level 3` intenta ejecutar `psql` con una contraseña placeholder como
+`CHANGE_ME`, el fichero local `deployers/infrastructure/deployer.config` no está
+alineado con los secretos reales de `common-srvs`.
+
+Antes de crear el dataspace, `Level 3` sincroniza las credenciales comunes
+locales desde los secretos Kubernetes de PostgreSQL, Keycloak y MinIO. Esto
+permite reutilizar servicios comunes ya desplegados desde una copia limpia del
+framework sin recrear `common-srvs`.
+
+El servicio PostgreSQL del cluster sigue usando el puerto `5432`. Si
+`localhost:5432` ya está ocupado por un PostgreSQL de la máquina, el framework no
+debe tratarlo como el PostgreSQL del cluster ni terminarlo automáticamente. Si el
+ocupante es un `kubectl port-forward` antiguo del propio framework, lo libera y
+lo recrea sobre `127.0.0.1:5432 -> common-srvs-postgresql:5432`. Si el ocupante
+es externo, el nivel falla con un diagnóstico para que el usuario libere el
+puerto manualmente.
+
+## Level 3 Falla con `Timeout waiting for dataspace pods`
+
+Si el log muestra que `registration-service` está `Running`, pero el nivel falla
+porque existen conectores antiguos en `Init`, `CrashLoopBackOff` u otro estado
+inestable, el problema no es el dataspace base. Esos conectores pertenecen a
+`Level 4`.
+
+`Level 3` solo debe validar los pods base del dataspace, principalmente
+`registration-service`. Los conectores se despliegan, actualizan y validan en
+`Level 4`, por lo que no deben bloquear la recreación de un dataspace.
+
+Después de un `Level 3` correcto, ejecuta `Level 4` para desplegar o actualizar
+los conectores del adapter activo.
+
 ## Vault Indica Token Obsoleto
 
 Si nivel 2 o nivel 4 informa que el token de Vault no es válido para el Vault en
@@ -87,6 +132,29 @@ No reintentes nivel 4 en bucle. Primero recupera el root token actual de Vault,
 si existe, o recrea los servicios comunes de nivel 2 en entorno local para que
 el framework vuelva a generar claves consistentes. Después ejecuta de nuevo
 nivel 3 y nivel 4.
+
+En topología `local`, el framework intenta prevenir este caso reconciliando de
+forma automática el artefacto compartido y `deployer.config` con cualquier token
+local que sea válido contra el Vault en ejecución. Si no queda ningún token
+válido, `Level 4` de EDC puede hacer una reparación controlada: mueve
+temporalmente el artefacto obsoleto, elimina `common-srvs`, vuelve a ejecutar
+`Level 2`, vuelve a ejecutar `Level 3` y reintenta `Level 4`. El backup temporal
+se elimina si la reparación termina bien y se restaura si falla.
+
+El framework pide confirmación interactiva antes de hacerlo. En ejecución no
+interactiva debe habilitarse explícitamente:
+
+```bash
+PIONERA_LEVEL4_REPAIR_COMMON_SERVICES=true python3 main.py edc deploy --topology local
+```
+
+No actives esta variable si quieres preservar el estado actual de
+`common-srvs`; recrear servicios comunes afecta a los adapters que compartan ese
+cluster local.
+
+El framework no debe copiar tokens desde runtimes legacy del adapter ni
+sobrescribir `VT_TOKEN` con un token que no haya sido validado contra el Vault en
+ejecución. La fuente canónica es `deployers/shared/common/init-keys-vault.json`.
 
 En un entorno sano no debería ser necesario recrear `common-srvs` en cada
 despliegue. Si vuelve a pasar, revisa si se ejecutó el mismo cluster desde dos
@@ -204,6 +272,32 @@ Level 6 comprueba la disponibilidad de esos endpoints antes de lanzar
 Playwright. Si no están listos, guarda el diagnóstico en
 `experiments/<experiment>/ui/edc/dashboard_readiness.json`.
 
+## Playwright INESData Falla Antes de Abrir el Portal
+
+Si `Level 6` falla antes de lanzar Playwright para `inesdata`, o si el mensaje
+indica que el portal no está listo, el problema suele estar en la ruta pública
+del conector y no en la suite en sí.
+
+Comprueba:
+
+```bash
+kubectl get pods -n <dataspace>
+kubectl get endpoints -n <dataspace>
+```
+
+Y revisa que la ruta pública responda realmente:
+
+```text
+http://conn-<connector>-<dataspace>.dev.ds.dataspaceunit.upm/inesdata-connector-interface/
+```
+
+`Level 6` valida Keycloak, los servicios `*-interface` y esa ruta pública antes
+de lanzar Playwright. Si falla, guarda el diagnóstico en:
+
+```text
+experiments/<experiment>/ui/inesdata/portal_readiness.json
+```
+
 ## Una Topología VM Requiere Dirección
 
 `vm-single` necesita una dirección de VM:
@@ -224,6 +318,27 @@ Comprueba:
 - que el dashboard o portal está desplegado;
 - que el modo de autenticación coincide con la suite esperada;
 - que el reporte en `experiments/` contiene screenshots, trazas o detalles de error.
+
+## Kafka Autoaprovisionado No Queda Listo a Tiempo
+
+Si `Level 6` falla en la parte Kafka con mensajes sobre `port-forward`,
+`bootstrap server` o `framework-kafka`, el problema suele venir de la
+estabilización del broker temporal en Kubernetes local.
+
+Comprueba:
+
+```bash
+kubectl get pods -n <dataspace>
+kubectl get events -n <dataspace>
+```
+
+El framework valida el listener interno del broker y el listener externo usado
+por `port-forward` antes de lanzar la suite Kafka. Si aun así falla, revisa:
+
+- que `minikube` no haya entrado en `NodeNotReady`;
+- que `framework-kafka` y `framework-kafka-external` existan en el namespace;
+- que `minikube tunnel` siga activo si el entorno local lo requiere;
+- el artefacto `kafka_runtime_preparation.json` dentro del experimento.
 
 ## Playwright INESData y Transferencias en STARTED
 
@@ -298,6 +413,15 @@ Durante una ejecución puedes inspeccionar el broker temporal con:
 ```bash
 kubectl get pods,svc -n <dataspace> -l app=framework-kafka
 ```
+
+Si el broker queda `ready`, los topics se crean bien y aun asi la transferencia
+termina en `TERMINATED` justo despues de `start_transfer`, la causa habitual ya
+no es el broker sino la imagen local del conector EDC. Ese patron indica que el
+control plane acepto la transferencia, pero el runtime desplegado no incluia el
+dataplane Kafka efectivo o seguia reutilizando una `connector.jar` obsoleta.
+Desde esta version, `adapters/edc/scripts/build_image.sh` reconstruye
+automaticamente la jar cuando cambian los inputs del runtime para evitar ese
+desalineamiento.
 
 ## Se Acumulan Datos de Validación
 

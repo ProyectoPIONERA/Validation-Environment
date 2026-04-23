@@ -34,6 +34,12 @@ Comportamiento esperado:
 - las opciones rápidas de INESData en `L` hacen redeploy preservando datos:
   reutilizan los valores existentes de Helm y no recrean credenciales ni
   servicios comunes.
+- las opciones rápidas de EDC en `L` construyen/cargan imágenes locales del
+  conector y/o dashboard, y reinician deployments EDC existentes sin recrear
+  datos.
+- el `Level 4` de EDC también prepara las imágenes locales necesarias en modo
+  `auto`, antes del despliegue Helm, salvo que se hayan definido overrides
+  explícitos o se desactive con `PIONERA_EDC_LOCAL_IMAGES_MODE=disabled`.
 
 Modos disponibles para `Level 4 local`:
 

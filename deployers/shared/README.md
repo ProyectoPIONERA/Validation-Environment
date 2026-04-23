@@ -32,17 +32,24 @@ el despliegue o permanecer en la ruta legacy hasta completar la migración.
 ## Valores Runtime
 
 Cuando `PIONERA_USE_SHARED_DEPLOYER_ARTIFACTS=true`, el chart fuente se lee desde
-`deployers/shared`. Los valores mutables específicos de un deployer se escriben
-fuera de esta carpeta:
+`deployers/shared`. Los valores mutables de servicios comunes se escriben en un
+runtime compartido ignorado por Git:
 
 ```text
-deployers/<deployer>/deployments/<ENV>/<dataspace>/shared/
+deployers/shared/deployments/<ENV>/common/
+```
+
+Los valores mutables específicos de un dataspace se escriben bajo el runtime del
+adapter, pero no dentro de una carpeta `shared/` del adapter:
+
+```text
+deployers/<adapter>/deployments/<ENV>/<dataspace>/dataspace/registration-service/
 ```
 
 Ejemplos:
 
-- `deployers/inesdata/deployments/DEV/demo/shared/common/values.yaml`
-- `deployers/inesdata/deployments/DEV/demo/shared/dataspace/registration-service/values-demo.yaml`
+- `deployers/shared/deployments/DEV/common/values.yaml`
+- `deployers/inesdata/deployments/DEV/demo/dataspace/registration-service/values-demo.yaml`
 
 Las claves generadas de Vault pertenecen a los servicios comunes compartidos, no
 a un deployer concreto. Por eso la copia canónica se mantiene en:

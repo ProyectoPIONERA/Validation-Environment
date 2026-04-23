@@ -10,12 +10,14 @@ El menú está en inglés para alinearse con nombres de comandos, código y arte
 
 ## Encabezado
 
-El encabezado muestra:
+El menú ya no muestra por defecto un bloque con el adapter activo o la lista de
+adapters disponibles. La idea es reducir carga cognitiva en la ruta normal de
+uso.
 
-- `Active adapter`: adapter seleccionado para las acciones del menú.
-- `Available adapters`: adapters disponibles, normalmente `edc` e `inesdata`.
+Si una acción depende del adapter, el framework:
 
-Si una acción depende del adapter, se ejecutará sobre el adapter activo.
+- usa el adapter que hayas preseleccionado con `S`;
+- o lo pide en ese momento si todavía no se ha elegido uno.
 
 ## Full Deployment
 
@@ -35,7 +37,9 @@ Despliega o actualiza servicios comunes como Keycloak, MinIO, PostgreSQL y Vault
 
 `3 - Level 3: Deploy Dataspace`
 
-Despliega el runtime base del dataspace y el registration service.
+Despliega el runtime base del dataspace y el registration service. Al terminar
+correctamente, el siguiente paso normal es ejecutar `Level 4` para desplegar o
+actualizar los conectores del adapter activo.
 
 `4 - Level 4: Deploy Connectors`
 
@@ -61,23 +65,37 @@ contraseña en esa terminal si aparece el prompt de sudo. Para conectores ya
 desplegados, ejecuta `Level 6` desde el mismo checkout que ejecutó `Level 4`,
 porque ahí se generan las credenciales locales usadas por la validación.
 
+Antes de lanzar Playwright, `Level 6` también hace un preflight HTTP real del
+portal del adapter:
+
+- `inesdata`: comprueba Keycloak, los servicios `*-interface` y la ruta pública
+  `http://<connector>.../inesdata-connector-interface/`;
+- `edc`: comprueba Keycloak, dashboard, proxy y rutas públicas de management.
+
+Si ese preflight falla, el nivel termina con una causa clara y persiste el
+diagnóstico del adapter en `experiments/`.
+
 ## Operations
 
 `S - Select adapter`
 
-Cambia el adapter activo. Úsalo para alternar entre `inesdata` y `edc` antes de desplegar, validar o planificar hosts.
+Permite dejar preseleccionado el adapter para la sesión actual del menú. Es un
+atajo opcional: si no lo usas, el framework te preguntará el adapter cuando una
+operación de `Level 3` a `Level 6` realmente lo necesite.
 
 `P - Preview deployment plan`
 
-Muestra un plan de despliegue sin modificar el entorno. Úsalo antes de ejecutar cambios destructivos o cuando quieras revisar dataspace, conectores, componentes, namespaces y hosts esperados.
+Muestra un plan de despliegue sin modificar el entorno. Úsalo antes de ejecutar cambios destructivos o cuando quieras revisar dataspace, conectores, componentes, namespaces y hosts esperados. Si la operación necesita adapter y aún no se ha elegido uno, el menú lo pide en ese momento.
 
 `H - Plan/apply hosts entries`
 
 Planifica o aplica entradas del fichero `hosts`. Por defecto solo planifica. Para aplicar cambios debes habilitar sincronización explícita con `PIONERA_SYNC_HOSTS=true` y `PIONERA_HOSTS_FILE`.
 
+En el menú interactivo, si el adapter elegido para la operación es `edc` y vas a ejecutar niveles `3-6`, el framework verifica primero si faltan hostnames en el fichero `hosts` local. Si faltan, muestra la lista y pregunta si quieres aplicar solo las entradas ausentes antes de continuar. Si cancelas o el sistema no permite escribir el fichero, el nivel no se ejecuta.
+
 `M - Run metrics / benchmarks`
 
-Ejecuta métricas o benchmarks independientes sobre el adapter activo. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.
+Ejecuta métricas o benchmarks independientes sobre el adapter elegido para esa operación. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.
 
 `X - Recreate dataspace`
 
@@ -107,9 +125,12 @@ Construye y carga imágenes locales. Úsalo durante desarrollo cuando hayas modi
 
 El submenú separa la ruta habitual de desarrollo de las recetas avanzadas:
 
-- `Quick actions`: acciones rápidas para INESData. Hacen `build/load/redeploy`
-  preservando datos: el redeploy usa `helm upgrade --reuse-values` sobre
-  releases existentes y no reinstala releases ausentes con values base.
+- `Quick actions`: acciones rápidas específicas del adapter activo.
+  En INESData hacen `build/load/redeploy` preservando datos: el redeploy usa
+  `helm upgrade --reuse-values` sobre releases existentes y no reinstala
+  releases ausentes con values base. En EDC construyen/cargan las imágenes
+  locales del conector y/o dashboard, y reinician deployments EDC existentes
+  para que tomen la imagen nueva sin recrear datos.
 - `Advanced recipes`: recetas registradas para construir, cargar y, cuando se
   seleccione, redesplegar una fuente concreta del adapter activo.
 

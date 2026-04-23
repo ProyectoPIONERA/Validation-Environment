@@ -13,6 +13,10 @@ El flujo habitual es este:
 5. `Level 5`: despliega componentes opcionales.
 6. `Level 6`: ejecuta la validación.
 
+`Level 3` deja preparado el dataspace base y el registration-service. No valida
+ni repara conectores existentes; después de un `Level 3` correcto, ejecuta
+`Level 4` para desplegar o actualizar los conectores del adapter activo.
+
 ## Qué hace hoy `Level 6`
 
 `Level 6` ya no ejecuta solo la validación API del núcleo del dataspace. Hoy orquesta un experimento completo y persiste sus artefactos.

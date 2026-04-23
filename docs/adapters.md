@@ -11,6 +11,15 @@ adapters/inesdata/
 adapters/edc/
 ```
 
+Ambos adapters pueden convivir en un mismo cluster local y compartir
+`common-srvs`. Para que esa convivencia sea reproducible, cada adapter debe
+usar un dataspace y namespace propios. Un ejemplo habitual es `demo` para
+INESData y `demoedc` para EDC.
+
+No se debe reutilizar el mismo `DS_1_NAME` o `DS_1_NAMESPACE` entre adapters en
+el mismo cluster. Esa reutilización puede mezclar registration-service, bases de
+datos, usuarios, hostnames y artefactos de despliegue.
+
 Cada adapter puede aportar:
 
 - operaciones de despliegue;
@@ -57,7 +66,17 @@ Deployer relevante:
 deployers/edc/deployer.py
 ```
 
-El adapter EDC puede construir o usar una imagen de conector configurada. En topología `local`, si no se han definido overrides, Level 4 prepara automáticamente la imagen local desde `adapters/edc/sources/connector`, la carga en Minikube y usa `validation-environment/edc-connector:local` para esa ejecución.
+`Level 3` de EDC reutiliza de forma transitoria la lógica compartida de
+bootstrap del dataspace base, pero lee la configuración de
+`deployers/edc/deployer.config`. Por tanto, el dataspace EDC sigue siendo
+aislado: por ejemplo `DS_1_NAME=demoedc` y `DS_1_NAMESPACE=demoedc`.
+
+El comportamiento operativo de `Level 3` debe ser equivalente al de INESData:
+ejecuta el bootstrap del dataspace del adapter activo aunque el namespace ya
+exista. Después de `Level 3`, ejecuta `Level 4` para desplegar o actualizar los
+conectores EDC.
+
+El adapter EDC puede construir o usar una imagen de conector configurada. En topología `local`, si no se han definido overrides, Level 4 prepara automáticamente la imagen local desde `adapters/edc/sources/connector`, la carga en Minikube y usa `validation-environment/edc-connector:local` para esa ejecución. Esta preparación vive también dentro del adapter EDC, de modo que funciona tanto desde el menú por niveles como desde llamadas directas del adapter.
 
 Si `EDC_DASHBOARD_ENABLED=true`, Level 4 también prepara y carga en Minikube las imágenes locales del dashboard y del proxy:
 
@@ -91,7 +110,14 @@ PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME
 PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG
 ```
 
+La preparación local puede desactivarse con `PIONERA_EDC_LOCAL_IMAGES_MODE=disabled` o hacerse estricta con `PIONERA_EDC_LOCAL_IMAGES_MODE=required`. El valor por defecto es `auto`. Si se desactiva la preparación local, debe existir un override explícito de imagen del conector EDC.
+
 El dashboard EDC es opcional y sirve como apoyo visual para validación UI. Las validaciones API con Newman siguen siendo el mecanismo principal de validación end-to-end.
+
+En el menú interactivo, el adapter EDC incluye una comprobación previa de
+hostnames antes de ejecutar niveles `3-6` en topología `local`. Si faltan
+entradas, el usuario puede aplicar solo las ausentes antes de continuar; si no
+lo confirma, el nivel se cancela para evitar fallos posteriores menos claros.
 
 ## Añadir un Adapter
 

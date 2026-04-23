@@ -73,6 +73,24 @@ deployers/edc/deployer.config
 
 Usa los ficheros `.example` como plantilla cuando existan. Los ficheros locales `deployer.config` pueden contener credenciales y no deben subirse al repositorio.
 
+## Coexistencia de Adapters
+
+`inesdata` y `edc` pueden reutilizar los servicios comunes de `common-srvs`.
+Esa es la ruta esperada cuando se prueban ambos adapters sobre el mismo cluster
+local.
+
+La restricción importante es que cada adapter debe usar un dataspace aislado:
+
+```text
+inesdata -> DS_1_NAME=demo, DS_1_NAMESPACE=demo
+edc      -> DS_1_NAME=demoedc, DS_1_NAMESPACE=demoedc
+```
+
+No reutilices el mismo `DS_1_NAME` o `DS_1_NAMESPACE` para dos adapters
+distintos en el mismo cluster. El problema no sería compartir PostgreSQL,
+Keycloak, MinIO o Vault, sino colisionar en namespaces, registration-service,
+bases de datos, usuarios y artefactos generados por `Level 3`.
+
 ## Hosts
 
 El framework puede planificar o aplicar entradas de `hosts` para el adapter y la topología seleccionados:
@@ -126,3 +144,9 @@ Déjalo ejecutándose en otra terminal durante despliegue y validación.
 Las validaciones funcionales deben usar los hostnames locales publicados por
 Ingress. Los `port-forward` quedan reservados para comprobaciones internas o
 diagnóstico de desarrollo; no deben sustituir la ruta normal de navegador o API.
+
+Para PostgreSQL, el servicio del cluster sigue usando el puerto `5432`. El
+framework intenta usar `PG_PORT=5432` como puerto local preferente. Si ese puerto
+está ocupado por un `kubectl port-forward` antiguo del framework, lo libera y lo
+recrea. Si pertenece a Windows, WSL u otro entorno local, el framework falla con
+un diagnóstico y no termina procesos externos automáticamente.
