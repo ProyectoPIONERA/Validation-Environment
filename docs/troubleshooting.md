@@ -18,6 +18,53 @@ python3 main.py edc hosts --topology local
 
 Si una entrada ya existe, el gestor de hosts la omite en lugar de duplicarla.
 
+En macOS, si aplicas entradas manualmente, recuerda que el fichero habitual es:
+
+```text
+/private/etc/hosts
+```
+
+Si el framework planifica bien los hostnames pero `Hosts sync` sigue en
+`Skipped`, revisa `PIONERA_SYNC_HOSTS` y `PIONERA_HOSTS_FILE`.
+
+## El Bootstrap Falla en macOS
+
+Si `bash scripts/bootstrap_framework.sh` falla en macOS, las causas más comunes
+son:
+
+- `python3` apunta a una versión menor que `3.10`;
+- falta alguna herramienta base del sistema (`minikube`, `helm`, `kubectl`,
+  `node`, `psql`);
+- la `.venv` existente fue creada con un Python demasiado antiguo.
+
+Comprueba primero:
+
+```bash
+python3 --version
+python3.11 --version
+```
+
+Si tienes un Python compatible instalado, fuerza el bootstrap así:
+
+```bash
+PIONERA_PYTHON_BIN=python3.11 bash scripts/bootstrap_framework.sh
+```
+
+Si todavía no lo tienes, una base razonable en macOS es:
+
+```bash
+brew install python@3.11 minikube helm kubectl node postgresql
+```
+
+El doctor del framework también puede ayudarte a localizar este caso antes de
+relanzar el bootstrap:
+
+```bash
+python3 main.py menu
+```
+
+Después usa la opción `D - Run Framework Doctor`.
+
 ## Los Servicios Minikube No Son Accesibles
 
 En despliegues locales, mantén esto abierto en otra terminal:

@@ -44,6 +44,19 @@ para evitar que las validaciones UI fallen al arrancar el navegador. En
 entornos donde no se puedan instalar paquetes del sistema, usa
 `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
+En macOS, el soporte del framework está en proceso de adaptación. El bootstrap
+y el doctor ya detectan Python `3.10+` y ayudan a preparar el entorno, pero la
+automatización completa de dependencias del sistema para `Level 1` todavía se
+está endureciendo. La recomendación actual es usar Homebrew para disponer de
+las herramientas base del host, por ejemplo:
+
+```bash
+brew install python@3.11 minikube helm kubectl node postgresql
+```
+
+Si ya tienes un Python compatible instalado en otra ruta, puedes forzarlo con
+`PIONERA_PYTHON_BIN=python3.11`.
+
 Después activa el entorno Python raíz:
 
 ```bash
@@ -121,6 +134,12 @@ Desde WSL, el fichero `hosts` de Windows suele estar en:
 
 ```text
 /mnt/c/Windows/System32/drivers/etc/hosts
+```
+
+En macOS, el fichero `hosts` del sistema suele estar en:
+
+```text
+/private/etc/hosts
 ```
 
 La sincronización es idempotente: si una entrada ya existe fuera de los bloques gestionados, se omite en lugar de duplicarse.
