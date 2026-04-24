@@ -85,6 +85,11 @@ class KafkaManager:
         return str(self._load_manager_config().get("provisioner") or "kubernetes").strip().lower()
 
     @staticmethod
+    def _is_kubernetes_provisioner(provisioner):
+        normalized = str(provisioner or "").strip().lower()
+        return normalized in {"kubernetes", "kubernetes-split-kraft"}
+
+    @staticmethod
     def _normalize_bootstrap_servers(bootstrap_servers):
         if bootstrap_servers is None:
             return []
@@ -154,16 +159,25 @@ class KafkaManager:
         return "192.168.49.2"
 
     def _kubernetes_identifiers(self, config):
+        provisioner = str(config.get("provisioner") or "kubernetes").strip().lower() or "kubernetes"
+        split_kraft = provisioner == "kubernetes-split-kraft"
         namespace = str(config.get("k8s_namespace") or "demo").strip() or "demo"
         service_name = str(config.get("k8s_service_name") or "framework-kafka").strip() or "framework-kafka"
         local_port = int(str(config.get("k8s_local_port") or "39092").strip() or "39092")
         internal_bootstrap = f"{service_name}.{namespace}.svc.cluster.local:9092"
         external_bootstrap = f"127.0.0.1:{local_port}"
         return {
+            "provisioner": provisioner,
+            "split_kraft": split_kraft,
             "namespace": namespace,
             "service_name": service_name,
             "external_service_name": f"{service_name}-external",
             "deployment_name": service_name,
+            "controller_service_name": f"{service_name}-controller",
+            "controller_deployment_name": f"{service_name}-controller",
+            "controller_bootstrap": f"{service_name}-controller.{namespace}.svc.cluster.local:9093",
+            "controller_node_id": int(str(config.get("k8s_controller_node_id") or "3000").strip() or "3000"),
+            "broker_node_id": int(str(config.get("k8s_broker_node_id") or "1").strip() or "1"),
             "local_port": local_port,
             "internal_bootstrap": internal_bootstrap,
             "external_service_bootstrap": f"{service_name}-external.{namespace}.svc.cluster.local:9094",
@@ -174,8 +188,98 @@ class KafkaManager:
     def _kubernetes_cluster_id():
         return "MkU3OEVBNTcwNTJENDM2Qk"
 
+    def _ensure_topic_in_kubernetes(self, topic_name, *, partitions=1, replication_factor=1):
+        ids = self._kubernetes_identifiers(self._load_manager_config())
+        exec_prefix = [
+            "kubectl",
+            "exec",
+            "-n",
+            ids["namespace"],
+            f"deployment/{ids['deployment_name']}",
+            "--",
+            "kafka-topics",
+            "--bootstrap-server",
+            "localhost:9092",
+        ]
+
+        list_result = self._run_command(exec_prefix + ["--list"])
+        existing_topics = set((getattr(list_result, "stdout", "") or "").splitlines())
+        if topic_name in existing_topics:
+            return True
+
+        self._run_command(
+            exec_prefix
+            + [
+                "--create",
+                "--if-not-exists",
+                "--topic",
+                topic_name,
+                "--partitions",
+                str(int(partitions or 1)),
+                "--replication-factor",
+                str(int(replication_factor or 1)),
+            ]
+        )
+
+        verify_result = self._run_command(exec_prefix + ["--list"])
+        verified_topics = set((getattr(verify_result, "stdout", "") or "").splitlines())
+        return topic_name in verified_topics
+
+    def ensure_topic(self, topic_name, *, partitions=1, replication_factor=1):
+        if not str(topic_name or "").strip():
+            return False
+
+        if bool(self.started_by_framework) and self._is_kubernetes_provisioner(self.provisioning_mode):
+            return self._ensure_topic_in_kubernetes(
+                str(topic_name).strip(),
+                partitions=partitions,
+                replication_factor=replication_factor,
+            )
+
+        return False
+
+    @staticmethod
+    def _kubernetes_resource_refs(ids):
+        refs = []
+        if ids.get("split_kraft"):
+            refs.extend(
+                [
+                    f"deployment/{ids['controller_deployment_name']}",
+                    f"service/{ids['controller_service_name']}",
+                ]
+            )
+        refs.extend(
+            [
+                f"deployment/{ids['deployment_name']}",
+                f"service/{ids['service_name']}",
+                f"service/{ids['external_service_name']}",
+            ]
+        )
+        return refs
+
+    @staticmethod
+    def _kubernetes_rollout_targets(ids):
+        targets = []
+        if ids.get("split_kraft"):
+            targets.append(f"deployment/{ids['controller_deployment_name']}")
+        targets.append(f"deployment/{ids['deployment_name']}")
+        return targets
+
+    @staticmethod
+    def _kubernetes_probe_excluded_prefixes(ids):
+        prefixes = [ids["deployment_name"]]
+        if ids.get("split_kraft"):
+            prefixes.append(ids["controller_deployment_name"])
+        return tuple(prefixes)
+
     def _build_kubernetes_manifest(self, config):
         ids = self._kubernetes_identifiers(config)
+        if ids.get("split_kraft"):
+            return self._build_kubernetes_split_kraft_manifest(config, ids)
+        return self._build_kubernetes_combined_manifest(config, ids)
+
+    def _build_kubernetes_combined_manifest(self, config, ids=None):
+        ids = ids or self._kubernetes_identifiers(config)
         image = str(config.get("container_image") or self.image)
         service_name = ids["service_name"]
         deployment_name = ids["deployment_name"]
@@ -237,26 +341,289 @@ class KafkaManager:
                       value: "1@localhost:9093"
                     - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
                       value: "1"
+                    - name: KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS
+                      value: "1"
                     - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+                      value: "1"
+                    - name: KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS
                       value: "1"
                     - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
                       value: "1"
+                    - name: KAFKA_BROKER_HEARTBEAT_INTERVAL_MS
+                      value: "3000"
+                    - name: KAFKA_BROKER_SESSION_TIMEOUT_MS
+                      value: "30000"
+                    - name: KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS
+                      value: "10000"
                     - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
                       value: "0"
                     - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
                       value: "true"
                     - name: KAFKA_LOG_DIRS
                       value: "/var/lib/kafka/data/kraft-combined-logs"
+                    resources:
+                      requests:
+                        cpu: "100m"
+                        memory: "256Mi"
+                    startupProbe:
+                      tcpSocket:
+                        port: 9092
+                      periodSeconds: 5
+                      failureThreshold: 24
                     readinessProbe:
                       tcpSocket:
                         port: 9092
-                      initialDelaySeconds: 10
+                      initialDelaySeconds: 5
                       periodSeconds: 5
+                      failureThreshold: 6
                     livenessProbe:
                       tcpSocket:
                         port: 9092
-                      initialDelaySeconds: 20
-                      periodSeconds: 10
+                      periodSeconds: 15
+                      failureThreshold: 6
+                    volumeMounts:
+                    - name: kafka-data
+                      mountPath: /var/lib/kafka/data
+                  volumes:
+                  - name: kafka-data
+                    emptyDir: {{}}
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: {service_name}
+              namespace: {namespace}
+              labels:
+                app: {service_name}
+                managed-by: inesdata-framework
+            spec:
+              selector:
+                app: {service_name}
+              ports:
+              - name: internal
+                port: 9092
+                targetPort: 9092
+              type: ClusterIP
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: {external_service_name}
+              namespace: {namespace}
+              labels:
+                app: {service_name}
+                managed-by: inesdata-framework
+            spec:
+              selector:
+                app: {service_name}
+              ports:
+              - name: external
+                port: 9094
+                targetPort: 9094
+              type: ClusterIP
+            """
+        ).strip()
+
+    def _build_kubernetes_split_kraft_manifest(self, config, ids=None):
+        ids = ids or self._kubernetes_identifiers(config)
+        image = str(config.get("container_image") or self.image)
+        service_name = ids["service_name"]
+        deployment_name = ids["deployment_name"]
+        namespace = ids["namespace"]
+        controller_service_name = ids["controller_service_name"]
+        controller_deployment_name = ids["controller_deployment_name"]
+        external_service_name = ids["external_service_name"]
+        external_bootstrap = ids["external_bootstrap"]
+        internal_bootstrap = ids["internal_bootstrap"]
+        controller_bootstrap = ids["controller_bootstrap"]
+        controller_node_id = ids["controller_node_id"]
+        broker_node_id = ids["broker_node_id"]
+        cluster_id = self._kubernetes_cluster_id()
+        return dedent(
+            f"""
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: {controller_deployment_name}
+              namespace: {namespace}
+              labels:
+                app: {controller_service_name}
+                managed-by: inesdata-framework
+                kafka-role: controller
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: {controller_service_name}
+              template:
+                metadata:
+                  labels:
+                    app: {controller_service_name}
+                    managed-by: inesdata-framework
+                    kafka-role: controller
+                spec:
+                  containers:
+                  - name: kafka-controller
+                    image: {image}
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                    - containerPort: 9093
+                      name: controller
+                    env:
+                    - name: CLUSTER_ID
+                      value: "{cluster_id}"
+                    - name: KAFKA_NODE_ID
+                      value: "{controller_node_id}"
+                    - name: KAFKA_PROCESS_ROLES
+                      value: "controller"
+                    - name: KAFKA_LISTENERS
+                      value: "CONTROLLER://0.0.0.0:9093"
+                    - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+                      value: "CONTROLLER:PLAINTEXT"
+                    - name: KAFKA_CONTROLLER_LISTENER_NAMES
+                      value: "CONTROLLER"
+                    - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+                      value: "{controller_node_id}@{controller_bootstrap}"
+                    - name: KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS
+                      value: "10000"
+                    - name: KAFKA_LOG_DIRS
+                      value: "/var/lib/kafka/data/kraft-controller-logs"
+                    resources:
+                      requests:
+                        cpu: "100m"
+                        memory: "256Mi"
+                    startupProbe:
+                      tcpSocket:
+                        port: 9093
+                      periodSeconds: 5
+                      failureThreshold: 24
+                    readinessProbe:
+                      tcpSocket:
+                        port: 9093
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+                      failureThreshold: 6
+                    livenessProbe:
+                      tcpSocket:
+                        port: 9093
+                      periodSeconds: 15
+                      failureThreshold: 6
+                    volumeMounts:
+                    - name: kafka-data
+                      mountPath: /var/lib/kafka/data
+                  volumes:
+                  - name: kafka-data
+                    emptyDir: {{}}
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: {controller_service_name}
+              namespace: {namespace}
+              labels:
+                app: {controller_service_name}
+                managed-by: inesdata-framework
+                kafka-role: controller
+            spec:
+              selector:
+                app: {controller_service_name}
+              ports:
+              - name: controller
+                port: 9093
+                targetPort: 9093
+              type: ClusterIP
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: {deployment_name}
+              namespace: {namespace}
+              labels:
+                app: {service_name}
+                managed-by: inesdata-framework
+                kafka-role: broker
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: {service_name}
+              template:
+                metadata:
+                  labels:
+                    app: {service_name}
+                    managed-by: inesdata-framework
+                    kafka-role: broker
+                spec:
+                  containers:
+                  - name: kafka
+                    image: {image}
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                    - containerPort: 9092
+                      name: internal
+                    - containerPort: 9094
+                      name: external
+                    env:
+                    - name: CLUSTER_ID
+                      value: "{cluster_id}"
+                    - name: KAFKA_NODE_ID
+                      value: "{broker_node_id}"
+                    - name: KAFKA_PROCESS_ROLES
+                      value: "broker"
+                    - name: KAFKA_LISTENERS
+                      value: "INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9094"
+                    - name: KAFKA_ADVERTISED_LISTENERS
+                      value: "INTERNAL://{internal_bootstrap},EXTERNAL://{external_bootstrap}"
+                    - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+                      value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+                    - name: KAFKA_INTER_BROKER_LISTENER_NAME
+                      value: "INTERNAL"
+                    - name: KAFKA_CONTROLLER_LISTENER_NAMES
+                      value: "CONTROLLER"
+                    - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+                      value: "{controller_node_id}@{controller_bootstrap}"
+                    - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+                      value: "1"
+                    - name: KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS
+                      value: "1"
+                    - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+                      value: "1"
+                    - name: KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS
+                      value: "1"
+                    - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+                      value: "1"
+                    - name: KAFKA_BROKER_HEARTBEAT_INTERVAL_MS
+                      value: "3000"
+                    - name: KAFKA_BROKER_SESSION_TIMEOUT_MS
+                      value: "30000"
+                    - name: KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS
+                      value: "10000"
+                    - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+                      value: "0"
+                    - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+                      value: "true"
+                    - name: KAFKA_LOG_DIRS
+                      value: "/var/lib/kafka/data/kraft-broker-logs"
+                    resources:
+                      requests:
+                        cpu: "100m"
+                        memory: "256Mi"
+                    startupProbe:
+                      tcpSocket:
+                        port: 9092
+                      periodSeconds: 5
+                      failureThreshold: 24
+                    readinessProbe:
+                      tcpSocket:
+                        port: 9092
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+                      failureThreshold: 6
+                    livenessProbe:
+                      tcpSocket:
+                        port: 9092
+                      periodSeconds: 15
+                      failureThreshold: 6
                     volumeMounts:
                     - name: kafka-data
                       mountPath: /var/lib/kafka/data
@@ -349,17 +716,7 @@ class KafkaManager:
 
     def _kubernetes_resources_exist(self, ids):
         try:
-            self._run_command(
-                [
-                    "kubectl",
-                    "get",
-                    f"deployment/{ids['deployment_name']}",
-                    f"service/{ids['service_name']}",
-                    f"service/{ids['external_service_name']}",
-                    "-n",
-                    ids["namespace"],
-                ]
-            )
+            self._run_command(["kubectl", "get"] + self._kubernetes_resource_refs(ids) + ["-n", ids["namespace"]])
             return True
         except Exception:
             return False
@@ -407,7 +764,7 @@ class KafkaManager:
 
     def _wait_for_kubernetes_namespace_listener(self, ids, *, host, port, listener_label):
         deadline = time.time() + self.wait_timeout_seconds
-        excluded_prefixes = (ids["deployment_name"],)
+        excluded_prefixes = self._kubernetes_probe_excluded_prefixes(ids)
 
         while time.time() < deadline:
             try:
@@ -454,24 +811,28 @@ class KafkaManager:
         ids = self._kubernetes_identifiers(config)
         self.bootstrap_servers = ids["external_bootstrap"]
         self.cluster_bootstrap_servers = ids["internal_bootstrap"]
-        self.provisioning_mode = "kubernetes"
+        self.provisioning_mode = ids["provisioner"]
         rollout_error = None
 
         self._run_command(["kubectl", "apply", "-f", "-"], input_text=manifest)
-        try:
-            self._run_command(
-                [
-                    "kubectl",
-                    "rollout",
-                    "status",
-                    f"deployment/{ids['deployment_name']}",
-                    "-n",
-                    ids["namespace"],
-                    f"--timeout={self.wait_timeout_seconds}s",
-                ]
-            )
-        except Exception as exc:
-            rollout_error = str(exc)
+        rollout_errors = []
+        for rollout_target in self._kubernetes_rollout_targets(ids):
+            try:
+                self._run_command(
+                    [
+                        "kubectl",
+                        "rollout",
+                        "status",
+                        rollout_target,
+                        "-n",
+                        ids["namespace"],
+                        f"--timeout={self.wait_timeout_seconds}s",
+                    ]
+                )
+            except Exception as exc:
+                rollout_errors.append(f"{rollout_target}: {exc}")
+        if rollout_errors:
+            rollout_error = "; ".join(rollout_errors)
 
         try:
             self._wait_for_kubernetes_internal_bootstrap(ids)
@@ -489,7 +850,7 @@ class KafkaManager:
                 self.started_by_framework = True
                 self.bootstrap_servers = ids["external_bootstrap"]
                 self.cluster_bootstrap_servers = ids["internal_bootstrap"]
-                self.provisioning_mode = "kubernetes"
+                self.provisioning_mode = ids["provisioner"]
                 self.last_error = None
                 return ids["external_bootstrap"]
             time.sleep(self.poll_interval_seconds)
@@ -518,7 +879,7 @@ class KafkaManager:
                 self.started_by_framework = True
                 self.bootstrap_servers = ids["external_bootstrap"]
                 self.cluster_bootstrap_servers = ids["internal_bootstrap"]
-                self.provisioning_mode = "kubernetes"
+                self.provisioning_mode = ids["provisioner"]
                 self.last_error = None
                 return ids["external_bootstrap"]
             time.sleep(self.poll_interval_seconds)
@@ -566,7 +927,7 @@ class KafkaManager:
         raise RuntimeError("Kafka container started but broker did not become available in time")
 
     def start_kafka(self):
-        if self._provisioner() == "kubernetes":
+        if self._is_kubernetes_provisioner(self._provisioner()):
             return self._start_kafka_kubernetes()
         return self._start_kafka_container()
 
@@ -587,7 +948,7 @@ class KafkaManager:
                 else:
                     self.cluster_bootstrap_servers = None
                 framework_managed_kubernetes = (
-                    previous_provisioning_mode == "kubernetes"
+                    self._is_kubernetes_provisioner(previous_provisioning_mode)
                     and self.port_forward_process is not None
                     and self.port_forward_process.poll() is None
                 )
@@ -596,14 +957,14 @@ class KafkaManager:
                     candidate == previous_bootstrap_servers
                     and (
                         (previous_started_by_framework and (framework_managed_container or framework_managed_kubernetes))
-                        or (previous_provisioning_mode == "kubernetes" and framework_managed_kubernetes)
+                        or (self._is_kubernetes_provisioner(previous_provisioning_mode) and framework_managed_kubernetes)
                     )
                 )
                 self.last_error = None
                 return candidate
 
         recovery_error = None
-        framework_managed_kubernetes = previous_provisioning_mode == "kubernetes" and (
+        framework_managed_kubernetes = self._is_kubernetes_provisioner(previous_provisioning_mode) and (
             previous_started_by_framework
             or previous_cluster_bootstrap_servers
             or previous_bootstrap_servers
@@ -629,23 +990,16 @@ class KafkaManager:
 
     def stop_kafka(self):
         """Stop the Kafka container only if it was started by the framework."""
-        if self.provisioning_mode == "kubernetes":
+        if self._is_kubernetes_provisioner(self.provisioning_mode):
             try:
                 config = self._load_manager_config()
                 ids = self._kubernetes_identifiers(config)
                 try:
                     self._stop_kubernetes_port_forward()
                     self._run_command(
-                        [
-                            "kubectl",
-                            "delete",
-                            f"deployment/{ids['deployment_name']}",
-                            f"service/{ids['service_name']}",
-                            f"service/{ids['external_service_name']}",
-                            "-n",
-                            ids["namespace"],
-                            "--ignore-not-found=true",
-                        ]
+                        ["kubectl", "delete"]
+                        + self._kubernetes_resource_refs(ids)
+                        + ["-n", ids["namespace"], "--ignore-not-found=true"]
                     )
                 except Exception as exc:
                     print(f"[WARNING] Failed to stop Kafka Kubernetes broker cleanly: {exc}")

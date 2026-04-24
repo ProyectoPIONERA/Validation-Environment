@@ -823,6 +823,32 @@ class NewmanMetricsTests(unittest.TestCase):
         self.assertEqual(env_vars["transferStartPath"], "adaptertransferprocesses")
         self.assertEqual(env_vars["transferDestinationType"], "AmazonS3")
 
+    def test_validation_engine_uses_protocol_address_resolver_when_available(self):
+        engine = ValidationEngine(
+            load_connector_credentials=lambda name: {"connector_user": {"user": name, "passwd": "secret"}},
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak-admin.local",
+                "KC_INTERNAL_URL": "http://keycloak.local",
+                "PIONERA_ADAPTER": "edc",
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name="roleedcprove",
+            protocol_address_resolver=lambda connector: (
+                f"http://{connector}.roleedcprove-provider.svc.cluster.local:19194/protocol"
+            ),
+        )
+
+        env_vars = engine.build_newman_env("conn-cityproof-roleedcprove", "conn-companyproof-roleedcprove")
+
+        self.assertEqual(
+            env_vars["providerProtocolAddress"],
+            "http://conn-cityproof-roleedcprove.roleedcprove-provider.svc.cluster.local:19194/protocol",
+        )
+        self.assertEqual(
+            env_vars["consumerProtocolAddress"],
+            "http://conn-companyproof-roleedcprove.roleedcprove-provider.svc.cluster.local:19194/protocol",
+        )
+
     def test_validation_engine_collects_transfer_storage_checks(self):
         fake_executor = mock.Mock()
         fake_executor.run_validation_collections.return_value = ["report.json"]

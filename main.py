@@ -4,6 +4,7 @@ import importlib
 import inspect
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -241,6 +242,54 @@ def _edc_dashboard_namespace(deployer_context):
     return str(getattr(deployer_context, "dataspace_name", "") or "").strip()
 
 
+def _context_namespace_profile(context):
+    return str(getattr(context, "namespace_profile", "compact") or "compact").strip() or "compact"
+
+
+def _context_namespace_roles_dict(context):
+    namespace_roles = getattr(context, "namespace_roles", None)
+    if hasattr(namespace_roles, "as_dict"):
+        return namespace_roles.as_dict()
+    if isinstance(namespace_roles, dict):
+        return dict(namespace_roles)
+    return {}
+
+
+def _context_planned_namespace_roles_dict(context):
+    planned_roles = getattr(context, "planned_namespace_roles", None)
+    if hasattr(planned_roles, "as_dict"):
+        return planned_roles.as_dict()
+    if isinstance(planned_roles, dict):
+        return dict(planned_roles)
+    return _context_namespace_roles_dict(context)
+
+
+def _build_namespace_plan_summary(context):
+    requested_profile = _context_namespace_profile(context)
+    execution_roles = _context_namespace_roles_dict(context)
+    planned_roles = _context_planned_namespace_roles_dict(context)
+    changed_roles = {}
+    for role_name, current_value in execution_roles.items():
+        planned_value = planned_roles.get(role_name)
+        if current_value != planned_value:
+            changed_roles[role_name] = {
+                "current": current_value,
+                "planned": planned_value,
+            }
+    preview_only = bool(changed_roles)
+    notes = []
+    if preview_only:
+        notes.append("Current runtime remains on the compatibility namespace layout in this phase.")
+        notes.append("Planned role-aligned namespaces are preview-only until Level 3, Level 4, and charts are migrated.")
+    return {
+        "status": "preview-only" if preview_only else "active",
+        "requested_profile": requested_profile,
+        "change_count": len(changed_roles),
+        "changed_roles": changed_roles,
+        "notes": notes,
+    }
+
+
 def _positive_float_env(name, default):
     raw_value = os.getenv(name)
     if raw_value in (None, ""):
@@ -250,6 +299,17 @@ def _positive_float_env(name, default):
     except ValueError:
         print(f"[WARNING] Ignoring invalid {name}={raw_value!r}; using {default}")
         return float(default)
+
+
+def _positive_int_env(name, default):
+    raw_value = os.getenv(name)
+    if raw_value in (None, ""):
+        return int(default)
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        print(f"[WARNING] Ignoring invalid {name}={raw_value!r}; using {default}")
+        return int(default)
 
 
 def _kubectl_endpoint_ready(namespace, service_name):
@@ -332,8 +392,30 @@ def _edc_keycloak_public_base_url(deployer_context):
     return _public_keycloak_base_url(deployer_context)
 
 
-def _http_readiness_gate(label, url, expected_statuses, timeout_seconds):
+def _normalize_readiness_url(url, *, preserve_trailing_slash=False):
     normalized_url = normalize_public_endpoint_url(url)
+    if (
+        normalized_url
+        and preserve_trailing_slash
+        and str(url or "").strip().endswith("/")
+        and not normalized_url.endswith("/")
+    ):
+        normalized_url = f"{normalized_url}/"
+    return normalized_url
+
+
+def _http_readiness_gate(
+    label,
+    url,
+    expected_statuses,
+    timeout_seconds,
+    *,
+    preserve_trailing_slash=False,
+):
+    normalized_url = _normalize_readiness_url(
+        url,
+        preserve_trailing_slash=preserve_trailing_slash,
+    )
     if not normalized_url:
         return {
             "gate": label,
@@ -373,6 +455,43 @@ def _http_readiness_gate(label, url, expected_statuses, timeout_seconds):
     }
 
 
+def _http_form_readiness_gate(label, url, form_data, expected_statuses, timeout_seconds):
+    normalized_url = _normalize_readiness_url(url)
+    if not normalized_url:
+        return {
+            "gate": label,
+            "url": url,
+            "ready": False,
+            "detail": "public URL is empty or not resolvable from the local machine",
+        }
+
+    try:
+        response = requests.post(
+            normalized_url,
+            data=form_data,
+            timeout=timeout_seconds,
+            allow_redirects=False,
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception as exc:
+        return {
+            "gate": label,
+            "url": normalized_url,
+            "ready": False,
+            "detail": f"HTTP probe failed: {exc}",
+        }
+
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    ready = status_code in set(expected_statuses)
+    return {
+        "gate": label,
+        "url": normalized_url,
+        "status_code": status_code,
+        "ready": ready,
+        "detail": f"HTTP {status_code}",
+    }
+
+
 def _edc_http_readiness_gate(label, url, expected_statuses, timeout_seconds):
     return _http_readiness_gate(label, url, expected_statuses, timeout_seconds)
 
@@ -382,8 +501,88 @@ def _inesdata_connector_public_base_url(connector_name, deployer_context):
     connector = str(connector_name or "").strip()
     if not connector or not ds_domain:
         return None
-    return normalize_public_endpoint_url(
-        f"http://{connector}.{ds_domain}/inesdata-connector-interface/"
+    return f"http://{connector}.{ds_domain}/inesdata-connector-interface/"
+
+
+def _inesdata_connector_credentials_path(deployer_context, connector_name):
+    runtime_dir = str(getattr(deployer_context, "runtime_dir", "") or "").strip()
+    connector = str(connector_name or "").strip()
+    if not runtime_dir or not connector:
+        return None
+    return os.path.join(runtime_dir, f"credentials-connector-{connector}.json")
+
+
+def _load_inesdata_connector_user_credentials(deployer_context, connector_name):
+    credentials_path = _inesdata_connector_credentials_path(deployer_context, connector_name)
+    if not credentials_path:
+        return None, "runtime_dir is not configured"
+    if not os.path.isfile(credentials_path):
+        return None, f"credentials file not found: {credentials_path}"
+
+    try:
+        with open(credentials_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        return None, f"failed to read {credentials_path}: {exc}"
+
+    connector_user = payload.get("connector_user") if isinstance(payload, dict) else {}
+    username = str((connector_user or {}).get("user") or "").strip()
+    password = str((connector_user or {}).get("passwd") or "").strip()
+    if not username or not password:
+        return None, f"connector_user credentials missing in {credentials_path}"
+
+    return {
+        "username": username,
+        "password": password,
+    }, None
+
+
+def _inesdata_keycloak_password_grant_gate(
+    deployer_context,
+    connector_name,
+    dataspace,
+    timeout_seconds,
+):
+    keycloak_base_url = _public_keycloak_base_url(deployer_context)
+    if not keycloak_base_url or not dataspace:
+        return {
+            "gate": f"keycloak-password-grant:{connector_name}",
+            "url": keycloak_base_url,
+            "ready": False,
+            "detail": "Keycloak public URL or dataspace is not configured",
+        }
+
+    credentials, error_detail = _load_inesdata_connector_user_credentials(
+        deployer_context,
+        connector_name,
+    )
+    if not credentials:
+        return {
+            "gate": f"keycloak-password-grant:{connector_name}",
+            "url": (
+                f"{keycloak_base_url}/realms/"
+                f"{urllib.parse.quote(dataspace, safe='')}/protocol/openid-connect/token"
+            ),
+            "ready": False,
+            "detail": error_detail or "connector credentials are not available",
+        }
+
+    token_url = (
+        f"{keycloak_base_url}/realms/"
+        f"{urllib.parse.quote(dataspace, safe='')}/protocol/openid-connect/token"
+    )
+    return _http_form_readiness_gate(
+        f"keycloak-password-grant:{connector_name}",
+        token_url,
+        form_data={
+            "grant_type": "password",
+            "client_id": "dataspace-users",
+            "username": credentials["username"],
+            "password": credentials["password"],
+            "scope": "openid profile email",
+        },
+        expected_statuses={200},
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -624,8 +823,17 @@ def _probe_inesdata_portal_readiness(deployer_context):
             _http_readiness_gate(
                 f"portal-route:{connector}",
                 _inesdata_connector_public_base_url(connector, deployer_context),
-                expected_statuses={200, 301, 302, 303, 307, 308},
+                expected_statuses={200},
                 timeout_seconds=http_timeout,
+                preserve_trailing_slash=True,
+            )
+        )
+        gates.append(
+            _inesdata_keycloak_password_grant_gate(
+                deployer_context,
+                connector,
+                dataspace,
+                http_timeout,
             )
         )
 
@@ -652,19 +860,41 @@ def _write_inesdata_portal_readiness(experiment_dir, readiness):
 def _wait_for_inesdata_portal_readiness(deployer_context, experiment_dir=None):
     timeout = _positive_float_env("PIONERA_INESDATA_PORTAL_READINESS_TIMEOUT_SECONDS", 90)
     poll_interval = _positive_float_env("PIONERA_INESDATA_PORTAL_READINESS_POLL_SECONDS", 3)
+    stable_polls_required = max(1, _positive_int_env("PIONERA_INESDATA_PORTAL_STABLE_POLLS", 2))
     deadline = time.monotonic() + timeout
     readiness = None
+    stable_polls_observed = 0
 
     while True:
         readiness = _probe_inesdata_portal_readiness(deployer_context)
         readiness["timeout_seconds"] = timeout
         readiness["poll_interval_seconds"] = poll_interval
+        readiness["stable_polls_required"] = stable_polls_required
         if readiness.get("status") == "passed":
-            readiness["artifact"] = _write_inesdata_portal_readiness(experiment_dir, readiness)
-            return readiness
+            stable_polls_observed += 1
+            readiness["stable_polls_observed"] = stable_polls_observed
+            if stable_polls_observed >= stable_polls_required:
+                readiness["artifact"] = _write_inesdata_portal_readiness(experiment_dir, readiness)
+                return readiness
+        else:
+            stable_polls_observed = 0
+            readiness["stable_polls_observed"] = 0
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if readiness.get("status") == "passed" and stable_polls_observed < stable_polls_required:
+                readiness["status"] = "failed"
+                readiness.setdefault("gates", []).append(
+                    {
+                        "gate": "stability-window",
+                        "ready": False,
+                        "detail": (
+                            f"observed {stable_polls_observed} consecutive successful polls; "
+                            f"require {stable_polls_required}"
+                        ),
+                    }
+                )
+                readiness["stable_polls_observed"] = stable_polls_observed
             readiness["artifact"] = _write_inesdata_portal_readiness(experiment_dir, readiness)
             return readiness
 
@@ -854,6 +1084,10 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         "config.ds_domain_base",
         "ds_domain_base",
     )
+    protocol_address_resolver = _resolve_adapter_callable(
+        adapter,
+        "connectors.build_internal_protocol_address",
+    )
     ds_name = "demo"
     config = getattr(adapter, "config", None)
     dataspace_name_getter = getattr(config, "dataspace_name", None)
@@ -884,6 +1118,7 @@ def build_validation_engine(adapter, engine_cls=ValidationEngine):
         ds_domain_resolver=ds_domain_resolver,
         ds_name=ds_name,
         transfer_storage_verifier=transfer_storage_verifier,
+        protocol_address_resolver=protocol_address_resolver,
     )
 
 
@@ -976,6 +1211,206 @@ class _Level6KafkaPreparationHandle:
         stop_method = getattr(self.kafka_manager, "stop_kafka", None)
         if callable(stop_method):
             stop_method()
+
+
+class _Level6LocalHttpPortForwardFallback:
+    """Temporary local-only HTTP fallback for Level 6 Kafka validation."""
+
+    KEYCLOAK_SERVICE_NAME = "common-srvs-keycloak"
+    KEYCLOAK_REMOTE_PORT = 80
+    CONNECTOR_MANAGEMENT_REMOTE_PORT = 19193
+
+    def __init__(self, adapter, connectors, validator):
+        self.adapter = adapter
+        self.connectors = list(dict.fromkeys(connectors or []))
+        self.validator = validator
+        self._processes = []
+        self._keycloak_port = None
+        self._connector_ports = {}
+
+    @staticmethod
+    def _enabled():
+        return _env_flag("PIONERA_LEVEL6_LOCAL_HTTP_PORT_FORWARD_FALLBACK", False)
+
+    def _is_local_topology(self):
+        topology = str(getattr(self.adapter, "topology", "local") or "local").strip().lower()
+        return topology == "local"
+
+    @staticmethod
+    def _normalize_http_url(url):
+        value = str(url or "").strip()
+        if not value:
+            return ""
+        if not value.startswith(("http://", "https://")):
+            return f"http://{value}"
+        return value
+
+    @staticmethod
+    def _probe_http_url(url, timeout=3):
+        normalized = _Level6LocalHttpPortForwardFallback._normalize_http_url(url)
+        if not normalized:
+            return False
+        try:
+            response = requests.get(normalized, timeout=timeout, allow_redirects=False)
+        except requests.RequestException:
+            return False
+        return int(getattr(response, "status_code", 0) or 0) < 500
+
+    @staticmethod
+    def _reserve_local_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            return int(sock.getsockname()[1])
+
+    @staticmethod
+    def _wait_for_local_port(port, timeout=15):
+        deadline = time.time() + max(float(timeout), 1.0)
+        while time.time() <= deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", int(port)), timeout=0.25):
+                    return True
+            except OSError:
+                time.sleep(0.1)
+        return False
+
+    @staticmethod
+    def _terminate_process(process):
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+    def _common_services_namespace(self):
+        config = getattr(self.adapter, "config", None)
+        return str(getattr(config, "NS_COMMON", "common-srvs") or "common-srvs").strip() or "common-srvs"
+
+    def _connector_namespace(self, connector):
+        connectors = getattr(self.adapter, "connectors", None)
+        resolver = getattr(connectors, "connector_target_namespace", None)
+        if callable(resolver):
+            resolved = str(resolver(connector) or "").strip()
+            if resolved:
+                return resolved
+        config = getattr(self.adapter, "config", None)
+        namespace_getter = getattr(config, "namespace_demo", None)
+        if callable(namespace_getter):
+            resolved = str(namespace_getter() or "").strip()
+            if resolved:
+                return resolved
+        return str(getattr(config, "DS_NAME", "demo") or "demo").strip() or "demo"
+
+    def _public_keycloak_url(self):
+        config_loader = getattr(self.validator, "load_deployer_config", None)
+        config = config_loader() if callable(config_loader) else {}
+        if not isinstance(config, dict):
+            config = {}
+        return self._normalize_http_url(config.get("KC_INTERNAL_URL") or config.get("KC_URL"))
+
+    def _keycloak_probe_url(self):
+        dataspace_name = getattr(self.validator, "_dataspace_name", lambda: "demo")()
+        keycloak_url = self._public_keycloak_url()
+        if not keycloak_url:
+            return ""
+        return f"{keycloak_url}/realms/{dataspace_name}/protocol/openid-connect/token"
+
+    def _connector_probe_url(self, connector):
+        return self.validator._management_url(connector, "/management/v3/assets/request")
+
+    def _start_service_port_forward(self, namespace, service_name, remote_port):
+        local_port = self._reserve_local_port()
+        process = subprocess.Popen(
+            [
+                "kubectl",
+                "port-forward",
+                "-n",
+                str(namespace),
+                f"svc/{service_name}",
+                f"{local_port}:{int(remote_port)}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if not self._wait_for_local_port(local_port):
+            self._terminate_process(process)
+            raise RuntimeError(
+                f"Local Level 6 HTTP fallback could not expose {service_name} "
+                f"in namespace {namespace} on local port {local_port}"
+            )
+        self._processes.append(process)
+        return int(local_port)
+
+    def activate_if_needed(self):
+        if not self._enabled() or not self._is_local_topology():
+            return False
+
+        keycloak_needs_fallback = not self._probe_http_url(self._keycloak_probe_url())
+        connectors_needing_fallback = [
+            connector
+            for connector in self.connectors
+            if not self._probe_http_url(self._connector_probe_url(connector))
+        ]
+
+        if not keycloak_needs_fallback and not connectors_needing_fallback:
+            return False
+
+        started_keycloak = False
+        started_connectors = []
+        try:
+            if keycloak_needs_fallback:
+                self._keycloak_port = self._start_service_port_forward(
+                    self._common_services_namespace(),
+                    self.KEYCLOAK_SERVICE_NAME,
+                    self.KEYCLOAK_REMOTE_PORT,
+                )
+                started_keycloak = True
+
+            for connector in connectors_needing_fallback:
+                self._connector_ports[connector] = self._start_service_port_forward(
+                    self._connector_namespace(connector),
+                    connector,
+                    self.CONNECTOR_MANAGEMENT_REMOTE_PORT,
+                )
+                started_connectors.append(connector)
+        except Exception:
+            self.close()
+            raise
+
+        if self._keycloak_port is not None:
+            self.validator.keycloak_url_resolver = (
+                lambda port=self._keycloak_port: f"http://127.0.0.1:{port}"
+            )
+
+        if self._connector_ports:
+            def _management_url_resolver(connector, path):
+                local_port = self._connector_ports.get(connector)
+                if local_port is None:
+                    return ""
+                return f"http://127.0.0.1:{local_port}{path}"
+
+            self.validator.management_url_resolver = _management_url_resolver
+
+        activated_parts = []
+        if started_keycloak:
+            activated_parts.append("Keycloak")
+        if started_connectors:
+            activated_parts.append(f"{len(started_connectors)} connector management API(s)")
+        if activated_parts:
+            print(
+                "Level 6 local HTTP fallback activated via port-forward for "
+                + " and ".join(activated_parts)
+                + "."
+            )
+        return True
+
+    def close(self):
+        for process in reversed(self._processes):
+            self._terminate_process(process)
+        self._processes.clear()
 
 
 def _save_level6_kafka_preparation_artifact(preparation, experiment_dir):
@@ -1103,6 +1538,10 @@ def build_kafka_edc_validation_suite(
         adapter,
         "ensure_kafka_topic",
     )
+    protocol_address_resolver = _resolve_adapter_callable(
+        adapter,
+        "connectors.build_internal_protocol_address",
+    )
 
     missing_dependencies = [
         name
@@ -1127,6 +1566,7 @@ def build_kafka_edc_validation_suite(
         experiment_storage=experiment_storage,
         ds_domain_resolver=ds_domain_resolver,
         ds_name_loader=_dataspace_name_loader(adapter),
+        protocol_address_resolver=protocol_address_resolver,
     )
 
 
@@ -1353,13 +1793,18 @@ def run_level6_kafka_edc_after_newman(
             kafka_manager_cls=kafka_manager_cls,
             kafka_manager=prepared_kafka_manager,
         )
-        results = run_kafka_edc_validation(
-            list(connectors or []),
-            experiment_dir,
-            validator=validator,
-            experiment_storage=experiment_storage,
-            progress_callback=_print_progress_result,
-        )
+        http_fallback = _Level6LocalHttpPortForwardFallback(adapter, connectors, validator)
+        http_fallback.activate_if_needed()
+        try:
+            results = run_kafka_edc_validation(
+                list(connectors or []),
+                experiment_dir,
+                validator=validator,
+                experiment_storage=experiment_storage,
+                progress_callback=_print_progress_result,
+            )
+        finally:
+            http_fallback.close()
     except Exception as exc:
         results = [
             {
@@ -1579,6 +2024,9 @@ def build_dry_run_preview(
                 deployer_registry=deployer_registry,
                 topology=topology,
             )
+            preview["namespace_profile"] = _context_namespace_profile(context)
+            preview["namespace_roles"] = _context_namespace_roles_dict(context)
+            preview["planned_namespace_roles"] = _context_planned_namespace_roles_dict(context)
             preview["hosts_plan"] = _build_shadow_host_sync_plan(context)
         except Exception as exc:
             preview["hosts_plan"] = {
@@ -1664,6 +2112,10 @@ def _build_deployer_dry_run_preview(
         "deployer": getattr(deployer, "name", lambda: type(deployer).__name__.lower())(),
         "deployer_class": type(deployer).__name__,
         "topology": topology,
+        "namespace_profile": _context_namespace_profile(context),
+        "namespace_roles": _context_namespace_roles_dict(context),
+        "planned_namespace_roles": _context_planned_namespace_roles_dict(context),
+        "namespace_plan_summary": _build_namespace_plan_summary(context),
         "context": _sanitize_preview_data(context.as_dict()),
     }
 
@@ -2127,6 +2579,10 @@ def _build_shadow_host_sync_plan(context):
         "hosts_file": _deployer_hosts_file() or None,
         "address": _deployer_hosts_default_address(context),
         "address_override": address_override,
+        "namespace_profile": _context_namespace_profile(context),
+        "namespace_roles": _context_namespace_roles_dict(context),
+        "planned_namespace_roles": _context_planned_namespace_roles_dict(context),
+        "namespace_plan_summary": _build_namespace_plan_summary(context),
         "topology_profile": (
             topology_profile.as_dict()
             if hasattr(topology_profile, "as_dict")
@@ -2323,6 +2779,8 @@ def _build_deployer_deploy_shadow_plan(adapter, deployer_name=None, deployer_reg
         "status": "planned",
         "deployer_name": resolved_deployer_name,
         "topology": topology,
+        "namespace_profile": _context_namespace_profile(context),
+        "namespace_plan_summary": _build_namespace_plan_summary(context),
         "actions": [
             "resolve_context",
             "plan_infrastructure",
@@ -2331,7 +2789,8 @@ def _build_deployer_deploy_shadow_plan(adapter, deployer_name=None, deployer_reg
             "plan_components",
             "plan_validation_after_deploy",
         ],
-        "namespace_roles": context.namespace_roles.as_dict(),
+        "namespace_roles": _context_namespace_roles_dict(context),
+        "planned_namespace_roles": _context_planned_namespace_roles_dict(context),
         "deployer_context": _sanitize_preview_data(context.as_dict()),
         "hosts_plan": _build_shadow_host_sync_plan(context),
         "level_plan": _build_shadow_level_plan(context, preflight=preflight),
@@ -2611,7 +3070,9 @@ def _execute_deployer_deploy(adapter, deployer_name=None, deployer_registry=None
         "status": "completed",
         "deployer_name": resolved_deployer_name,
         "topology": topology,
-        "namespace_roles": context.namespace_roles.as_dict(),
+        "namespace_profile": _context_namespace_profile(context),
+        "namespace_roles": _context_namespace_roles_dict(context),
+        "planned_namespace_roles": _context_planned_namespace_roles_dict(context),
         "deployer_context": _sanitize_preview_data(context.as_dict()),
         "hosts_sync": hosts_sync,
         "deployment": {
@@ -2668,13 +3129,293 @@ def run_hosts(adapter, deployer_name=None, deployer_registry=None, topology="loc
     )
     plan = _build_shadow_host_sync_plan(context)
     sync = _sync_deployer_hosts_if_enabled(context)
+    result_status = sync.get("status", "planned")
+    if result_status == "skipped" and sync.get("reason") == "disabled":
+        result_status = "planned"
     return {
-        "status": sync.get("status", "planned"),
+        "status": result_status,
         "deployer_name": resolved_deployer_name,
         "topology": topology,
         "dataspace": getattr(context, "dataspace_name", None),
         "hosts_plan": plan,
         "hosts_sync": sync,
+    }
+
+
+def _humanize_url_label(label):
+    normalized = str(label or "").strip().replace("_", " ").replace("-", " ")
+    normalized = " ".join(token for token in normalized.split() if token)
+    return normalized.title() if normalized else "Url"
+
+
+def _flatten_url_map(urls, prefix=None):
+    flattened = []
+    if not isinstance(urls, dict):
+        return flattened
+
+    for key, value in urls.items():
+        if value in (None, "", [], {}):
+            continue
+
+        label = _humanize_url_label(key)
+        if prefix:
+            label = f"{prefix} {label}"
+
+        if isinstance(value, dict):
+            flattened.extend(_flatten_url_map(value, prefix=label))
+            continue
+
+        flattened.append((label, str(value)))
+
+    return flattened
+
+
+def _append_url_lines(lines, urls, heading="URLs", multiline=False):
+    flattened = _flatten_url_map(urls)
+    if not flattened:
+        return
+
+    lines.append(f"{heading}:")
+    for label, value in flattened:
+        if multiline:
+            lines.append(f"- {label}:")
+            lines.append(f"  {value}")
+        else:
+            lines.append(f"- {label}: {value}")
+
+
+def _append_hosts_level_lines(lines, label, hostnames):
+    values = [str(value or "").strip() for value in (hostnames or []) if str(value or "").strip()]
+    if not values:
+        return
+
+    lines.append(f"{label}: {len(values)}")
+    for value in values:
+        lines.append(f"- {value}")
+
+
+def _humanize_hosts_sync_reason(reason):
+    normalized = str(reason or "").strip().lower()
+    if not normalized:
+        return ""
+
+    labels = {
+        "disabled": "disabled by configuration",
+        "missing-deployer-context": "missing deployer context",
+    }
+    return labels.get(normalized, normalized.replace("-", " "))
+
+
+def _hosts_plan_hostnames(plan):
+    if not isinstance(plan, dict):
+        return []
+
+    values = []
+    for key in ("level_1_2", "level_3", "level_4", "level_5"):
+        values.extend(plan.get(key) or [])
+    return _dedupe_ordered(values)
+
+
+def _level2_access_urls(urls):
+    if not isinstance(urls, dict):
+        return {}
+
+    level_urls = {}
+    keycloak_realm = str(urls.get("keycloak_realm") or "").strip()
+    if keycloak_realm:
+        parsed = urllib.parse.urlparse(keycloak_realm)
+        if parsed.scheme and parsed.netloc:
+            level_urls["keycloak"] = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+
+    keycloak_admin_console = str(urls.get("keycloak_admin_console") or "").strip()
+    if keycloak_admin_console:
+        parsed = urllib.parse.urlparse(keycloak_admin_console)
+        if parsed.scheme and parsed.netloc:
+            level_urls["keycloak_admin_console"] = urllib.parse.urlunparse(
+                (parsed.scheme, parsed.netloc, "/admin/", "", "", "")
+            )
+
+    minio_console = str(urls.get("minio_console") or "").strip()
+    if minio_console:
+        level_urls["minio_console"] = minio_console
+
+    minio_api = str(urls.get("minio_api") or "").strip()
+    if minio_api:
+        level_urls["minio_api"] = minio_api
+
+    return level_urls
+
+
+def _select_level_access_urls(level_id, urls):
+    if not isinstance(urls, dict) or not urls:
+        return {}
+
+    if level_id == 2:
+        return _level2_access_urls(urls)
+
+    if level_id == 3:
+        selected = {}
+        for key in ("public_portal_login", "public_portal_backend_admin", "registration_service"):
+            value = urls.get(key)
+            if value:
+                selected[key] = value
+        return selected
+
+    if level_id == 4:
+        connectors = urls.get("connectors")
+        return {"connectors": connectors} if isinstance(connectors, dict) and connectors else {}
+
+    if level_id == 5:
+        components = urls.get("components")
+        return {"components": components} if isinstance(components, dict) and components else {}
+
+    return {}
+
+
+def _resolve_level_access_urls(adapter, level_id, deployer_name=None, deployer_registry=None, topology="local"):
+    if int(level_id) not in {2, 3, 4, 5}:
+        return {}
+
+    try:
+        available = run_available_access_urls(
+            adapter,
+            deployer_name=deployer_name,
+            deployer_registry=deployer_registry,
+            topology=topology,
+        )
+    except Exception:
+        return {}
+
+    return _select_level_access_urls(level_id, available.get("urls"))
+
+
+def run_available_access_urls(adapter, deployer_name=None, deployer_registry=None, topology="local"):
+    """Resolve access URLs already implied by the current adapter configuration."""
+    resolved_deployer_name, context = _resolve_deployer_context(
+        adapter,
+        deployer_name=deployer_name,
+        deployer_registry=deployer_registry,
+        topology=topology,
+    )
+
+    config = dict(getattr(context, "config", {}) or {})
+    dataspace_name = str(getattr(context, "dataspace_name", "") or "").strip()
+    environment = str(getattr(context, "environment", "DEV") or "DEV").strip()
+    connectors = list(getattr(context, "connectors", []) or [])
+    components = list(getattr(context, "components", []) or [])
+    urls = {}
+
+    if resolved_deployer_name == "inesdata":
+        from deployers.inesdata.access_urls import (
+            build_connector_access_urls as build_inesdata_connector_access_urls,
+            build_dataspace_access_urls,
+        )
+
+        dataspace_urls = build_dataspace_access_urls(dataspace_name, environment, config)
+        for key in (
+            "public_portal_login",
+            "public_portal_backend_admin",
+            "registration_service",
+            "keycloak_realm",
+            "keycloak_account",
+            "keycloak_admin_console",
+            "minio_api",
+            "minio_console",
+        ):
+            value = dataspace_urls.get(key)
+            if value:
+                urls[key] = value
+
+        connector_urls = {}
+        for connector in connectors:
+            access_urls = build_inesdata_connector_access_urls(
+                connector,
+                dataspace_name,
+                environment,
+                config,
+            )
+            selected = {}
+            for key in (
+                "connector_ingress",
+                "connector_interface_login",
+                "connector_management_api",
+                "connector_protocol_api",
+                "connector_shared_api",
+                "minio_bucket",
+            ):
+                value = access_urls.get(key)
+                if value:
+                    selected[key] = value
+            if selected:
+                connector_urls[connector] = selected
+        if connector_urls:
+            urls["connectors"] = connector_urls
+
+        infer_component_urls = _resolve_adapter_callable(adapter, "components.infer_component_urls")
+        if callable(infer_component_urls) and components:
+            component_urls = infer_component_urls(components)
+            if component_urls:
+                urls["components"] = component_urls
+
+    else:
+        from deployers.edc.bootstrap import (
+            access_protocol as edc_access_protocol,
+            build_connector_access_urls as build_edc_connector_access_urls,
+            common_access_urls as build_edc_common_access_urls,
+            dataspace_domain_base as edc_dataspace_domain_base,
+        )
+
+        common_urls = build_edc_common_access_urls(config, dataspace_name, environment)
+        for key in (
+            "keycloak_realm",
+            "keycloak_account",
+            "keycloak_admin_console",
+            "minio_api",
+            "minio_console",
+        ):
+            value = common_urls.get(key)
+            if value:
+                urls[key] = value
+
+        protocol = edc_access_protocol(environment)
+        dataspace_domain = edc_dataspace_domain_base(config, environment)
+        if dataspace_name and dataspace_domain:
+            urls["registration_service"] = f"{protocol}://registration-service-{dataspace_name}.{dataspace_domain}"
+
+        connector_urls = {}
+        for connector in connectors:
+            access_urls = build_edc_connector_access_urls(
+                config,
+                connector,
+                dataspace_name,
+                environment,
+            )
+            selected = {}
+            for key in (
+                "connector_ingress",
+                "connector_management_api_v3",
+                "connector_protocol_api",
+                "connector_default_api",
+                "connector_control_api",
+                "edc_dashboard_login",
+                "edc_dashboard_oidc_login",
+                "minio_bucket",
+            ):
+                value = access_urls.get(key)
+                if value:
+                    selected[key] = value
+            if selected:
+                connector_urls[connector] = selected
+        if connector_urls:
+            urls["connectors"] = connector_urls
+
+    return {
+        "status": "available",
+        "adapter": resolved_deployer_name,
+        "topology": topology,
+        "dataspace": dataspace_name or None,
+        "access_urls_view": True,
+        "urls": urls,
     }
 
 
@@ -3394,12 +4135,23 @@ def run_level(
             baseline=baseline,
         )
 
-    return {
+    level_urls = _resolve_level_access_urls(
+        adapter,
+        level_id,
+        deployer_name=resolved_deployer_name,
+        deployer_registry=deployer_registry,
+        topology=topology,
+    )
+
+    payload = {
         "level": level_id,
         "name": level_name,
         "status": "completed",
         "result": result,
     }
+    if level_urls:
+        payload["urls"] = level_urls
+    return payload
 
 
 def run_levels(
@@ -3661,6 +4413,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None):
     print("S - Select adapter")
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
+    print("U - Show available access URLs")
     print("M - Run metrics / benchmarks")
     print("X - Recreate dataspace")
     print()
@@ -3702,8 +4455,10 @@ def _print_interactive_help():
     print("    If you skip it, the menu still asks automatically when an action needs an adapter.")
     print("P - Use before deploying to inspect the plan without changing the environment.")
     print("    If Levels 3-6 need an adapter and none has been chosen yet, the menu asks for one automatically.")
-    print("H - Use before EDC Levels 3-6, or when browser/API access fails because local hostnames are missing.")
-    print("    If the operation needs an adapter and none has been chosen yet, the menu asks for one automatically.")
+    print("H - Use to inspect or apply local hosts entries needed by the selected adapter.")
+    print("    It shows concrete hostnames, the sync result, and in menu mode can offer to apply the plan immediately.")
+    print("U - Use to print access URLs derived from the selected adapter config in a readable format.")
+    print("    Useful after Levels 2-5 when you want portal, connector, component or MinIO access details without searching files manually.")
     print(
         "M - Use when you only need metrics or standalone benchmarks. "
         "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
@@ -3840,6 +4595,64 @@ def _interactive_ensure_hosts_ready_for_levels(
     return True
 
 
+def _interactive_offer_hosts_plan_apply(
+    result,
+    adapter,
+    deployer_name=None,
+    deployer_registry=None,
+    topology="local",
+):
+    if not isinstance(result, dict):
+        return result
+
+    hosts_sync = result.get("hosts_sync")
+    if not isinstance(hosts_sync, dict):
+        return result
+
+    sync_status = str(hosts_sync.get("status") or "").strip().lower()
+    sync_reason = str(hosts_sync.get("reason") or "").strip().lower()
+    if sync_status != "skipped" or sync_reason != "disabled":
+        return result
+
+    hostnames = _hosts_plan_hostnames(result.get("hosts_plan"))
+    if not hostnames:
+        return result
+
+    hosts_file = _interactive_hosts_file_path()
+
+    print()
+    if not hosts_file:
+        print("Cannot detect a hosts file automatically. Set PIONERA_HOSTS_FILE and run H again.")
+        return result
+
+    print(f"Detected hosts file: {hosts_file}")
+    print("The framework can apply this hosts plan now.")
+
+    if not _interactive_confirm("Apply this hosts plan now?", default=False):
+        return result
+
+    try:
+        with _temporary_environment(
+            {
+                "PIONERA_SYNC_HOSTS": "true",
+                "PIONERA_HOSTS_FILE": hosts_file,
+            }
+        ):
+            applied = run_hosts(
+                adapter,
+                deployer_name=deployer_name,
+                deployer_registry=deployer_registry,
+                topology=topology,
+            )
+    except Exception as exc:
+        print(f"Could not apply host entries automatically: {exc}")
+        print("Run H again with the required permissions or set PIONERA_SYNC_HOSTS manually.")
+        return result
+
+    _print_action_result(applied)
+    return applied
+
+
 def _print_action_result(result):
     def _console_result_label(status):
         normalized = str(status or "").strip().lower()
@@ -3903,6 +4716,15 @@ def _print_action_result(result):
                 summary = _summarize_level_result(level_payload)
                 if summary:
                     lines.append(summary)
+                if isinstance(level_payload, dict):
+                    level_urls = level_payload.get("urls")
+                    if not level_urls:
+                        level_result = level_payload.get("result")
+                        if isinstance(level_result, dict):
+                            level_urls = level_result.get("urls")
+                    if level_urls:
+                        heading = f"Level {level_payload.get('level')} URLs"
+                        _append_url_lines(lines, level_urls, heading=heading)
         elif payload.get("level") is not None and payload.get("name"):
             summary = _summarize_level_result(payload)
             if summary and summary not in lines:
@@ -3935,6 +4757,32 @@ def _print_action_result(result):
         if isinstance(cleanup, dict) and cleanup.get("status") not in (None, "skipped"):
             lines.append(f"Cleanup: {_console_result_label(cleanup.get('status'))}")
 
+        hosts_plan = payload.get("hosts_plan")
+        if isinstance(hosts_plan, dict):
+            for key, label in (
+                ("level_1_2", "Hosts Level 1-2"),
+                ("level_3", "Hosts Level 3"),
+                ("level_4", "Hosts Level 4"),
+                ("level_5", "Hosts Level 5"),
+            ):
+                _append_hosts_level_lines(lines, label, hosts_plan.get(key))
+            _append_if_value(lines, "Hosts address", hosts_plan.get("address"))
+
+        hosts_sync = payload.get("hosts_sync")
+        if isinstance(hosts_sync, dict):
+            sync_status = hosts_sync.get("status")
+            if sync_status not in (None, ""):
+                line = f"Hosts sync: {_console_result_label(sync_status)}"
+                sync_reason = hosts_sync.get("reason")
+                if sync_reason not in (None, ""):
+                    line += f" ({_humanize_hosts_sync_reason(sync_reason)})"
+                lines.append(line)
+
+        _append_url_lines(
+            lines,
+            payload.get("urls"),
+            multiline=bool(payload.get("access_urls_view")),
+        )
         _append_if_value(lines, "Next step", payload.get("next_step"))
         return lines
 
@@ -4150,8 +4998,33 @@ def run_interactive_menu(
                 ):
                     print("Hosts operation cancelled.")
                     continue
+                result = run_hosts(
+                    adapter,
+                    deployer_name=current_adapter,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                )
+                _print_action_result(result)
+                result = _interactive_offer_hosts_plan_apply(
+                    result,
+                    adapter,
+                    deployer_name=current_adapter,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                )
+                continue
+
+            if choice == "U":
+                selected_adapter = _interactive_require_adapter_selection(
+                    current_adapter,
+                    adapter_registry=registry,
+                )
+                if not selected_adapter:
+                    continue
+                current_adapter = selected_adapter
+                adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
                 _print_action_result(
-                    run_hosts(
+                    run_available_access_urls(
                         adapter,
                         deployer_name=current_adapter,
                         deployer_registry=deployer_registry,

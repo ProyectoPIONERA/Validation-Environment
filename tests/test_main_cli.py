@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -14,10 +15,15 @@ from adapters.inesdata.adapter import InesdataAdapter
 
 class FakeConfig:
     DS_NAME = "fake-ds"
+    NS_COMMON = "common-srvs"
 
     @staticmethod
     def ds_domain_base():
         return "example.local"
+
+    @staticmethod
+    def namespace_demo():
+        return "fake-ds"
 
 
 class FakeConfigAdapter:
@@ -50,12 +56,22 @@ class FakeConnectors:
     def validation_test_entities_absent(connector):
         return True, []
 
+    @staticmethod
+    def connector_target_namespace(connector):
+        return f"{connector}-ns"
+
 
 class FakeAdapter:
     def __init__(self):
         self.config = FakeConfig
         self.config_adapter = FakeConfigAdapter()
         self.connectors = FakeConnectors()
+        self.components = types.SimpleNamespace(
+            infer_component_urls=lambda components: {
+                component: f"http://{component}.example.local"
+                for component in components
+            }
+        )
         self.calls = []
 
     def deploy_infrastructure(self):
@@ -138,6 +154,56 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Result: Succeeded", output)
         self.assertIn("Dataspace: fake-ds", output)
         self.assertIn("Next step: Run Level 6 to validate the recreated dataspace and connectors.", output)
+
+    def test_action_result_prints_level5_component_urls(self):
+        payload = {
+            "status": "completed",
+            "adapter": "inesdata",
+            "topology": "local",
+            "levels": [
+                {
+                    "level": 5,
+                    "name": "Deploy Components",
+                    "status": "completed",
+                    "result": {
+                        "deployed": ["ontology-hub"],
+                        "urls": {
+                            "ontology-hub": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                        },
+                    },
+                }
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Level 5 - Deploy Components: Succeeded", output)
+        self.assertIn("Level 5 URLs:", output)
+        self.assertIn("Ontology Hub: http://ontology-hub-demo.dev.ds.dataspaceunit.upm", output)
+
+    def test_action_result_prints_available_access_urls_in_multiline_format(self):
+        payload = {
+            "status": "available",
+            "adapter": "inesdata",
+            "topology": "local",
+            "dataspace": "demo",
+            "access_urls_view": True,
+            "urls": {
+                "public_portal_login": "http://demo.dev.ds.dataspaceunit.upm",
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("URLs:", output)
+        self.assertIn("- Public Portal Login:", output)
+        self.assertIn("  http://demo.dev.ds.dataspaceunit.upm", output)
 
     def test_kafka_transfer_results_are_printed_with_neutral_summary(self):
         results = [
@@ -265,6 +331,57 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Message: id=msg-1 status=consumed latency=3.4ms", stdout.getvalue())
 
 
+class NamespacePlanSummaryTests(unittest.TestCase):
+    def test_namespace_plan_summary_marks_compact_layout_as_active(self):
+        context = types.SimpleNamespace(
+            namespace_profile="compact",
+            namespace_roles={
+                "registration_service_namespace": "demo",
+                "provider_namespace": "demo",
+                "consumer_namespace": "demo",
+            },
+            planned_namespace_roles={
+                "registration_service_namespace": "demo",
+                "provider_namespace": "demo",
+                "consumer_namespace": "demo",
+            },
+        )
+
+        summary = main._build_namespace_plan_summary(context)
+
+        self.assertEqual(summary["status"], "active")
+        self.assertEqual(summary["requested_profile"], "compact")
+        self.assertEqual(summary["change_count"], 0)
+        self.assertEqual(summary["changed_roles"], {})
+        self.assertEqual(summary["notes"], [])
+
+    def test_namespace_plan_summary_marks_role_aligned_layout_as_preview_only(self):
+        context = types.SimpleNamespace(
+            namespace_profile="role-aligned",
+            namespace_roles={
+                "registration_service_namespace": "demo",
+                "provider_namespace": "demo",
+                "consumer_namespace": "demo",
+            },
+            planned_namespace_roles={
+                "registration_service_namespace": "demo-core",
+                "provider_namespace": "demo-provider",
+                "consumer_namespace": "demo-consumer",
+            },
+        )
+
+        summary = main._build_namespace_plan_summary(context)
+
+        self.assertEqual(summary["status"], "preview-only")
+        self.assertEqual(summary["requested_profile"], "role-aligned")
+        self.assertEqual(summary["change_count"], 3)
+        self.assertEqual(
+            summary["changed_roles"]["registration_service_namespace"],
+            {"current": "demo", "planned": "demo-core"},
+        )
+        self.assertIn("preview-only", " ".join(summary["notes"]).lower())
+
+
 class EdcDashboardReadinessTests(unittest.TestCase):
     def _context(self):
         return types.SimpleNamespace(
@@ -345,10 +462,41 @@ class EdcDashboardReadinessTests(unittest.TestCase):
 
 class InesdataPortalReadinessTests(unittest.TestCase):
     def _context(self):
+        runtime_dir = os.path.join("/tmp", "inesdata-readiness-runtime")
+        os.makedirs(runtime_dir, exist_ok=True)
+        credentials_path = os.path.join(
+            runtime_dir,
+            "credentials-connector-conn-citycouncil-demo.json",
+        )
+        with open(credentials_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "connector_user": {
+                        "user": "user-conn-citycouncil-demo",
+                        "passwd": "change-me",
+                    }
+                },
+                handle,
+            )
+        credentials_path = os.path.join(
+            runtime_dir,
+            "credentials-connector-conn-company-demo.json",
+        )
+        with open(credentials_path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "connector_user": {
+                        "user": "user-conn-company-demo",
+                        "passwd": "change-me",
+                    }
+                },
+                handle,
+            )
         return types.SimpleNamespace(
             dataspace_name="demo",
             ds_domain_base="dev.ds.dataspaceunit.upm",
             connectors=["conn-citycouncil-demo", "conn-company-demo"],
+            runtime_dir=runtime_dir,
             namespace_roles=types.SimpleNamespace(
                 registration_service_namespace="demo",
                 provider_namespace="demo",
@@ -366,7 +514,12 @@ class InesdataPortalReadinessTests(unittest.TestCase):
         def fake_http_get(url, **kwargs):
             if url.endswith("/.well-known/openid-configuration"):
                 return types.SimpleNamespace(status_code=200, headers={})
-            if url.endswith("/inesdata-connector-interface/") or url.endswith("/inesdata-connector-interface"):
+            if url.endswith("/inesdata-connector-interface/"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        def fake_http_post(url, **kwargs):
+            if url.endswith("/protocol/openid-connect/token"):
                 return types.SimpleNamespace(status_code=200, headers={})
             raise AssertionError(f"Unexpected URL probed: {url}")
 
@@ -374,7 +527,11 @@ class InesdataPortalReadinessTests(unittest.TestCase):
             main,
             "_probe_service_ready_across_namespaces",
             return_value=(True, "1 endpoint address(es)", "demo"),
-        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
+            main.requests,
+            "post",
+            side_effect=fake_http_post,
+        ):
             readiness = main._probe_inesdata_portal_readiness(context)
 
         self.assertEqual(readiness["status"], "passed")
@@ -385,6 +542,15 @@ class InesdataPortalReadinessTests(unittest.TestCase):
             keycloak_gate["url"],
             "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/.well-known/openid-configuration",
         )
+        token_gate = next(
+            gate for gate in readiness["gates"]
+            if gate["gate"] == "keycloak-password-grant:conn-citycouncil-demo"
+        )
+        self.assertTrue(token_gate["ready"])
+        self.assertEqual(
+            token_gate["url"],
+            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/protocol/openid-connect/token",
+        )
 
     def test_probe_inesdata_portal_readiness_rejects_http_503_even_with_ready_services(self):
         context = self._context()
@@ -392,15 +558,24 @@ class InesdataPortalReadinessTests(unittest.TestCase):
         def fake_http_get(url, **kwargs):
             if url.endswith("/.well-known/openid-configuration"):
                 return types.SimpleNamespace(status_code=200, headers={})
-            if url.endswith("/inesdata-connector-interface/") or url.endswith("/inesdata-connector-interface"):
+            if url.endswith("/inesdata-connector-interface/"):
                 return types.SimpleNamespace(status_code=503, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        def fake_http_post(url, **kwargs):
+            if url.endswith("/protocol/openid-connect/token"):
+                return types.SimpleNamespace(status_code=200, headers={})
             raise AssertionError(f"Unexpected URL probed: {url}")
 
         with mock.patch.object(
             main,
             "_probe_service_ready_across_namespaces",
             return_value=(True, "1 endpoint address(es)", "demo"),
-        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
+            main.requests,
+            "post",
+            side_effect=fake_http_post,
+        ):
             readiness = main._probe_inesdata_portal_readiness(context)
 
         self.assertEqual(readiness["status"], "failed")
@@ -411,6 +586,187 @@ class InesdataPortalReadinessTests(unittest.TestCase):
         )
         self.assertFalse(failing_gate["ready"])
         self.assertEqual(failing_gate["detail"], "HTTP 503")
+
+    def test_probe_inesdata_portal_readiness_rejects_redirect_only_portal_route(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/inesdata-connector-interface/"):
+                return types.SimpleNamespace(status_code=301, headers={"Location": "/inesdata-connector-interface/"})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        def fake_http_post(url, **kwargs):
+            if url.endswith("/protocol/openid-connect/token"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_probe_service_ready_across_namespaces",
+            return_value=(True, "1 endpoint address(es)", "demo"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
+            main.requests,
+            "post",
+            side_effect=fake_http_post,
+        ):
+            readiness = main._probe_inesdata_portal_readiness(context)
+
+        self.assertEqual(readiness["status"], "failed")
+        failing_gate = next(
+            gate
+            for gate in readiness["gates"]
+            if gate["gate"] == "portal-route:conn-citycouncil-demo"
+        )
+        self.assertFalse(failing_gate["ready"])
+        self.assertEqual(failing_gate["detail"], "HTTP 301 -> /inesdata-connector-interface/")
+
+    def test_probe_inesdata_portal_readiness_rejects_keycloak_password_grant_503(self):
+        context = self._context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/inesdata-connector-interface/"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        def fake_http_post(url, **kwargs):
+            if url.endswith("/protocol/openid-connect/token"):
+                return types.SimpleNamespace(status_code=503, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        with mock.patch.object(
+            main,
+            "_probe_service_ready_across_namespaces",
+            return_value=(True, "1 endpoint address(es)", "demo"),
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
+            main.requests,
+            "post",
+            side_effect=fake_http_post,
+        ):
+            readiness = main._probe_inesdata_portal_readiness(context)
+
+        self.assertEqual(readiness["status"], "failed")
+        failing_gate = next(
+            gate
+            for gate in readiness["gates"]
+            if gate["gate"] == "keycloak-password-grant:conn-citycouncil-demo"
+        )
+        self.assertFalse(failing_gate["ready"])
+        self.assertEqual(failing_gate["detail"], "HTTP 503")
+
+    def test_wait_inesdata_portal_readiness_requires_consecutive_successful_polls(self):
+        context = self._context()
+        readiness_sequence = [
+            {"status": "passed", "gates": []},
+            {"status": "passed", "gates": []},
+        ]
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PIONERA_INESDATA_PORTAL_STABLE_POLLS": "2",
+                "PIONERA_INESDATA_PORTAL_READINESS_TIMEOUT_SECONDS": "5",
+                "PIONERA_INESDATA_PORTAL_READINESS_POLL_SECONDS": "0",
+            },
+            clear=False,
+        ), mock.patch.object(
+            main,
+            "_probe_inesdata_portal_readiness",
+            side_effect=readiness_sequence,
+        ) as readiness_probe, mock.patch.object(
+            main,
+            "_write_inesdata_portal_readiness",
+            return_value="/tmp/portal_readiness.json",
+        ):
+            readiness = main._wait_for_inesdata_portal_readiness(context, experiment_dir="/tmp/exp")
+
+        self.assertEqual(readiness["status"], "passed")
+        self.assertEqual(readiness["stable_polls_required"], 2)
+        self.assertEqual(readiness["stable_polls_observed"], 2)
+        self.assertEqual(readiness["artifact"], "/tmp/portal_readiness.json")
+        self.assertEqual(readiness_probe.call_count, 2)
+
+    def test_run_available_access_urls_includes_component_urls_for_inesdata(self):
+        adapter = FakeAdapter()
+        fake_context = types.SimpleNamespace(
+            config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            dataspace_name="demo",
+            environment="DEV",
+            connectors=["conn-citycouncil-demo"],
+            components=["ontology-hub"],
+        )
+
+        with mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("inesdata", fake_context),
+        ), mock.patch(
+            "deployers.inesdata.access_urls.build_dataspace_access_urls",
+            return_value={
+                "public_portal_login": "http://demo.dev.ds.dataspaceunit.upm",
+                "registration_service": "http://registration-service-demo.dev.ds.dataspaceunit.upm",
+                "keycloak_realm": "http://keycloak.dev.ds.dataspaceunit.upm/realms/demo",
+                "keycloak_admin_console": "http://keycloak-admin.dev.ds.dataspaceunit.upm/admin/demo/console/",
+                "minio_api": "http://minio.dev.ed.dataspaceunit.upm",
+                "minio_console": "http://console.minio-s3.dev.ds.dataspaceunit.upm",
+            },
+        ), mock.patch(
+            "deployers.inesdata.access_urls.build_connector_access_urls",
+            return_value={
+                "connector_interface_login": "http://conn-citycouncil-demo.dev.ds.dataspaceunit.upm/inesdata-connector-interface/",
+                "connector_management_api": "http://conn-citycouncil-demo.dev.ds.dataspaceunit.upm/management",
+                "connector_protocol_api": "http://conn-citycouncil-demo.dev.ds.dataspaceunit.upm/protocol",
+                "minio_bucket": "demo-conn-citycouncil-demo",
+            },
+        ):
+            result = main.run_available_access_urls(adapter, deployer_name="inesdata", topology="local")
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["adapter"], "inesdata")
+        self.assertEqual(result["dataspace"], "demo")
+        self.assertEqual(
+            result["urls"]["components"]["ontology-hub"],
+            "http://ontology-hub.example.local",
+        )
+        self.assertEqual(
+            result["urls"]["connectors"]["conn-citycouncil-demo"]["connector_interface_login"],
+            "http://conn-citycouncil-demo.dev.ds.dataspaceunit.upm/inesdata-connector-interface/",
+        )
+        self.assertEqual(result["urls"]["minio_api"], "http://minio.dev.ed.dataspaceunit.upm")
+        self.assertEqual(
+            result["urls"]["connectors"]["conn-citycouncil-demo"]["minio_bucket"],
+            "demo-conn-citycouncil-demo",
+        )
+
+    def test_run_available_access_urls_for_inesdata_does_not_require_click(self):
+        adapter = FakeAdapter()
+        fake_context = types.SimpleNamespace(
+            config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            dataspace_name="demo",
+            environment="DEV",
+            connectors=["conn-citycouncil-demo"],
+            components=[],
+        )
+
+        with mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("inesdata", fake_context),
+        ), mock.patch.dict(
+            sys.modules,
+            {"click": None},
+            clear=False,
+        ):
+            result = main.run_available_access_urls(adapter, deployer_name="inesdata", topology="local")
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(
+            result["urls"]["registration_service"],
+            "http://registration-service-demo.dev.ds.dataspaceunit.upm",
+        )
 
 
 class NoConnectorDeployAdapter:
@@ -793,7 +1149,8 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("0 - Use for a fresh or full rebuild", stdout.getvalue())
         self.assertIn("4 - Use when connector deployments changed", stdout.getvalue())
         self.assertIn("S - Use when you want to preselect the adapter", stdout.getvalue())
-        self.assertIn("H - Use before EDC Levels 3-6", stdout.getvalue())
+        self.assertIn("H - Use to inspect or apply local hosts entries", stdout.getvalue())
+        self.assertIn("U - Use to print access URLs derived from the selected adapter config", stdout.getvalue())
         self.assertIn("X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
         self.assertIn("asks for one automatically", stdout.getvalue())
         self.assertIn("[Developer]", stdout.getvalue())
@@ -1336,10 +1693,16 @@ class MainCliTests(unittest.TestCase):
     def test_run_level_invokes_level_two_adapter_method(self):
         adapter = FakeAdapter()
 
-        result = main.run_level(adapter, 2, deployer_name="fake")
+        with mock.patch.object(
+            main,
+            "_resolve_level_access_urls",
+            return_value={"keycloak": "http://keycloak.example.local"},
+        ):
+            result = main.run_level(adapter, 2, deployer_name="fake")
 
         self.assertEqual(result["level"], 2)
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["urls"], {"keycloak": "http://keycloak.example.local"})
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
 
     def test_run_level_refuses_non_local_deployment_levels_until_vm_execution_exists(self):
@@ -1371,13 +1734,70 @@ class MainCliTests(unittest.TestCase):
             main,
             "_prepare_edc_local_dashboard_images",
             return_value={"status": "prepared"},
-        ) as dashboard_prepare, mock.patch.dict(os.environ, {}, clear=True):
+        ) as dashboard_prepare, mock.patch.object(
+            main,
+            "_resolve_level_access_urls",
+            return_value={
+                "connectors": {
+                    "conn-a": {"connector_management_api_v3": "http://conn-a.example.local/management/v3"},
+                    "conn-b": {"connector_management_api_v3": "http://conn-b.example.local/management/v3"},
+                }
+            },
+        ), mock.patch.dict(os.environ, {}, clear=True):
             result = main.run_level(adapter, 4, deployer_name="edc", topology="local")
 
         self.assertEqual(result["level"], 4)
         self.assertEqual(result["result"], ["conn-a", "conn-b"])
+        self.assertIn("connectors", result["urls"])
         image_prepare.assert_called_once_with(adapter)
         dashboard_prepare.assert_called_once()
+
+    def test_run_available_access_urls_for_edc_includes_registration_service_and_connectors(self):
+        adapter = FakeAdapter()
+        fake_context = types.SimpleNamespace(
+            config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm", "DOMAIN_BASE": "dev.ed.dataspaceunit.upm"},
+            dataspace_name="demoedc",
+            environment="DEV",
+            connectors=["conn-citycounciledc-demoedc"],
+            components=[],
+        )
+
+        with mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("edc", fake_context),
+        ), mock.patch(
+            "deployers.edc.bootstrap.common_access_urls",
+            return_value={
+                "keycloak_realm": "http://keycloak.dev.ds.dataspaceunit.upm/realms/demoedc",
+                "keycloak_admin_console": "http://keycloak-admin.dev.ds.dataspaceunit.upm/admin/demoedc/console/",
+                "minio_api": "http://minio.dev.ed.dataspaceunit.upm",
+                "minio_console": "http://console.minio-s3.dev.ds.dataspaceunit.upm",
+            },
+        ), mock.patch(
+            "deployers.edc.bootstrap.build_connector_access_urls",
+            return_value={
+                "connector_management_api_v3": "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm/management/v3",
+                "connector_protocol_api": "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm/protocol",
+                "edc_dashboard_login": "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm/edc-dashboard/",
+                "minio_bucket": "demoedc-conn-citycounciledc-demoedc",
+            },
+        ):
+            result = main.run_available_access_urls(adapter, deployer_name="edc", topology="local")
+
+        self.assertEqual(
+            result["urls"]["registration_service"],
+            "http://registration-service-demoedc.dev.ds.dataspaceunit.upm",
+        )
+        self.assertEqual(
+            result["urls"]["connectors"]["conn-citycounciledc-demoedc"]["connector_management_api_v3"],
+            "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm/management/v3",
+        )
+        self.assertEqual(result["urls"]["minio_api"], "http://minio.dev.ed.dataspaceunit.upm")
+        self.assertEqual(
+            result["urls"]["connectors"]["conn-citycounciledc-demoedc"]["minio_bucket"],
+            "demoedc-conn-citycounciledc-demoedc",
+        )
 
     def test_run_levels_reuses_one_adapter_for_selected_levels(self):
         result = main.run_levels(
@@ -1796,10 +2216,104 @@ class MainCliTests(unittest.TestCase):
             topology="local",
         )
 
-        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["status"], "planned")
         self.assertEqual(result["hosts_sync"]["reason"], "disabled")
         self.assertEqual(result["hosts_plan"]["level_3"], ["registration-service-fake-ds.example.local"])
         self.assertEqual(result["hosts_plan"]["level_4"], ["conn-a.example.local", "conn-b.example.local"])
+
+    def test_action_result_prints_hosts_plan_when_sync_is_disabled(self):
+        payload = {
+            "status": "planned",
+            "deployer_name": "inesdata",
+            "topology": "local",
+            "dataspace": "demo",
+            "hosts_plan": {
+                "level_3": ["registration-service-demo.example.local"],
+                "level_4": ["conn-a.example.local", "conn-b.example.local"],
+                "address": "127.0.0.1",
+            },
+            "hosts_sync": {
+                "status": "skipped",
+                "reason": "disabled",
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Result: Succeeded", output)
+        self.assertIn("Hosts Level 3: 1", output)
+        self.assertIn("- registration-service-demo.example.local", output)
+        self.assertIn("Hosts Level 4: 2", output)
+        self.assertIn("- conn-a.example.local", output)
+        self.assertIn("- conn-b.example.local", output)
+        self.assertIn("Hosts address: 127.0.0.1", output)
+        self.assertIn("Hosts sync: Skipped (disabled by configuration)", output)
+
+    def test_menu_hosts_can_offer_to_apply_plan_when_sync_is_disabled(self):
+        registry = {
+            "edc": "fake_adapter_module:FakeAdapter",
+            "inesdata": "fake_adapter_module:FakeAdapter",
+        }
+        deployer_registry = {
+            "edc": "fake_deployer_module:FakeDeployer",
+            "inesdata": "fake_deployer_module:FakeDeployer",
+        }
+        planned_result = {
+            "status": "planned",
+            "deployer_name": "inesdata",
+            "topology": "local",
+            "dataspace": "demo",
+            "hosts_plan": {
+                "level_3": ["registration-service-demo.example.local"],
+                "level_4": ["conn-a.example.local", "conn-b.example.local"],
+                "address": "127.0.0.1",
+            },
+            "hosts_sync": {
+                "status": "skipped",
+                "reason": "disabled",
+            },
+        }
+        applied_result = {
+            "status": "updated",
+            "deployer_name": "inesdata",
+            "topology": "local",
+            "dataspace": "demo",
+            "hosts_plan": planned_result["hosts_plan"],
+            "hosts_sync": {
+                "status": "updated",
+                "hosts_file": "/tmp/hosts",
+                "changed": True,
+            },
+        }
+
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["H", "2", "Y", "Q"]), mock.patch.object(
+            main,
+            "run_hosts",
+            side_effect=[planned_result, applied_result],
+        ) as run_hosts, mock.patch.object(
+            main,
+            "_interactive_hosts_file_path",
+            return_value="/tmp/hosts",
+        ), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=registry,
+                deployer_registry=deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertEqual(run_hosts.call_count, 2)
+        rendered = stdout.getvalue()
+        self.assertIn("Hosts sync: Skipped (disabled by configuration)", rendered)
+        self.assertIn("Detected hosts file: /tmp/hosts", rendered)
+        self.assertIn("The framework can apply this hosts plan now.", rendered)
 
     def test_hosts_command_vm_single_uses_vm_address_from_context(self):
         adapter = FakeAdapter()
@@ -2188,6 +2702,76 @@ class MainCliTests(unittest.TestCase):
         self.assertLess(events.index("newman_metrics"), events.index("kafka_prepare_finish"))
         self.assertLess(events.index("kafka_prepare_finish"), events.index("kafka_edc"))
         self.assertIsInstance(build_suite.call_args.kwargs["kafka_manager"], BlockingKafkaManager)
+
+    def test_level6_local_http_fallback_is_not_used_when_disabled(self):
+        adapter = FakeAdapter()
+        adapter.topology = "local"
+        validator = mock.Mock()
+        validator.load_deployer_config.return_value = {"KC_URL": "http://keycloak.local"}
+        validator._dataspace_name.return_value = "fake-ds"
+        validator._management_url.side_effect = lambda connector, path: f"http://{connector}.example.local{path}"
+
+        fallback = main._Level6LocalHttpPortForwardFallback(adapter, ["conn-a", "conn-b"], validator)
+
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(
+            main._Level6LocalHttpPortForwardFallback,
+            "_probe_http_url",
+            return_value=False,
+        ) as probe, mock.patch.object(
+            main._Level6LocalHttpPortForwardFallback,
+            "_start_service_port_forward",
+        ) as start_forward:
+            activated = fallback.activate_if_needed()
+
+        self.assertFalse(activated)
+        start_forward.assert_not_called()
+        probe.assert_not_called()
+
+    def test_level6_local_http_fallback_starts_port_forwards_only_for_unreachable_endpoints(self):
+        adapter = FakeAdapter()
+        adapter.topology = "local"
+        validator = mock.Mock()
+        validator.load_deployer_config.return_value = {"KC_URL": "http://keycloak.local"}
+        validator._dataspace_name.return_value = "fake-ds"
+        validator._management_url.side_effect = lambda connector, path: f"http://{connector}.example.local{path}"
+        validator.keycloak_url_resolver = None
+        validator.management_url_resolver = None
+
+        fallback = main._Level6LocalHttpPortForwardFallback(adapter, ["conn-a", "conn-b"], validator)
+
+        def probe(url, timeout=3):
+            if "keycloak.local" in url:
+                return False
+            if "conn-a.example.local" in url:
+                return False
+            return True
+
+        with mock.patch.dict(
+            os.environ,
+            {"PIONERA_LEVEL6_LOCAL_HTTP_PORT_FORWARD_FALLBACK": "true"},
+            clear=False,
+        ), mock.patch.object(
+            main._Level6LocalHttpPortForwardFallback,
+            "_probe_http_url",
+            side_effect=probe,
+        ), mock.patch.object(
+            main._Level6LocalHttpPortForwardFallback,
+            "_start_service_port_forward",
+            side_effect=[38080, 39193],
+        ) as start_forward:
+            activated = fallback.activate_if_needed()
+
+        self.assertTrue(activated)
+        self.assertEqual(start_forward.call_count, 2)
+        self.assertEqual(validator.keycloak_url_resolver(), "http://127.0.0.1:38080")
+        self.assertEqual(
+            validator.management_url_resolver("conn-a", "/management/v3/assets/request"),
+            "http://127.0.0.1:39193/management/v3/assets/request",
+        )
+        self.assertEqual(
+            validator.management_url_resolver("conn-b", "/management/v3/assets/request"),
+            "",
+        )
 
     def test_validate_command_runs_test_data_cleanup_when_enabled(self):
         with mock.patch.object(
@@ -2871,6 +3455,11 @@ class MainCliTests(unittest.TestCase):
         self.assertIs(validation_engine.load_connector_credentials.__func__, adapter.connectors.load_connector_credentials.__func__)
         self.assertIs(validation_engine.load_deployer_config.__self__, adapter.config_adapter)
         self.assertIs(validation_engine.load_deployer_config.__func__, adapter.config_adapter.load_deployer_config.__func__)
+        self.assertIs(validation_engine.protocol_address_resolver.__self__, adapter.connectors)
+        self.assertIs(
+            validation_engine.protocol_address_resolver.__func__,
+            adapter.connectors.build_internal_protocol_address.__func__,
+        )
         self.assertIs(validation_engine.cleanup_test_entities.__self__, adapter.connectors)
         self.assertIs(validation_engine.cleanup_test_entities.__func__, adapter.connectors.cleanup_test_entities.__func__)
         self.assertIs(metrics_collector.build_connector_url.__self__, adapter.connectors)
@@ -2880,6 +3469,21 @@ class MainCliTests(unittest.TestCase):
         self.assertIs(metrics_collector.ensure_kafka_topic.__self__, adapter)
         self.assertIs(metrics_collector.ensure_kafka_topic.__func__, adapter.ensure_kafka_topic.__func__)
         self.assertTrue(metrics_collector.auto_mode())
+
+    def test_build_kafka_edc_validation_suite_wires_internal_protocol_resolver(self):
+        adapter = InesdataAdapter(
+            run=lambda *args, **kwargs: None,
+            run_silent=lambda *args, **kwargs: "",
+            auto_mode_getter=lambda: True,
+        )
+
+        suite = main.build_kafka_edc_validation_suite(adapter)
+
+        self.assertIs(suite.protocol_address_resolver.__self__, adapter.connectors)
+        self.assertIs(
+            suite.protocol_address_resolver.__func__,
+            adapter.connectors.build_internal_protocol_address.__func__,
+        )
 
     def test_build_adapter_passes_dry_run_when_supported(self):
         registry = {"fake": "fake_adapter_module:DryRunAwareAdapter"}
@@ -2951,7 +3555,13 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("deployer_orchestrator", result)
         self.assertEqual(result["deployer_orchestrator"]["status"], "available")
         self.assertEqual(result["deployer_orchestrator"]["deployer"], "fake")
+        self.assertEqual(result["deployer_orchestrator"]["namespace_profile"], "compact")
+        self.assertEqual(result["deployer_orchestrator"]["namespace_plan_summary"]["status"], "active")
         self.assertEqual(result["deployer_orchestrator"]["context"]["dataspace_name"], "fake-ds")
+        self.assertEqual(
+            result["deployer_orchestrator"]["planned_namespace_roles"]["registration_service_namespace"],
+            "fake-ds",
+        )
         self.assertIn("deploy_components", result["deployer_orchestrator"]["actions"])
         self.assertEqual(
             result["deployer_orchestrator"]["context"]["config"]["KC_PASSWORD"],
@@ -2977,7 +3587,14 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "dry-run")
         self.assertEqual(result["command"], "hosts")
         self.assertIn("plan_hosts_entries", result["actions"])
+        self.assertEqual(result["namespace_profile"], "compact")
+        self.assertEqual(result["hosts_plan"]["namespace_profile"], "compact")
+        self.assertEqual(result["hosts_plan"]["namespace_plan_summary"]["status"], "active")
         self.assertEqual(result["hosts_plan"]["level_3"], ["registration-service-fake-ds.example.local"])
+        self.assertEqual(
+            result["hosts_plan"]["planned_namespace_roles"]["registration_service_namespace"],
+            "fake-ds",
+        )
 
     def test_recreate_dataspace_dry_run_includes_protected_plan(self):
         result = main.main(

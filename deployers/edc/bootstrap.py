@@ -117,6 +117,7 @@ def build_connector_access_urls(config: dict[str, str], connector: str, dataspac
         "connector_protocol_api": f"{connector_base}/protocol",
         "connector_default_api": f"{connector_base}/api",
         "connector_control_api": f"{connector_base}/control",
+        "minio_bucket": f"{dataspace}-{connector}",
     }
     if as_bool(config.get("EDC_DASHBOARD_ENABLED", "true")):
         dashboard_base_href = normalize_base_href(config.get("EDC_DASHBOARD_BASE_HREF", "/edc-dashboard/"))
@@ -140,6 +141,11 @@ def common_access_urls(config: dict[str, str], dataspace: str, environment: str)
         or clean_hostname(config.get("KC_URL"))
         or f"keycloak-admin.{domain_base}"
     )
+    minio_api_hostname = (
+        clean_hostname(config.get("MINIO_HOSTNAME"))
+        or clean_hostname(config.get("MINIO_ENDPOINT"))
+        or f"minio.{domain_base}"
+    )
     minio_console_hostname = (
         clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
         or f"console.minio-s3.{domain_base}"
@@ -148,6 +154,7 @@ def common_access_urls(config: dict[str, str], dataspace: str, environment: str)
         "keycloak_realm": f"{protocol}://{keycloak_hostname}/realms/{dataspace}",
         "keycloak_account": f"{protocol}://{keycloak_hostname}/realms/{dataspace}/account",
         "keycloak_admin_console": f"{protocol}://{keycloak_admin_hostname}/admin/{dataspace}/console/",
+        "minio_api": f"{protocol}://{minio_api_hostname}",
         "minio_console": f"{protocol}://{minio_console_hostname}",
     }
 

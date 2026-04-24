@@ -170,6 +170,65 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertEqual(manager.provisioning_mode, "kubernetes")
         self.assertTrue(any(call["args"][:3] == ["kubectl", "rollout", "status"] for call in commands))
 
+    def test_auto_starts_kafka_broker_in_split_kraft_mode(self):
+        commands = []
+
+        def fake_runner(args, input_text=None):
+            commands.append({"args": list(args), "input": input_text})
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes-split-kraft",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+                "k8s_local_port": "39092",
+            },
+            command_runner=fake_runner,
+        )
+
+        with mock.patch.object(KafkaManager, "_start_kubernetes_port_forward", return_value=object()) as mocked_port_forward:
+            with mock.patch.object(KafkaManager, "_wait_for_kubernetes_internal_bootstrap", return_value={"pod": "conn-a"}) as mocked_internal_wait:
+                with mock.patch.object(KafkaManager, "_wait_for_kubernetes_external_service_bootstrap", return_value={"pod": "conn-a"}) as mocked_external_wait:
+                    with mock.patch.object(KafkaManager, "is_kafka_available", side_effect=[False, True]):
+                        bootstrap = manager.ensure_kafka_running()
+
+        self.assertEqual(bootstrap, "127.0.0.1:39092")
+        self.assertEqual(manager.cluster_bootstrap_servers, "framework-kafka.demo.svc.cluster.local:9092")
+        self.assertEqual(manager.provisioning_mode, "kubernetes-split-kraft")
+        self.assertTrue(manager.started_by_framework)
+        mocked_port_forward.assert_called_once()
+        mocked_internal_wait.assert_called_once()
+        mocked_external_wait.assert_called_once()
+        apply_call = next(call for call in commands if call["args"] == ["kubectl", "apply", "-f", "-"])
+        self.assertIn("name: framework-kafka-controller", apply_call["input"])
+        rollout_calls = [
+            call["args"] for call in commands if call["args"][:3] == ["kubectl", "rollout", "status"]
+        ]
+        self.assertEqual(
+            rollout_calls,
+            [
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    "deployment/framework-kafka-controller",
+                    "-n",
+                    "demo",
+                    "--timeout=90s",
+                ],
+                [
+                    "kubectl",
+                    "rollout",
+                    "status",
+                    "deployment/framework-kafka",
+                    "-n",
+                    "demo",
+                    "--timeout=90s",
+                ],
+            ],
+        )
+
     def test_wait_for_kubernetes_external_service_bootstrap_uses_external_service_dns(self):
         exec_calls = []
 
@@ -320,6 +379,125 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
         self.assertTrue(kwargs["text"])
 
+    def test_kubernetes_manifest_uses_startup_probe_and_relaxed_liveness(self):
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            }
+        )
+
+        manifest = manager._build_kubernetes_manifest(manager._load_manager_config())
+
+        self.assertIn("startupProbe:", manifest)
+        self.assertIn("failureThreshold: 24", manifest)
+        self.assertIn("readinessProbe:", manifest)
+        self.assertIn("initialDelaySeconds: 5", manifest)
+        self.assertIn("failureThreshold: 6", manifest)
+        self.assertIn("livenessProbe:", manifest)
+        self.assertIn("periodSeconds: 15", manifest)
+        self.assertIn("KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS", manifest)
+        self.assertIn('value: "1"', manifest)
+        self.assertIn("KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS", manifest)
+        self.assertIn("KAFKA_BROKER_HEARTBEAT_INTERVAL_MS", manifest)
+        self.assertIn('value: "3000"', manifest)
+        self.assertIn("KAFKA_BROKER_SESSION_TIMEOUT_MS", manifest)
+        self.assertIn('value: "30000"', manifest)
+        self.assertIn("KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS", manifest)
+        self.assertIn('value: "10000"', manifest)
+        self.assertIn("resources:", manifest)
+        self.assertIn('cpu: "100m"', manifest)
+        self.assertIn('memory: "256Mi"', manifest)
+
+    def test_split_kraft_manifest_uses_separate_controller_and_broker_workloads(self):
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes-split-kraft",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+                "k8s_local_port": "39092",
+            }
+        )
+
+        manifest = manager._build_kubernetes_manifest(manager._load_manager_config())
+
+        self.assertGreaterEqual(manifest.count("kind: Deployment"), 2)
+        self.assertIn("name: framework-kafka-controller", manifest)
+        self.assertIn("name: framework-kafka-external", manifest)
+        self.assertIn('value: "controller"', manifest)
+        self.assertIn('value: "broker"', manifest)
+        self.assertIn("framework-kafka-controller.demo.svc.cluster.local:9093", manifest)
+        self.assertIn('value: "3000@framework-kafka-controller.demo.svc.cluster.local:9093"', manifest)
+
+    def test_ensure_topic_uses_in_cluster_exec_for_framework_kubernetes_broker(self):
+        commands = []
+        list_calls = {"count": 0}
+
+        def fake_runner(args, input_text=None):
+            commands.append(list(args))
+            if "--list" in args:
+                list_calls["count"] += 1
+                if list_calls["count"] >= 2:
+                    return _FakeCompletedProcess(stdout="topic-a\n")
+                return _FakeCompletedProcess(stdout="")
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            },
+            command_runner=fake_runner,
+        )
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes"
+
+        self.assertTrue(manager.ensure_topic("topic-a"))
+
+        self.assertEqual(len(commands), 3)
+        self.assertEqual(
+            commands[0][:6],
+            ["kubectl", "exec", "-n", "demo", "deployment/framework-kafka", "--"],
+        )
+        self.assertIn("--bootstrap-server", commands[0])
+        self.assertIn("localhost:9092", commands[0])
+        self.assertIn("--create", commands[1])
+        self.assertIn("--if-not-exists", commands[1])
+
+    def test_ensure_topic_uses_in_cluster_exec_for_framework_split_kraft_broker(self):
+        commands = []
+        list_calls = {"count": 0}
+
+        def fake_runner(args, input_text=None):
+            commands.append(list(args))
+            if "--list" in args:
+                list_calls["count"] += 1
+                if list_calls["count"] >= 2:
+                    return _FakeCompletedProcess(stdout="topic-split\n")
+                return _FakeCompletedProcess(stdout="")
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes-split-kraft",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            },
+            command_runner=fake_runner,
+        )
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes-split-kraft"
+
+        self.assertTrue(manager.ensure_topic("topic-split"))
+
+        self.assertEqual(
+            commands[0][:6],
+            ["kubectl", "exec", "-n", "demo", "deployment/framework-kafka", "--"],
+        )
+        self.assertIn("--create", commands[1])
+
     def test_kubernetes_port_forward_can_restart_existing_process(self):
         manager = KafkaManager()
         ids = {
@@ -402,6 +580,47 @@ class KafkaManagerTests(unittest.TestCase):
             [
                 "kubectl",
                 "delete",
+                "deployment/framework-kafka",
+                "service/framework-kafka",
+                "service/framework-kafka-external",
+                "-n",
+                "demo",
+                "--ignore-not-found=true",
+            ],
+            commands,
+        )
+        port_forward_process.terminate.assert_called_once()
+
+    def test_stop_kafka_split_kraft_deletes_controller_broker_and_services(self):
+        commands = []
+
+        def fake_runner(args, input_text=None):
+            commands.append(list(args))
+            return _FakeCompletedProcess(stdout="")
+
+        manager = KafkaManager(
+            runtime_config={
+                "provisioner": "kubernetes-split-kraft",
+                "k8s_namespace": "demo",
+                "k8s_service_name": "framework-kafka",
+            },
+            command_runner=fake_runner,
+        )
+        manager.started_by_framework = True
+        manager.provisioning_mode = "kubernetes-split-kraft"
+        port_forward_process = mock.Mock()
+        port_forward_process.poll.return_value = None
+        port_forward_process.wait.return_value = None
+        manager.port_forward_process = port_forward_process
+
+        manager.stop_kafka()
+
+        self.assertIn(
+            [
+                "kubectl",
+                "delete",
+                "deployment/framework-kafka-controller",
+                "service/framework-kafka-controller",
                 "deployment/framework-kafka",
                 "service/framework-kafka",
                 "service/framework-kafka-external",

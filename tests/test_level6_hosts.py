@@ -76,6 +76,8 @@ class Level6HostsTests(unittest.TestCase):
         message = str(exc.exception)
         self.assertIn("[sudo] password", message)
         self.assertIn("does not collect", message)
+        self.assertIn("Level 6 full validation still requires these public hostnames", message)
+        self.assertIn("does not replace public ingress", message)
 
     def test_public_endpoint_check_skips_loopback_and_cluster_internal_urls(self):
         requester = mock.Mock()

@@ -128,6 +128,8 @@ def format_public_endpoint_access_error(result: dict[str, Any], *, topology: str
                 "For local topology, keep `minikube tunnel` running in a separate terminal.",
                 "If that terminal shows `[sudo] password for <user>:`, enter your Linux/WSL sudo password there, then retry the level.",
                 "The framework does not collect, store or proxy sudo passwords.",
+                "Level 6 full validation still requires these public hostnames for Newman and Playwright.",
+                "The local Kafka HTTP port-forward fallback is only a safety net for isolated local Kafka checks; it does not replace public ingress for the complete Level 6 flow.",
             ]
         )
     else:

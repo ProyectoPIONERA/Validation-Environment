@@ -55,6 +55,9 @@ class KafkaEdcValidationSuite:
         session=None,
         time_provider=None,
         uuid_factory=None,
+        protocol_address_resolver=None,
+        management_url_resolver=None,
+        keycloak_url_resolver=None,
     ):
         self.load_connector_credentials = load_connector_credentials
         self.load_deployer_config = load_deployer_config
@@ -71,6 +74,9 @@ class KafkaEdcValidationSuite:
         self.session = session
         self.time_provider = time_provider or self._default_time_provider
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
+        self.protocol_address_resolver = protocol_address_resolver
+        self.management_url_resolver = management_url_resolver
+        self.keycloak_url_resolver = keycloak_url_resolver
 
     @staticmethod
     def _default_time_provider():
@@ -208,7 +214,12 @@ class KafkaEdcValidationSuite:
         if not username or not password:
             raise RuntimeError(f"Missing connector_user credentials for {connector}")
 
-        keycloak_url = config.get("KC_INTERNAL_URL") or config.get("KC_URL")
+        keycloak_url = ""
+        resolver = self.keycloak_url_resolver
+        if callable(resolver):
+            keycloak_url = str(resolver() or "").strip()
+        if not keycloak_url:
+            keycloak_url = config.get("KC_INTERNAL_URL") or config.get("KC_URL")
         if not keycloak_url:
             raise RuntimeError("Missing KC_INTERNAL_URL/KC_URL in deployer.config")
         if not keycloak_url.startswith("http"):
@@ -316,9 +327,19 @@ class KafkaEdcValidationSuite:
         raise RuntimeError(f"{label} did not produce a response")
 
     def _management_url(self, connector, path):
+        resolver = self.management_url_resolver
+        if callable(resolver):
+            resolved = str(resolver(connector, path) or "").strip()
+            if resolved:
+                return resolved
         return f"http://{connector}.{self._ds_domain()}{path}"
 
     def _protocol_address(self, connector):
+        resolver = self.protocol_address_resolver
+        if callable(resolver):
+            resolved = str(resolver(connector) or "").strip()
+            if resolved:
+                return resolved
         return f"http://{connector}:19194/protocol"
 
     def _post_json(self, url, token, payload, label):
@@ -557,16 +578,44 @@ class KafkaEdcValidationSuite:
             runtime["cluster_bootstrap_servers"] = cluster_bootstrap
         return True
 
-    def _can_hard_restart_kafka_runtime(self):
+    @staticmethod
+    def _truthy(value):
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _can_hard_restart_kafka_runtime(self, runtime=None):
         kafka_manager = self.kafka_manager
         if kafka_manager is None:
             return False
 
+        runtime = runtime if isinstance(runtime, dict) else {}
+        explicit_flag = runtime.get("allow_hard_restart_on_topic_failure")
+        if explicit_flag not in (None, ""):
+            return self._truthy(explicit_flag)
+
         if bool(getattr(kafka_manager, "started_by_framework", False)):
+            if str(getattr(kafka_manager, "provisioning_mode", "") or "").strip().lower().startswith("kubernetes"):
+                # Do not recycle a framework-managed in-cluster broker during validation by default:
+                # a hard restart drops ephemeral topics and destabilizes the running transfer flow.
+                return False
             return True
 
         provisioning_mode = str(getattr(kafka_manager, "provisioning_mode", "") or "").strip().lower()
-        return provisioning_mode == "kubernetes"
+        return False
+
+    def _ensure_topic_via_runtime_manager(self, runtime, topic_name):
+        kafka_manager = self.kafka_manager
+        ensure_topic = getattr(kafka_manager, "ensure_topic", None) if kafka_manager is not None else None
+        if not callable(ensure_topic):
+            return False
+
+        try:
+            ensured = bool(ensure_topic(topic_name, partitions=1, replication_factor=1))
+        except Exception:
+            return False
+
+        if ensured:
+            runtime["_last_topic_ensure_method"] = "runtime_manager"
+        return ensured
 
     def _ensure_topic_with_runtime(self, runtime, topic_name):
         admin_client_class, new_topic_class = self._load_kafka_admin_classes()
@@ -597,13 +646,16 @@ class KafkaEdcValidationSuite:
                     timeout_seconds=runtime.get("topic_ready_timeout_seconds", 15),
                 ):
                     raise RuntimeError(f"Kafka topic '{topic_name}' could not be created or verified")
+                runtime["_last_topic_ensure_method"] = "runtime_admin"
                 return True
             except Exception as exc:
                 last_exc = exc
+                if self._ensure_topic_via_runtime_manager(runtime, topic_name):
+                    return True
                 if attempt == 1 and self._refresh_kafka_runtime(runtime, restart=False):
                     continue
 
-                if not hard_restart_attempted and self._can_hard_restart_kafka_runtime():
+                if not hard_restart_attempted and self._can_hard_restart_kafka_runtime(runtime):
                     hard_restart_attempted = True
                     if self._refresh_kafka_runtime(runtime, restart=True):
                         continue
@@ -1544,11 +1596,32 @@ class KafkaEdcValidationSuite:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
         return path
 
-    def _reset_framework_managed_kafka(self):
+    def _should_reset_framework_managed_kafka(self, runtime=None):
+        kafka_manager = self.kafka_manager
+        if kafka_manager is None or not bool(getattr(kafka_manager, "started_by_framework", False)):
+            return False
+
+        runtime = runtime if isinstance(runtime, dict) else {}
+        explicit_flag = runtime.get("allow_framework_kafka_reset_between_pairs")
+        if explicit_flag not in (None, ""):
+            return self._truthy(explicit_flag)
+
+        provisioning_mode = str(getattr(kafka_manager, "provisioning_mode", "") or "").strip().lower()
+        if provisioning_mode.startswith("kubernetes"):
+            # In local Kubernetes runs the broker is ephemeral; resetting it between
+            # transient pair retries destroys topics and invalidates the transfer flow.
+            return False
+        return True
+
+    def _reset_framework_managed_kafka(self, runtime=None):
+        if not self._should_reset_framework_managed_kafka(runtime):
+            return False
         kafka_manager = self.kafka_manager
         stop_method = getattr(kafka_manager, "stop_kafka", None) if kafka_manager is not None else None
         if callable(stop_method):
             stop_method()
+            return True
+        return False
 
     def _wait_for_post_run_settlement(self, runtime, payload):
         cleanup = (payload or {}).get("cleanup") or {}
@@ -1625,7 +1698,7 @@ class KafkaEdcValidationSuite:
                     "ensure_source_topic",
                     "passed",
                     topic=source_topic,
-                    method="runtime_admin",
+                    method=runtime.pop("_last_topic_ensure_method", "runtime_admin"),
                     bootstrap_servers=runtime.get("host_bootstrap_servers") or runtime.get("bootstrap_servers"),
                 )
                 self._ensure_topic_with_runtime(runtime, destination_topic)
@@ -1633,7 +1706,7 @@ class KafkaEdcValidationSuite:
                     "ensure_destination_topic",
                     "passed",
                     topic=destination_topic,
-                    method="runtime_admin",
+                    method=runtime.pop("_last_topic_ensure_method", "runtime_admin"),
                     bootstrap_servers=runtime.get("host_bootstrap_servers") or runtime.get("bootstrap_servers"),
                 )
             except Exception as admin_exc:
@@ -1834,7 +1907,7 @@ class KafkaEdcValidationSuite:
 
                 retry_reason = self._pair_error_message(result)
                 self._wait_for_post_run_settlement(settle_runtime, result)
-                self._reset_framework_managed_kafka()
+                self._reset_framework_managed_kafka(settle_runtime)
                 time.sleep(self.DEFAULT_PAIR_RETRY_SECONDS)
 
             if result is None:

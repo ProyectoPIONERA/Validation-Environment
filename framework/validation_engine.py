@@ -23,6 +23,7 @@ class ValidationEngine:
         ds_domain_resolver=None,
         ds_name="demo",
         transfer_storage_verifier=None,
+        protocol_address_resolver=None,
     ):
         self.newman_executor = newman_executor or NewmanExecutor()
         self.load_connector_credentials = load_connector_credentials
@@ -32,12 +33,21 @@ class ValidationEngine:
         self.ds_domain_resolver = ds_domain_resolver
         self.ds_name = ds_name
         self.transfer_storage_verifier = transfer_storage_verifier
+        self.protocol_address_resolver = protocol_address_resolver
         self.last_storage_checks = []
 
     def _require_dependency(self, dependency, name):
         if dependency is None:
             raise RuntimeError(f"ValidationEngine requires dependency: {name}")
         return dependency
+
+    def _protocol_address(self, connector_name):
+        resolver = self.protocol_address_resolver
+        if callable(resolver):
+            resolved = str(resolver(connector_name) or "").strip()
+            if resolved:
+                return resolved
+        return f"http://{connector_name}:19194/protocol"
 
     def build_newman_env(self, provider, consumer):
         """Build Newman environment variables for dataspace validation."""
@@ -86,8 +96,8 @@ class ValidationEngine:
             "dataspace": dataspace,
             "keycloakUrl": keycloak_url,
             "keycloakClientId": "dataspace-users",
-            "providerProtocolAddress": f"http://{provider}:19194/protocol",
-            "consumerProtocolAddress": f"http://{consumer}:19194/protocol",
+            "providerProtocolAddress": self._protocol_address(provider),
+            "consumerProtocolAddress": self._protocol_address(consumer),
             "e2e_expected_provider_bucket": f"{dataspace}-{provider}",
             "e2e_expected_consumer_bucket": f"{dataspace}-{consumer}",
             "adapter": adapter_name,
