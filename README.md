@@ -168,6 +168,13 @@ hacen una comprobación previa de hostnames en topología `local`. Si faltan
 entradas, el framework muestra cuáles son y pregunta si quieres aplicar solo las
 entradas ausentes antes de continuar.
 
+Para `Level 6` en topología `local`, la validación completa sigue dependiendo de
+hostnames públicos accesibles por Ingress. Mantén `minikube tunnel` activo y
+asegúrate de que `hosts` resuelve correctamente Keycloak, MinIO,
+`registration-service` y los conectores. Los mecanismos internos de
+`port-forward` que el framework puede usar en validaciones Kafka concretas no
+sustituyen ese requisito del flujo completo.
+
 ## Coexistencia de Adapters
 
 Los adapters pueden compartir los servicios comunes desplegados en
@@ -214,7 +221,8 @@ Opciones operativas del menú:
 | --- | --- |
 | `S` | Preseleccionar adapter para la sesión actual del menú. |
 | `P` | Previsualizar el plan de despliegue. |
-| `H` | Planificar o aplicar entradas de hosts. |
+| `H` | Planificar o aplicar entradas de `hosts`, mostrando hostnames concretos y el motivo si el sync queda omitido. |
+| `U` | Mostrar URLs de acceso derivadas de la configuración activa. |
 | `M` | Ejecutar métricas o benchmarks independientes. |
 | `X` | Recrear el dataspace seleccionado. |
 | `B/D/R/C/L` | Accesos de desarrollo: bootstrap, doctor, recovery, cleanup e imágenes locales. |
@@ -225,10 +233,29 @@ Opciones operativas del menú:
 Al seleccionar `edc`, el menú recuerda revisar `H` antes de ejecutar niveles que
 dependen de hostnames públicos.
 
+La opción `U` muestra las URLs de acceso en formato legible y puede incluir
+endpoints compartidos como `Keycloak`, `MinIO API`, `MinIO Console`,
+`registration-service`, URLs de conectores/componentes y el `bucket` MinIO de
+cada conector cuando aplique.
+
 Si no preseleccionas adapter con `S`, el menú lo pedirá automáticamente cuando
 una operación de `Level 3` a `Level 6` lo necesite.
 
 La referencia completa está en [docs/menu-reference.md](./docs/menu-reference.md).
+
+## Validación Local y Acceso Público
+
+En topología `local`, el framework intenta comportarse de forma coherente con un
+entorno más parecido a producción:
+
+- navegador, Playwright y validación completa de `Level 6` usan hostnames
+  públicos vía Ingress;
+- la comunicación interna entre conectores usa nombres internos de Kubernetes;
+- `port-forward` queda reservado como mecanismo local de soporte o diagnóstico.
+
+Esto significa que `Level 6` completo no debe considerarse correcto si solo
+funciona mediante `port-forward`. Primero deben estar operativos `hosts`,
+Ingress y `minikube tunnel`.
 
 ## Prerrequisitos
 
@@ -262,6 +289,15 @@ necesarias para ejecutar esos navegadores:
 
 ```bash
 bash scripts/bootstrap_framework.sh
+```
+
+El bootstrap requiere Python `3.10+`. Si `python3` apunta a una versión más
+antigua pero la máquina ya tiene otra versión compatible instalada, el script
+intentará usar automáticamente `python3.10`, `python3.11`, `python3.12` o
+`python3.13`. También puede forzarse explícitamente:
+
+```bash
+PIONERA_PYTHON_BIN=python3.11 bash scripts/bootstrap_framework.sh
 ```
 
 Si un entorno no permite instalar paquetes del sistema desde el bootstrap, se

@@ -21,6 +21,10 @@ máquina que lanza el framework. Si esta comprobación falla, revisa que
 `[sudo] password for <user>:`, introduce la contraseña Linux/WSL en esa misma
 terminal y vuelve a lanzar el nivel.
 
+Ese preflight público forma parte del comportamiento esperado del framework en
+`local`. `Level 6` completo debe ejecutarse contra la ruta pública del entorno,
+no contra `port-forward` como camino principal.
+
 Después de ese check general, `Level 6` hace preflights específicos del adapter
 antes de abrir Playwright:
 
@@ -86,6 +90,12 @@ En la ruta local actual, la preparación del broker Kafka empieza al inicio de
 ese tiempo de espera sin interrumpir Newman y se reduce la probabilidad de que
 Kafka falle solo por arranque lento.
 
+El flujo completo de `Level 6` sigue requiriendo que Keycloak, MinIO,
+`registration-service` y los conectores sean accesibles por hostname público. La
+parte Kafka puede usar mecanismos locales de soporte para el propio proceso del
+framework, pero eso no convierte `Level 6` completo en una validación correcta
+si la capa pública local no está disponible.
+
 En topología `local`, el broker gestionado por defecto se despliega dentro de
 Kubernetes. Los conectores usan el endpoint interno de cluster:
 
@@ -97,6 +107,27 @@ El framework puede usar un `port-forward` temporal para que el proceso Python
 del host cree topics, produzca mensajes de prueba y verifique el topic destino.
 Ese `port-forward` es un mecanismo de soporte interno de la validación, no un
 endpoint público del dataspace.
+
+Cuando interesa una variante más estable del broker Kafka local sin salir de
+Kubernetes, puede usarse de forma explícita:
+
+```bash
+PIONERA_KAFKA_PROVISIONER=kubernetes-split-kraft python3 main.py edc validate --topology local
+```
+
+Esa variante sigue siendo opt-in. El modo por defecto no cambia automáticamente.
+
+Para diagnósticos Kafka muy concretos en `local`, también existe un fallback
+HTTP opt-in del framework:
+
+```bash
+PIONERA_LEVEL6_LOCAL_HTTP_PORT_FORWARD_FALLBACK=true
+```
+
+Ese fallback solo actúa como ayuda técnica de la suite Kafka cuando el flujo ya
+ha llegado a esa fase. No sustituye el preflight público de `Level 6`, ni debe
+usarse para declarar válida una ejecución completa que no puede acceder a los
+hostnames públicos del entorno.
 
 La consola usa mensajes neutrales bajo el nombre `Kafka transfer validation`.
 Por defecto imprime resultado por par de conectores a medida que cada prueba

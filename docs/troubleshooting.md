@@ -34,6 +34,11 @@ kubectl get ingress -A
 helm list -A
 ```
 
+Si el problema aparece al lanzar `Level 6`, recuerda que la validación completa
+usa hostnames públicos por defecto. Un `port-forward` puntual puede servir para
+diagnóstico, pero no sustituye la necesidad de que Ingress, `hosts` y
+`minikube tunnel` estén realmente operativos.
+
 ## Level 2 Muestra `failed post-install`
 
 En instalaciones locales limpias, Helm puede dejar `common-srvs` en estado
@@ -319,6 +324,33 @@ Comprueba:
 - que el modo de autenticación coincide con la suite esperada;
 - que el reporte en `experiments/` contiene screenshots, trazas o detalles de error.
 
+## Level 6 Completo Falla por Endpoints Públicos Inaccesibles
+
+Si `Level 6` falla antes de Newman, Playwright o Kafka con un mensaje sobre
+hostnames públicos inaccesibles, el framework está detectando correctamente que
+la capa pública local no está lista.
+
+Revisa:
+
+- `minikube tunnel` activo en otra terminal;
+- entradas `hosts` sincronizadas;
+- Ingress con dirección y backends activos;
+- resolución DNS/hosts desde la misma máquina que ejecuta el framework.
+
+Comandos útiles:
+
+```bash
+python3 main.py edc hosts --topology local --dry-run
+kubectl get ingress -A
+kubectl get endpoints -A
+kubectl get endpointslices -A
+```
+
+En esta situación, no conviene intentar “forzar” un `Level 6` completo mediante
+`port-forward`. La decisión actual del framework es mantener `hostname` como vía
+normal para validación completa en `local`, de forma coherente con un entorno
+más parecido a producción.
+
 ## Kafka Autoaprovisionado No Queda Listo a Tiempo
 
 Si `Level 6` falla en la parte Kafka con mensajes sobre `port-forward`,
@@ -339,6 +371,28 @@ por `port-forward` antes de lanzar la suite Kafka. Si aun así falla, revisa:
 - que `framework-kafka` y `framework-kafka-external` existan en el namespace;
 - que `minikube tunnel` siga activo si el entorno local lo requiere;
 - el artefacto `kafka_runtime_preparation.json` dentro del experimento.
+
+Si el broker local integrado en Kubernetes sigue siendo inestable en `local`,
+puede probarse la variante opt-in:
+
+```bash
+PIONERA_KAFKA_PROVISIONER=kubernetes-split-kraft python3 main.py edc validate --topology local
+```
+
+Esta variante mantiene Kafka dentro de Kubernetes, pero separa `controller` y
+`broker` para reducir flakes del provisionador local.
+
+Cuando el problema no está en el broker sino en el acceso HTTP local a Keycloak
+o a las management APIs durante la suite Kafka, el framework también puede usar
+un fallback HTTP opt-in:
+
+```bash
+PIONERA_LEVEL6_LOCAL_HTTP_PORT_FORWARD_FALLBACK=true
+```
+
+Ese fallback está pensado para la fase Kafka de `Level 6` en `local`. No debe
+interpretarse como sustituto del acceso público requerido por la validación
+completa del nivel.
 
 ## Playwright INESData y Transferencias en STARTED
 

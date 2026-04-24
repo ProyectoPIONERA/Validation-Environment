@@ -89,9 +89,36 @@ Muestra un plan de despliegue sin modificar el entorno. Úsalo antes de ejecutar
 
 `H - Plan/apply hosts entries`
 
-Planifica o aplica entradas del fichero `hosts`. Por defecto solo planifica. Para aplicar cambios debes habilitar sincronización explícita con `PIONERA_SYNC_HOSTS=true` y `PIONERA_HOSTS_FILE`.
+Planifica o aplica entradas del fichero `hosts`. Por defecto solo planifica. La
+salida muestra los hostnames concretos por nivel y el motivo si el sync queda
+en `Skipped`.
 
-En el menú interactivo, si el adapter elegido para la operación es `edc` y vas a ejecutar niveles `3-6`, el framework verifica primero si faltan hostnames en el fichero `hosts` local. Si faltan, muestra la lista y pregunta si quieres aplicar solo las entradas ausentes antes de continuar. Si cancelas o el sistema no permite escribir el fichero, el nivel no se ejecuta.
+Si el sync automático no está habilitado, el menú interactivo también puede
+ofrecer aplicar el plan en ese momento cuando detecta un fichero `hosts`
+resoluble. Para aplicar cambios de forma explícita fuera del prompt interactivo,
+usa `PIONERA_SYNC_HOSTS=true` y `PIONERA_HOSTS_FILE`.
+
+En el menú interactivo, si el adapter elegido para la operación es `edc` y vas
+a ejecutar niveles `3-6`, el framework verifica primero si faltan hostnames en
+el fichero `hosts` local. Si faltan, muestra la lista y pregunta si quieres
+aplicar solo las entradas ausentes antes de continuar. Si cancelas o el sistema
+no permite escribir el fichero, el nivel no se ejecuta.
+
+`U - Show available access URLs`
+
+Muestra las URLs de acceso derivadas de la configuración activa del adapter en
+un formato legible. Es útil después de `Level 2`, `Level 4` o `Level 5` cuando
+quieres ver rápidamente portales, dashboards, APIs, componentes o accesos
+compartidos sin buscar en artefactos o ficheros de configuración.
+
+La salida puede incluir:
+
+- `Keycloak`
+- `MinIO API`
+- `MinIO Console`
+- `registration-service`
+- URLs de portales, conectores y componentes
+- `MinIO Bucket` por conector cuando aplique
 
 `M - Run metrics / benchmarks`
 

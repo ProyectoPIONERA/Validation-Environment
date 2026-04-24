@@ -105,6 +105,17 @@ la validacion, no el endpoint funcional que deben usar los conectores.
 Antes de dar el broker por listo, el framework valida tanto el listener interno
 del cluster como el listener externo usado por el `port-forward`.
 
+Cuando interesa una variante local más estable sin salir de Kubernetes, puede
+activarse explícitamente:
+
+```bash
+PIONERA_KAFKA_PROVISIONER=kubernetes-split-kraft
+```
+
+Esa variante separa `controller` y `broker` dentro del namespace Kafka y sigue
+siendo opt-in. No sustituye automáticamente al provisionador `kubernetes`
+histórico.
+
 ## Configuracion del Broker
 
 El broker Kafka puede configurarse con:
@@ -125,6 +136,22 @@ El modo `docker` sigue disponible para desarrollo avanzado mediante
 Docker como broker externo puede dejar al dataplane apuntando a
 `host.minikube.internal:<puerto>` y provocar que la transferencia quede en
 `STARTED` sin mover mensajes si ese puerto no es alcanzable desde los pods.
+
+Para `Level 6` completo en `local`, la validación sigue dependiendo de
+hostnames públicos funcionales para Keycloak y los conectores. El broker Kafka
+puede apoyarse en `port-forward` internos del framework, pero eso no convierte
+el flujo completo en válido si la capa pública local no está disponible.
+
+Cuando la suite Kafka necesita recuperarse de un problema HTTP local puntual en
+Keycloak o en la management API del conector, puede activarse:
+
+```bash
+PIONERA_LEVEL6_LOCAL_HTTP_PORT_FORWARD_FALLBACK=true
+```
+
+Ese fallback está limitado a la fase Kafka de `Level 6` en `local`. No debe
+usarse como sustituto de Ingress, `hosts` o `minikube tunnel` para la validación
+completa del nivel.
 
 La ruta local normal no requiere declarar variables Kafka en los
 `deployer.config`. El framework usa defaults reproducibles y los ficheros
