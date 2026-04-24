@@ -30,6 +30,15 @@ Desde la raíz del repositorio:
 bash scripts/bootstrap_framework.sh
 ```
 
+El bootstrap requiere Python `3.10+`. Si `python3` apunta a una versión más
+antigua pero la máquina ya tiene otra versión compatible instalada, el script
+intentará usar automáticamente `python3.10`, `python3.11`, `python3.12` o
+`python3.13`. También puede forzarse explícitamente:
+
+```bash
+PIONERA_PYTHON_BIN=python3.11 bash scripts/bootstrap_framework.sh
+```
+
 En Linux/WSL, el bootstrap instala Playwright con sus dependencias del sistema
 para evitar que las validaciones UI fallen al arrancar el navegador. En
 entornos donde no se puedan instalar paquetes del sistema, usa

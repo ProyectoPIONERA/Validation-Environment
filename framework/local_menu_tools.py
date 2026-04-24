@@ -20,6 +20,7 @@ CLEAN_WORKSPACE_SCRIPT_REL_PATH = os.path.join("scripts", "clean_workspace.sh")
 LOCAL_WORKFLOW_SCRIPT_REL_PATH = os.path.join(
     "adapters", "inesdata", "scripts", "local_build_load_deploy.sh"
 )
+MIN_FRAMEWORK_PYTHON = (3, 10)
 FRAMEWORK_DOCTOR_SYSTEM_COMMANDS = (
     ("python3", ["python3", "--version"], "Instala Python 3 y el paquete venv del sistema."),
     ("git", ["git", "--version"], "Instala Git en la máquina anfitriona."),
@@ -43,6 +44,33 @@ def _playwright_browser_remediation() -> str:
     if sys.platform.startswith("linux"):
         return "Run: cd validation/ui && npx playwright install --with-deps"
     return "Run: cd validation/ui && npx playwright install"
+
+
+def _python_bootstrap_remediation() -> str:
+    if sys.platform == "darwin":
+        return (
+            "Install Python 3.10+ (for example: brew install python@3.11) "
+            "and rerun bootstrap. If needed: "
+            f"PIONERA_PYTHON_BIN=python3.11 bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}"
+        )
+    return f"Use Python 3.10+ and rerun bootstrap: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}"
+
+
+def _parse_python_version(version_text: str) -> tuple[int, int, int] | None:
+    match = re.search(r"Python\s+(\d+)\.(\d+)(?:\.(\d+))?", version_text or "")
+    if not match:
+        return None
+    major = int(match.group(1))
+    minor = int(match.group(2))
+    patch = int(match.group(3) or 0)
+    return major, minor, patch
+
+
+def _python_version_supported(version_text: str) -> bool:
+    parsed = _parse_python_version(version_text)
+    if not parsed:
+        return False
+    return parsed >= MIN_FRAMEWORK_PYTHON
 
 
 @dataclass(frozen=True)
@@ -150,25 +178,42 @@ def collect_framework_doctor_report():
             )
             continue
         return_code, version_text = _run_command_capture(version_args)
+        status = "ok" if return_code == 0 else "warning"
+        details = version_text.splitlines()[0].strip() if version_text else resolved
+        item_remediation = remediation if return_code != 0 else None
+        if command_name == "python3" and return_code == 0 and not _python_version_supported(version_text):
+            status = "warning"
+            details = f"{details} (framework requires Python 3.10+)"
+            item_remediation = _python_bootstrap_remediation()
         checks.append(
             _doctor_item(
                 "system",
                 command_name,
-                "ok" if return_code == 0 else "warning",
-                version_text.splitlines()[0].strip() if version_text else resolved,
-                remediation if return_code != 0 else None,
+                status,
+                details,
+                item_remediation,
             )
         )
 
     if os.path.exists(root_venv_python):
         return_code, version_text = _run_command_capture([root_venv_python, "--version"])
+        venv_status = "ok" if return_code == 0 else "warning"
+        venv_details = version_text or root_venv_python
+        venv_remediation = f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}"
+        if return_code == 0 and not _python_version_supported(version_text):
+            venv_status = "warning"
+            venv_details = f"{venv_details} (framework requires Python 3.10+)"
+            venv_remediation = (
+                "Remove .venv and rerun bootstrap with a supported interpreter. "
+                + _python_bootstrap_remediation()
+            )
         checks.append(
             _doctor_item(
                 "framework",
                 "root .venv",
-                "ok" if return_code == 0 else "warning",
-                version_text or root_venv_python,
-                f"Run: bash {FRAMEWORK_BOOTSTRAP_SCRIPT_REL_PATH}",
+                venv_status,
+                venv_details,
+                venv_remediation,
             )
         )
     else:
@@ -183,9 +228,16 @@ def collect_framework_doctor_report():
         )
 
     active_python = os.path.abspath(sys.executable)
-    active_status = "ok" if active_python == os.path.abspath(root_venv_python) else "warning"
-    active_details = active_python
-    active_remediation = None if active_status == "ok" else "Activate .venv before long-running deployments."
+    active_version = f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    active_supported = (sys.version_info.major, sys.version_info.minor) >= MIN_FRAMEWORK_PYTHON
+    active_status = "ok" if active_python == os.path.abspath(root_venv_python) and active_supported else "warning"
+    active_details = f"{active_python} ({active_version})"
+    active_remediation = None
+    if not active_supported:
+        active_remediation = _python_bootstrap_remediation()
+        active_details = f"{active_details} [framework requires Python 3.10+]"
+    elif active_status != "ok":
+        active_remediation = "Activate .venv before long-running deployments."
     checks.append(_doctor_item("framework", "active python", active_status, active_details, active_remediation))
 
     if os.path.exists(local_newman):

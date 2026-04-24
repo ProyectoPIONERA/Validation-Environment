@@ -7,6 +7,66 @@ from framework import local_menu_tools
 
 
 class LocalMenuToolsTests(unittest.TestCase):
+    def test_framework_doctor_warns_when_system_python3_is_too_old(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(local_menu_tools, "project_root", return_value=tmpdir),
+                mock.patch.object(
+                    local_menu_tools,
+                    "FRAMEWORK_DOCTOR_SYSTEM_COMMANDS",
+                    (("python3", ["python3", "--version"], "Install Python."),),
+                ),
+                mock.patch.object(
+                    local_menu_tools.shutil,
+                    "which",
+                    side_effect=lambda command: f"/usr/bin/{command}" if command in {"python3", "pgrep"} else None,
+                ),
+                mock.patch.object(
+                    local_menu_tools,
+                    "_run_command_capture",
+                    side_effect=lambda args, cwd=None: (0, "Python 3.9.6")
+                    if args == ["python3", "--version"]
+                    else (1, ""),
+                ),
+                mock.patch.object(local_menu_tools, "get_hosts_path", return_value=None),
+                mock.patch.object(local_menu_tools.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")),
+            ):
+                report = local_menu_tools.collect_framework_doctor_report()
+
+        python_item = next(item for item in report["checks"] if item["name"] == "python3")
+        self.assertEqual(python_item["status"], "warning")
+        self.assertIn("Python 3.9.6", python_item["details"])
+        self.assertIn("Python 3.10+", python_item["details"])
+        self.assertIn("Python 3.10+", python_item["remediation"])
+
+    def test_framework_doctor_warns_when_root_venv_python_is_too_old(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root_venv_python = os.path.join(tmpdir, ".venv", "bin", "python")
+            os.makedirs(os.path.dirname(root_venv_python), exist_ok=True)
+            with open(root_venv_python, "w", encoding="utf-8") as handle:
+                handle.write("")
+
+            with (
+                mock.patch.object(local_menu_tools, "project_root", return_value=tmpdir),
+                mock.patch.object(local_menu_tools, "FRAMEWORK_DOCTOR_SYSTEM_COMMANDS", ()),
+                mock.patch.object(local_menu_tools.shutil, "which", return_value="/usr/bin/pgrep"),
+                mock.patch.object(
+                    local_menu_tools,
+                    "_run_command_capture",
+                    side_effect=lambda args, cwd=None: (0, "Python 3.9.6")
+                    if args == [root_venv_python, "--version"]
+                    else (1, ""),
+                ),
+                mock.patch.object(local_menu_tools, "get_hosts_path", return_value=None),
+                mock.patch.object(local_menu_tools.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")),
+            ):
+                report = local_menu_tools.collect_framework_doctor_report()
+
+        venv_item = next(item for item in report["checks"] if item["name"] == "root .venv")
+        self.assertEqual(venv_item["status"], "warning")
+        self.assertIn("Python 3.10+", venv_item["details"])
+        self.assertIn("Remove .venv", venv_item["remediation"])
+
     def test_bootstrap_interactive_executes_framework_bootstrap_script(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             script_dir = os.path.join(tmpdir, "scripts")

@@ -23,6 +23,7 @@ SKIP_PLAYWRIGHT=false
 SKIP_ROOT_NODE=false
 SKIP_UI_NODE=false
 SKIP_DEPLOYER_CONFIG_INIT=false
+MIN_PYTHON_VERSION="3.10"
 
 log() {
   printf '[bootstrap] %s\n' "$*"
@@ -31,6 +32,46 @@ log() {
 fail() {
   printf '[bootstrap] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+python_version_string() {
+  local python_bin="$1"
+  "$python_bin" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")'
+}
+
+python_supports_framework() {
+  local python_bin="$1"
+  "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+find_bootstrap_python() {
+  local requested_python_bin="${PIONERA_PYTHON_BIN:-}"
+  local candidate=""
+
+  if [[ -n "$requested_python_bin" ]]; then
+    command -v "$requested_python_bin" >/dev/null 2>&1 || fail "PIONERA_PYTHON_BIN points to a command that was not found: $requested_python_bin"
+    python_supports_framework "$requested_python_bin" || fail "PIONERA_PYTHON_BIN=$requested_python_bin uses Python $(python_version_string "$requested_python_bin"), but the framework requires Python $MIN_PYTHON_VERSION+"
+    printf '%s\n' "$requested_python_bin"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1 && python_supports_framework python3; then
+    printf 'python3\n'
+    return 0
+  fi
+
+  for candidate in python3.13 python3.12 python3.11 python3.10; do
+    if command -v "$candidate" >/dev/null 2>&1 && python_supports_framework "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v python3 >/dev/null 2>&1; then
+    fail "Python $MIN_PYTHON_VERSION+ is required. The current python3 is $(python_version_string python3). On macOS, install a newer interpreter (for example 'brew install python@3.11') and rerun with PIONERA_PYTHON_BIN=python3.11 bash scripts/bootstrap_framework.sh"
+  fi
+
+  fail "Python $MIN_PYTHON_VERSION+ is required. Install Python 3.10 or newer and rerun the bootstrap. On macOS, for example: brew install python@3.11"
 }
 
 usage() {
@@ -101,16 +142,18 @@ should_install_playwright_system_deps() {
   [[ "$(uname -s)" == "Linux" ]]
 }
 
-command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+BOOTSTRAP_PYTHON_BIN="$(find_bootstrap_python)"
+log "Using Python interpreter: $BOOTSTRAP_PYTHON_BIN ($(python_version_string "$BOOTSTRAP_PYTHON_BIN"))"
 
 if [[ ! -d "$ROOT_VENV_DIR" ]]; then
   log "Creating root virtual environment at $ROOT_VENV_DIR"
-  python3 -m venv "$ROOT_VENV_DIR"
+  "$BOOTSTRAP_PYTHON_BIN" -m venv "$ROOT_VENV_DIR"
 else
   log "Reusing existing root virtual environment at $ROOT_VENV_DIR"
 fi
 
 [[ -x "$ROOT_PYTHON_BIN" ]] || fail "Virtual environment python not found: $ROOT_PYTHON_BIN"
+python_supports_framework "$ROOT_PYTHON_BIN" || fail "The existing virtual environment uses Python $(python_version_string "$ROOT_PYTHON_BIN"), but the framework requires Python $MIN_PYTHON_VERSION+. Remove .venv and rerun bootstrap with a supported interpreter."
 [[ -f "$ROOT_REQUIREMENTS" ]] || fail "Missing requirements file: $ROOT_REQUIREMENTS"
 
 log "Upgrading pip in the root virtual environment"
