@@ -124,7 +124,9 @@ class DeploymentContext:
     ds_domain_base: str
     connectors: list[str] = field(default_factory=list)
     components: list[str] = field(default_factory=list)
+    namespace_profile: str = "compact"
     namespace_roles: NamespaceRoles = field(default_factory=NamespaceRoles)
+    planned_namespace_roles: NamespaceRoles = field(default_factory=NamespaceRoles)
     topology_profile: TopologyProfile = field(default_factory=TopologyProfile)
     runtime_dir: str = ""
     config: dict[str, Any] = field(default_factory=dict)
@@ -138,6 +140,11 @@ class DeploymentContext:
             resolved_roles = namespace_roles
         else:
             resolved_roles = NamespaceRoles.from_mapping(namespace_roles or {})
+        planned_namespace_roles = payload.get("planned_namespace_roles")
+        if isinstance(planned_namespace_roles, NamespaceRoles):
+            resolved_planned_roles = planned_namespace_roles
+        else:
+            resolved_planned_roles = NamespaceRoles.from_mapping(planned_namespace_roles or resolved_roles.as_dict())
         topology_profile = payload.get("topology_profile")
         if isinstance(topology_profile, TopologyProfile):
             resolved_topology_profile = topology_profile
@@ -153,7 +160,9 @@ class DeploymentContext:
             ds_domain_base=str(payload.get("ds_domain_base", "") or ""),
             connectors=list(payload.get("connectors") or []),
             components=list(payload.get("components") or []),
+            namespace_profile=str(payload.get("namespace_profile", "compact") or "compact"),
             namespace_roles=resolved_roles,
+            planned_namespace_roles=resolved_planned_roles,
             topology_profile=resolved_topology_profile,
             runtime_dir=str(payload.get("runtime_dir", "") or ""),
             config=dict(payload.get("config") or {}),
@@ -168,7 +177,9 @@ class DeploymentContext:
             "ds_domain_base": self.ds_domain_base,
             "connectors": list(self.connectors),
             "components": list(self.components),
+            "namespace_profile": self.namespace_profile,
             "namespace_roles": self.namespace_roles.as_dict(),
+            "planned_namespace_roles": self.planned_namespace_roles.as_dict(),
             "topology_profile": self.topology_profile.as_dict(),
             "runtime_dir": self.runtime_dir,
             "config": dict(self.config),

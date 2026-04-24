@@ -1,25 +1,24 @@
 """Deployment helpers for the generic EDC adapter."""
 
-import os
-import shutil
-
-from adapters.inesdata.config import InesdataConfig
-from adapters.inesdata.deployment import INESDataDeploymentAdapter
+from adapters.shared.config import (
+    SharedLevel3DataspaceRuntimeMixin,
+    SharedLevel3RuntimeConfigMixin,
+    SharedRegistrationServiceRuntimeMixin,
+    resolve_shared_level3_runtime_context,
+    stage_shared_level3_runtime_artifacts,
+)
+from adapters.shared.deployment import SharedDataspaceDeploymentAdapter
 
 from .config import EDCConfigAdapter, EdcConfig
 
 
-class EdcSharedDataspaceConfig(EdcConfig):
+class EdcSharedDataspaceConfig(
+    SharedRegistrationServiceRuntimeMixin,
+    SharedLevel3DataspaceRuntimeMixin,
+    SharedLevel3RuntimeConfigMixin,
+    EdcConfig,
+):
     """Transitional Level 3 config that reuses the shared dataspace runtime."""
-
-    REPO_DIR = InesdataConfig.REPO_DIR
-    RUNTIME_LABEL = "shared dataspace"
-    QUIET_REQUIREMENTS_INSTALL = True
-    QUIET_SENSITIVE_DEPLOYER_OUTPUT = True
-
-    @classmethod
-    def python_exec(cls):
-        return os.path.join(cls.venv_path(), "bin", "python")
 
 
 class EDCDeploymentAdapter:
@@ -34,7 +33,7 @@ class EDCDeploymentAdapter:
         self.config = config_cls or EdcConfig
         self.config_adapter = config_adapter or EDCConfigAdapter(self.config, topology=self.topology)
         self.connectors_adapter = None
-        self._delegate = INESDataDeploymentAdapter(
+        self._delegate = SharedDataspaceDeploymentAdapter(
             run=run,
             run_silent=run_silent,
             auto_mode_getter=auto_mode_getter,
@@ -43,18 +42,8 @@ class EDCDeploymentAdapter:
             config_cls=EdcSharedDataspaceConfig,
         )
 
-    def _stage_shared_dataspace_credentials(self):
-        """Move shared Level 3 credentials into the EDC runtime tree.
-
-        The transitional EDC Level 3 flow reuses the INESData bootstrap script,
-        which writes some credentials relative to its own deployer directory.
-        For auditability, the generated EDC dataspace state must live under
-        deployers/edc/deployments instead of deployers/inesdata/deployments.
-        """
+    def _shared_level3_runtime_context(self):
         delegate_config = getattr(getattr(self, "_delegate", None), "config", None)
-        source_repo_getter = getattr(delegate_config, "repo_dir", None)
-        if not callable(source_repo_getter):
-            return None
 
         dataspace_getter = getattr(self.config_adapter, "primary_dataspace_name", None)
         environment_getter = getattr(self.config_adapter, "deployment_environment_name", None)
@@ -62,34 +51,43 @@ class EDCDeploymentAdapter:
         if not (callable(dataspace_getter) and callable(environment_getter) and callable(runtime_getter)):
             return None
 
-        dataspace = str(dataspace_getter() or "").strip()
-        environment = str(environment_getter() or "DEV").strip().upper() or "DEV"
-        if not dataspace:
-            return None
+        dataspace = dataspace_getter()
+        environment = environment_getter()
+        target_runtime_dir = runtime_getter(ds_name=dataspace)
+        return resolve_shared_level3_runtime_context(
+            delegate_config,
+            dataspace=dataspace,
+            environment=environment,
+            target_runtime_dir=target_runtime_dir,
+        )
 
-        source_dir = os.path.join(source_repo_getter(), "deployments", environment, dataspace)
-        source_file = os.path.join(source_dir, f"credentials-dataspace-{dataspace}.json")
-        if not os.path.isfile(source_file):
-            return None
+    def _stage_shared_dataspace_credentials(self):
+        """Compatibility shim for legacy/tests that request staged dataspace credentials.
 
-        target_dir = runtime_getter(ds_name=dataspace)
-        target_file = os.path.join(target_dir, os.path.basename(source_file))
-        os.makedirs(target_dir, exist_ok=True)
+        The real staging logic now lives in the neutral shared helper layer.
+        """
+        return self._stage_shared_dataspace_runtime_artifacts().get("credentials")
 
-        if os.path.abspath(source_file) != os.path.abspath(target_file):
-            shutil.copy2(source_file, target_file)
-            try:
-                os.remove(source_file)
-                if os.path.isdir(source_dir) and not os.listdir(source_dir):
-                    os.rmdir(source_dir)
-            except OSError as exc:
-                print(f"Warning: could not clean transitional EDC Level 3 artifact {source_file}: {exc}")
-        return target_file
+    def _stage_shared_registration_service_values(self):
+        """Compatibility shim for legacy/tests that request staged registration values.
+
+        The real staging logic now lives in the neutral shared helper layer.
+        """
+        return self._stage_shared_dataspace_runtime_artifacts().get("registration_values")
+
+    def _stage_shared_dataspace_runtime_artifacts(self):
+        """Stage transitional Level 3 runtime artifacts through the shared helper layer."""
+        context = self._shared_level3_runtime_context()
+        return stage_shared_level3_runtime_artifacts(
+            context,
+            target_config_adapter=self.config_adapter,
+            label="transitional EDC Level 3 artifact",
+        )
 
     def deploy_dataspace(self):
         self._delegate.connectors_adapter = self.connectors_adapter
         result = self._delegate.deploy_dataspace()
-        self._stage_shared_dataspace_credentials()
+        self._stage_shared_dataspace_runtime_artifacts()
         return result
 
     def build_recreate_dataspace_plan(self):

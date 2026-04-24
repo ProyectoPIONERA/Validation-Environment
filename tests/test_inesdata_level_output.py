@@ -59,6 +59,9 @@ class LevelOutputConfig:
     def namespace_demo(self):
         return "demo-ns"
 
+    def registration_service_namespace(self):
+        return "demo-core-ns"
+
     def python_exec(self):
         return "python3"
 
@@ -424,6 +427,21 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_namespace_stability.assert_not_called()
         infrastructure.ensure_vault_unsealed.assert_not_called()
 
+    def test_verify_common_services_ready_for_level3_fails_fast_when_helm_release_missing(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: None
+        infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_common_services_ready_for_level3()
+
+        self.assertFalse(ready)
+        self.assertEqual(root_cause, "common services Helm release not found")
+        infrastructure.wait_for_level2_service_pods.assert_not_called()
+        infrastructure.wait_for_namespace_stability.assert_not_called()
+        infrastructure.ensure_vault_unsealed.assert_not_called()
+
     def test_reset_common_services_for_level4_repair_uses_temporary_vault_backup(self):
         infrastructure = self._make_infrastructure()
         infrastructure.stop_port_forward_service = mock.Mock()
@@ -528,6 +546,9 @@ class InesdataLevelOutputTests(unittest.TestCase):
         ), mock.patch(
             "adapters.inesdata.deployment.requests.get",
             return_value=mock.Mock(status_code=200),
+        ), mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""),
         ):
             deployment.deploy_dataspace()
             infrastructure.announce_level(3, "DATASPACE")
@@ -539,6 +560,70 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Next step: run Level 4", rendered)
         infrastructure.reconcile_vault_state_for_local_runtime.assert_called_once()
         infrastructure.sync_common_credentials_from_kubernetes.assert_called_once()
+
+    def test_level3_postgres_cleanup_reconciles_residual_role_directly(self):
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=self._make_infrastructure(),
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = mock.Mock()
+        deployment.connectors_adapter.force_clean_postgres_db = mock.Mock()
+
+        subprocess_results = [
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="1\n", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+        ]
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            side_effect=subprocess_results,
+        ):
+            deployment._cleanup_level3_postgres_state("demoedc_rs", "demoedc_rsusr", "registration-service")
+
+        deployment.connectors_adapter.force_clean_postgres_db.assert_called_once_with(
+            "demoedc_rs",
+            "demoedc_rsusr",
+        )
+        self.assertIn("Reconciling directly", output.getvalue())
+
+    def test_level3_postgres_cleanup_fails_when_residual_state_persists(self):
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=self._make_infrastructure(),
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = mock.Mock()
+        deployment.connectors_adapter.force_clean_postgres_db = mock.Mock()
+
+        subprocess_results = [
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="1\n", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="1\n", stderr=""),
+        ]
+
+        with mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            side_effect=subprocess_results,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "PostgreSQL cleanup did not remove previous registration-service state"):
+                deployment._cleanup_level3_postgres_state("demoedc_rs", "demoedc_rsusr", "registration-service")
 
     def test_wait_for_keycloak_admin_ready_retries_until_token_is_available(self):
         deployment = INESDataDeploymentAdapter(
@@ -876,7 +961,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertTrue(result)
         infrastructure._ensure_local_service_access.assert_called_once_with(
             "registration-service actuator",
-            "demo-ns",
+            "demo-core-ns",
             "registration-service",
             18080,
             8080,
@@ -885,7 +970,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
             wait_timeout=30,
         )
         infrastructure.stop_port_forward_service.assert_called_once_with(
-            "demo-ns",
+            "demo-core-ns",
             "registration-service",
             quiet=True,
         )
@@ -919,7 +1004,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertIsNone(root_cause)
         infrastructure.wait_for_dataspace_level3_pods.assert_called_once_with(
-            "demo-ns",
+            "demo-core-ns",
             dataspace_name="demo",
         )
         infrastructure.wait_for_registration_service_schema.assert_called_once_with(
@@ -1188,6 +1273,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
     def test_verify_common_services_ready_for_level3_uses_extended_timeouts(self):
         infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: "deployed"
         infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
         infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
         infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+import yaml
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -73,13 +74,234 @@ class ConnectorRetryConfigAdapter:
             "KC_PASSWORD": "secret",
             "MINIO_USER": "admin",
             "MINIO_PASSWORD": "minio-secret",
+            "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
         }
 
     def generate_connector_hosts(self, _connectors):
         return []
 
+    def registration_service_internal_hostname(self, **_kwargs):
+        return "demo-registration-service:8080"
+
+
+class RoleAlignedConnectorRetryConfigAdapter(ConnectorRetryConfigAdapter):
+    def load_deployer_config(self):
+        config = super().load_deployer_config()
+        config["NAMESPACE_PROFILE"] = "role-aligned"
+        config["LEVEL4_ROLE_ALIGNED_CONNECTOR_NAMESPACES"] = "true"
+        return config
+
 
 class ConnectorCreationRetryTests(unittest.TestCase):
+    def test_build_internal_protocol_address_uses_cross_namespace_service_fqdn_when_role_aligned(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *args, **kwargs: None,
+                run_silent=lambda *args, **kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=RoleAlignedConnectorRetryConfigAdapter(tmpdir),
+                config_cls=lambda: None,
+            )
+            adapter.config = ConnectorRetryConfig(tmpdir)
+            adapter.load_dataspace_connectors = mock.Mock(return_value=[
+                {
+                    "name": "roleedcprove",
+                    "namespace": "roleedcprove",
+                    "namespace_profile": "role-aligned",
+                    "connectors": [
+                        "conn-cityproof-roleedcprove",
+                        "conn-companyproof-roleedcprove",
+                    ],
+                    "connector_roles": {
+                        "provider": "conn-cityproof-roleedcprove",
+                        "consumer": "conn-companyproof-roleedcprove",
+                    },
+                    "connector_details": [
+                        {
+                            "name": "conn-cityproof-roleedcprove",
+                            "role": "provider",
+                            "active_namespace": "roleedcprove",
+                            "planned_namespace": "roleedcprove-provider",
+                        },
+                        {
+                            "name": "conn-companyproof-roleedcprove",
+                            "role": "consumer",
+                            "active_namespace": "roleedcprove",
+                            "planned_namespace": "roleedcprove-consumer",
+                        },
+                    ],
+                }
+            ])
+
+            self.assertEqual(
+                adapter.build_internal_protocol_address("conn-cityproof-roleedcprove"),
+                "http://conn-cityproof-roleedcprove.roleedcprove-provider.svc.cluster.local:19194/protocol",
+            )
+
+    def test_update_connector_service_discovery_uses_cross_namespace_registration_service_hostname(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class RoleAlignedConfigAdapter(ConnectorRetryConfigAdapter):
+                def registration_service_internal_hostname(self, **_kwargs):
+                    return "demo-registration-service.demo-core.svc.cluster.local:8080"
+
+            config_adapter = RoleAlignedConfigAdapter(tmpdir)
+            values_path = config.connector_values_file("conn-a-demo")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(
+                    {
+                        "services": {
+                            "registrationService": {
+                                "hostname": "demo-registration-service:8080",
+                                "protocol": "http",
+                            }
+                        }
+                    },
+                    handle,
+                    sort_keys=False,
+                )
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: False,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo", "conn-b-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "active_namespace": "demo",
+                        }
+                    ],
+                }
+            ]
+
+            adapter.update_connector_service_discovery(values_path, "conn-a-demo")
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(
+            rendered["services"]["registrationService"]["hostname"],
+            "demo-registration-service.demo-core.svc.cluster.local:8080",
+        )
+
+    def test_update_connector_host_aliases_uses_connector_dataspace_registration_hostname(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class DataspaceAwareConfigAdapter(ConnectorRetryConfigAdapter):
+                def host_alias_domains(self, ds_name=None, ds_namespace=None):
+                    del ds_namespace
+                    return [
+                        "keycloak.dev.ed.dataspaceunit.upm",
+                        f"registration-service-{ds_name}.dev.ds.dataspaceunit.upm",
+                    ]
+
+            config_adapter = DataspaceAwareConfigAdapter(tmpdir)
+            values_path = config.connector_values_file("conn-a-pilot")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"hostAliases": []}, handle, sort_keys=False)
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: "192.168.49.2",
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "pilot",
+                    "namespace": "pilot",
+                    "connectors": ["conn-a-pilot", "conn-b-pilot"],
+                }
+            ]
+
+            adapter.update_connector_host_aliases(
+                values_path,
+                ["conn-a-pilot", "conn-b-pilot"],
+                connector_name="conn-a-pilot",
+            )
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(
+            rendered["hostAliases"][0]["hostnames"],
+            [
+                "keycloak.dev.ed.dataspaceunit.upm",
+                "registration-service-pilot.dev.ds.dataspaceunit.upm",
+                "conn-a-pilot.dev.ds.dataspaceunit.upm",
+                "conn-b-pilot.dev.ds.dataspaceunit.upm",
+            ],
+        )
+
+    def test_update_connector_layout_metadata_persists_namespace_plan_for_connector(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            values_path = config.connector_values_file("conn-a-pilot")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"connector": {"name": "conn-a-pilot"}}, handle, sort_keys=False)
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: "192.168.49.2",
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "pilot",
+                    "namespace": "pilot",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-pilot", "conn-b-pilot"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-pilot",
+                            "role": "provider",
+                            "runtime_namespace": "pilot",
+                            "active_namespace": "pilot",
+                            "planned_namespace": "pilot-provider",
+                            "registration_service_namespace": "pilot-core",
+                            "planned_registration_service_namespace": "pilot-core",
+                        }
+                    ],
+                }
+            ]
+
+            adapter.update_connector_layout_metadata(values_path, "conn-a-pilot")
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(
+            rendered["connector"]["layout"],
+            {
+                "role": "provider",
+                "namespaceProfile": "role-aligned",
+                "runtimeNamespace": "pilot",
+                "activeNamespace": "pilot",
+                "plannedNamespace": "pilot-provider",
+                "registrationServiceNamespace": "pilot-core",
+                "plannedRegistrationServiceNamespace": "pilot-core",
+            },
+        )
+
     def test_keycloak_readiness_uses_configured_hostname_without_port_forward(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -409,6 +631,373 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 ],
             )
 
+    def test_management_api_ready_falls_back_on_http_503_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+                    self.stops = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+                def stop_port_forward_service(self, *args, **kwargs):
+                    self.stops.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            responses = iter([
+                mock.Mock(status_code=503),
+                mock.Mock(status_code=200),
+            ])
+
+            with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "true"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch.object(adapter, "_reserve_local_port", return_value=19193),
+            ):
+                self.assertTrue(adapter.wait_for_management_api_ready("conn-a-demo", timeout=5, poll_interval=0))
+
+            self.assertEqual(
+                infra.calls,
+                [
+                    (
+                        ("demo", "conn-a-demo-123", 19193, 19193),
+                        {"quiet": True},
+                    )
+                ],
+            )
+            self.assertEqual(
+                infra.stops,
+                [
+                    (
+                        ("demo", "conn-a-demo-123"),
+                        {"quiet": True},
+                    )
+                ],
+            )
+
+    def test_management_api_ready_role_aligned_fallback_uses_planned_namespace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = RoleAlignedConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+                    self.stops = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+                def stop_port_forward_service(self, *args, **kwargs):
+                    self.stops.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            responses = iter([
+                mock.Mock(status_code=503),
+                mock.Mock(status_code=200),
+            ])
+
+            with (
+                mock.patch.dict(os.environ, {"PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK": "true"}),
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch.object(adapter, "_reserve_local_port", return_value=19193),
+            ):
+                self.assertTrue(adapter.wait_for_management_api_ready("conn-a-demo", timeout=5, poll_interval=0))
+
+            self.assertEqual(
+                infra.calls,
+                [
+                    (
+                        ("demo-provider", "conn-a-demo-123", 19193, 19193),
+                        {"quiet": True},
+                    )
+                ],
+            )
+            self.assertEqual(
+                infra.stops,
+                [
+                    (
+                        ("demo-provider", "conn-a-demo-123"),
+                        {"quiet": True},
+                    )
+                ],
+            )
+
+    def test_management_api_ready_role_aligned_waits_for_public_ingress_before_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = RoleAlignedConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+                    self.stops = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+                def stop_port_forward_service(self, *args, **kwargs):
+                    self.stops.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            responses = iter([
+                mock.Mock(status_code=503),
+                mock.Mock(status_code=200),
+            ])
+
+            with (
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch.object(adapter, "_reserve_local_port", return_value=19193),
+            ):
+                self.assertTrue(adapter.wait_for_management_api_ready("conn-a-demo", timeout=5, poll_interval=0))
+
+            self.assertEqual(
+                infra.calls,
+                [],
+            )
+            self.assertEqual(
+                infra.stops,
+                [],
+            )
+
+    def test_management_api_ready_role_aligned_falls_back_after_stabilization_window(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = RoleAlignedConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+                    self.stops = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+                def stop_port_forward_service(self, *args, **kwargs):
+                    self.stops.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            responses = iter([
+                mock.Mock(status_code=503),
+                mock.Mock(status_code=200),
+            ])
+
+            with (
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch.object(adapter, "_reserve_local_port", return_value=19193),
+                mock.patch.object(adapter, "_connector_public_ingress_stabilization_timeout", return_value=0),
+                mock.patch.object(adapter, "_connector_public_ingress_resync_wait_seconds", return_value=0),
+            ):
+                self.assertTrue(adapter.wait_for_management_api_ready("conn-a-demo", timeout=5, poll_interval=0))
+
+            self.assertEqual(
+                infra.calls,
+                [
+                    (
+                        ("demo-provider", "conn-a-demo-123", 19193, 19193),
+                        {"quiet": True},
+                    )
+                ],
+            )
+            self.assertEqual(
+                infra.stops,
+                [
+                    (
+                        ("demo-provider", "conn-a-demo-123"),
+                        {"quiet": True},
+                    )
+                ],
+            )
+
+    def test_management_api_ready_role_aligned_resyncs_ingress_before_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = RoleAlignedConnectorRetryConfigAdapter(tmpdir)
+
+            class Infra:
+                def __init__(self):
+                    self.calls = []
+                    self.stops = []
+
+                def port_forward_service(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+                    return True
+
+                def stop_port_forward_service(self, *args, **kwargs):
+                    self.stops.append((args, kwargs))
+                    return True
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "conn-a-demo-123 1/1 Running 0 1m",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter.get_management_api_headers = lambda *_args, **_kwargs: {"Authorization": "Bearer token"}
+            adapter.invalidate_management_api_token = lambda *_args, **_kwargs: None
+
+            responses = iter([
+                mock.Mock(status_code=503),
+                mock.Mock(status_code=200),
+            ])
+
+            with (
+                mock.patch("adapters.inesdata.connectors.socket.gethostbyname", return_value="127.0.0.1"),
+                mock.patch("adapters.inesdata.connectors.requests.post", side_effect=lambda *_a, **_k: next(responses)),
+                mock.patch.object(adapter, "_connector_public_ingress_stabilization_timeout", return_value=0),
+                mock.patch.object(adapter, "_connector_public_ingress_resync_wait_seconds", return_value=5),
+                mock.patch.object(adapter, "_trigger_connector_ingress_resync", return_value=True) as resync,
+            ):
+                self.assertTrue(adapter.wait_for_management_api_ready("conn-a-demo", timeout=5, poll_interval=0))
+
+            resync.assert_called_once_with("conn-a-demo")
+            self.assertEqual(infra.calls, [])
+            self.assertEqual(infra.stops, [])
+
     def test_create_connector_aborts_before_cleanup_when_vault_token_is_stale(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -697,6 +1286,101 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(infra.namespace_wait_calls, [])
+
+    def test_create_connector_uses_planned_namespace_when_level4_role_aligned_opt_in_is_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = RoleAlignedConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            def fake_run(cmd, **_kwargs):
+                if "bootstrap.py connector create" in cmd:
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
+
+            class RecordingInfra:
+                def __init__(self):
+                    self.deploy_calls = []
+                    self.rollout_calls = []
+
+                @staticmethod
+                def ensure_local_infra_access():
+                    return True
+
+                @staticmethod
+                def ensure_vault_unsealed():
+                    return True
+
+                def deploy_helm_release(self, *args, **kwargs):
+                    self.deploy_calls.append((args, kwargs))
+                    return True
+
+                def wait_for_deployment_rollout(self, *args, **kwargs):
+                    self.rollout_calls.append((args, kwargs))
+                    return True
+
+                @staticmethod
+                def manage_hosts_entries(*_args, **_kwargs):
+                    return None
+
+                @staticmethod
+                def get_pod_by_name(*_args, **_kwargs):
+                    return "minio"
+
+            infra = RecordingInfra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo", "conn-b-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+            adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+            adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+
+            created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+
+            self.assertTrue(created)
+            self.assertEqual(infra.deploy_calls[0][0][1], "demo-provider")
+            self.assertEqual(
+                infra.rollout_calls,
+                [
+                    (
+                        ("demo-provider", "conn-a-demo"),
+                        {"timeout_seconds": 180, "label": "connector runtime 'conn-a-demo'"},
+                    ),
+                    (
+                        ("demo-provider", "conn-a-demo-inteface"),
+                        {"timeout_seconds": 180, "label": "connector interface 'conn-a-demo'"},
+                    ),
+                ],
+            )
 
     def test_deploy_connectors_recreates_healthy_existing_connectors(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -126,6 +126,22 @@ class InesdataAdapter:
     def cleanup_test_entities(self, connector_name):
         return self.connectors.cleanup_test_entities(connector_name)
 
+    def _registration_service_namespace(self):
+        config_namespace_getter = getattr(self.config, "registration_service_namespace", None)
+        if callable(config_namespace_getter):
+            namespace = config_namespace_getter()
+            if namespace:
+                return str(namespace).strip()
+        namespace_getter = getattr(self.config_adapter, "primary_registration_service_namespace", None)
+        if callable(namespace_getter):
+            try:
+                namespace = namespace_getter()
+            except Exception:
+                namespace = None
+            if namespace:
+                return str(namespace).strip()
+        return self.config.namespace_demo()
+
     def _preview_common_services(self):
         namespace = self.config.NS_COMMON
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
@@ -234,7 +250,7 @@ class InesdataAdapter:
         }
 
     def _preview_dataspace(self):
-        namespace = self.config.namespace_demo()
+        namespace = self._registration_service_namespace()
         registration_pod = self.infrastructure.get_pod_by_name(namespace, "registration-service")
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
         pod_names = []
@@ -275,10 +291,26 @@ class InesdataAdapter:
 
     def _preview_connectors(self):
         configured_connectors = []
+        connector_layouts = {}
+        dataspace_entries = []
         loader = getattr(self.connectors, "load_dataspace_connectors", None)
         if callable(loader):
             dataspaces = loader() or []
             for dataspace in dataspaces:
+                dataspace_entries.append(
+                    {
+                        "name": dataspace.get("name"),
+                        "namespace": dataspace.get("namespace"),
+                        "namespace_profile": dataspace.get("namespace_profile", "compact"),
+                        "namespace_roles": dict(dataspace.get("namespace_roles") or {}),
+                        "planned_namespace_roles": dict(dataspace.get("planned_namespace_roles") or {}),
+                        "connector_roles": dict(dataspace.get("connector_roles") or {}),
+                    }
+                )
+                for detail in dataspace.get("connector_details") or []:
+                    name = detail.get("name")
+                    if name:
+                        connector_layouts[name] = detail
                 configured_connectors.extend(list(dataspace.get("connectors") or []))
 
         configured_connectors = list(dict.fromkeys(configured_connectors))
@@ -287,10 +319,17 @@ class InesdataAdapter:
         all_ready = True
         for connector in configured_connectors:
             ready = connector in cluster_connectors
+            layout = connector_layouts.get(connector, {})
             connector_entries.append(
                 {
                     "name": connector,
+                    "role": layout.get("role"),
                     "portal_url": self.build_connector_url(connector),
+                    "target_namespace": self.connectors._connector_target_namespace(connector),
+                    "active_namespace": layout.get("active_namespace", self.config.namespace_demo()),
+                    "planned_namespace": layout.get("planned_namespace", self.config.namespace_demo()),
+                    "registration_service_namespace": layout.get("registration_service_namespace"),
+                    "planned_registration_service_namespace": layout.get("planned_registration_service_namespace"),
                     "status": "ready" if ready else "missing",
                     "issues": [] if ready else ["connector runtime pod not found in dataspace namespace"],
                 }
@@ -301,6 +340,7 @@ class InesdataAdapter:
             "status": "ready" if all_ready else "missing",
             "action": "reuse" if all_ready else "deploy_connectors",
             "namespace": self.config.namespace_demo(),
+            "dataspaces": dataspace_entries,
             "connectors": connector_entries,
             "issues": [] if all_ready else ["One or more INESData connectors are not present in the cluster"],
         }
@@ -376,7 +416,23 @@ class InesdataAdapter:
         if callable(loader):
             config = loader()
             if isinstance(config, dict):
-                return dict(config)
+                runtime = dict(config)
+                dataspaces = self.connectors.load_dataspace_connectors() or []
+                if len(dataspaces) == 1:
+                    dataspace = dataspaces[0]
+                    role_summary = dict(dataspace.get("connector_roles") or {})
+                    provider_connector = role_summary.get("provider")
+                    if (
+                        provider_connector
+                        and self.connectors._role_aligned_level4_namespaces_active(
+                            dataspace,
+                            dataspaces=dataspaces,
+                        )
+                    ):
+                        target_namespace = self.connectors.connector_target_namespace(provider_connector)
+                        if target_namespace:
+                            runtime["k8s_namespace"] = target_namespace
+                return runtime
         return {}
 
     def _kafka_container_name(self):

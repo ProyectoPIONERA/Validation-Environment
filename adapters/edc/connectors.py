@@ -542,9 +542,13 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return None
         return f"{base_url}/protocol"
 
-    def _host_aliases(self, connector_hostnames):
+    def _host_aliases(self, connector_hostnames, ds_name=None, ds_namespace=None, connector_name=None):
         minikube_ip = self.run_silent("minikube ip") or self.config.MINIKUBE_IP
-        hostnames = list(self.config.host_alias_domains())
+        hostnames = self._host_alias_domains_for_dataspace(
+            ds_name=ds_name,
+            ds_namespace=ds_namespace,
+            connector_name=connector_name,
+        )
         ds_domain = self.config_adapter.ds_domain_base()
         if ds_domain:
             for connector in connector_hostnames or []:
@@ -777,7 +781,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             "baseHrefFile": base_href_path,
         }
 
-    def _connector_values_payload(self, connector_name, ds_name, connector_hostnames):
+    def _connector_values_payload(self, connector_name, ds_name, connector_hostnames, connector_namespace=None):
         deployer_config = self.config_adapter.load_deployer_config()
         credentials = self.load_connector_credentials(connector_name)
         if not credentials:
@@ -803,12 +807,28 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         dashboard_runtime = self._dashboard_runtime_payload(connector_name, connector_hostnames)
         dashboard_proxy_config = self._dashboard_proxy_config_payload(ds_name, connector_hostnames)
         dashboard_proxy_auth = self._dashboard_proxy_auth_payload(connector_hostnames)
+        if environment == "pro":
+            registration_service_hostname = f"registration-service-{ds_name}.ds.dataspaceunit-project.eu"
+        else:
+            hostname_getter = getattr(self.config_adapter, "registration_service_internal_hostname", None)
+            if callable(hostname_getter):
+                registration_service_hostname = hostname_getter(
+                    ds_name=ds_name,
+                    connector_namespace=connector_namespace,
+                )
+            else:
+                registration_service_hostname = f"{ds_name}-registration-service:8080"
 
         return {
             "connector": {
                 "name": connector_name,
                 "dataspace": ds_name,
                 "environment": environment,
+                "layout": self._connector_layout_metadata(
+                    connector_name,
+                    ds_name=ds_name,
+                    ds_namespace=connector_namespace,
+                ),
                 "image": {
                     "name": self.config_adapter.edc_connector_image_name(),
                     "tag": self.config_adapter.edc_connector_image_tag(),
@@ -889,11 +909,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                     "protocol": "https" if environment == "pro" else "http",
                 },
                 "registrationService": {
-                    "hostname": (
-                        f"registration-service-{ds_name}.ds.dataspaceunit-project.eu"
-                        if environment == "pro"
-                        else f"{ds_name}-registration-service:8080"
-                    ),
+                    "hostname": registration_service_hostname,
                     "protocol": "https" if environment == "pro" else "http",
                 },
                 "vault": {
@@ -902,13 +918,22 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                     "path": f"{ds_name}/{connector_name}/",
                 },
             },
-            "hostAliases": self._host_aliases(connector_hostnames),
+            "hostAliases": self._host_aliases(
+                connector_hostnames,
+                ds_name=ds_name,
+                connector_name=connector_name,
+            ),
         }
 
-    def _render_values_file(self, connector_name, ds_name, connector_hostnames):
+    def _render_values_file(self, connector_name, ds_name, connector_hostnames, connector_namespace=None):
         values_path = self._values_file_path(connector_name, ds_name=ds_name)
         os.makedirs(os.path.dirname(values_path), exist_ok=True)
-        payload = self._connector_values_payload(connector_name, ds_name, connector_hostnames)
+        payload = self._connector_values_payload(
+            connector_name,
+            ds_name,
+            connector_hostnames,
+            connector_namespace=connector_namespace,
+        )
         dashboard_runtime = payload.get("dashboard", {}).get("runtime")
         if dashboard_runtime:
             self._write_dashboard_runtime_config(
@@ -990,17 +1015,44 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             ds_name = dataspace["name"]
             namespace = dataspace["namespace"]
             connectors = dataspace["connectors"]
+            target_namespaces = self._dataspace_connector_target_namespaces(dataspace, dataspaces=dataspaces)
+            connector_details = {
+                entry.get("name"): entry
+                for entry in (dataspace.get("connector_details") or [])
+                if entry.get("name")
+            }
             dataspace_preview = {
                 "name": ds_name,
                 "namespace": namespace,
+                "namespace_profile": dataspace.get("namespace_profile", "compact"),
+                "namespace_roles": dict(dataspace.get("namespace_roles") or {}),
+                "planned_namespace_roles": dict(dataspace.get("planned_namespace_roles") or {}),
+                "connector_roles": dict(dataspace.get("connector_roles") or {}),
                 "connectors": [],
             }
 
             for connector in connectors:
+                connector_layout = connector_details.get(connector, {})
                 connector_preview = {
                     "name": connector,
+                    "role": connector_layout.get("role"),
                     "release_name": f"{connector}-{ds_name}",
                     "namespace": namespace,
+                    "target_namespace": self._connector_target_namespace(
+                        connector,
+                        dataspace=dataspace,
+                        dataspaces=dataspaces,
+                    ),
+                    "active_namespace": connector_layout.get("active_namespace", namespace),
+                    "planned_namespace": connector_layout.get("planned_namespace", namespace),
+                    "registration_service_namespace": connector_layout.get(
+                        "registration_service_namespace",
+                        dataspace_preview["namespace_roles"].get("registration_service_namespace"),
+                    ),
+                    "planned_registration_service_namespace": connector_layout.get(
+                        "planned_registration_service_namespace",
+                        dataspace_preview["planned_namespace_roles"].get("registration_service_namespace"),
+                    ),
                     "values_file": self._values_file_path(connector, ds_name=ds_name),
                     "management_api_url": self.build_connector_url(connector),
                     "dsp_url": self._protocol_url(connector),
@@ -1012,7 +1064,10 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                     "status": "ready",
                 }
 
-                conflicts = self._conflicting_runtime_resources(connector, namespace)
+                conflicts = self._conflicting_runtime_resources(
+                    connector,
+                    connector_preview["target_namespace"],
+                )
                 if conflicts:
                     connector_preview["status"] = "blocked"
                     connector_preview["conflicts"] = conflicts
@@ -1020,7 +1075,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                         "Existing runtime resources are not managed by the EDC adapter."
                     )
                     preview["blocking_reasons"].append(
-                        f"{connector} in namespace {namespace}: {', '.join(conflicts)}"
+                        f"{connector} in namespace {connector_preview['target_namespace']}: {', '.join(conflicts)}"
                     )
                     any_blocked = True
 
@@ -1035,7 +1090,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                         connector_preview["status"] = "bootstrap-required"
                     any_bootstrap_required = True
                 elif connector_preview["status"] != "blocked":
-                    payload = self._connector_values_payload(connector, ds_name, connectors)
+                    payload = self._connector_values_payload(
+                        connector,
+                        ds_name,
+                        connectors,
+                        connector_namespace=namespace,
+                    )
                     connector_preview["render_summary"] = self._redacted_values_preview(payload)
 
                 dataspace_preview["connectors"].append(connector_preview)
@@ -1289,17 +1349,25 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             ds_name = dataspace["name"]
             namespace = dataspace["namespace"]
             connectors = dataspace["connectors"]
+            target_namespaces = self._dataspace_connector_target_namespaces(dataspace, dataspaces=dataspaces)
 
             print(f"\nDataspace: {ds_name}")
             print(f"Namespace: {namespace}")
+            if self._role_aligned_level4_namespaces_active(dataspace, dataspaces=dataspaces):
+                print(f"Target connector namespaces: {target_namespaces}")
             print(f"Connectors defined: {connectors}\n")
 
             for connector in connectors:
-                conflicts = self._conflicting_runtime_resources(connector, namespace)
+                target_namespace = self._connector_target_namespace(
+                    connector,
+                    dataspace=dataspace,
+                    dataspaces=dataspaces,
+                )
+                conflicts = self._conflicting_runtime_resources(connector, target_namespace)
                 if conflicts:
                     raise RuntimeError(
                         "Refusing to deploy generic EDC connector because it would replace "
-                        f"existing non-EDC resources for {connector} in namespace {namespace}: "
+                        f"existing non-EDC resources for {connector} in namespace {target_namespace}: "
                         f"{', '.join(conflicts)}. Use an isolated dataspace configuration or "
                         "remove the conflicting runtime first."
                     )
@@ -1308,16 +1376,37 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 return []
 
             for connector in connectors:
-                if not self._prepare_connector_prerequisites(connector, ds_name, namespace, repo_dir, python_exec):
+                target_namespace = self._connector_target_namespace(
+                    connector,
+                    dataspace=dataspace,
+                    dataspaces=dataspaces,
+                )
+                if not self._prepare_connector_prerequisites(
+                    connector,
+                    ds_name,
+                    target_namespace,
+                    repo_dir,
+                    python_exec,
+                ):
                     return []
 
             for connector in connectors:
-                values_file = self._render_values_file(connector, ds_name, connectors)
+                target_namespace = self._connector_target_namespace(
+                    connector,
+                    dataspace=dataspace,
+                    dataspaces=dataspaces,
+                )
+                values_file = self._render_values_file(
+                    connector,
+                    ds_name,
+                    connectors,
+                    connector_namespace=target_namespace,
+                )
                 release_name = f"{connector}-{ds_name}"
                 print(f"Deploying generic EDC connector: {connector}")
                 if not self.infrastructure.deploy_helm_release(
                     release_name,
-                    namespace,
+                    target_namespace,
                     values_file,
                     cwd=self._edc_connector_dir(),
                 ):
@@ -1325,12 +1414,16 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                     return []
 
                 rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
-                if not self._wait_for_edc_deployment_rollout(connector, namespace, timeout=rollout_timeout):
+                if not self._wait_for_edc_deployment_rollout(
+                    connector,
+                    target_namespace,
+                    timeout=rollout_timeout,
+                ):
                     print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
                     return []
                 if not self._restart_local_edc_deployments_if_needed(
                     connector,
-                    namespace,
+                    target_namespace,
                     rollout_timeout=rollout_timeout,
                 ):
                     return []

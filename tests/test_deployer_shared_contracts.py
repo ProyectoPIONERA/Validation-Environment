@@ -67,7 +67,36 @@ class SharedContractsTests(unittest.TestCase):
         self.assertEqual(context.components, ["ontology-hub"])
         self.assertIsInstance(context.namespace_roles, NamespaceRoles)
         self.assertEqual(context.namespace_roles.registration_service_namespace, "demoedc")
+        self.assertEqual(context.namespace_profile, "compact")
+        self.assertEqual(context.planned_namespace_roles.registration_service_namespace, "demoedc")
         self.assertEqual(context.config["DS_1_NAME"], "demoedc")
+
+    def test_deployment_context_from_mapping_wraps_planned_namespace_roles(self):
+        context = DeploymentContext.from_mapping(
+            {
+                "deployer": "edc",
+                "topology": "local",
+                "environment": "DEV",
+                "dataspace_name": "demoedc",
+                "ds_domain_base": "dev.ds.dataspaceunit.upm",
+                "namespace_profile": "role-aligned",
+                "namespace_roles": {
+                    "registration_service_namespace": "demoedc",
+                    "provider_namespace": "demoedc",
+                    "consumer_namespace": "demoedc",
+                },
+                "planned_namespace_roles": {
+                    "registration_service_namespace": "demoedc-core",
+                    "provider_namespace": "demoedc-provider",
+                    "consumer_namespace": "demoedc-consumer",
+                },
+            }
+        )
+
+        self.assertEqual(context.namespace_profile, "role-aligned")
+        self.assertEqual(context.namespace_roles.registration_service_namespace, "demoedc")
+        self.assertEqual(context.planned_namespace_roles.registration_service_namespace, "demoedc-core")
+        self.assertEqual(context.planned_namespace_roles.provider_namespace, "demoedc-provider")
 
     def test_deployment_context_from_mapping_wraps_topology_profile(self):
         context = DeploymentContext.from_mapping(

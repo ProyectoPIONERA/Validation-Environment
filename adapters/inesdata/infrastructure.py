@@ -71,6 +71,27 @@ class INESDataInfrastructureAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    def _registration_service_namespace(self):
+        config_namespace_getter = getattr(self.config, "registration_service_namespace", None)
+        if callable(config_namespace_getter):
+            namespace = config_namespace_getter()
+            if namespace:
+                return str(namespace).strip()
+        namespace_getter = getattr(self.config_adapter, "primary_registration_service_namespace", None)
+        if callable(namespace_getter):
+            try:
+                namespace = namespace_getter()
+            except Exception:
+                namespace = None
+            if namespace:
+                return str(namespace).strip()
+        namespace_demo_getter = getattr(self.config, "namespace_demo", None)
+        if callable(namespace_demo_getter):
+            namespace = namespace_demo_getter()
+            if namespace:
+                return str(namespace).strip()
+        return self._dataspace_name()
+
     @staticmethod
     def _first_config_value(config, *keys):
         for key in keys:
@@ -2003,7 +2024,7 @@ class INESDataInfrastructureAdapter:
     def wait_for_registration_service_liquibase(self, timeout=None, poll_interval=3):
         timeout = timeout or self.config.TIMEOUT_POD_WAIT
         local_port = self.config.PORT_REGISTRATION_SERVICE
-        namespace = self.config.namespace_demo()
+        namespace = self._registration_service_namespace()
         created_port_forward = False
         last_issue = None
         next_progress = None
@@ -2199,6 +2220,8 @@ class INESDataInfrastructureAdapter:
         common_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
         common_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
         release_status = self._common_services_release_status()
+        if release_status is None:
+            return False, "common services Helm release not found"
         if release_status and release_status != "deployed":
             return False, f"common services Helm release is {release_status}"
 
@@ -2232,7 +2255,7 @@ class INESDataInfrastructureAdapter:
             else getattr(self.config, "DS_NAME", self.config.namespace_demo())
         )
         if not self.wait_for_dataspace_level3_pods(
-            self.config.namespace_demo(),
+            self._registration_service_namespace(),
             dataspace_name=dataspace_name,
         ):
             return False, "Level 3 dataspace pods did not become ready"

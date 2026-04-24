@@ -51,6 +51,12 @@ class RecreateConfigProtectedNamespace(RecreateConfig):
         return "common-srvs"
 
 
+class RecreateConfigRoleAligned(RecreateConfig):
+    @classmethod
+    def registration_service_namespace(cls):
+        return "demoedc-core"
+
+
 class RecreateDataspaceTests(unittest.TestCase):
     def test_recreate_cleanup_targets_only_selected_dataspace_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -105,6 +111,37 @@ class RecreateDataspaceTests(unittest.TestCase):
                 deployment._cleanup_dataspace_before_recreate()
 
             self.assertIn("protected namespace", str(exc.exception))
+
+    def test_recreate_cleanup_uses_registration_service_namespace_when_defined(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            RecreateConfigRoleAligned.root = tmpdir
+            repo_dir = RecreateConfigRoleAligned.repo_dir()
+            runtime_dir = RecreateConfigRoleAligned.deployment_runtime_dir()
+            os.makedirs(repo_dir, exist_ok=True)
+            os.makedirs(runtime_dir, exist_ok=True)
+            with open(os.path.join(repo_dir, "bootstrap.py"), "w", encoding="utf-8") as handle:
+                handle.write("# test bootstrap\n")
+
+            commands = []
+
+            def run(cmd, **kwargs):
+                commands.append((cmd, kwargs))
+                return object()
+
+            deployment = INESDataDeploymentAdapter(
+                run=run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_cls=RecreateConfigRoleAligned,
+            )
+
+            plan = deployment.build_recreate_dataspace_plan()
+            deployment._cleanup_dataspace_before_recreate()
+
+            self.assertEqual(plan["namespace"], "demoedc-core")
+            self.assertEqual(commands[0][0], "helm uninstall demoedc-dataspace-rs -n demoedc-core")
+            self.assertEqual(commands[1][0], "kubectl delete namespace demoedc-core --ignore-not-found=true")
 
 
 if __name__ == "__main__":

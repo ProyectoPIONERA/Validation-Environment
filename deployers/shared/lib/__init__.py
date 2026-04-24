@@ -21,6 +21,13 @@ from .hosts_manager import (
     upsert_managed_block,
     upsert_managed_blocks,
 )
+from .namespaces import (
+    COMPACT_NAMESPACE_PROFILE,
+    ROLE_ALIGNED_NAMESPACE_PROFILE,
+    SUPPORTED_NAMESPACE_PROFILES,
+    normalize_namespace_profile,
+    resolve_namespace_profile_plan,
+)
 from .orchestrator import DeployerOrchestrator
 from .topology import SUPPORTED_TOPOLOGIES, build_topology_profile, normalize_topology
 
@@ -30,6 +37,9 @@ __all__ = [
     "HostBlock",
     "HostEntry",
     "NamespaceRoles",
+    "COMPACT_NAMESPACE_PROFILE",
+    "ROLE_ALIGNED_NAMESPACE_PROFILE",
+    "SUPPORTED_NAMESPACE_PROFILES",
     "SUPPORTED_TOPOLOGIES",
     "TopologyProfile",
     "ValidationProfile",
@@ -43,10 +53,12 @@ __all__ = [
     "apply_pionera_environment_overrides",
     "load_layered_deployer_config",
     "merge_missing_managed_blocks",
+    "normalize_namespace_profile",
     "normalize_topology",
     "parse_hostnames",
     "remove_managed_blocks",
     "render_managed_block",
+    "resolve_namespace_profile_plan",
     "upsert_managed_block",
     "upsert_managed_blocks",
 ]

@@ -4,7 +4,8 @@ from typing import Any
 
 from adapters.edc.adapter import EdcAdapter
 from adapters.edc.config import EDCConfigAdapter, EdcConfig
-from deployers.infrastructure.lib.contracts import DeploymentContext, NamespaceRoles, ValidationProfile
+from deployers.infrastructure.lib.contracts import DeploymentContext, ValidationProfile
+from deployers.infrastructure.lib.namespaces import resolve_namespace_profile_plan
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
 
 
@@ -55,19 +56,12 @@ class EdcDeployer:
             or ""
         )
 
-        namespace_roles = NamespaceRoles.from_mapping(
-            {
-                "common_services_namespace": config.get("COMMON_SERVICES_NAMESPACE")
-                or getattr(self.config, "NS_COMMON", "common-srvs"),
-                "components_namespace": config.get("COMPONENTS_NAMESPACE") or "components",
-                "registration_service_namespace": config.get("DS_1_REGISTRATION_NAMESPACE")
-                or dataspace_namespace,
-                "provider_namespace": config.get("DS_1_PROVIDER_NAMESPACE")
-                or dataspace_namespace,
-                "consumer_namespace": config.get("DS_1_CONSUMER_NAMESPACE")
-                or dataspace_namespace,
-                "observability_namespace": config.get("OBSERVABILITY_NAMESPACE") or None,
-            }
+        namespace_plan = resolve_namespace_profile_plan(
+            config,
+            dataspace_name=dataspace_name,
+            dataspace_namespace=dataspace_namespace,
+            common_default=getattr(self.config, "NS_COMMON", "common-srvs"),
+            components_default="components",
         )
         topology_profile = build_topology_profile(topology, config)
 
@@ -81,7 +75,9 @@ class EdcDeployer:
             ds_domain_base=ds_domain_base,
             connectors=self._resolve_primary_connectors(dataspace_name, config),
             components=[],
-            namespace_roles=namespace_roles,
+            namespace_profile=namespace_plan["namespace_profile"],
+            namespace_roles=namespace_plan["namespace_roles"],
+            planned_namespace_roles=namespace_plan["planned_namespace_roles"],
             topology_profile=topology_profile,
             runtime_dir=runtime_dir,
             config=config,

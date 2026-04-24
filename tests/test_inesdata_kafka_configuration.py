@@ -97,6 +97,57 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
         self.assertEqual(config["k8s_namespace"], "demo")
         self.assertEqual(config["k8s_service_name"], "framework-kafka")
 
+    def test_get_kafka_config_uses_provider_namespace_when_role_aligned_level4_is_active(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_deployer_config(
+                tmpdir,
+                [
+                    "DS_1_NAME=roleedcprove",
+                    "DS_1_NAMESPACE=roleedcprove",
+                    "DS_1_CONNECTORS=cityproof,companyproof",
+                    "NAMESPACE_PROFILE=role-aligned",
+                    "LEVEL4_ROLE_ALIGNED_CONNECTOR_NAMESPACES=true",
+                ],
+            )
+
+            with (
+                mock.patch.object(InesdataConfig, "script_dir", return_value=tmpdir),
+                mock.patch.object(InesdataConfig, "deployer_config_path", return_value=config_path),
+            ):
+                adapter = InesdataAdapter()
+                adapter.connectors.load_dataspace_connectors = mock.Mock(return_value=[
+                    {
+                        "name": "roleedcprove",
+                        "namespace": "roleedcprove",
+                        "namespace_profile": "role-aligned",
+                        "connectors": [
+                            "conn-cityproof-roleedcprove",
+                            "conn-companyproof-roleedcprove",
+                        ],
+                        "connector_roles": {
+                            "provider": "conn-cityproof-roleedcprove",
+                            "consumer": "conn-companyproof-roleedcprove",
+                        },
+                        "connector_details": [
+                            {
+                                "name": "conn-cityproof-roleedcprove",
+                                "role": "provider",
+                                "active_namespace": "roleedcprove",
+                                "planned_namespace": "roleedcprove-provider",
+                            },
+                            {
+                                "name": "conn-companyproof-roleedcprove",
+                                "role": "consumer",
+                                "active_namespace": "roleedcprove",
+                                "planned_namespace": "roleedcprove-consumer",
+                            },
+                        ],
+                    }
+                ])
+                config = adapter.get_kafka_config()
+
+        self.assertEqual(config["k8s_namespace"], "roleedcprove-provider")
+
     def test_is_kafka_available_uses_configured_container_name(self):
         commands = []
 

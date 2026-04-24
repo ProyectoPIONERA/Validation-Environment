@@ -6,6 +6,9 @@ from deployers.infrastructure.lib.config_loader import (
     INFRASTRUCTURE_MANAGED_KEYS,
     load_layered_deployer_config,
 )
+from deployers.infrastructure.lib.namespaces import (
+    resolve_namespace_profile_plan,
+)
 from deployers.infrastructure.lib.paths import (
     legacy_deployer_artifact_dir,
     resolve_shared_artifact_dir,
@@ -190,6 +193,11 @@ class InesdataConfig:
         return cls.dataspace_namespace()
 
     @classmethod
+    def registration_service_namespace(cls):
+        adapter = INESDataConfigAdapter(cls)
+        return adapter.primary_registration_service_namespace()
+
+    @classmethod
     def registration_service_dir(cls):
         return resolve_shared_artifact_dir("dataspace", "registration-service", required_file="Chart.yaml")
 
@@ -267,16 +275,9 @@ class InesdataConfig:
         return "minio"
 
     @classmethod
-    def host_alias_domains(cls):
-        ds_name = cls.dataspace_name()
-        ds_domain = cls.ds_domain_base() or "dev.ds.dataspaceunit.upm"
-        return [
-            "keycloak.dev.ed.dataspaceunit.upm",
-            "keycloak-admin.dev.ed.dataspaceunit.upm",
-            "minio.dev.ed.dataspaceunit.upm",
-            "console.minio-s3.dev.ed.dataspaceunit.upm",
-            f"registration-service-{ds_name}.{ds_domain}"
-        ]
+    def host_alias_domains(cls, ds_name=None, ds_namespace=None):
+        adapter = INESDataConfigAdapter(cls)
+        return adapter.host_alias_domains(ds_name=ds_name, ds_namespace=ds_namespace)
 
     @classmethod
     def ds_domain_base(cls):
@@ -417,6 +418,104 @@ class INESDataConfigAdapter:
             return configured
         return self.primary_dataspace_name()
 
+    def primary_registration_service_namespace(self):
+        return self.namespace_plan_for_dataspace(ds_index=1)["namespace_roles"].registration_service_namespace
+
+    def primary_provider_namespace(self):
+        return self.namespace_plan_for_dataspace(ds_index=1)["namespace_roles"].provider_namespace
+
+    def primary_consumer_namespace(self):
+        return self.namespace_plan_for_dataspace(ds_index=1)["namespace_roles"].consumer_namespace
+
+    def dataspace_index(self, ds_name=None, ds_namespace=None):
+        config = self.load_deployer_config()
+        target_name = str(ds_name or "").strip()
+        target_namespace = str(ds_namespace or "").strip()
+
+        index = 1
+        while True:
+            configured_name = str(config.get(f"DS_{index}_NAME") or "").strip()
+            configured_namespace = str(config.get(f"DS_{index}_NAMESPACE") or configured_name).strip()
+            if not configured_name:
+                break
+            if target_name and configured_name == target_name:
+                return index
+            if target_namespace and configured_namespace == target_namespace:
+                return index
+            index += 1
+        return 1
+
+    @staticmethod
+    def registration_service_service_name(ds_name):
+        normalized_name = str(ds_name or "").strip()
+        return f"{normalized_name}-registration-service" if normalized_name else "registration-service"
+
+    def registration_service_internal_hostname(
+        self,
+        *,
+        ds_name=None,
+        ds_namespace=None,
+        connector_namespace=None,
+        ds_index=None,
+        include_port=True,
+    ):
+        resolved_name = str(ds_name or self.primary_dataspace_name()).strip() or self.primary_dataspace_name()
+        resolved_namespace = str(ds_namespace or self.primary_dataspace_namespace()).strip() or self.primary_dataspace_namespace()
+        resolved_index = ds_index or self.dataspace_index(resolved_name, resolved_namespace)
+        namespace_plan = self.namespace_plan_for_dataspace(
+            ds_name=resolved_name,
+            ds_namespace=resolved_namespace,
+            ds_index=resolved_index,
+        )
+        runtime_roles = namespace_plan["namespace_roles"]
+        registration_namespace = runtime_roles.registration_service_namespace or resolved_namespace
+        active_connector_namespace = str(
+            connector_namespace
+            or runtime_roles.provider_namespace
+            or resolved_namespace
+        ).strip() or resolved_namespace
+        service_name = self.registration_service_service_name(resolved_name)
+        if registration_namespace and registration_namespace != active_connector_namespace:
+            hostname = f"{service_name}.{registration_namespace}.svc.cluster.local"
+        else:
+            hostname = service_name
+        if include_port:
+            return f"{hostname}:8080"
+        return hostname
+
+    def namespace_plan_for_dataspace(self, *, ds_name=None, ds_namespace=None, ds_index=1):
+        config = dict(self.load_deployer_config() or {})
+        ds_name = str(ds_name or self.primary_dataspace_name()).strip() or self.primary_dataspace_name()
+        ds_namespace = str(ds_namespace or self.primary_dataspace_namespace()).strip() or self.primary_dataspace_namespace()
+
+        try:
+            resolved_index = int(ds_index)
+        except (TypeError, ValueError):
+            resolved_index = 1
+        if resolved_index < 1:
+            resolved_index = 1
+
+        if resolved_index != 1:
+            for suffix in (
+                "REGISTRATION_NAMESPACE",
+                "PROVIDER_NAMESPACE",
+                "CONSUMER_NAMESPACE",
+            ):
+                primary_key = f"DS_1_{suffix}"
+                scoped_key = f"DS_{resolved_index}_{suffix}"
+                config.pop(primary_key, None)
+                scoped_value = str(config.get(scoped_key) or "").strip()
+                if scoped_value:
+                    config[primary_key] = scoped_value
+
+        return resolve_namespace_profile_plan(
+            config,
+            dataspace_name=ds_name,
+            dataspace_namespace=ds_namespace,
+            common_default=getattr(self.config, "NS_COMMON", "common-srvs"),
+            components_default="components",
+        )
+
     def generate_hosts(self, ds_name=None):
         config = self.load_deployer_config()
         ds_name = ds_name or self.primary_dataspace_name()
@@ -439,6 +538,18 @@ class INESDataConfigAdapter:
             hosts.append(f"127.0.0.1 registration-service-{ds_name}.{ds_domain}")
 
         return hosts
+
+    def host_alias_domains(self, ds_name=None, ds_namespace=None):
+        resolved_name = str(ds_name or self.primary_dataspace_name()).strip() or self.primary_dataspace_name()
+        del ds_namespace
+        ds_domain = self.ds_domain_base() or "dev.ds.dataspaceunit.upm"
+        return [
+            "keycloak.dev.ed.dataspaceunit.upm",
+            "keycloak-admin.dev.ed.dataspaceunit.upm",
+            "minio.dev.ed.dataspaceunit.upm",
+            "console.minio-s3.dev.ed.dataspaceunit.upm",
+            f"registration-service-{resolved_name}.{ds_domain}",
+        ]
 
     def generate_connector_hosts(self, connectors):
         config = self.load_deployer_config()

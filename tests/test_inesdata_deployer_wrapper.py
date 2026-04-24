@@ -38,6 +38,13 @@ class FakeConfigAdapter:
         return "dev.ds.dataspaceunit.upm"
 
 
+class RoleAlignedConfigAdapter(FakeConfigAdapter):
+    def load_deployer_config(self):
+        config = super().load_deployer_config()
+        config["NAMESPACE_PROFILE"] = "role-aligned"
+        return config
+
+
 class FakeConnectors:
     @staticmethod
     def load_dataspace_connectors():
@@ -97,7 +104,7 @@ class InesdataDeployerWrapperTests(unittest.TestCase):
         deployer = InesdataDeployer(adapter=FakeAdapter(), components_adapter=FakeComponentsAdapter(), config_cls=FakeConfig)
 
         self.assertEqual(deployer.name(), "inesdata")
-        self.assertEqual(deployer.supported_topologies(), ["local"])
+        self.assertEqual(deployer.supported_topologies(), ["local", "vm-single", "vm-distributed"])
 
     def test_resolve_context_uses_existing_inesdata_conventions(self):
         deployer = InesdataDeployer(adapter=FakeAdapter(), components_adapter=FakeComponentsAdapter(), config_cls=FakeConfig)
@@ -153,6 +160,20 @@ class InesdataDeployerWrapperTests(unittest.TestCase):
 
         self.assertEqual(result["deployed"], ["ontology-hub", "ai-model-hub"])
         self.assertEqual(components_adapter.calls, [["ontology-hub", "ai-model-hub"]])
+
+    def test_resolve_context_can_plan_role_aligned_namespaces_without_changing_execution_roles(self):
+        adapter = FakeAdapter()
+        adapter.config_adapter = RoleAlignedConfigAdapter()
+        deployer = InesdataDeployer(adapter=adapter, components_adapter=FakeComponentsAdapter(), config_cls=FakeConfig)
+
+        context = deployer.resolve_context(topology="local")
+
+        self.assertEqual(context.namespace_profile, "role-aligned")
+        self.assertEqual(context.namespace_roles.registration_service_namespace, "demo-core")
+        self.assertEqual(context.namespace_roles.provider_namespace, "demo")
+        self.assertEqual(context.planned_namespace_roles.registration_service_namespace, "demo-core")
+        self.assertEqual(context.planned_namespace_roles.provider_namespace, "demo-provider")
+        self.assertEqual(context.planned_namespace_roles.consumer_namespace, "demo-consumer")
 
     def test_validation_profile_matches_current_inesdata_ui_suite(self):
         deployer = InesdataDeployer(adapter=FakeAdapter(), components_adapter=FakeComponentsAdapter(), config_cls=FakeConfig)

@@ -1,9 +1,34 @@
+{{- $layout := .Values.connector.layout | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
     service: {{ .Values.connector.name }}
     validation-environment-adapter: edc
+    {{- with (index $layout "role") }}
+    validation-environment-role: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "namespaceProfile") }}
+    validation-environment-namespace-profile: {{ . | quote }}
+    {{- end }}
+  {{- if or (index $layout "runtimeNamespace") (index $layout "activeNamespace") (index $layout "plannedNamespace") (index $layout "registrationServiceNamespace") (index $layout "plannedRegistrationServiceNamespace") }}
+  annotations:
+    {{- with (index $layout "runtimeNamespace") }}
+    validation-environment/runtime-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "activeNamespace") }}
+    validation-environment/active-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "plannedNamespace") }}
+    validation-environment/planned-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "registrationServiceNamespace") }}
+    validation-environment/registration-service-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "plannedRegistrationServiceNamespace") }}
+    validation-environment/planned-registration-service-namespace: {{ . | quote }}
+    {{- end }}
+  {{- end }}
   name: {{ .Values.connector.name }}
 spec:
   replicas: {{ .Values.connector.replicas }}
@@ -17,6 +42,30 @@ spec:
       labels:
         service: {{ .Values.connector.name }}
         validation-environment-adapter: edc
+        {{- with (index $layout "role") }}
+        validation-environment-role: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "namespaceProfile") }}
+        validation-environment-namespace-profile: {{ . | quote }}
+        {{- end }}
+      {{- if or (index $layout "runtimeNamespace") (index $layout "activeNamespace") (index $layout "plannedNamespace") (index $layout "registrationServiceNamespace") (index $layout "plannedRegistrationServiceNamespace") }}
+      annotations:
+        {{- with (index $layout "runtimeNamespace") }}
+        validation-environment/runtime-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "activeNamespace") }}
+        validation-environment/active-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "plannedNamespace") }}
+        validation-environment/planned-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "registrationServiceNamespace") }}
+        validation-environment/registration-service-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "plannedRegistrationServiceNamespace") }}
+        validation-environment/planned-registration-service-namespace: {{ . | quote }}
+        {{- end }}
+      {{- end }}
     spec:
       {{- with .Values.hostAliases }}
       hostAliases:

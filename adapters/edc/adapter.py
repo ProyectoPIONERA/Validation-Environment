@@ -268,7 +268,7 @@ class EdcAdapter(InesdataAdapter):
         }
 
     def _preview_dataspace(self):
-        namespace = self.config.namespace_demo()
+        namespace = self._registration_service_namespace()
         ds_name = self.config.dataspace_name()
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
         pod_names = []

@@ -30,6 +30,9 @@ class INESDataConnectorsAdapter:
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
 
+    def _is_local_topology(self):
+        return str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower() == "local"
+
     @staticmethod
     def _is_connector_interface_pod(pod_name):
         """Support both historical '-inteface' and corrected '-interface' suffixes."""
@@ -128,8 +131,8 @@ class INESDataConnectorsAdapter:
     def _is_truthy(value):
         return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    def _allow_connector_port_forward_fallback(self):
-        env_value = os.environ.get("PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
+    def _level4_role_aligned_connector_namespaces_requested(self):
+        env_value = os.environ.get("PIONERA_LEVEL4_ROLE_ALIGNED_CONNECTOR_NAMESPACES")
         if env_value is not None:
             return self._is_truthy(env_value)
 
@@ -138,9 +141,175 @@ class INESDataConnectorsAdapter:
         except Exception:
             deployer_config = {}
         return self._is_truthy(
+            deployer_config.get("LEVEL4_ROLE_ALIGNED_CONNECTOR_NAMESPACES")
+            or deployer_config.get("ROLE_ALIGNED_CONNECTOR_NAMESPACES_LEVEL4")
+        )
+
+    def _allow_connector_port_forward_fallback(self):
+        env_value = os.environ.get("PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
+        if env_value is not None:
+            return self._is_truthy(env_value)
+
+        configured_value = None
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        configured_value = (
             deployer_config.get("ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
             or deployer_config.get("CONNECTOR_PORT_FORWARD_FALLBACK")
         )
+        if configured_value is not None:
+            return self._is_truthy(configured_value)
+
+        return self._role_aligned_connector_port_forward_fallback_implicit()
+
+    def _role_aligned_connector_port_forward_fallback_implicit(self):
+        if not self._is_local_topology():
+            return False
+        if os.environ.get("PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK") is not None:
+            return False
+
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        configured_value = (
+            deployer_config.get("ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK")
+            or deployer_config.get("CONNECTOR_PORT_FORWARD_FALLBACK")
+        )
+        if configured_value is not None:
+            return False
+
+        try:
+            dataspaces = self.load_dataspace_connectors() or []
+        except Exception:
+            dataspaces = []
+        return self._role_aligned_level4_namespaces_active(dataspaces=dataspaces)
+
+    def _connector_public_ingress_stabilization_timeout(self, connector_name):
+        if not self._role_aligned_connector_port_forward_fallback_implicit():
+            return 0
+
+        current = self._find_dataspace_for_connector(connector_name) or {}
+        if not self._role_aligned_level4_namespaces_active(current):
+            return 0
+
+        default_namespace = str(
+            current.get("namespace")
+            or self._default_connector_namespace()
+        ).strip() or self._default_connector_namespace()
+        target_namespace = str(
+            self._connector_target_namespace(connector_name, dataspace=current)
+            or default_namespace
+        ).strip() or default_namespace
+        if target_namespace == default_namespace:
+            return 0
+        return 60
+
+    def _connector_public_ingress_resync_wait_seconds(self, connector_name):
+        if self._connector_public_ingress_stabilization_timeout(connector_name) <= 0:
+            return 0
+        return 20
+
+    def _trigger_connector_ingress_resync(self, connector_name):
+        if not self._is_local_topology():
+            return False
+        namespace = str(self._connector_target_namespace(connector_name) or "").strip()
+        if not namespace:
+            return False
+        ingress_name = f"{connector_name}-ingress"
+        sync_marker = str(int(time.time()))
+        result = self.run_silent(
+            f"kubectl annotate ingress {ingress_name} -n {namespace} "
+            f"validation-environment/forced-sync-at={sync_marker} --overwrite"
+        )
+        if result is None:
+            return False
+        print(f"Requesting ingress resynchronization for connector: {connector_name}")
+        return True
+
+    def _default_connector_namespace(self):
+        namespace_getter = getattr(self.config, "namespace_demo", None)
+        if callable(namespace_getter):
+            namespace = namespace_getter()
+            if namespace:
+                return str(namespace).strip()
+        return self._dataspace_name()
+
+    def _connector_details_by_name(self, dataspace):
+        return {
+            entry.get("name"): entry
+            for entry in (dataspace.get("connector_details") or [])
+            if entry.get("name")
+        }
+
+    def _role_aligned_level4_namespaces_active(self, dataspace=None, dataspaces=None):
+        if not self._level4_role_aligned_connector_namespaces_requested():
+            return False
+        all_dataspaces = dataspaces or self.load_dataspace_connectors() or []
+        if len(all_dataspaces) != 1:
+            return False
+        current = dataspace or all_dataspaces[0]
+        profile = str(current.get("namespace_profile") or "compact").strip().lower()
+        return profile == "role-aligned"
+
+    def _connector_target_namespace(self, connector_name, dataspace=None, dataspaces=None):
+        current = dataspace or self._find_dataspace_for_connector(connector_name) or {}
+        default_namespace = str(
+            current.get("namespace")
+            or self._default_connector_namespace()
+        ).strip() or self._default_connector_namespace()
+        details = self._connector_details_by_name(current).get(connector_name, {})
+        active_namespace = str(details.get("active_namespace") or default_namespace).strip() or default_namespace
+        planned_namespace = str(details.get("planned_namespace") or active_namespace).strip() or active_namespace
+        if self._role_aligned_level4_namespaces_active(current, dataspaces=dataspaces):
+            return planned_namespace
+        return active_namespace
+
+    def connector_target_namespace(self, connector_name):
+        return self._connector_target_namespace(connector_name)
+
+    def build_internal_protocol_address(self, connector_name, port=19194, path="/protocol"):
+        current = self._find_dataspace_for_connector(connector_name) or {}
+        default_namespace = str(
+            current.get("namespace")
+            or self._default_connector_namespace()
+        ).strip() or self._default_connector_namespace()
+        target_namespace = str(
+            self._connector_target_namespace(connector_name, dataspace=current)
+            or default_namespace
+        ).strip() or default_namespace
+        if target_namespace and target_namespace != default_namespace:
+            hostname = f"{connector_name}.{target_namespace}.svc.cluster.local"
+        else:
+            hostname = connector_name
+        normalized_path = f"/{str(path or '/protocol').lstrip('/')}"
+        return f"http://{hostname}:{int(port)}{normalized_path}"
+
+    def _dataspace_connector_target_namespaces(self, dataspace, dataspaces=None):
+        connectors = list(dataspace.get("connectors") or [])
+        if not connectors:
+            return [str(dataspace.get("namespace") or self._default_connector_namespace()).strip() or self._default_connector_namespace()]
+        ordered = []
+        for connector in connectors:
+            namespace = self._connector_target_namespace(
+                connector,
+                dataspace=dataspace,
+                dataspaces=dataspaces,
+            )
+            if namespace and namespace not in ordered:
+                ordered.append(namespace)
+        return ordered or [str(dataspace.get("namespace") or self._default_connector_namespace()).strip() or self._default_connector_namespace()]
+
+    def _all_connector_scan_namespaces(self):
+        dataspaces = self.load_dataspace_connectors() or []
+        ordered = []
+        for dataspace in dataspaces:
+            for namespace in self._dataspace_connector_target_namespaces(dataspace, dataspaces=dataspaces):
+                if namespace not in ordered:
+                    ordered.append(namespace)
+        return ordered or [self._default_connector_namespace()]
 
     def _should_sync_vault_token_to_deployer_config(self):
         for resolver_name in ("infrastructure_deployer_config_path", "deployer_config_path"):
@@ -262,8 +431,16 @@ class INESDataConnectorsAdapter:
         self._vault_management_token_verified = True
         return True
 
-    def _connector_pod_name(self, connector_name, interface=False):
-        namespace = self.config.namespace_demo()
+    def _connector_runtime_namespace(self, connector_name):
+        namespace = self._connector_target_namespace(connector_name)
+        if namespace:
+            return str(namespace).strip()
+        return self._default_connector_namespace()
+
+    def _connector_pod_name(self, connector_name, interface=False, namespace=None):
+        namespace = str(namespace or self._connector_runtime_namespace(connector_name) or "").strip()
+        if not namespace:
+            namespace = self._default_connector_namespace()
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not result:
             return None
@@ -320,12 +497,13 @@ class INESDataConnectorsAdapter:
             )
 
     def _start_connector_interface_fallback(self, connector_name):
-        pod_name = self._connector_pod_name(connector_name, interface=True)
+        namespace = self._connector_runtime_namespace(connector_name)
+        pod_name = self._connector_pod_name(connector_name, interface=True, namespace=namespace)
         if not pod_name:
             return None, None
 
         port_forward = self._open_temporary_port_forward(
-            self.config.namespace_demo(),
+            namespace,
             pod_name,
             remote_port=8080,
         )
@@ -336,12 +514,13 @@ class INESDataConnectorsAdapter:
         return url, port_forward
 
     def _start_connector_management_api_fallback(self, connector_name):
-        pod_name = self._connector_pod_name(connector_name, interface=False)
+        namespace = self._connector_runtime_namespace(connector_name)
+        pod_name = self._connector_pod_name(connector_name, interface=False, namespace=namespace)
         if not pod_name:
             return None, None
 
         port_forward = self._open_temporary_port_forward(
-            self.config.namespace_demo(),
+            namespace,
             pod_name,
             remote_port=19193,
         )
@@ -413,6 +592,81 @@ class INESDataConnectorsAdapter:
                 f"Invalid connector name '{name}'. Connector names must start with a letter and contain only alphanumeric characters."
             )
 
+    @staticmethod
+    def _connector_role_summary(connectors):
+        ordered = [connector for connector in connectors or [] if connector]
+        return {
+            "provider": ordered[0] if len(ordered) >= 1 else None,
+            "consumer": ordered[1] if len(ordered) >= 2 else None,
+            "additional": ordered[2:] if len(ordered) > 2 else [],
+        }
+
+    @staticmethod
+    def _namespace_role_value(roles, key, default=""):
+        if hasattr(roles, key):
+            value = getattr(roles, key)
+        elif isinstance(roles, dict):
+            value = roles.get(key)
+        else:
+            value = None
+        return value or default
+
+    @classmethod
+    def _namespace_roles_dict(cls, roles):
+        if hasattr(roles, "as_dict"):
+            return roles.as_dict()
+        if isinstance(roles, dict):
+            return dict(roles)
+        return {
+            "registration_service_namespace": cls._namespace_role_value(roles, "registration_service_namespace"),
+            "provider_namespace": cls._namespace_role_value(roles, "provider_namespace"),
+            "consumer_namespace": cls._namespace_role_value(roles, "consumer_namespace"),
+        }
+
+    def _connector_namespace_details(self, connectors, runtime_namespace, namespace_plan):
+        runtime_roles = namespace_plan["namespace_roles"]
+        planned_roles = namespace_plan["planned_namespace_roles"]
+        role_summary = self._connector_role_summary(connectors)
+        details = []
+
+        for connector in connectors or []:
+            if connector == role_summary["provider"]:
+                role = "provider"
+                active_namespace = self._namespace_role_value(runtime_roles, "provider_namespace", runtime_namespace)
+                planned_namespace = self._namespace_role_value(planned_roles, "provider_namespace", active_namespace)
+            elif connector == role_summary["consumer"]:
+                role = "consumer"
+                active_namespace = self._namespace_role_value(runtime_roles, "consumer_namespace", runtime_namespace)
+                planned_namespace = self._namespace_role_value(planned_roles, "consumer_namespace", active_namespace)
+            else:
+                role = "additional"
+                active_namespace = runtime_namespace
+                planned_namespace = runtime_namespace
+
+            details.append(
+                {
+                    "name": connector,
+                    "role": role,
+                    "runtime_namespace": runtime_namespace,
+                    "active_namespace": active_namespace,
+                    "planned_namespace": planned_namespace,
+                    "registration_service_namespace": self._namespace_role_value(
+                        runtime_roles,
+                        "registration_service_namespace",
+                        runtime_namespace,
+                    ),
+                    "planned_registration_service_namespace": (
+                        self._namespace_role_value(
+                            planned_roles,
+                            "registration_service_namespace",
+                            active_namespace,
+                        )
+                    ),
+                }
+            )
+
+        return role_summary, details
+
     def load_dataspace_connectors(self):
         deployer_config = self.config_adapter.load_deployer_config()
         dataspaces = []
@@ -420,7 +674,7 @@ class INESDataConnectorsAdapter:
 
         while True:
             ds_name = deployer_config.get(f"DS_{i}_NAME")
-            ds_namespace = deployer_config.get(f"DS_{i}_NAMESPACE")
+            ds_namespace = (deployer_config.get(f"DS_{i}_NAMESPACE") or ds_name or "").strip() or ds_name
             connectors = deployer_config.get(f"DS_{i}_CONNECTORS")
 
             if not ds_name:
@@ -434,10 +688,42 @@ class INESDataConnectorsAdapter:
                         self.validate_connector_name(name)
                         connector_list.append(f"conn-{name}-{ds_name}")
 
+            namespace_plan_getter = getattr(self.config_adapter, "namespace_plan_for_dataspace", None)
+            if callable(namespace_plan_getter):
+                namespace_plan = namespace_plan_getter(
+                    ds_name=ds_name,
+                    ds_namespace=ds_namespace,
+                    ds_index=i,
+                )
+            else:
+                namespace_plan = {
+                    "namespace_profile": "compact",
+                    "namespace_roles": {
+                        "registration_service_namespace": ds_namespace,
+                        "provider_namespace": ds_namespace,
+                        "consumer_namespace": ds_namespace,
+                    },
+                    "planned_namespace_roles": {
+                        "registration_service_namespace": ds_namespace,
+                        "provider_namespace": ds_namespace,
+                        "consumer_namespace": ds_namespace,
+                    },
+                }
+            role_summary, connector_details = self._connector_namespace_details(
+                connector_list,
+                ds_namespace,
+                namespace_plan,
+            )
+
             dataspaces.append({
                 "name": ds_name,
                 "namespace": ds_namespace,
-                "connectors": connector_list
+                "connectors": connector_list,
+                "namespace_profile": namespace_plan["namespace_profile"],
+                "namespace_roles": self._namespace_roles_dict(namespace_plan["namespace_roles"]),
+                "planned_namespace_roles": self._namespace_roles_dict(namespace_plan["planned_namespace_roles"]),
+                "connector_roles": role_summary,
+                "connector_details": connector_details,
             })
             i += 1
 
@@ -507,19 +793,132 @@ class INESDataConnectorsAdapter:
 
         return [f"{connector}.{ds_domain}" for connector in connectors]
 
-    def update_connector_host_aliases(self, values_file, connectors):
+    def _host_alias_domains_for_dataspace(self, ds_name=None, ds_namespace=None, connector_name=None):
+        resolved_name = str(ds_name or "").strip()
+        resolved_namespace = str(ds_namespace or "").strip()
+        if connector_name and (not resolved_name or not resolved_namespace):
+            dataspace = self._find_dataspace_for_connector(connector_name) or {}
+            if not resolved_name:
+                resolved_name = str(dataspace.get("name") or "").strip()
+            if not resolved_namespace:
+                resolved_namespace = str(dataspace.get("namespace") or "").strip()
+
+        domains_getter = getattr(self.config_adapter, "host_alias_domains", None)
+        if callable(domains_getter):
+            return list(
+                domains_getter(
+                    ds_name=resolved_name or None,
+                    ds_namespace=resolved_namespace or None,
+                )
+                or []
+            )
+
+        fallback_getter = getattr(self.config, "host_alias_domains", None)
+        if callable(fallback_getter):
+            return list(fallback_getter() or [])
+        return []
+
+    def update_connector_host_aliases(self, values_file, connectors, connector_name=None, ds_name=None, ds_namespace=None):
         minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
 
         with open(values_file) as f:
             values = yaml.safe_load(f)
 
-        hostnames = self.config.host_alias_domains()
+        hostnames = self._host_alias_domains_for_dataspace(
+            ds_name=ds_name,
+            ds_namespace=ds_namespace,
+            connector_name=connector_name,
+        )
         hostnames.extend(self.build_connector_hostnames(connectors))
 
         values["hostAliases"] = [{
             "ip": minikube_ip,
             "hostnames": hostnames
         }]
+
+        with open(values_file, "w") as f:
+            yaml.dump(values, f, sort_keys=False)
+
+    def _find_dataspace_for_connector(self, connector_name):
+        for dataspace in self.load_dataspace_connectors() or []:
+            connectors = dataspace.get("connectors") or []
+            if connector_name in connectors:
+                return dataspace
+        return None
+
+    def _registration_service_hostname_for_connector(self, connector_name):
+        dataspace = self._find_dataspace_for_connector(connector_name) or {}
+        ds_name = dataspace.get("name") or self._dataspace_name()
+        ds_namespace = dataspace.get("namespace") or self.config.namespace_demo()
+        connector_details = {
+            entry.get("name"): entry
+            for entry in (dataspace.get("connector_details") or [])
+            if entry.get("name")
+        }
+        connector_layout = connector_details.get(connector_name, {})
+        connector_namespace = connector_layout.get("active_namespace") or ds_namespace
+        hostname_getter = getattr(self.config_adapter, "registration_service_internal_hostname", None)
+        if callable(hostname_getter):
+            return hostname_getter(
+                ds_name=ds_name,
+                ds_namespace=ds_namespace,
+                connector_namespace=connector_namespace,
+            )
+        return f"{ds_name}-registration-service:8080"
+
+    def _connector_layout_metadata(self, connector_name, ds_name=None, ds_namespace=None):
+        dataspace = self._find_dataspace_for_connector(connector_name) or {}
+        namespace_getter = getattr(self.config, "namespace_demo", None)
+        if callable(namespace_getter):
+            default_namespace = namespace_getter() or self._dataspace_name()
+        else:
+            default_namespace = self._dataspace_name()
+        resolved_name = str(ds_name or dataspace.get("name") or self._dataspace_name()).strip() or self._dataspace_name()
+        resolved_namespace = str(
+            ds_namespace
+            or dataspace.get("namespace")
+            or default_namespace
+        ).strip() or default_namespace
+        connector_details = {
+            entry.get("name"): entry
+            for entry in (dataspace.get("connector_details") or [])
+            if entry.get("name")
+        }
+        connector_layout = connector_details.get(connector_name, {})
+        return {
+            "role": connector_layout.get("role") or "",
+            "namespaceProfile": dataspace.get("namespace_profile") or "compact",
+            "runtimeNamespace": connector_layout.get("runtime_namespace") or resolved_namespace,
+            "activeNamespace": connector_layout.get("active_namespace") or resolved_namespace,
+            "plannedNamespace": connector_layout.get("planned_namespace") or resolved_namespace,
+            "registrationServiceNamespace": (
+                connector_layout.get("registration_service_namespace")
+                or resolved_namespace
+            ),
+            "plannedRegistrationServiceNamespace": (
+                connector_layout.get("planned_registration_service_namespace")
+                or connector_layout.get("registration_service_namespace")
+                or resolved_namespace
+            ),
+        }
+
+    def update_connector_service_discovery(self, values_file, connector_name):
+        with open(values_file) as f:
+            values = yaml.safe_load(f) or {}
+
+        services = values.setdefault("services", {})
+        registration_service = services.setdefault("registrationService", {})
+        registration_service["hostname"] = self._registration_service_hostname_for_connector(connector_name)
+
+        with open(values_file, "w") as f:
+            yaml.dump(values, f, sort_keys=False)
+
+    def update_connector_layout_metadata(self, values_file, connector_name):
+        with open(values_file) as f:
+            values = yaml.safe_load(f) or {}
+
+        connector = values.setdefault("connector", {})
+        connector["layout"] = self._connector_layout_metadata(connector_name)
 
         with open(values_file, "w") as f:
             yaml.dump(values, f, sort_keys=False)
@@ -654,6 +1053,10 @@ class INESDataConnectorsAdapter:
         host = urlparse(url).hostname
         local_fallback = None
         allow_local_fallback = self._allow_connector_port_forward_fallback()
+        ingress_stabilization_timeout = self._connector_public_ingress_stabilization_timeout(connector_name)
+        ingress_resync_wait = self._connector_public_ingress_resync_wait_seconds(connector_name)
+        ingress_resync_deadline = None
+        ingress_resync_attempted = False
         if host:
             try:
                 socket.gethostbyname(host)
@@ -680,6 +1083,30 @@ class INESDataConnectorsAdapter:
                         print(f"Connector ready: {connector_name}")
                         return True
                     last_issue = f"HTTP {response.status_code}"
+                    if (
+                        allow_local_fallback
+                        and not local_fallback
+                        and response.status_code in {502, 503, 504}
+                    ):
+                        if time.time() - start < ingress_stabilization_timeout:
+                            time.sleep(3)
+                            continue
+                        if (
+                            ingress_resync_wait > 0
+                            and not ingress_resync_attempted
+                            and self._trigger_connector_ingress_resync(connector_name)
+                        ):
+                            ingress_resync_attempted = True
+                            ingress_resync_deadline = time.time() + ingress_resync_wait
+                            time.sleep(3)
+                            continue
+                        if ingress_resync_deadline and time.time() < ingress_resync_deadline:
+                            time.sleep(3)
+                            continue
+                        local_url, local_fallback = self._start_connector_interface_fallback(connector_name)
+                        if local_url:
+                            url = local_url
+                            continue
                 except Exception as exc:
                     last_issue = str(exc)
                     if (
@@ -719,6 +1146,10 @@ class INESDataConnectorsAdapter:
         }
         last_issue = None
         local_fallback = None
+        ingress_stabilization_timeout = self._connector_public_ingress_stabilization_timeout(connector_name)
+        ingress_resync_wait = self._connector_public_ingress_resync_wait_seconds(connector_name)
+        ingress_resync_deadline = None
+        ingress_resync_attempted = False
 
         if host:
             try:
@@ -755,6 +1186,30 @@ class INESDataConnectorsAdapter:
                         time.sleep(poll_interval)
                         continue
                     last_issue = f"HTTP {response.status_code}"
+                    if (
+                        allow_local_fallback
+                        and not local_fallback
+                        and response.status_code in {502, 503, 504}
+                    ):
+                        if time.time() - start < ingress_stabilization_timeout:
+                            time.sleep(poll_interval)
+                            continue
+                        if (
+                            ingress_resync_wait > 0
+                            and not ingress_resync_attempted
+                            and self._trigger_connector_ingress_resync(connector_name)
+                        ):
+                            ingress_resync_attempted = True
+                            ingress_resync_deadline = time.time() + ingress_resync_wait
+                            time.sleep(poll_interval)
+                            continue
+                        if ingress_resync_deadline and time.time() < ingress_resync_deadline:
+                            time.sleep(poll_interval)
+                            continue
+                        local_url, local_fallback = self._start_connector_management_api_fallback(connector_name)
+                        if local_url:
+                            url = local_url
+                            continue
                 except Exception as exc:
                     last_issue = str(exc)
                     if (
@@ -786,8 +1241,8 @@ class INESDataConnectorsAdapter:
 
         return True
 
-    def _wait_for_connector_deployments(self, connector_name, timeout=300):
-        namespace = self.config.namespace_demo()
+    def _wait_for_connector_deployments(self, connector_name, namespace=None, timeout=300):
+        namespace = namespace or self._default_connector_namespace()
         rollout_waiter = getattr(self.infrastructure, "wait_for_deployment_rollout", None)
         timeout = max(int(timeout or 300), 1)
 
@@ -1474,8 +1929,11 @@ class INESDataConnectorsAdapter:
         print("LEVEL 4 - CREATE CONNECTOR")
         print("========================================\n")
 
+        dataspace = self._find_dataspace_for_connector(connector_name) or {}
         repo_dir = self.config.repo_dir()
-        ds_name = self._dataspace_name()
+        ds_name = str(dataspace.get("name") or self._dataspace_name()).strip() or self._dataspace_name()
+        ds_namespace = str(dataspace.get("namespace") or self._default_connector_namespace()).strip() or self._default_connector_namespace()
+        target_namespace = self._connector_target_namespace(connector_name, dataspace=dataspace)
         python_exec = self.config.python_exec()
 
         if not os.path.exists(repo_dir):
@@ -1493,7 +1951,13 @@ class INESDataConnectorsAdapter:
             print("Keycloak admin API not ready for connector cleanup")
             return False
 
-        values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
+        values_file = self._cleanup_connector_state(
+            connector_name,
+            repo_dir,
+            ds_name,
+            python_exec,
+            namespace=target_namespace,
+        )
 
         if not self.wait_for_keycloak_admin_ready():
             print("Keycloak admin API not ready for connector provisioning")
@@ -1524,7 +1988,13 @@ class INESDataConnectorsAdapter:
                     f"Connector creation failed on attempt {attempt}. "
                     "Cleaning partial state and retrying after Keycloak readiness check..."
                 )
-                values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
+                values_file = self._cleanup_connector_state(
+                    connector_name,
+                    repo_dir,
+                    ds_name,
+                    python_exec,
+                    namespace=target_namespace,
+                )
                 if not self.wait_for_keycloak_admin_ready():
                     print("Keycloak admin API not ready for connector provisioning retry")
                     return False
@@ -1553,7 +2023,15 @@ class INESDataConnectorsAdapter:
             return False
 
         connector_hostnames = connector_hostnames or [connector_name]
-        self.update_connector_host_aliases(values_file, connector_hostnames)
+        self.update_connector_host_aliases(
+            values_file,
+            connector_hostnames,
+            connector_name=connector_name,
+            ds_name=ds_name,
+            ds_namespace=ds_namespace,
+        )
+        self.update_connector_service_discovery(values_file, connector_name)
+        self.update_connector_layout_metadata(values_file, connector_name)
 
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
@@ -1565,7 +2043,7 @@ class INESDataConnectorsAdapter:
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
-            self.config.namespace_demo(),
+            target_namespace,
             values_files,
             cwd=self.config.connector_dir()
         ):
@@ -1573,7 +2051,11 @@ class INESDataConnectorsAdapter:
             return False
 
         rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
-        if not self._wait_for_connector_deployments(connector_name, timeout=rollout_timeout):
+        if not self._wait_for_connector_deployments(
+            connector_name,
+            namespace=target_namespace,
+            timeout=rollout_timeout,
+        ):
             print("Timeout waiting for connector deployment rollout")
             return False
 
@@ -1632,31 +2114,35 @@ class INESDataConnectorsAdapter:
         return False
 
     def validate_connectors_deployment(self, connectors):
-        namespace = self.config.namespace_demo()
-
         print("\n========================================")
         print("VALIDATING CONNECTOR DEPLOYMENT")
         print("========================================\n")
 
-        pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
-        if not pods:
+        namespace_outputs = []
+        for namespace in self._all_connector_scan_namespaces():
+            pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+            if pods:
+                namespace_outputs.append((namespace, pods))
+        if not namespace_outputs:
             print("No pods found in namespace")
             return False
 
         failed = False
-        for line in pods.splitlines():
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            pod_name = parts[0]
-            status = parts[2]
-            if self._is_connector_runtime_pod(pod_name) and status != "Running":
-                print(f"Connector pod not running: {pod_name} ({status})")
-                failed = True
+        for namespace, pods in namespace_outputs:
+            for line in pods.splitlines():
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                pod_name = parts[0]
+                status = parts[2]
+                if self._is_connector_runtime_pod(pod_name) and status != "Running":
+                    print(f"Connector pod not running: {pod_name} ({status}) in namespace {namespace}")
+                    failed = True
 
         if failed:
             print("\nSome connectors are not running\n")
-            self.run(f"kubectl get pods -n {namespace}", check=False)
+            for namespace, _pods in namespace_outputs:
+                self.run(f"kubectl get pods -n {namespace}", check=False)
             return False
 
         print("All connector pods are running\n")
@@ -1699,38 +2185,36 @@ class INESDataConnectorsAdapter:
         return False
 
     def show_connector_logs(self):
-        namespace = self.config.namespace_demo()
-        pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
-        if not pods:
+        connector_pods = []
+        for namespace in self._all_connector_scan_namespaces():
+            pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+            if not pods:
+                continue
+            for line in pods.splitlines():
+                pod_name = line.split()[0]
+                if self._is_connector_runtime_pod(pod_name):
+                    connector_pods.append((namespace, pod_name))
+
+        if not connector_pods:
             print("No pods found in namespace")
             return
 
-        connector_pods = []
-        for line in pods.splitlines():
-            pod_name = line.split()[0]
-            if self._is_connector_runtime_pod(pod_name):
-                connector_pods.append(pod_name)
-
-        if not connector_pods:
-            print("No connectors deployed")
-            return
-
         print("Available connectors:\n")
-        for i, pod in enumerate(connector_pods, 1):
-            print(f"{i} - {pod}")
+        for i, (namespace, pod) in enumerate(connector_pods, 1):
+            print(f"{i} - {pod} ({namespace})")
 
         choice = input("\nSelect connector for logs (number): ")
         if not choice.isdigit() or int(choice) < 1 or int(choice) > len(connector_pods):
             print("Invalid selection")
             return
 
-        selected_pod = connector_pods[int(choice) - 1]
+        selected_namespace, selected_pod = connector_pods[int(choice) - 1]
         follow = input("Follow logs in real-time? (Y/N): ").strip().upper()
 
         if follow == "Y":
-            self.run(f"kubectl logs -f {selected_pod} -n {namespace}", check=False)
+            self.run(f"kubectl logs -f {selected_pod} -n {selected_namespace}", check=False)
         else:
-            self.run(f"kubectl logs {selected_pod} -n {namespace}", check=False)
+            self.run(f"kubectl logs {selected_pod} -n {selected_namespace}", check=False)
 
     def deploy_connectors(self):
         print("\n========================================")
@@ -1772,13 +2256,18 @@ class INESDataConnectorsAdapter:
             ds_name = ds["name"]
             namespace = ds["namespace"]
             connectors = ds["connectors"]
+            target_namespaces = self._dataspace_connector_target_namespaces(ds, dataspaces=dataspaces)
 
             print(f"\nDataspace: {ds_name}")
             print(f"Namespace: {namespace}")
+            if self._role_aligned_level4_namespaces_active(ds, dataspaces=dataspaces):
+                print(f"Target connector namespaces: {target_namespaces}")
             print(f"Connectors defined: {connectors}\n")
 
             desired = set(connectors or [])
-            existing = self._discover_existing_connectors(ds_name, namespace)
+            existing = set()
+            for target_namespace in target_namespaces:
+                existing.update(self._discover_existing_connectors(ds_name, target_namespace))
             stale = sorted(existing - desired)
             if stale:
                 print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
@@ -1793,20 +2282,39 @@ class INESDataConnectorsAdapter:
                 if not self._prepare_vault_management_access(ds_name=ds_name):
                     return []
                 for stale_connector in stale:
-                    self._cleanup_connector_state(stale_connector, repo_dir, ds_name, python_exec, namespace=namespace)
+                    stale_namespace = self._connector_target_namespace(
+                        stale_connector,
+                        dataspace=ds,
+                        dataspaces=dataspaces,
+                    )
+                    self._cleanup_connector_state(
+                        stale_connector,
+                        repo_dir,
+                        ds_name,
+                        python_exec,
+                        namespace=stale_namespace,
+                    )
 
             for connector in connectors:
                 all_connectors.add(connector)
+                target_namespace = self._connector_target_namespace(
+                    connector,
+                    dataspace=ds,
+                    dataspaces=dataspaces,
+                )
 
-                if self.connector_already_exists(connector, namespace):
+                if self.connector_already_exists(connector, target_namespace):
                     if (
-                        self.connector_is_healthy(connector, namespace)
+                        self.connector_is_healthy(connector, target_namespace)
                         and self.connector_database_credentials_valid(connector)
                     ):
                         print(f"Connector already running: {connector}")
                         print("Recreating connector to ensure a clean Level 4 deployment")
                     else:
-                        print(f"Connector exists but is unhealthy or stale. Recreating: {connector}")
+                        print(
+                            f"Connector exists but is unhealthy or stale. Recreating: {connector} "
+                            f"in namespace {target_namespace}"
+                        )
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)
@@ -1827,19 +2335,18 @@ class INESDataConnectorsAdapter:
         return all_connectors
 
     def get_cluster_connectors(self):
-        namespace = self.config.namespace_demo()
-        output = self.run(f"kubectl get pods -n {namespace} --no-headers", capture=True)
-        if not output:
-            return []
-
         connectors = set()
-        for line in output.splitlines():
-            parts = line.split()
-            if not parts:
+        for namespace in self._all_connector_scan_namespaces():
+            output = self.run(f"kubectl get pods -n {namespace} --no-headers", capture=True)
+            if not output:
                 continue
-            name = parts[0]
-            if self._is_connector_runtime_pod(name):
-                connectors.add("-".join(name.split("-")[:3]))
+            for line in output.splitlines():
+                parts = line.split()
+                if not parts:
+                    continue
+                name = parts[0]
+                if self._is_connector_runtime_pod(name):
+                    connectors.add("-".join(name.split("-")[:3]))
 
         return sorted(connectors)
 

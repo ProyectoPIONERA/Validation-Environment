@@ -1,3 +1,4 @@
+{{- $layout := .Values.connector.layout | default dict }}
 {{- $dashboard := (index .Values "dashboard") | default dict }}
 {{- $dashboardProxy := (index $dashboard "proxy") | default dict }}
 {{- $dashboardProxyImage := (index $dashboardProxy "image") | default dict }}
@@ -8,6 +9,30 @@ metadata:
   name: {{ .Values.connector.name }}-dashboard-proxy
   labels:
     validation-environment-adapter: edc
+    {{- with (index $layout "role") }}
+    validation-environment-role: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "namespaceProfile") }}
+    validation-environment-namespace-profile: {{ . | quote }}
+    {{- end }}
+  {{- if or (index $layout "runtimeNamespace") (index $layout "activeNamespace") (index $layout "plannedNamespace") (index $layout "registrationServiceNamespace") (index $layout "plannedRegistrationServiceNamespace") }}
+  annotations:
+    {{- with (index $layout "runtimeNamespace") }}
+    validation-environment/runtime-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "activeNamespace") }}
+    validation-environment/active-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "plannedNamespace") }}
+    validation-environment/planned-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "registrationServiceNamespace") }}
+    validation-environment/registration-service-namespace: {{ . | quote }}
+    {{- end }}
+    {{- with (index $layout "plannedRegistrationServiceNamespace") }}
+    validation-environment/planned-registration-service-namespace: {{ . | quote }}
+    {{- end }}
+  {{- end }}
 spec:
   replicas: 1
   selector:
@@ -18,9 +43,30 @@ spec:
       annotations:
         checksum/dashboard-proxy-config: {{ toJson ((index $dashboardProxy "config") | default dict) | sha256sum | quote }}
         checksum/dashboard-proxy-auth: {{ toJson ((index $dashboardProxy "auth") | default dict) | sha256sum | quote }}
+        {{- with (index $layout "runtimeNamespace") }}
+        validation-environment/runtime-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "activeNamespace") }}
+        validation-environment/active-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "plannedNamespace") }}
+        validation-environment/planned-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "registrationServiceNamespace") }}
+        validation-environment/registration-service-namespace: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "plannedRegistrationServiceNamespace") }}
+        validation-environment/planned-registration-service-namespace: {{ . | quote }}
+        {{- end }}
       labels:
         app: {{ .Values.connector.name }}-dashboard-proxy
         validation-environment-adapter: edc
+        {{- with (index $layout "role") }}
+        validation-environment-role: {{ . | quote }}
+        {{- end }}
+        {{- with (index $layout "namespaceProfile") }}
+        validation-environment-namespace-profile: {{ . | quote }}
+        {{- end }}
     spec:
       {{- with .Values.hostAliases }}
       hostAliases:

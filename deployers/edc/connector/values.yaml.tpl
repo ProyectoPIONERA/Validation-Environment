@@ -78,7 +78,7 @@ services:
     bucket: {{ keys.dataspace_name }}-{{ keys.connector_name }}
     protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
   registrationService:
-    hostname: {% if keys.environment == 'PRO' %}registration-service-{{ keys.dataspace_name }}.ds.dataspaceunit-project.eu{% else %}{{ keys.dataspace_name }}-registration-service:8080{% endif %}
+    hostname: {% if keys.environment == 'PRO' %}registration-service-{{ keys.dataspace_name }}.ds.dataspaceunit-project.eu{% else %}{{ keys.registration_service_internal_hostname | default(keys.dataspace_name ~ '-registration-service:8080') }}{% endif %}
     protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
   vault:
     url: {{ keys.vault_url }}

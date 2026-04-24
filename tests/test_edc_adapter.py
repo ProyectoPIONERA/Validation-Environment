@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from adapters.edc.adapter import EdcAdapter
 from adapters.edc.connectors import EDCConnectorsAdapter
-from adapters.edc.deployment import EDCDeploymentAdapter
+from adapters.edc.deployment import EDCDeploymentAdapter, EdcSharedDataspaceConfig
+from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
 
 
 class SharedInfrastructureStub:
@@ -416,8 +417,83 @@ class EdcDeploymentTests(unittest.TestCase):
                 "Validation-Environment/deployers/inesdata/.venv/bin/python"
             )
         )
+        self.assertTrue(
+            deployment._delegate.config.bootstrap_script().endswith(
+                "Validation-Environment/deployers/inesdata/bootstrap.py"
+            )
+        )
+        self.assertIn(
+            "Validation-Environment/deployers/inesdata/bootstrap.py",
+            deployment._delegate.config.bootstrap_dataspace_command("create", dataspace="demoedc"),
+        )
+        bootstrap_runtime = resolve_shared_level3_bootstrap_runtime(deployment._delegate.config)
+        self.assertTrue(
+            bootstrap_runtime["repo_dir"].endswith("Validation-Environment/deployers/inesdata")
+        )
+        self.assertTrue(
+            bootstrap_runtime["bootstrap_script"].endswith("Validation-Environment/deployers/inesdata/bootstrap.py")
+        )
+        self.assertTrue(
+            bootstrap_runtime["runtime_dir"].endswith(
+                "Validation-Environment/deployers/edc/deployments/DEV/demoedc"
+            )
+        )
+        self.assertEqual(
+            deployment._delegate.config.shared_level3_repo_dir(),
+            EdcSharedDataspaceConfig.shared_level3_repo_dir(),
+        )
+        self.assertTrue(
+            deployment._delegate.config.shared_level3_dataspace_runtime_dir().endswith(
+                "Validation-Environment/deployers/inesdata/deployments/DEV/demoedc"
+            )
+        )
+        self.assertTrue(
+            deployment._delegate.config.shared_level3_dataspace_credentials_file().endswith(
+                "Validation-Environment/deployers/inesdata/deployments/DEV/demoedc/"
+                "credentials-dataspace-demoedc.json"
+            )
+        )
+        self.assertTrue(
+            deployment._delegate.config.registration_service_dir().endswith(
+                "Validation-Environment/deployers/shared/dataspace/registration-service"
+            )
+        )
+        self.assertTrue(
+            deployment._delegate.config.registration_values_file().endswith(
+                "Validation-Environment/deployers/edc/deployments/DEV/demoedc/"
+                "dataspace/registration-service/values-demoedc.yaml"
+            )
+        )
+        self.assertTrue(
+            deployment._delegate.config.legacy_registration_values_file().endswith(
+                "Validation-Environment/deployers/inesdata/dataspace/registration-service/values-demoedc.yaml"
+            )
+        )
         self.assertEqual(deployment._delegate.config.RUNTIME_LABEL, "shared dataspace")
         self.assertTrue(deployment._delegate.config.QUIET_SENSITIVE_DEPLOYER_OUTPUT)
+
+    def test_edc_deployment_builds_shared_level3_runtime_context_from_neutral_helper(self):
+        deployment = EDCDeploymentAdapter(
+            run=lambda *_args, **_kwargs: None,
+            run_silent=lambda *_args, **_kwargs: "",
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=SharedInfrastructureStub(),
+        )
+
+        context = deployment._shared_level3_runtime_context()
+
+        self.assertEqual(context["dataspace"], "demoedc")
+        self.assertEqual(context["environment"], "DEV")
+        self.assertTrue(
+            context["source_runtime_dir"].endswith(
+                "Validation-Environment/deployers/inesdata/deployments/DEV/demoedc"
+            )
+        )
+        self.assertTrue(
+            context["target_runtime_dir"].endswith(
+                "Validation-Environment/deployers/edc/deployments/DEV/demoedc"
+            )
+        )
 
     def test_edc_deployment_stages_shared_dataspace_credentials_into_edc_runtime(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -433,6 +509,105 @@ class EdcDeploymentTests(unittest.TestCase):
                 @staticmethod
                 def repo_dir():
                     return source_repo
+
+                @staticmethod
+                def shared_level3_dataspace_runtime_dir(ds_name=None, environment=None):
+                    return os.path.join(
+                        source_repo,
+                        "deployments",
+                        environment or "DEV",
+                        ds_name or "demoedc",
+                    )
+
+                @staticmethod
+                def shared_level3_dataspace_credentials_file(ds_name=None, environment=None):
+                    return os.path.join(
+                        source_repo,
+                        "deployments",
+                        environment or "DEV",
+                        ds_name or "demoedc",
+                        f"credentials-dataspace-{ds_name or 'demoedc'}.json",
+                    )
+
+            class ConfigAdapter:
+                @staticmethod
+                def primary_dataspace_name():
+                    return "demoedc"
+
+                @staticmethod
+                def deployment_environment_name():
+                    return "DEV"
+
+                @staticmethod
+                def edc_dataspace_runtime_dir(ds_name=None):
+                    return os.path.join(target_repo, "deployments", "DEV", ds_name or "demoedc")
+
+                @staticmethod
+                def edc_dataspace_credentials_file(ds_name=None):
+                    return os.path.join(
+                        target_repo,
+                        "deployments",
+                        "DEV",
+                        ds_name or "demoedc",
+                        f"credentials-dataspace-{ds_name or 'demoedc'}.json",
+                    )
+
+            deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
+            deployment._delegate = type("Delegate", (), {"config": SourceConfig})()
+            deployment.config_adapter = ConfigAdapter()
+
+            staged = deployment._stage_shared_dataspace_credentials()
+
+            target_file = os.path.join(target_repo, "deployments", "DEV", "demoedc", "credentials-dataspace-demoedc.json")
+            self.assertEqual(staged, target_file)
+            self.assertTrue(os.path.isfile(target_file))
+            self.assertFalse(os.path.exists(source_file))
+            self.assertFalse(os.path.exists(source_dir))
+
+    def test_edc_deployment_stages_registration_values_into_edc_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = tmpdir
+            source_repo = os.path.join(root, "deployers", "inesdata")
+            target_repo = os.path.join(root, "deployers", "edc")
+            source_dir = os.path.join(source_repo, "dataspace", "registration-service")
+            os.makedirs(source_dir, exist_ok=True)
+            source_file = os.path.join(source_dir, "values-demoedc.yaml")
+            with open(source_file, "w", encoding="utf-8") as handle:
+                handle.write("dataspace:\n  name: demoedc\n")
+
+            target_dir = os.path.join(
+                target_repo,
+                "deployments",
+                "DEV",
+                "demoedc",
+                "dataspace",
+                "registration-service",
+            )
+            target_file = os.path.join(target_dir, "values-demoedc.yaml")
+
+            class SourceConfig:
+                @staticmethod
+                def repo_dir():
+                    return source_repo
+
+                @staticmethod
+                def legacy_registration_values_file():
+                    return source_file
+
+                @staticmethod
+                def registration_values_file():
+                    return target_file
+
+                @staticmethod
+                def ensure_registration_values_file(refresh=False):
+                    del refresh
+                    os.makedirs(target_dir, exist_ok=True)
+                    if os.path.exists(source_file):
+                        with open(source_file, "r", encoding="utf-8") as source_handle, open(
+                            target_file, "w", encoding="utf-8"
+                        ) as target_handle:
+                            target_handle.write(source_handle.read())
+                    return target_file
 
             class ConfigAdapter:
                 @staticmethod
@@ -451,13 +626,13 @@ class EdcDeploymentTests(unittest.TestCase):
             deployment._delegate = type("Delegate", (), {"config": SourceConfig})()
             deployment.config_adapter = ConfigAdapter()
 
-            staged = deployment._stage_shared_dataspace_credentials()
+            staged = deployment._stage_shared_registration_service_values()
 
-            target_file = os.path.join(target_repo, "deployments", "DEV", "demoedc", "credentials-dataspace-demoedc.json")
             self.assertEqual(staged, target_file)
             self.assertTrue(os.path.isfile(target_file))
             self.assertFalse(os.path.exists(source_file))
-            self.assertFalse(os.path.exists(source_dir))
+            with open(target_file, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "dataspace:\n  name: demoedc\n")
 
     def test_edc_deployment_recreate_dataspace_delegates_to_shared_level3_flow(self):
         deployment = EDCDeploymentAdapter.__new__(EDCDeploymentAdapter)
@@ -479,6 +654,19 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         @staticmethod
         def edc_dashboard_proxy_auth_mode():
             return "oidc-bff"
+
+    class RoleAlignedEdcConnectorConfigAdapter(EdcConnectorConfigAdapter):
+        @staticmethod
+        def registration_service_internal_hostname(**_kwargs):
+            return "demoedc-registration-service.demoedc-core.svc.cluster.local:8080"
+
+        @staticmethod
+        def host_alias_domains(ds_name=None, ds_namespace=None):
+            del ds_namespace
+            return [
+                "keycloak.dev.ed.dataspaceunit.upm",
+                f"registration-service-{ds_name}.dev.ds.dataspaceunit.upm",
+            ]
 
     def _make_adapter(self, root):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
@@ -524,6 +712,11 @@ class EdcConnectorAdapterTests(unittest.TestCase):
     def _make_oidc_adapter(self, root):
         adapter = self._make_adapter(root)
         adapter.config_adapter = self.OidcEdcConnectorConfigAdapter(root)
+        return adapter
+
+    def _make_role_aligned_adapter(self, root):
+        adapter = self._make_adapter(root)
+        adapter.config_adapter = self.RoleAlignedEdcConnectorConfigAdapter(root)
         return adapter
 
     def _make_runtime_prerequisites_adapter(
@@ -853,6 +1046,68 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         self.assertFalse(proxy_config["cookieSecure"])
         self.assertEqual(payload["dashboard"]["proxy"]["auth"]["connectors"], [])
 
+    def test_connector_values_payload_uses_registration_service_fqdn_when_namespace_differs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = self._make_role_aligned_adapter(tmpdir)
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demoedc",
+                    "namespace": "demoedc",
+                    "namespace_profile": "role-aligned",
+                    "connectors": [
+                        "conn-citycounciledc-demoedc",
+                        "conn-companyedc-demoedc",
+                    ],
+                    "connector_details": [
+                        {
+                            "name": "conn-citycounciledc-demoedc",
+                            "role": "provider",
+                            "runtime_namespace": "demoedc",
+                            "active_namespace": "demoedc",
+                            "planned_namespace": "demoedc-provider",
+                            "registration_service_namespace": "demoedc-core",
+                            "planned_registration_service_namespace": "demoedc-core",
+                        }
+                    ],
+                }
+            ]
+
+            payload = adapter._connector_values_payload(
+                "conn-citycounciledc-demoedc",
+                "demoedc",
+                [
+                    "conn-citycounciledc-demoedc",
+                    "conn-companyedc-demoedc",
+                ],
+                connector_namespace="demoedc",
+            )
+
+        self.assertEqual(
+            payload["services"]["registrationService"]["hostname"],
+            "demoedc-registration-service.demoedc-core.svc.cluster.local:8080",
+        )
+        self.assertEqual(
+            payload["connector"]["layout"],
+            {
+                "role": "provider",
+                "namespaceProfile": "role-aligned",
+                "runtimeNamespace": "demoedc",
+                "activeNamespace": "demoedc",
+                "plannedNamespace": "demoedc-provider",
+                "registrationServiceNamespace": "demoedc-core",
+                "plannedRegistrationServiceNamespace": "demoedc-core",
+            },
+        )
+        self.assertEqual(
+            payload["hostAliases"][0]["hostnames"],
+            [
+                "keycloak.dev.ed.dataspaceunit.upm",
+                "registration-service-demoedc.dev.ds.dataspaceunit.upm",
+                "conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm",
+                "conn-companyedc-demoedc.dev.ds.dataspaceunit.upm",
+            ],
+        )
+
     def test_render_values_file_writes_chart_values_into_edc_deployment_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = self._make_adapter(tmpdir)
@@ -1133,7 +1388,9 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             adapter._prepare_connector_prerequisites = lambda connector, ds_name, namespace, repo_dir, python_exec: (
                 events.append("prepare-prerequisites") or True
             )
-            adapter._render_values_file = lambda connector, ds_name, connectors: "/tmp/values.yaml"
+            adapter._render_values_file = (
+                lambda connector, ds_name, connectors, connector_namespace=None: "/tmp/values.yaml"
+            )
             adapter._wait_for_edc_deployment_rollout = (
                 lambda deployment, namespace, timeout=300, label=None: (
                     events.append(f"wait-rollout:{deployment}") or True
@@ -1164,6 +1421,78 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             ],
         )
         adapter.infrastructure.deploy_helm_release.assert_called_once()
+
+    def test_deploy_connectors_uses_planned_namespace_when_level4_role_aligned_opt_in_is_enabled(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "local"
+        adapter.config = type(
+            "Config",
+            (),
+            {
+                "TIMEOUT_POD_WAIT": 120,
+            },
+        )
+        adapter._prepare_runtime_prerequisites = lambda: ("/tmp/repo", "/tmp/python")
+        adapter.load_dataspace_connectors = lambda: [
+            {
+                "name": "demoedc",
+                "namespace": "demoedc",
+                "namespace_profile": "role-aligned",
+                "connectors": ["conn-citycounciledc-demoedc"],
+                "connector_details": [
+                    {
+                        "name": "conn-citycounciledc-demoedc",
+                        "role": "provider",
+                        "runtime_namespace": "demoedc",
+                        "active_namespace": "demoedc",
+                        "planned_namespace": "demoedc-provider",
+                        "registration_service_namespace": "demoedc-core",
+                        "planned_registration_service_namespace": "demoedc-core",
+                    }
+                ],
+            }
+        ]
+        adapter._conflicting_runtime_resources = lambda connector, namespace: []
+        adapter._maybe_prepare_level4_local_edc_images = lambda: True
+        calls = []
+        adapter._prepare_connector_prerequisites = lambda connector, ds_name, namespace, repo_dir, python_exec: (
+            calls.append(("prepare", connector, namespace)) or True
+        )
+        adapter._render_values_file = lambda connector, ds_name, connectors, connector_namespace=None: (
+            calls.append(("values", connector, connector_namespace)) or "/tmp/values.yaml"
+        )
+        adapter._edc_connector_dir = lambda: "/tmp/edc-connector-chart"
+        adapter.config_adapter = mock.Mock()
+        adapter.config_adapter.generate_connector_hosts.return_value = []
+        adapter._wait_for_edc_deployment_rollout = lambda deployment, namespace, timeout=300, label=None: (
+            calls.append(("rollout", deployment, namespace)) or True
+        )
+        adapter._restart_local_edc_deployments_if_needed = lambda connector, namespace, rollout_timeout=300: (
+            calls.append(("restart", connector, namespace)) or True
+        )
+        adapter.wait_for_all_connectors = lambda connectors: True
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.deploy_helm_release.return_value = True
+        adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+
+        deployed = adapter.deploy_connectors()
+
+        self.assertEqual(deployed, ["conn-citycounciledc-demoedc"])
+        self.assertEqual(
+            calls,
+            [
+                ("prepare", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("values", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("rollout", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("restart", "conn-citycounciledc-demoedc", "demoedc-provider"),
+            ],
+        )
+        adapter.infrastructure.deploy_helm_release.assert_called_once_with(
+            "conn-citycounciledc-demoedc-demoedc",
+            "demoedc-provider",
+            "/tmp/values.yaml",
+            cwd=adapter._edc_connector_dir(),
+        )
 
     def test_preview_deploy_connectors_reports_render_summary_without_secrets(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1197,6 +1526,73 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         )
         self.assertNotIn("secret-db", str(connector["render_summary"]))
         self.assertNotIn("vault-token", str(connector["render_summary"]))
+
+    def test_preview_deploy_connectors_exposes_namespace_plan_metadata_when_available(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = self._make_adapter(tmpdir)
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demoedc",
+                    "namespace": "demoedc",
+                    "namespace_profile": "role-aligned",
+                    "namespace_roles": {
+                        "registration_service_namespace": "demoedc-core",
+                        "provider_namespace": "demoedc",
+                        "consumer_namespace": "demoedc",
+                    },
+                    "planned_namespace_roles": {
+                        "registration_service_namespace": "demoedc-core",
+                        "provider_namespace": "demoedc-provider",
+                        "consumer_namespace": "demoedc-consumer",
+                    },
+                    "connector_roles": {
+                        "provider": "conn-citycounciledc-demoedc",
+                        "consumer": "conn-companyedc-demoedc",
+                        "additional": [],
+                    },
+                    "connector_details": [
+                        {
+                            "name": "conn-citycounciledc-demoedc",
+                            "role": "provider",
+                            "runtime_namespace": "demoedc",
+                            "active_namespace": "demoedc",
+                            "planned_namespace": "demoedc-provider",
+                            "registration_service_namespace": "demoedc-core",
+                            "planned_registration_service_namespace": "demoedc-core",
+                        },
+                        {
+                            "name": "conn-companyedc-demoedc",
+                            "role": "consumer",
+                            "runtime_namespace": "demoedc",
+                            "active_namespace": "demoedc",
+                            "planned_namespace": "demoedc-consumer",
+                            "registration_service_namespace": "demoedc-core",
+                            "planned_registration_service_namespace": "demoedc-core",
+                        },
+                    ],
+                    "connectors": [
+                        "conn-citycounciledc-demoedc",
+                        "conn-companyedc-demoedc",
+                    ],
+                }
+            ]
+            adapter._conflicting_runtime_resources = lambda connector, namespace: []
+
+            preview = adapter.preview_deploy_connectors()
+
+        dataspace = preview["dataspaces"][0]
+        self.assertEqual(dataspace["namespace_profile"], "role-aligned")
+        self.assertEqual(dataspace["planned_namespace_roles"]["provider_namespace"], "demoedc-provider")
+        first_connector = dataspace["connectors"][0]
+        second_connector = dataspace["connectors"][1]
+        self.assertEqual(first_connector["role"], "provider")
+        self.assertEqual(first_connector["target_namespace"], "demoedc-provider")
+        self.assertEqual(first_connector["planned_namespace"], "demoedc-provider")
+        self.assertEqual(first_connector["registration_service_namespace"], "demoedc-core")
+        self.assertEqual(second_connector["role"], "consumer")
+        self.assertEqual(second_connector["target_namespace"], "demoedc-consumer")
+        self.assertEqual(second_connector["planned_namespace"], "demoedc-consumer")
 
     def test_prepare_connector_prerequisites_recreates_partial_bootstrap_when_runtime_is_missing(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)

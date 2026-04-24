@@ -726,6 +726,68 @@ def dataspace_domain_base(config, environment):
     return configured or URL_DEV.lstrip(".")
 
 
+def dataspace_index(config, dataspace_name, dataspace_namespace=None):
+    target_name = str(dataspace_name or "").strip()
+    target_namespace = str(dataspace_namespace or "").strip()
+    index = 1
+
+    while True:
+        configured_name = str(config.get(f"DS_{index}_NAME", "") or "").strip()
+        configured_namespace = str(config.get(f"DS_{index}_NAMESPACE", "") or configured_name).strip()
+        if not configured_name:
+            break
+        if target_name and configured_name == target_name:
+            return index
+        if target_namespace and configured_namespace == target_namespace:
+            return index
+        index += 1
+
+    return 1
+
+
+def registration_service_namespace(config, dataspace_name, dataspace_namespace=None):
+    resolved_namespace = str(dataspace_namespace or dataspace_name or "").strip() or str(dataspace_name or "").strip()
+    index = dataspace_index(config, dataspace_name, dataspace_namespace)
+    configured = str(config.get(f"DS_{index}_REGISTRATION_NAMESPACE", "") or "").strip()
+    if configured:
+        return configured
+
+    profile = str(config.get("NAMESPACE_PROFILE", "compact") or "compact").strip().lower().replace("_", "-")
+    if profile in {"role-aligned", "rolealigned", "aligned", "roles"}:
+        return f"{dataspace_name}-core"
+
+    return resolved_namespace
+
+
+def registration_service_internal_hostname(
+    config,
+    dataspace_name,
+    environment,
+    *,
+    connector_namespace=None,
+    dataspace_namespace=None,
+):
+    if str(environment or "").strip().upper() == "PRO":
+        return f"registration-service-{dataspace_name}.ds.dataspaceunit-project.eu"
+
+    index = dataspace_index(config, dataspace_name, dataspace_namespace)
+    resolved_dataspace_namespace = (
+        str(dataspace_namespace or "").strip()
+        or str(config.get(f"DS_{index}_NAMESPACE", "") or "").strip()
+        or str(dataspace_name or "").strip()
+    )
+    resolved_connector_namespace = str(connector_namespace or resolved_dataspace_namespace).strip() or resolved_dataspace_namespace
+    resolved_registration_namespace = registration_service_namespace(
+        config,
+        dataspace_name,
+        resolved_dataspace_namespace,
+    )
+    service_name = f"{dataspace_name}-registration-service"
+    if resolved_registration_namespace and resolved_registration_namespace != resolved_connector_namespace:
+        return f"{service_name}.{resolved_registration_namespace}.svc.cluster.local:8080"
+    return f"{service_name}:8080"
+
+
 def clean_hostname(value):
     raw_value = str(value or "").strip()
     if not raw_value:
@@ -1453,7 +1515,14 @@ def create_connector_value_files(dataspace_name, connector_name, environment):
     keys['dataspace_name'] = dataspace_name
     keys['connector_name'] = connector_name
 
-    for key_name, value in load_effective_deployer_config().items():
+    config = load_effective_deployer_config()
+    keys['registration_service_internal_hostname'] = registration_service_internal_hostname(
+        config,
+        dataspace_name,
+        environment,
+    )
+
+    for key_name, value in config.items():
         keys[key_name.lower()] = value
 
     # Generate connector values file

@@ -42,6 +42,13 @@ class FakeConfigAdapter:
         return f"/tmp/deployers/edc/deployments/DEV/{ds_name or 'demoedc'}"
 
 
+class RoleAlignedConfigAdapter(FakeConfigAdapter):
+    def load_deployer_config(self):
+        config = super().load_deployer_config()
+        config["NAMESPACE_PROFILE"] = "role-aligned"
+        return config
+
+
 class FakeConnectors:
     @staticmethod
     def load_dataspace_connectors():
@@ -140,6 +147,20 @@ class EdcDeployerWrapperTests(unittest.TestCase):
         context = deployer.resolve_context(topology="local")
 
         self.assertEqual(deployer.deploy_components(context), {"deployed": [], "urls": {}})
+
+    def test_resolve_context_can_plan_role_aligned_namespaces_without_changing_execution_roles(self):
+        adapter = FakeAdapter()
+        adapter.config_adapter = RoleAlignedConfigAdapter()
+        deployer = EdcDeployer(adapter=adapter, config_cls=FakeConfig, topology="local")
+
+        context = deployer.resolve_context(topology="local")
+
+        self.assertEqual(context.namespace_profile, "role-aligned")
+        self.assertEqual(context.namespace_roles.registration_service_namespace, "demoedc-core")
+        self.assertEqual(context.namespace_roles.provider_namespace, "demoedc")
+        self.assertEqual(context.planned_namespace_roles.registration_service_namespace, "demoedc-core")
+        self.assertEqual(context.planned_namespace_roles.provider_namespace, "demoedc-provider")
+        self.assertEqual(context.planned_namespace_roles.consumer_namespace, "demoedc-consumer")
 
     def test_validation_profile_matches_current_edc_ui_suite(self):
         deployer = EdcDeployer(adapter=FakeAdapter(), config_cls=FakeConfig, topology="local")
