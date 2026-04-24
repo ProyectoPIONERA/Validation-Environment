@@ -4,6 +4,7 @@ import shutil
 import shlex
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import requests
@@ -132,6 +133,48 @@ class INESDataInfrastructureAdapter:
                 return "microsoft" in f.read().lower()
         except Exception:
             return False
+
+    @staticmethod
+    def is_macos():
+        return sys.platform == "darwin"
+
+    @staticmethod
+    def _command_exists(command):
+        return shutil.which(str(command or "").strip()) is not None
+
+    def _ensure_level1_command(self, command, *, label=None, macos_hint=None, linux_installer=None):
+        command = str(command or "").strip()
+        label = str(label or command).strip() or command
+        if self._command_exists(command):
+            return
+
+        if self.is_macos():
+            self._fail(
+                f"{label} is not installed",
+                root_cause=(
+                    macos_hint
+                    or f"Install {label} on macOS (for example: brew install {command}) and retry Level 1"
+                ),
+            )
+
+        if callable(linux_installer):
+            linux_installer()
+            return
+
+        self._fail(
+            f"{label} is not installed",
+            root_cause=f"Install {label} and retry Level 1",
+        )
+
+    def _install_minikube_for_linux(self):
+        print("Installing Minikube...")
+        self.run("curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64")
+        self.run("sudo install minikube-linux-amd64 /usr/local/bin/minikube")
+        self.run("rm -f minikube-linux-amd64")
+
+    def _install_helm_for_linux(self):
+        print("Installing Helm...")
+        self.run("sudo snap install helm --classic", check=False)
 
     def ensure_wsl_docker_config(self):
         if not self.is_wsl():
@@ -2291,20 +2334,41 @@ class INESDataInfrastructureAdapter:
             self._fail("Could not adjust WSL Docker configuration safely")
 
         print("Checking Minikube installation...")
-        if self.run("which minikube", capture=True) is None:
-            print("Installing Minikube...")
-            self.run("curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64")
-            self.run("sudo install minikube-linux-amd64 /usr/local/bin/minikube")
-            self.run("rm -f minikube-linux-amd64")
+        self._ensure_level1_command(
+            "minikube",
+            label="Minikube",
+            macos_hint="Install Minikube on macOS (for example: brew install minikube) and retry Level 1",
+            linux_installer=self._install_minikube_for_linux,
+        )
 
         self.run("minikube version")
 
         print("\nChecking Helm installation...")
-        if self.run("which helm", capture=True) is None:
-            self.run("sudo snap install helm --classic", check=False)
+        self._ensure_level1_command(
+            "helm",
+            label="Helm",
+            macos_hint="Install Helm on macOS (for example: brew install helm) and retry Level 1",
+            linux_installer=self._install_helm_for_linux,
+        )
         self.run("helm version")
 
+        print("\nChecking kubectl installation...")
+        self._ensure_level1_command(
+            "kubectl",
+            label="kubectl",
+            macos_hint="Install kubectl on macOS (for example: brew install kubectl) and retry Level 1",
+        )
+        self.run("kubectl version --client=true", check=False)
+
         print("\nChecking Docker...")
+        self._ensure_level1_command(
+            "docker",
+            label="Docker",
+            macos_hint=(
+                "Install Docker Desktop (or a compatible Docker CLI) on macOS, "
+                "start the Docker daemon, and retry Level 1"
+            ),
+        )
         if self.run("docker info", capture=True, check=False) is None:
             self._fail("Docker is not running. Start Docker and retry")
 

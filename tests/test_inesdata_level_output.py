@@ -158,7 +158,10 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
 
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=lambda command: "/usr/bin/" + command,
+        ):
             infrastructure.setup_cluster()
             infrastructure.announce_level(1, "CLUSTER SETUP")
             infrastructure.complete_level(1)
@@ -181,13 +184,134 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
 
         output = io.StringIO()
-        with contextlib.redirect_stdout(output):
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=lambda command: "/usr/bin/" + command,
+        ):
             infrastructure.setup_cluster()
 
         self.assertIn(
             "Warning: minikube reported a transient ingress addon enable failure",
             output.getvalue(),
         )
+
+    def test_setup_cluster_fails_fast_on_macos_when_minikube_is_missing(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.run = mock.Mock(return_value=object())
+
+        with mock.patch.object(infrastructure, "is_macos", return_value=True), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=lambda command: None if command == "minikube" else "/usr/bin/" + command,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "brew install minikube"):
+                infrastructure.setup_cluster()
+
+        issued_commands = " ".join(call.args[0] for call in infrastructure.run.call_args_list)
+        self.assertNotIn("minikube-linux-amd64", issued_commands)
+        self.assertNotIn("snap install helm", issued_commands)
+
+    def test_setup_cluster_fails_fast_on_macos_when_helm_is_missing(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.run = mock.Mock(return_value=object())
+
+        def fake_which(command):
+            if command == "minikube":
+                return "/usr/local/bin/minikube"
+            if command == "helm":
+                return None
+            return "/usr/bin/" + command
+
+        with mock.patch.object(infrastructure, "is_macos", return_value=True), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=fake_which,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "brew install helm"):
+                infrastructure.setup_cluster()
+
+        issued_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("minikube version", issued_commands)
+        self.assertNotIn("sudo snap install helm --classic", issued_commands)
+
+    def test_setup_cluster_fails_fast_on_macos_when_kubectl_is_missing(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.run = mock.Mock(return_value=object())
+
+        def fake_which(command):
+            if command in {"minikube", "helm"}:
+                return f"/usr/local/bin/{command}"
+            if command == "kubectl":
+                return None
+            return "/usr/bin/" + command
+
+        with mock.patch.object(infrastructure, "is_macos", return_value=True), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=fake_which,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "brew install kubectl"):
+                infrastructure.setup_cluster()
+
+        issued_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("minikube version", issued_commands)
+        self.assertIn("helm version", issued_commands)
+        self.assertNotIn("kubectl version --client=true", issued_commands)
+
+    def test_setup_cluster_fails_fast_on_macos_when_docker_cli_is_missing(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.run = mock.Mock(return_value=object())
+
+        def fake_which(command):
+            if command in {"minikube", "helm", "kubectl"}:
+                return f"/usr/local/bin/{command}"
+            if command == "docker":
+                return None
+            return "/usr/bin/" + command
+
+        with mock.patch.object(infrastructure, "is_macos", return_value=True), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=fake_which,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Docker Desktop"):
+                infrastructure.setup_cluster()
+
+        issued_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("kubectl version --client=true", issued_commands)
+        self.assertNotIn("docker info", issued_commands)
+
+    def test_setup_cluster_keeps_linux_minikube_installer_path(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.wait_for_kubernetes_ready = lambda: True
+        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(return_value="")
+
+        def fake_which(command):
+            if command == "minikube":
+                return None
+            return "/usr/bin/" + command
+
+        with mock.patch.object(infrastructure, "is_macos", return_value=False), mock.patch(
+            "adapters.inesdata.infrastructure.shutil.which",
+            side_effect=fake_which,
+        ):
+            infrastructure.setup_cluster()
+
+        issued_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn(
+            "curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64",
+            issued_commands,
+        )
+        self.assertIn("sudo install minikube-linux-amd64 /usr/local/bin/minikube", issued_commands)
+        self.assertIn("rm -f minikube-linux-amd64", issued_commands)
 
     def test_deploy_infrastructure_does_not_print_complete_on_failure(self):
         infrastructure = self._make_infrastructure()

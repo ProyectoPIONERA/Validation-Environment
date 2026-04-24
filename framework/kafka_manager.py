@@ -1,4 +1,5 @@
 import os
+import shlex
 import socket
 import subprocess
 import time
@@ -776,21 +777,13 @@ class KafkaManager:
             candidate_pods = preferred_pods or pods
 
             for pod_name in candidate_pods:
-                probe_command = (
-                    f"timeout 3 bash -lc '</dev/tcp/{host}/{port}'"
-                )
                 result = self.command_runner(
-                    [
-                        "kubectl",
-                        "exec",
-                        "-n",
+                    self._kubernetes_listener_probe_command(
                         ids["namespace"],
                         pod_name,
-                        "--",
-                        "bash",
-                        "-lc",
-                        probe_command,
-                    ]
+                        host=host,
+                        port=port,
+                    )
                 )
                 if getattr(result, "returncode", 1) == 0:
                     return {
@@ -804,6 +797,43 @@ class KafkaManager:
         raise RuntimeError(
             f"Kafka {listener_label} did not become reachable from namespace pods in time"
         )
+
+    @staticmethod
+    def _kubernetes_listener_probe_script(host, port):
+        host = str(host)
+        port = int(port)
+        python_host = repr(host)
+        quoted_host = shlex.quote(host)
+        quoted_port = shlex.quote(str(port))
+        bash_host = host.replace("'", "'\"'\"'")
+        return dedent(
+            f"""
+            if command -v python3 >/dev/null 2>&1; then
+              python3 -c "import socket; socket.create_connection(({python_host}, {port}), 3).close()"
+            elif command -v python >/dev/null 2>&1; then
+              python -c "import socket; socket.create_connection(({python_host}, {port}), 3).close()"
+            elif command -v nc >/dev/null 2>&1; then
+              nc -z -w 3 {quoted_host} {quoted_port}
+            elif command -v bash >/dev/null 2>&1; then
+              bash -lc '</dev/tcp/{bash_host}/{port}'
+            else
+              exit 127
+            fi
+            """
+        ).strip()
+
+    def _kubernetes_listener_probe_command(self, namespace, pod_name, *, host, port):
+        return [
+            "kubectl",
+            "exec",
+            "-n",
+            namespace,
+            pod_name,
+            "--",
+            "sh",
+            "-lc",
+            self._kubernetes_listener_probe_script(host, port),
+        ]
 
     def _start_kafka_kubernetes(self):
         config = self._load_manager_config()

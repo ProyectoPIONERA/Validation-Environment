@@ -254,7 +254,31 @@ class KafkaManagerTests(unittest.TestCase):
         self.assertEqual(result["host"], "framework-kafka-external.demo.svc.cluster.local")
         self.assertEqual(result["port"], 9094)
         self.assertTrue(exec_calls)
+        self.assertEqual(exec_calls[0][6:8], ["sh", "-lc"])
         self.assertIn("framework-kafka-external.demo.svc.cluster.local", exec_calls[0][-1])
+        self.assertIn("command -v python3", exec_calls[0][-1])
+        self.assertIn("command -v nc", exec_calls[0][-1])
+        self.assertNotIn("timeout 3 bash -lc", exec_calls[0][-1])
+
+    def test_kubernetes_listener_probe_command_prefers_portable_probes(self):
+        manager = KafkaManager()
+
+        command = manager._kubernetes_listener_probe_command(
+            "demo",
+            "conn-a",
+            host="framework-kafka.demo.svc.cluster.local",
+            port=9092,
+        )
+
+        self.assertEqual(
+            command[:8],
+            ["kubectl", "exec", "-n", "demo", "conn-a", "--", "sh", "-lc"],
+        )
+        self.assertIn("python3 -c", command[-1])
+        self.assertIn("python -c", command[-1])
+        self.assertIn("nc -z -w 3", command[-1])
+        self.assertIn("bash -lc '</dev/tcp/framework-kafka.demo.svc.cluster.local/9092'", command[-1])
+        self.assertNotIn("timeout 3 bash -lc", command[-1])
 
     def test_stop_kafka_only_stops_framework_managed_container(self):
         manager = KafkaManager(container_class=_FakeKafkaContainer)
