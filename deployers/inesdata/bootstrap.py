@@ -777,16 +777,20 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
     keycloak_admin.change_current_realm(realm_name)
 
     # Set realm frontendUrl if PUBLIC_HOSTNAME is configured (enables external HTTPS access via nginx proxy)
+    # Both the dataspace realm and master realm need this so the Keycloak admin console works externally.
     config = load_effective_deployer_config()
     public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
     if public_hostname:
-        click.echo(f'  + Setting realm frontendUrl to https://{public_hostname}/auth')
-        try:
-            realm_rep = keycloak_admin.get_realm(realm_name)
-            realm_rep.setdefault("attributes", {})["frontendUrl"] = f"https://{public_hostname}/auth"
-            keycloak_admin.update_realm(realm_name, payload=realm_rep)
-        except Exception as e:
-            click.echo(f'  ! Warning: could not set frontendUrl: {e}')
+        for realm_to_patch in [realm_name, "master"]:
+            click.echo(f'  + Setting frontendUrl for realm "{realm_to_patch}" to https://{public_hostname}/auth')
+            try:
+                keycloak_admin.change_current_realm("master")
+                realm_rep = keycloak_admin.get_realm(realm_to_patch)
+                realm_rep.setdefault("attributes", {})["frontendUrl"] = f"https://{public_hostname}/auth"
+                keycloak_admin.update_realm(realm_to_patch, payload=realm_rep)
+            except Exception as e:
+                click.echo(f'  ! Warning: could not set frontendUrl for realm "{realm_to_patch}": {e}')
+        keycloak_admin.change_current_realm(realm_name)
 
     # Check if the client scope exists and create it if it doesn't
     click.echo(f'  + Checking scope "dataspaceunit-dataspace-audience"' )

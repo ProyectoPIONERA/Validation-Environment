@@ -293,20 +293,22 @@ KC_TOKEN=$(curl -s -X POST "${KC_URL}/realms/master/protocol/openid-connect/toke
     -d "client_id=admin-cli&username=admin&password=change-me&grant_type=password" | \
     python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-REALM=$(curl -s "${KC_URL}/admin/realms/demo" -H "Authorization: Bearer $KC_TOKEN")
-UPDATED=$(echo "$REALM" | python3 -c "
+for REALM_NAME in master demo; do
+    REALM=$(curl -s "${KC_URL}/admin/realms/${REALM_NAME}" -H "Authorization: Bearer $KC_TOKEN")
+    UPDATED=$(echo "$REALM" | python3 -c "
 import sys,json
 r = json.load(sys.stdin)
 r.setdefault('attributes', {})['frontendUrl'] = 'https://${PUBLIC_HOST}/auth'
 print(json.dumps(r))
 ")
-curl -s -o /dev/null -w "%{http_code}" -X PUT \
-    "${KC_URL}/admin/realms/demo" \
-    -H "Authorization: Bearer $KC_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$UPDATED"
-echo ""
-echo "  Keycloak frontendUrl set to https://${PUBLIC_HOST}/auth"
+    curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        "${KC_URL}/admin/realms/${REALM_NAME}" \
+        -H "Authorization: Bearer $KC_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$UPDATED"
+    echo ""
+    echo "  Keycloak frontendUrl set for realm '${REALM_NAME}'"
+done
 
 echo ""
 echo "=========================================="
