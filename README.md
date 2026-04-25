@@ -125,6 +125,15 @@ deployers/infrastructure/deployer.config.example
 deployers/inesdata/deployer.config.example
 ```
 
+La variable `PUBLIC_HOSTNAME` en `deployers/infrastructure/deployer.config` controla
+el hostname público del entorno. Cuando está configurada, `bootstrap.py` la usa
+automáticamente para establecer el `frontendUrl` de Keycloak, lo que asegura que
+los tokens JWT contengan el issuer correcto para acceso externo vía HTTPS:
+
+```text
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+```
+
 También puedes sobreescribir valores con variables `PIONERA_*`, por ejemplo:
 
 ```bash
@@ -254,6 +263,42 @@ diagnósticos o clientes host-side, pero no debe sustituir los endpoints de
 navegador o API. El fallback de `port-forward` para conectores está desactivado
 por defecto y solo debe habilitarse temporalmente con
 `PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true`.
+
+## Acceso Externo (entorno VM/PIONERA)
+
+En entornos desplegados en VM (topología `vm-single`), los conectores y servicios
+corren dentro de Minikube y no son accesibles desde fuera de la VM por defecto.
+Para exponer el entorno externamente a través de un hostname público (como
+`org1.pionera.oeg.fi.upm.es`), hay que ejecutar una vez el script de proxy nginx:
+
+```bash
+cd deployers/inesdata/scripts
+bash setup-nginx-proxy.sh [minikube_ip] [vm_ip] [public_hostname] [internal_domain]
+```
+
+Ejemplo para el entorno PIONERA:
+
+```bash
+bash setup-nginx-proxy.sh 192.168.49.2 192.168.122.64 org1.pionera.oeg.fi.upm.es pionera.oeg.fi.upm.es
+```
+
+El script realiza estas operaciones:
+
+1. Instala nginx e iptables-persistent en la VM.
+2. Configura reglas iptables DNAT para redirigir tráfico al Minikube.
+3. Parchea `app.config.json` en los pods de los conectores y los sirve directamente
+   desde nginx (evita problemas de caché de browser).
+4. Escribe la configuración nginx con rutas por prefijo (`/c/citycouncil/`,
+   `/c/company/`, `/auth/`, `/s3-console/`).
+5. Establece el `frontendUrl` de Keycloak vía Admin API.
+
+Después del despliegue normal (`bootstrap.py`), el `frontendUrl` de Keycloak se
+establece automáticamente si `PUBLIC_HOSTNAME` está configurado en `deployer.config`.
+El script solo es necesario para la parte nginx/iptables que corre en el host VM,
+fuera de Kubernetes.
+
+La arquitectura y URLs de acceso están documentadas en
+[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md).
 
 ## CLI Principal
 
@@ -502,6 +547,7 @@ Orden recomendado:
 - [Validación](./docs/validation.md)
 - [Desarrollo y testing](./docs/development-and-testing.md)
 - [Troubleshooting](./docs/troubleshooting.md)
+- [Acceso externo a conectores (VM/PIONERA)](./docs/acceso_externo_conectores_pionera.md)
 
 ## Referencias Técnicas
 
