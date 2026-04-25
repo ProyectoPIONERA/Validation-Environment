@@ -61,6 +61,7 @@ c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
 c['sharedUrl']        = f'{base}/c/{conn}/shared'
 c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
 c['oauth2']['allowedUrls'] = base
+c['oauth2']['redirectPath'] = f'/c/{conn}/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | sudo tee /var/www/connector-configs/app.config.${CONNECTOR}.json > /dev/null
 
@@ -75,6 +76,7 @@ c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
 c['sharedUrl']        = f'{base}/c/{conn}/shared'
 c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
 c['oauth2']['allowedUrls'] = base
+c['oauth2']['redirectPath'] = f'/c/{conn}/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | kubectl exec -n demo "$POD" -i -- tee "$CONFIG_PATH" > /dev/null
 
