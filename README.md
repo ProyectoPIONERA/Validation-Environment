@@ -73,35 +73,53 @@ cd Validation-Environment
 
 ```bash
 bash scripts/bootstrap_framework.sh
+source .venv/bin/activate
 ```
 
 En Linux/WSL, este comando instala también las dependencias del sistema que
 Playwright necesita para arrancar los navegadores. Si el entorno no permite
 instalar paquetes del sistema, usa `--without-system-deps`.
 
-3. Activa el entorno Python raíz:
+3. Configura el entorno:
 
 ```bash
-source .venv/bin/activate
+cp deployers/infrastructure/deployer.config.example deployers/infrastructure/deployer.config
 ```
 
-4. Revisa la configuración generada si necesitas ajustar credenciales, dominios
-o dataspaces:
+Edita `deployers/infrastructure/deployer.config` y ajusta al menos:
 
 ```text
-deployers/infrastructure/deployer.config
-deployers/inesdata/deployer.config
-deployers/edc/deployer.config
+KC_PASSWORD=change-me
+PG_PASSWORD=change-me
+MINIO_PASSWORD=change-me
+VT_TOKEN=<vault-token>
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es   # hostname público para acceso externo
+VM_COMMON_IP=192.168.122.64                   # IP de la VM host
 ```
 
-5. Abre el menú guiado:
+4. Ejecuta los niveles en orden desde el menú guiado:
 
 ```bash
 python3 main.py menu
 ```
 
-El menú guiado es la entrada recomendada para usuarios que quieran ejecutar los
-niveles de despliegue sin memorizar comandos.
+Ejecuta **1 → 2 → 3 → 4 → 5 → 6** en orden. El menú guiado es la entrada
+recomendada para usuarios que quieran ejecutar los niveles sin memorizar comandos.
+
+5. Después de Level 4 — proxy nginx (acceso externo):
+
+Si Level 4 imprime `sudo requires a password — run manually:`, ejecuta el
+comando que aparece en pantalla una sola vez (requiere contraseña sudo de la VM).
+Si `sudo` es passwordless, el proxy se configura automáticamente.
+
+6. Accede a los conectores desde cualquier PC en red UPM o VPN:
+
+| URL | Usuario | Contraseña |
+|-----|---------|------------|
+| `https://org1.pionera.oeg.fi.upm.es/c/citycouncil/inesdata-connector-interface/` | `user-conn-citycouncil-demo` | `skaEFXy1XaPgrek*` |
+| `https://org1.pionera.oeg.fi.upm.es/c/company/inesdata-connector-interface/` | `user-conn-company-demo` | `XMSi1tr*vl*30bjo` |
+| `https://org1.pionera.oeg.fi.upm.es/auth/admin/demo/console/` | `admin` | `change-me` |
+| `https://org1.pionera.oeg.fi.upm.es/s3-console/` | `admin` | `change-me` |
 
 ## Configuración
 
