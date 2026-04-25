@@ -1743,7 +1743,48 @@ class INESDataConnectorsAdapter:
         connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
         self.infrastructure.manage_hosts_entries(connector_hosts)
         self.wait_for_all_connectors(all_connectors)
+        self._setup_nginx_proxy_if_configured()
         return all_connectors
+
+    def _setup_nginx_proxy_if_configured(self):
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        public_hostname = str(deployer_config.get("PUBLIC_HOSTNAME", "")).strip()
+        if not public_hostname:
+            return
+
+        script_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "deployers", "inesdata", "scripts", "setup-nginx-proxy.sh"
+        )
+        script_path = os.path.normpath(script_path)
+        if not os.path.exists(script_path):
+            print(f"  [nginx-proxy] Script not found: {script_path}")
+            return
+
+        minikube_ip = self.run("minikube ip", capture=True) or "192.168.49.2"
+        minikube_ip = minikube_ip.strip()
+        vm_ip = str(deployer_config.get("VM_COMMON_IP", "192.168.122.64")).strip() or "192.168.122.64"
+        internal_domain = str(deployer_config.get("DOMAIN_BASE", "pionera.oeg.fi.upm.es")).strip()
+        manual_cmd = f"bash {script_path} {minikube_ip} {vm_ip} {public_hostname} {internal_domain}"
+
+        print(f"\n[Level 4] PUBLIC_HOSTNAME={public_hostname} — configuring nginx external proxy...")
+
+        can_sudo = self.run("sudo -n true", check=False) is not None
+        if not can_sudo:
+            print(
+                "  [nginx-proxy] sudo requires a password in this session.\n"
+                "  Run once manually to enable external browser access:\n"
+                f"  {manual_cmd}"
+            )
+            return
+
+        result = self.run(manual_cmd, check=False)
+        if result is None:
+            print(
+                "  [nginx-proxy] Script failed. Run manually:\n"
+                f"  {manual_cmd}"
+            )
+        else:
+            print(f"  [nginx-proxy] External access configured for https://{public_hostname}")
 
     def get_cluster_connectors(self):
         namespace = self.config.namespace_demo()
