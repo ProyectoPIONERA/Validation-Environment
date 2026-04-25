@@ -928,7 +928,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                 "post.logout.redirect.uris": "+",
                 "backchannel.logout.session.required": True
             },
-            "defaultClientScopes":["dataspaceunit-dataspace-audience","dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
+            "defaultClientScopes":["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
         }
         keycloak_admin.create_client(payload=new_client)
 
