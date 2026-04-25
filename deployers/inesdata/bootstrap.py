@@ -687,6 +687,24 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
         if str(config.get("EDC_DASHBOARD_PROXY_AUTH_MODE", "")).strip().lower() == "oidc-bff":
             urls["edc_dashboard_oidc_login"] = f"{connector_base}/edc-dashboard-api/auth/login"
     urls.update(common_access_urls(dataspace, environment, config))
+
+    public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
+    if public_hostname:
+        # Extract short connector name: conn-citycouncil-demo → citycouncil
+        short_name = connector
+        if short_name.startswith("conn-"):
+            short_name = short_name[len("conn-"):]
+        if short_name.endswith("-demo"):
+            short_name = short_name[: -len("-demo")]
+        base = f"https://{public_hostname}"
+        urls["external_connector_interface"] = f"{base}/c/{short_name}/inesdata-connector-interface/"
+        urls["external_management_api"] = f"{base}/c/{short_name}/management"
+        urls["external_shared_api"] = f"{base}/c/{short_name}/shared"
+        urls["external_federated_catalog"] = f"{base}/c/{short_name}/federatedcatalog"
+        urls["external_keycloak_realm"] = f"{base}/auth/realms/{dataspace}"
+        urls["external_keycloak_admin_console"] = f"{base}/auth/admin/{dataspace}/console/"
+        urls["external_minio_console"] = f"{base}/s3-console/"
+
     return urls
 
 
