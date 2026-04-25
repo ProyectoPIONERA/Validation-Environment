@@ -162,13 +162,22 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
+    location /resources/ {
+        proxy_pass http://${MINIKUBE_IP};
+        proxy_set_header Host auth.${INTERNAL_DOMAIN};
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
     location /s3-console/ {
         rewrite ^/s3-console/(.*) /\$1 break;
         proxy_pass http://${MINIKUBE_IP};
         proxy_set_header Host console.minio-s3.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header Accept-Encoding "";
-        sub_filter '<base href="/">' '<base href="/s3-console/">';
+        gunzip on;
+        sub_filter '<base href="/"/>' '<base href="/s3-console/"/>';
         sub_filter_once on;
     }
 
