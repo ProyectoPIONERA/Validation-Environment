@@ -310,6 +310,28 @@ print(json.dumps(r))
     echo "  Keycloak frontendUrl set for realm '${REALM_NAME}'"
 done
 
+echo "  Patching security-admin-console redirectUris..."
+CLIENT_UUID=$(curl -s "${KC_URL}/admin/realms/master/clients?clientId=security-admin-console" \
+    -H "Authorization: Bearer $KC_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+CLIENT=$(curl -s "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" -H "Authorization: Bearer $KC_TOKEN")
+UPDATED_CLIENT=$(echo "$CLIENT" | python3 -c "
+import sys,json
+c = json.load(sys.stdin)
+existing = c.get('redirectUris', [])
+for u in ['https://${PUBLIC_HOST}/auth/admin/*', 'https://${PUBLIC_HOST}/*', '*']:
+    if u not in existing:
+        existing.append(u)
+c['redirectUris'] = existing
+print(json.dumps(c))
+")
+curl -s -o /dev/null -w "%{http_code}" -X PUT \
+    "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" \
+    -H "Authorization: Bearer $KC_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$UPDATED_CLIENT"
+echo ""
+echo "  security-admin-console redirectUris updated"
+
 echo ""
 echo "=========================================="
 echo "Setup complete. URLs:"

@@ -791,6 +791,26 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             except Exception as e:
                 click.echo(f'  ! Warning: could not set frontendUrl for realm "{realm_to_patch}": {e}')
         keycloak_admin.change_current_realm(realm_name)
+        # Allow security-admin-console to redirect back to the external proxy URL
+        try:
+            keycloak_admin.change_current_realm("master")
+            clients = keycloak_admin.get_clients(query={"clientId": "security-admin-console"})
+            if clients:
+                client = clients[0]
+                redirect_uris = client.get("redirectUris", [])
+                to_add = [f"https://{public_hostname}/auth/admin/*", f"https://{public_hostname}/*", "*"]
+                changed = False
+                for uri in to_add:
+                    if uri not in redirect_uris:
+                        redirect_uris.append(uri)
+                        changed = True
+                if changed:
+                    client["redirectUris"] = redirect_uris
+                    keycloak_admin.update_client(client["id"], payload=client)
+                    click.echo(f'  + Updated security-admin-console redirectUris for external access')
+            keycloak_admin.change_current_realm(realm_name)
+        except Exception as e:
+            click.echo(f'  ! Warning: could not update security-admin-console redirectUris: {e}')
 
     # Check if the client scope exists and create it if it doesn't
     click.echo(f'  + Checking scope "dataspaceunit-dataspace-audience"' )
