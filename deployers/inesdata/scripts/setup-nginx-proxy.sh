@@ -94,6 +94,11 @@ map $cookie_inesdata_connector $connector_host {
     "company"    conn-company-demo.INTERNAL_DOMAIN_PLACEHOLDER;
     default      conn-citycouncil-demo.INTERNAL_DOMAIN_PLACEHOLDER;
 }
+
+map $cookie_inesdata_connector $connector_config_name {
+    "company"    company;
+    default      citycouncil;
+}
 MAPEOF
 sudo sed -i "s/INTERNAL_DOMAIN_PLACEHOLDER/${INTERNAL_DOMAIN}/g" /etc/nginx/conf.d/connector-routing.conf
 
@@ -102,10 +107,22 @@ server {
     listen ${VM_IP}:80;
     server_name ${PUBLIC_HOST};
 
+    # Route app.config.json based on inesdata_connector cookie (set by /c/<connector>/)
+    # Uses internal rewrite: $connector_config_name is set by map in conf.d
     location = /inesdata-connector-interface/assets/config/app.config.json {
+        rewrite ^ /internal-connector-config/\$connector_config_name last;
+    }
+    location = /internal-connector-config/company {
+        internal;
+        alias /var/www/connector-configs/app.config.company.json;
+        default_type application/json;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    }
+    location = /internal-connector-config/citycouncil {
+        internal;
         alias /var/www/connector-configs/app.config.citycouncil.json;
         default_type application/json;
-        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
     }
     location = /c/citycouncil/inesdata-connector-interface/assets/config/app.config.json {
         alias /var/www/connector-configs/app.config.citycouncil.json;
