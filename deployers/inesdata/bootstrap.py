@@ -860,7 +860,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                 "post.logout.redirect.uris": "+",
                 "backchannel.logout.session.required": True
             },
-            "defaultClientScopes":["dataspaceunit-dataspace-audience", "profile", "email", "acr", "web-origins", "roles"]
+            "defaultClientScopes":["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
         }
         keycloak_admin.create_client(payload=new_client)
 
@@ -945,7 +945,7 @@ def create_manager_group(keycloak_admin, realm_name):
 def create_client(keycloak_admin, dataspace, client_name, environment):
     clients = keycloak_admin.get_clients()
     client = next((client for client in clients if client['clientId'] == client_name), None)
-    default_scopes = ["dataspaceunit-dataspace-audience", "profile", "email", "acr", "roles"]
+    default_scopes = ["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "roles"]
     if client is None:
         new_client = {
             "clientId": client_name,

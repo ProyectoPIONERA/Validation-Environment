@@ -86,6 +86,7 @@ class ValidationEngine:
             "dataspace": dataspace,
             "keycloakUrl": keycloak_url,
             "keycloakClientId": "dataspace-users",
+            "providerParticipantId": provider,
             "providerProtocolAddress": f"http://{provider}:19194/protocol",
             "consumerProtocolAddress": f"http://{consumer}:19194/protocol",
             "e2e_expected_provider_bucket": f"{dataspace}-{provider}",
