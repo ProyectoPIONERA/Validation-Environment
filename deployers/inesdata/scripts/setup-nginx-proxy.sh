@@ -167,6 +167,9 @@ server {
         proxy_pass http://${MINIKUBE_IP};
         proxy_set_header Host console.minio-s3.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header Accept-Encoding "";
+        sub_filter '<base href="/">' '<base href="/s3-console/">';
+        sub_filter_once on;
     }
 
     location /rs-demo/ {
