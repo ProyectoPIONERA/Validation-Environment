@@ -61,7 +61,7 @@ c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
 c['sharedUrl']        = f'{base}/c/{conn}/shared'
 c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
 c['oauth2']['allowedUrls'] = base
-c['oauth2']['redirectPath'] = f'/c/{conn}/inesdata-connector-interface'
+c['oauth2']['redirectPath'] = '/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | sudo tee /var/www/connector-configs/app.config.${CONNECTOR}.json > /dev/null
 
@@ -76,7 +76,7 @@ c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
 c['sharedUrl']        = f'{base}/c/{conn}/shared'
 c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
 c['oauth2']['allowedUrls'] = base
-c['oauth2']['redirectPath'] = f'/c/{conn}/inesdata-connector-interface'
+c['oauth2']['redirectPath'] = '/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | kubectl exec -n demo "$POD" -i -- tee "$CONFIG_PATH" > /dev/null
 
@@ -84,6 +84,19 @@ print(json.dumps(c, indent=2))
 done
 
 echo "[4/5] Writing nginx config..."
+
+# Cookie-based routing: /inesdata-connector-interface/ routes to the connector
+# the user last visited via /c/<connector>/. This is needed because all Angular
+# SPAs share base href=/inesdata-connector-interface/ and the OIDC callback must
+# land at that exact path for Angular routing to work.
+sudo tee /etc/nginx/conf.d/connector-routing.conf > /dev/null << 'MAPEOF'
+map $cookie_inesdata_connector $connector_host {
+    "company"    conn-company-demo.INTERNAL_DOMAIN_PLACEHOLDER;
+    default      conn-citycouncil-demo.INTERNAL_DOMAIN_PLACEHOLDER;
+}
+MAPEOF
+sudo sed -i "s/INTERNAL_DOMAIN_PLACEHOLDER/${INTERNAL_DOMAIN}/g" /etc/nginx/conf.d/connector-routing.conf
+
 sudo tee /etc/nginx/sites-enabled/pionera-dataspace.conf > /dev/null << NGINXEOF
 server {
     listen ${VM_IP}:80;
@@ -171,6 +184,7 @@ server {
     }
 
     location /c/citycouncil/ {
+        add_header Set-Cookie "inesdata_connector=citycouncil; Path=/; SameSite=Lax" always;
         rewrite ^/c/citycouncil/(.*) /\$1 break;
         proxy_pass http://${MINIKUBE_IP};
         proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
@@ -204,6 +218,7 @@ server {
     }
 
     location /c/company/ {
+        add_header Set-Cookie "inesdata_connector=company; Path=/; SameSite=Lax" always;
         rewrite ^/c/company/(.*) /\$1 break;
         proxy_pass http://${MINIKUBE_IP};
         proxy_set_header Host conn-company-demo.${INTERNAL_DOMAIN};
@@ -214,7 +229,7 @@ server {
 
     location /inesdata-connector-interface/ {
         proxy_pass http://${MINIKUBE_IP};
-        proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
+        proxy_set_header Host \$connector_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
