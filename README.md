@@ -125,13 +125,25 @@ deployers/infrastructure/deployer.config.example
 deployers/inesdata/deployer.config.example
 ```
 
-La variable `PUBLIC_HOSTNAME` en `deployers/infrastructure/deployer.config` controla
-el hostname público del entorno. Cuando está configurada, `bootstrap.py` la usa
-automáticamente para establecer el `frontendUrl` de Keycloak, lo que asegura que
-los tokens JWT contengan el issuer correcto para acceso externo vía HTTPS:
+Las variables `PUBLIC_HOSTNAME` y `VM_COMMON_IP` en `deployers/infrastructure/deployer.config`
+habilitan el acceso externo vía HTTPS desde un navegador:
 
 ```text
-PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es   # hostname público del entorno
+VM_COMMON_IP=192.168.122.64                   # IP de la VM host (red interna)
+```
+
+Cuando `PUBLIC_HOSTNAME` está configurado:
+
+- `bootstrap.py` (Level 2) establece automáticamente el `frontendUrl` de Keycloak,
+  garantizando que los tokens JWT contengan el issuer correcto para HTTPS externo.
+- Al finalizar Level 4, el framework intenta ejecutar `setup-nginx-proxy.sh`
+  automáticamente si `sudo` no requiere contraseña. Si requiere contraseña,
+  imprime el comando manual a ejecutar una vez:
+
+```bash
+bash deployers/inesdata/scripts/setup-nginx-proxy.sh \
+  <minikube_ip> <vm_ip> <public_hostname> <internal_domain>
 ```
 
 También puedes sobreescribir valores con variables `PIONERA_*`, por ejemplo:
@@ -266,36 +278,37 @@ por defecto y solo debe habilitarse temporalmente con
 
 ## Acceso Externo (entorno VM/PIONERA)
 
-En entornos desplegados en VM (topología `vm-single`), los conectores y servicios
-corren dentro de Minikube y no son accesibles desde fuera de la VM por defecto.
-Para exponer el entorno externamente a través de un hostname público (como
-`org1.pionera.oeg.fi.upm.es`), hay que ejecutar una vez el script de proxy nginx:
+En entornos desplegados en VM (topología `vm-single`), los conectores corren dentro
+de Minikube y no son accesibles desde fuera por defecto.
 
-```bash
-cd deployers/inesdata/scripts
-bash setup-nginx-proxy.sh [minikube_ip] [vm_ip] [public_hostname] [internal_domain]
+### Configuración automática (recomendada)
+
+Configura en `deployers/infrastructure/deployer.config`:
+
+```text
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+VM_COMMON_IP=192.168.122.64
 ```
 
-Ejemplo para el entorno PIONERA:
+Al ejecutar Level 4, el framework detecta `PUBLIC_HOSTNAME` y ejecuta
+`setup-nginx-proxy.sh` automáticamente si `sudo` es passwordless.
+Si `sudo` requiere contraseña, imprime el comando a ejecutar manualmente:
 
 ```bash
-bash setup-nginx-proxy.sh 192.168.49.2 192.168.122.64 org1.pionera.oeg.fi.upm.es pionera.oeg.fi.upm.es
+bash deployers/inesdata/scripts/setup-nginx-proxy.sh \
+  192.168.49.2 192.168.122.64 org1.pionera.oeg.fi.upm.es pionera.oeg.fi.upm.es
 ```
 
-El script realiza estas operaciones:
+### Qué hace el script
 
 1. Instala nginx e iptables-persistent en la VM.
-2. Configura reglas iptables DNAT para redirigir tráfico al Minikube.
-3. Parchea `app.config.json` en los pods de los conectores y los sirve directamente
-   desde nginx (evita problemas de caché de browser).
-4. Escribe la configuración nginx con rutas por prefijo (`/c/citycouncil/`,
-   `/c/company/`, `/auth/`, `/s3-console/`).
+2. Configura reglas iptables DNAT (VM → Minikube).
+3. Parchea `app.config.json` en los pods con URLs HTTPS correctas.
+4. Escribe configuración nginx con rutas por prefijo y routing por cookie
+   para que el callback OIDC llegue al pod correcto de cada conector.
 5. Establece el `frontendUrl` de Keycloak vía Admin API.
 
-Después del despliegue normal (`bootstrap.py`), el `frontendUrl` de Keycloak se
-establece automáticamente si `PUBLIC_HOSTNAME` está configurado en `deployer.config`.
-El script solo es necesario para la parte nginx/iptables que corre en el host VM,
-fuera de Kubernetes.
+El script es idempotente: se puede re-ejecutar sin problemas.
 
 La arquitectura y URLs de acceso están documentadas en
 [docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md).
