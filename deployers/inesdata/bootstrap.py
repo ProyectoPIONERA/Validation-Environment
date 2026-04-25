@@ -758,6 +758,18 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             keycloak_admin.create_realm(payload={"realm": realm_name, "enabled": True})
     keycloak_admin.change_current_realm(realm_name)
 
+    # Set realm frontendUrl if PUBLIC_HOSTNAME is configured (enables external HTTPS access via nginx proxy)
+    config = load_effective_deployer_config()
+    public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
+    if public_hostname:
+        click.echo(f'  + Setting realm frontendUrl to https://{public_hostname}/auth')
+        try:
+            realm_rep = keycloak_admin.get_realm(realm_name)
+            realm_rep.setdefault("attributes", {})["frontendUrl"] = f"https://{public_hostname}/auth"
+            keycloak_admin.update_realm(realm_name, payload=realm_rep)
+        except Exception as e:
+            click.echo(f'  ! Warning: could not set frontendUrl: {e}')
+
     # Check if the client scope exists and create it if it doesn't
     click.echo(f'  + Checking scope "dataspaceunit-dataspace-audience"' )
     client_scopes = keycloak_admin.get_client_scopes()
