@@ -153,6 +153,8 @@ server {
         sub_filter "http://auth.${INTERNAL_DOMAIN}/realms/"    "https://${PUBLIC_HOST}/auth/realms/";
         sub_filter "http://auth.${INTERNAL_DOMAIN}/resources/" "https://${PUBLIC_HOST}/auth/resources/";
         sub_filter "http://auth.${INTERNAL_DOMAIN}/js/"        "https://${PUBLIC_HOST}/auth/js/";
+        sub_filter '"authUrl": "http://admin.auth.${INTERNAL_DOMAIN}"' '"authUrl": "https://${PUBLIC_HOST}/auth"';
+        sub_filter '"consoleBaseUrl": "/admin/' '"consoleBaseUrl": "/auth/admin/';
     }
 
     location /s3/ {
@@ -331,6 +333,33 @@ curl -s -o /dev/null -w "%{http_code}" -X PUT \
     -d "$UPDATED_CLIENT"
 echo ""
 echo "  security-admin-console redirectUris updated"
+
+echo "  Patching security-admin-console webOrigins (both realms)..."
+for REALM_NAME in master demo; do
+    CLIENT_UUID=$(curl -s "${KC_URL}/admin/realms/${REALM_NAME}/clients?clientId=security-admin-console" \
+        -H "Authorization: Bearer $KC_TOKEN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
+    if [ -z "$CLIENT_UUID" ]; then continue; fi
+    CLIENT=$(curl -s "${KC_URL}/admin/realms/${REALM_NAME}/clients/${CLIENT_UUID}" -H "Authorization: Bearer $KC_TOKEN")
+    UPDATED_CLIENT=$(echo "$CLIENT" | python3 -c "
+import sys,json
+c = json.load(sys.stdin)
+origins = c.get('webOrigins', [])
+ext = 'https://${PUBLIC_HOST}'
+if ext not in origins:
+    origins.append(ext)
+if '+' not in origins:
+    origins.append('+')
+c['webOrigins'] = origins
+print(json.dumps(c))
+")
+    curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        "${KC_URL}/admin/realms/${REALM_NAME}/clients/${CLIENT_UUID}" \
+        -H "Authorization: Bearer $KC_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$UPDATED_CLIENT"
+    echo ""
+    echo "  security-admin-console webOrigins updated for realm '${REALM_NAME}'"
+done
 
 echo ""
 echo "=========================================="
