@@ -1208,6 +1208,72 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(infra.local_calls, 0)
             self.assertEqual(infra.vault_calls, 1)
 
+    def test_level4_local_image_policy_disables_local_overrides_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            policy = adapter._resolve_level4_local_image_policy(
+                mode="auto",
+                label="INESData connector",
+            )
+
+            self.assertEqual(policy["topology"], "vm-single")
+            self.assertFalse(policy["prepare_local_images"])
+            self.assertFalse(policy["allow_local_image_overrides"])
+            self.assertIn("chart-configured image references", policy["message"])
+
+    def test_local_connector_image_override_path_is_ignored_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            with (
+                mock.patch("adapters.inesdata.connectors.os.path.isfile", return_value=True),
+                mock.patch("adapters.inesdata.connectors.os.path.getsize", return_value=1),
+            ):
+                self.assertIsNone(adapter._local_connector_image_override_path())
+
+    def test_level4_local_connector_images_fail_when_required_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            with (
+                mock.patch.object(adapter, "_level4_local_images_mode", return_value="required"),
+                mock.patch.object(adapter, "_framework_root_dir") as root_dir_mock,
+            ):
+                self.assertFalse(adapter._maybe_prepare_level4_local_connector_images("demo"))
+
+            root_dir_mock.assert_not_called()
+
     def test_create_connector_retries_after_initial_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
