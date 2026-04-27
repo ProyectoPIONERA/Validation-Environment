@@ -900,7 +900,9 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Topology 'vm-single' uses an existing cluster ingress.", rendered)
         self.assertNotIn("MINIKUBE TUNNEL REQUIRED", rendered)
         self.assertIn("Next step: run Level 4", rendered)
-        infrastructure.ensure_local_infra_access.assert_called_once()
+        infrastructure.ensure_local_infra_access.assert_not_called()
+        infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
+        infrastructure.sync_common_credentials_from_kubernetes.assert_called_once()
         deployment.update_helm_values_with_host_aliases.assert_not_called()
         self.assertFalse(any(call.args and call.args[0] == "minikube ip" for call in run.call_args_list))
 

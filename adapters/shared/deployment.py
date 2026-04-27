@@ -470,14 +470,16 @@ class SharedDataspaceDeploymentAdapter:
         if not os.path.exists(repo_dir):
             self._fail("Repository not found. Run Level 2 first")
 
-        if not self.infrastructure.ensure_local_infra_access():
+        requires_local_runtime_access = normalized_topology == LOCAL_TOPOLOGY
+
+        if requires_local_runtime_access and not self.infrastructure.ensure_local_infra_access():
             self._fail("Local access to PostgreSQL/Vault is not available")
 
         if not self.infrastructure.ensure_vault_unsealed():
             self._fail("Vault is not initialized or unsealed")
 
         reconcile_vault_state = getattr(self.infrastructure, "reconcile_vault_state_for_local_runtime", None)
-        if callable(reconcile_vault_state) and not reconcile_vault_state():
+        if requires_local_runtime_access and callable(reconcile_vault_state) and not reconcile_vault_state():
             self._fail("Vault token could not be synchronized with the shared local runtime")
 
         sync_common_credentials = getattr(self.infrastructure, "sync_common_credentials_from_kubernetes", None)
