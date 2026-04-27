@@ -4,6 +4,7 @@ import importlib
 import inspect
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -46,6 +47,10 @@ from deployers.infrastructure.lib.hosts_manager import (
     build_context_host_blocks,
     hostnames_by_level,
     parse_hostnames,
+)
+from deployers.infrastructure.lib.config_loader import (
+    apply_pionera_environment_overrides,
+    load_deployer_config as load_raw_deployer_config,
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
@@ -2569,6 +2574,162 @@ def _deployer_hosts_default_address(context=None):
 
 def _deployer_hosts_file():
     return str(os.getenv("PIONERA_HOSTS_FILE") or "").strip()
+
+
+def _infrastructure_deployer_config_path():
+    return os.path.join(os.path.dirname(__file__), "deployers", "infrastructure", "deployer.config")
+
+
+def _infrastructure_deployer_config_example_path():
+    return os.path.join(os.path.dirname(__file__), "deployers", "infrastructure", "deployer.config.example")
+
+
+def _load_effective_infrastructure_deployer_config():
+    config = load_raw_deployer_config(_infrastructure_deployer_config_path())
+    return apply_pionera_environment_overrides(dict(config))
+
+
+def _configured_vm_single_address():
+    config = _load_effective_infrastructure_deployer_config()
+    for key in (
+        "VM_SINGLE_ADDRESS",
+        "VM_SINGLE_IP",
+        "VM_EXTERNAL_IP",
+        "HOSTS_ADDRESS",
+        "INGRESS_EXTERNAL_IP",
+    ):
+        value = str(config.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _command_stdout(args):
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return str(completed.stdout or "").strip()
+
+
+def _detect_vm_single_address_candidates():
+    vm_ip = ""
+    for token in _command_stdout(["hostname", "-I"]).split():
+        candidate = str(token or "").strip()
+        if candidate and not candidate.startswith("127."):
+            vm_ip = candidate
+            break
+
+    minikube_ip = ""
+    for token in _command_stdout(["minikube", "ip"]).split():
+        candidate = str(token or "").strip()
+        if candidate:
+            minikube_ip = candidate
+            break
+
+    recommended_source = "minikube" if minikube_ip else ("vm" if vm_ip else "")
+    recommended_address = minikube_ip or vm_ip
+    return {
+        "vm_ip": vm_ip,
+        "minikube_ip": minikube_ip,
+        "recommended_address": recommended_address,
+        "recommended_source": recommended_source,
+    }
+
+
+def _write_key_value_updates(path, updates, preferred_order):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = []
+    seen = set()
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.rstrip("\n")
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    key, _value = stripped.split("=", 1)
+                    key = key.strip()
+                    if key in updates:
+                        lines.append(f"{key}={updates[key]}\n")
+                        seen.add(key)
+                        continue
+                lines.append(raw_line if raw_line.endswith("\n") else f"{raw_line}\n")
+
+    ordered_keys = [key for key in preferred_order if key in updates and key not in seen]
+    ordered_keys.extend(sorted(key for key in updates if key not in seen and key not in ordered_keys))
+    for key in ordered_keys:
+        lines.append(f"{key}={updates[key]}\n")
+
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.writelines(lines)
+
+
+def _seed_infrastructure_deployer_config_if_missing():
+    config_path = _infrastructure_deployer_config_path()
+    if os.path.isfile(config_path):
+        return config_path
+
+    example_path = _infrastructure_deployer_config_example_path()
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    if os.path.isfile(example_path):
+        shutil.copy2(example_path, config_path)
+    else:
+        with open(config_path, "w", encoding="utf-8") as handle:
+            handle.write("")
+    return config_path
+
+
+def _interactive_offer_vm_single_address_configuration(required=False):
+    if _configured_vm_single_address():
+        return True
+
+    candidates = _detect_vm_single_address_candidates()
+    recommended_address = str(candidates.get("recommended_address") or "").strip()
+    recommended_source = str(candidates.get("recommended_source") or "").strip()
+
+    print()
+    print("vm-single needs a topology address for ingress hostnames and public URLs.")
+    if candidates.get("vm_ip"):
+        print("Detected a candidate address from hostname -I.")
+    if candidates.get("minikube_ip"):
+        print("Detected a candidate address from minikube ip.")
+
+    if not recommended_address:
+        print("Could not detect a vm-single address automatically.")
+        print("Set VM_EXTERNAL_IP or INGRESS_EXTERNAL_IP in deployers/infrastructure/deployer.config.")
+        return not required
+
+    source_label = "minikube ip" if recommended_source == "minikube" else "hostname -I"
+    if not _interactive_confirm(
+        f"Populate VM_EXTERNAL_IP and INGRESS_EXTERNAL_IP from detected {source_label} now?",
+        default=required,
+    ):
+        if required:
+            print("Cannot continue until vm-single address is configured.")
+            print("Set VM_EXTERNAL_IP/INGRESS_EXTERNAL_IP or choose T again later.")
+            return False
+        return True
+
+    config_path = _seed_infrastructure_deployer_config_if_missing()
+    _write_key_value_updates(
+        config_path,
+        {
+            "VM_EXTERNAL_IP": recommended_address,
+            "INGRESS_EXTERNAL_IP": recommended_address,
+        },
+        ("VM_EXTERNAL_IP", "INGRESS_EXTERNAL_IP"),
+    )
+    print("Updated deployers/infrastructure/deployer.config with vm-single address values.")
+    return True
+
+
+def _menu_action_requires_vm_single_address(choice):
+    normalized = str(choice or "").strip().upper()
+    if normalized in {"0", "P", "H", "U", "X"}:
+        return True
+    return normalized in {"3", "4", "5", "6"}
 
 
 def _should_use_deployer_run():
@@ -5233,7 +5394,13 @@ def run_interactive_menu(
                 if selected_topology != topology:
                     topology = selected_topology
                     print(f"Active topology set to {topology}.")
+                    if normalize_topology(topology) == "vm-single":
+                        _interactive_offer_vm_single_address_configuration(required=False)
                 continue
+
+            if normalize_topology(topology) == "vm-single" and _menu_action_requires_vm_single_address(choice):
+                if not _interactive_offer_vm_single_address_configuration(required=True):
+                    continue
 
             if choice == "B":
                 _run_legacy_menu_action("bootstrap")

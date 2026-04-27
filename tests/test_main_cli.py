@@ -1441,7 +1441,11 @@ class MainCliTests(unittest.TestCase):
 
     def test_menu_can_preselect_topology_with_shortcut_t(self):
         stdout = io.StringIO()
-        with mock.patch("builtins.input", side_effect=["T", "2", "Q"]), contextlib.redirect_stdout(stdout):
+        with mock.patch("builtins.input", side_effect=["T", "2", "Q"]), mock.patch.object(
+            main,
+            "_interactive_offer_vm_single_address_configuration",
+            return_value=True,
+        ) as vm_single_prompt, contextlib.redirect_stdout(stdout):
             result = main.main(
                 ["menu"],
                 adapter_registry=self.registry,
@@ -1457,6 +1461,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("Available topologies:", rendered)
         self.assertIn("Active topology set to vm-single.", rendered)
         self.assertIn("Topology: vm-single", rendered)
+        vm_single_prompt.assert_called_once_with(required=False)
 
     def test_menu_level_execution_uses_selected_topology_from_shortcut_t(self):
         stdout = io.StringIO()
@@ -1464,7 +1469,11 @@ class MainCliTests(unittest.TestCase):
             main,
             "run_level",
             return_value={"level": 1, "name": "Setup Cluster", "status": "completed", "result": {}},
-        ) as run_level, contextlib.redirect_stdout(stdout):
+        ) as run_level, mock.patch.object(
+            main,
+            "_interactive_offer_vm_single_address_configuration",
+            return_value=True,
+        ), contextlib.redirect_stdout(stdout):
             result = main.main(
                 ["menu"],
                 adapter_registry=self.registry,
@@ -1478,6 +1487,74 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["topology"], "vm-single")
         run_level.assert_called_once()
         self.assertEqual(run_level.call_args.kwargs["topology"], "vm-single")
+
+    def test_interactive_vm_single_address_configuration_updates_infrastructure_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "deployer.config")
+            example_path = os.path.join(tmpdir, "deployer.config.example")
+            with open(example_path, "w", encoding="utf-8") as handle:
+                handle.write("ENVIRONMENT=DEV\n")
+
+            stdout = io.StringIO()
+            with mock.patch.object(
+                main,
+                "_infrastructure_deployer_config_path",
+                return_value=config_path,
+            ), mock.patch.object(
+                main,
+                "_infrastructure_deployer_config_example_path",
+                return_value=example_path,
+            ), mock.patch.object(
+                main,
+                "_detect_vm_single_address_candidates",
+                return_value={
+                    "vm_ip": "198.51.100.20",
+                    "minikube_ip": "192.0.2.10",
+                    "recommended_address": "192.0.2.10",
+                    "recommended_source": "minikube",
+                },
+            ), mock.patch.object(
+                main,
+                "_interactive_confirm",
+                return_value=True,
+            ), contextlib.redirect_stdout(stdout):
+                result = main._interactive_offer_vm_single_address_configuration(required=True)
+
+            with open(config_path, "r", encoding="utf-8") as handle:
+                config_text = handle.read()
+
+        self.assertTrue(result)
+        self.assertIn("VM_EXTERNAL_IP=192.0.2.10\n", config_text)
+        self.assertIn("INGRESS_EXTERNAL_IP=192.0.2.10\n", config_text)
+        self.assertIn("Updated deployers/infrastructure/deployer.config", stdout.getvalue())
+
+    def test_menu_level3_vm_single_requires_address_configuration_before_running(self):
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["3", "Y", "Q"]), mock.patch.object(
+            main,
+            "_interactive_offer_vm_single_address_configuration",
+            return_value=True,
+        ) as vm_single_prompt, mock.patch.object(
+            main,
+            "_interactive_ensure_hosts_ready_for_levels",
+            return_value=True,
+        ), mock.patch.object(
+            main,
+            "run_levels",
+            return_value={"status": "completed", "levels": []},
+        ) as run_levels, contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu", "--topology", "vm-single"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        vm_single_prompt.assert_called_once_with(required=True)
+        run_levels.assert_called_once()
 
     def test_menu_level3_prompts_for_adapter_selection_when_missing(self):
         registry = {
