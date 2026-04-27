@@ -1721,6 +1721,36 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Level 3 dataspace pods ready", rendered)
         infrastructure.run.assert_called_once_with("kubectl get pods -n demoedc", check=False)
 
+    def test_wait_for_dataspace_level3_pods_tolerates_transient_error_before_running(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run = mock.Mock(return_value=object())
+        snapshots = iter([
+            "demo-registration-service-677f49d885-nbm85 0/1 Error 0 3s",
+            "demo-registration-service-677f49d885-nbm85 1/1 Running 1 5s",
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+        clock = iter([0.0, 0.0, 1.0, 2.0])
+
+        output = io.StringIO()
+        with mock.patch(
+            "adapters.inesdata.infrastructure.time.time",
+            side_effect=lambda: next(clock),
+        ), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+            return_value=None,
+        ), contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_dataspace_level3_pods(
+                "demo",
+                dataspace_name="demo",
+                timeout=3,
+            )
+
+        self.assertTrue(result)
+        rendered = output.getvalue()
+        self.assertIn("Waiting for transient Level 3 pod errors to recover", rendered)
+        self.assertIn("Level 3 dataspace pods ready", rendered)
+        infrastructure.run.assert_called_once_with("kubectl get pods -n demo", check=False)
+
 
 if __name__ == "__main__":
     unittest.main()

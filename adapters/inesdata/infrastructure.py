@@ -628,6 +628,10 @@ class INESDataInfrastructureAdapter:
         initializing or unhealthy; connector health belongs to Level 4.
         """
         timeout = timeout or self.config.TIMEOUT_NAMESPACE
+        transient_error_grace_seconds = max(
+            5,
+            min(int(getattr(self.config, "TIMEOUT_PORT", 30)), 15),
+        )
         dataspace = str(dataspace_name or namespace or "").strip()
         namespace = str(namespace or "").strip()
         if not namespace:
@@ -641,8 +645,10 @@ class INESDataInfrastructureAdapter:
         print(f"\nWaiting for Level 3 dataspace pods in namespace '{namespace}'...")
         start = time.time()
         last_stale_terminal_notice = None
+        transient_error_since = {}
 
         while True:
+            now = time.time()
             result = self.run_silent(f"kubectl get pods -n {shlex.quote(namespace)} --no-headers")
 
             if result:
@@ -663,12 +669,15 @@ class INESDataInfrastructureAdapter:
                 if selected:
                     all_ready = True
                     ready_running = []
-                    terminal_error = []
+                    fatal_terminal_error = []
+                    transient_error = []
                     progressing = []
+                    selected_names = set()
                     for columns in selected:
                         name = columns[0]
                         ready = columns[1] if len(columns) > 1 else ""
                         status = columns[2]
+                        selected_names.add(name)
 
                         is_ready = False
                         if status == "Running" and "/" in ready:
@@ -677,10 +686,18 @@ class INESDataInfrastructureAdapter:
                         elif status == "Running" and ready:
                             is_ready = True
 
-                        if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
-                            terminal_error.append((name, status))
+                        if status in ["CrashLoopBackOff", "ImagePullBackOff"]:
+                            fatal_terminal_error.append((name, status))
                             all_ready = False
                             continue
+
+                        if status == "Error":
+                            transient_error.append((name, status))
+                            transient_error_since.setdefault(name, now)
+                            all_ready = False
+                            continue
+
+                        transient_error_since.pop(name, None)
 
                         if status != "Running":
                             progressing.append((name, status))
@@ -694,6 +711,12 @@ class INESDataInfrastructureAdapter:
                         progressing.append((name, status))
                         all_ready = False
 
+                    transient_error_since = {
+                        name: first_seen
+                        for name, first_seen in transient_error_since.items()
+                        if name in selected_names
+                    }
+
                     if all_ready:
                         if ignored:
                             print(
@@ -704,9 +727,15 @@ class INESDataInfrastructureAdapter:
                         self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
                         return True
 
-                    if terminal_error and (ready_running or progressing):
+                    if fatal_terminal_error:
+                        name, status = fatal_terminal_error[0]
+                        print(f"\nLevel 3 pod in error state: {name} ({status})")
+                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                        return False
+
+                    if transient_error and (ready_running or progressing):
                         stale_terminal_notice = ", ".join(
-                            f"{name} ({status})" for name, status in terminal_error
+                            f"{name} ({status})" for name, status in transient_error
                         )
                         if stale_terminal_notice != last_stale_terminal_notice:
                             print(
@@ -714,13 +743,30 @@ class INESDataInfrastructureAdapter:
                                 f"{stale_terminal_notice}"
                             )
                             last_stale_terminal_notice = stale_terminal_notice
-                    elif terminal_error:
-                        name, status = terminal_error[0]
-                        print(f"\nLevel 3 pod in error state: {name} ({status})")
-                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
-                        return False
+                    elif transient_error:
+                        expired_transient_error = [
+                            (name, status)
+                            for name, status in transient_error
+                            if now - transient_error_since.get(name, now)
+                            >= transient_error_grace_seconds
+                        ]
+                        if expired_transient_error:
+                            name, status = expired_transient_error[0]
+                            print(f"\nLevel 3 pod in error state: {name} ({status})")
+                            self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                            return False
 
-            if time.time() - start > timeout:
+                        stale_terminal_notice = ", ".join(
+                            f"{name} ({status})" for name, status in transient_error
+                        )
+                        if stale_terminal_notice != last_stale_terminal_notice:
+                            print(
+                                "\nWaiting for transient Level 3 pod errors to recover: "
+                                f"{stale_terminal_notice}"
+                            )
+                            last_stale_terminal_notice = stale_terminal_notice
+
+            if now - start > timeout:
                 print("Timeout waiting for Level 3 dataspace pods")
                 self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
                 return False
