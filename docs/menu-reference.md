@@ -83,6 +83,12 @@ Permite dejar preseleccionado el adapter para la sesión actual del menú. Es un
 atajo opcional: si no lo usas, el framework te preguntará el adapter cuando una
 operación de `Level 3` a `Level 6` realmente lo necesite.
 
+`T - Select topology`
+
+Permite cambiar la topología activa para la sesión actual del menú. No escribe
+ningún valor en `deployer.config`: solo cambia el contexto interactivo entre
+`local`, `vm-single` y `vm-distributed` hasta que salgas del menú.
+
 `P - Preview deployment plan`
 
 Muestra un plan de despliegue sin modificar el entorno. Úsalo antes de ejecutar cambios destructivos o cuando quieras revisar dataspace, conectores, componentes, namespaces y hosts esperados. Si la operación necesita adapter y aún no se ha elegido uno, el menú lo pide en ese momento.
@@ -196,7 +202,12 @@ Sale del menú.
 
 ## Topología
 
-La topología se selecciona por CLI con `--topology`:
+La topología puede seleccionarse de dos maneras:
+
+- por CLI con `--topology`
+- desde el propio menú con `T - Select topology`
+
+Ejemplos por CLI:
 
 ```bash
 python3 main.py inesdata deploy --topology local
@@ -211,4 +222,6 @@ vm-single
 vm-distributed
 ```
 
-La opción visual `Topology` puede añadirse al menú cuando la selección interactiva de topología esté implementada. Mientras tanto, el menú usa la topología recibida por argumento o `local` por defecto.
+Dentro del menú, la topología activa se muestra en el encabezado y se aplica a
+todas las acciones de la sesión actual hasta que la cambies con `T` o salgas
+del menú.

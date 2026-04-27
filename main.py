@@ -4653,11 +4653,15 @@ def _run_interactive_full_levels(
     }
 
 
-def _print_interactive_menu(adapter_name, adapter_registry=None):
+def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local"):
     print()
     print("=" * 50)
     print("DATASPACE VALIDATION ENVIRONMENT")
     print("=" * 50)
+    print()
+    print(f"Topology: {topology}")
+    if adapter_name:
+        print(f"Adapter: {adapter_name}")
     print()
     print("[Full Deployment]")
     print("0 - Run All Levels (1-6) sequentially")
@@ -4668,6 +4672,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None):
     print()
     print("[Operations]")
     print("S - Select adapter")
+    print("T - Select topology")
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
     print("U - Show available access URLs")
@@ -4710,6 +4715,8 @@ def _print_interactive_help():
     print("[Operations]")
     print("S - Use when you want to preselect the adapter for upcoming Levels 3-6 or adapter-specific operations.")
     print("    If you skip it, the menu still asks automatically when an action needs an adapter.")
+    print("T - Use when you want to change the active topology for this menu session.")
+    print("    It switches between local, vm-single and vm-distributed without editing configuration files.")
     print("P - Use before deploying to inspect the plan without changing the environment.")
     print("    If Levels 3-6 need an adapter and none has been chosen yet, the menu asks for one automatically.")
     print("H - Use to inspect or apply local hosts entries needed by the selected adapter.")
@@ -4738,6 +4745,7 @@ def _print_interactive_help():
     print()
     print("[Compatibility]")
     print("Levels 1-2 belong to the shared local foundation; the menu asks for an adapter only when an operation needs Levels 3-6, unless you preselect one with S.")
+    print("The active topology shown in the header applies to all actions until you change it with T or exit the menu.")
     print("All developer and UI validation shortcuts are available directly from the main menu.")
     print("Q - Exit the menu.")
     print("=" * 50)
@@ -4767,6 +4775,33 @@ def _select_adapter_interactive(current_adapter, adapter_registry=None):
         print("Invalid selection.")
         return current_adapter
     return adapters[index]
+
+
+def _select_topology_interactive(current_topology="local", available_topologies=None):
+    topologies = list(available_topologies or SUPPORTED_TOPOLOGIES or (LOCAL_TOPOLOGY,))
+    normalized_current = normalize_topology(current_topology)
+
+    print()
+    print("Available topologies:")
+    for index, topology_name in enumerate(topologies, start=1):
+        marker = " (current)" if topology_name == normalized_current else ""
+        print(f"{index} - {topology_name}{marker}")
+    print("B - Back")
+
+    choice = _interactive_read("\nSelection: ").strip().upper()
+    if not choice or choice == "B":
+        return normalized_current
+
+    try:
+        index = int(choice) - 1
+    except ValueError:
+        print("Invalid selection.")
+        return normalized_current
+
+    if index < 0 or index >= len(topologies):
+        print("Invalid selection.")
+        return normalized_current
+    return topologies[index]
 
 
 def _print_adapter_selection_hint(adapter_name):
@@ -5168,12 +5203,12 @@ def run_interactive_menu(
         current_adapter = sorted(registry)[0]
 
     while True:
-        _print_interactive_menu(current_adapter, adapter_registry=registry)
+        _print_interactive_menu(current_adapter, adapter_registry=registry, topology=topology)
         choice = _interactive_read("\nSelection: ").strip().upper()
 
         if not choice or choice == "Q":
             print("\nExiting Dataspace Validation Environment\n")
-            return {"status": "exited", "adapter": current_adapter}
+            return {"status": "exited", "adapter": current_adapter, "topology": topology}
 
         try:
             if choice in {"?", "HELP"}:
@@ -5188,6 +5223,16 @@ def run_interactive_menu(
                 if selected_adapter != current_adapter:
                     current_adapter = selected_adapter
                     _print_adapter_selection_hint(current_adapter)
+                continue
+
+            if choice == "T":
+                selected_topology = _select_topology_interactive(
+                    topology,
+                    available_topologies=SUPPORTED_TOPOLOGIES,
+                )
+                if selected_topology != topology:
+                    topology = selected_topology
+                    print(f"Active topology set to {topology}.")
                 continue
 
             if choice == "B":

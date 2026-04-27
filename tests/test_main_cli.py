@@ -1306,9 +1306,12 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "exited")
         self.assertEqual(result["adapter"], "fake")
+        self.assertEqual(result["topology"], "local")
         self.assertIn("DATASPACE VALIDATION ENVIRONMENT", stdout.getvalue())
+        self.assertIn("Topology: local", stdout.getvalue())
         self.assertIn("[Full Deployment]", stdout.getvalue())
         self.assertIn("[Operations]", stdout.getvalue())
+        self.assertIn("T - Select topology", stdout.getvalue())
         self.assertIn("X - Recreate dataspace", stdout.getvalue())
         self.assertIn("[Developer]", stdout.getvalue())
         self.assertIn("L - Build and Deploy Local Images", stdout.getvalue())
@@ -1333,6 +1336,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("0 - Use for a fresh or full rebuild", stdout.getvalue())
         self.assertIn("4 - Use when connector deployments changed", stdout.getvalue())
         self.assertIn("S - Use when you want to preselect the adapter", stdout.getvalue())
+        self.assertIn("T - Use when you want to change the active topology", stdout.getvalue())
         self.assertIn("H - Use to inspect or apply local hosts entries", stdout.getvalue())
         self.assertIn("U - Use to print access URLs derived from the selected adapter config", stdout.getvalue())
         self.assertIn("X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
@@ -1430,9 +1434,50 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "exited")
         self.assertEqual(result["adapter"], "edc")
+        self.assertEqual(result["topology"], "local")
         self.assertIn("S - Select adapter", stdout.getvalue())
         self.assertIn("EDC adapter selected", stdout.getvalue())
         self.assertIn("Available adapters:", stdout.getvalue())
+
+    def test_menu_can_preselect_topology_with_shortcut_t(self):
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["T", "2", "Q"]), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertEqual(result["topology"], "vm-single")
+        rendered = stdout.getvalue()
+        self.assertIn("Available topologies:", rendered)
+        self.assertIn("Active topology set to vm-single.", rendered)
+        self.assertIn("Topology: vm-single", rendered)
+
+    def test_menu_level_execution_uses_selected_topology_from_shortcut_t(self):
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["T", "2", "1", "Y", "Q"]), mock.patch.object(
+            main,
+            "run_level",
+            return_value={"level": 1, "name": "Setup Cluster", "status": "completed", "result": {}},
+        ) as run_level, contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertEqual(result["topology"], "vm-single")
+        run_level.assert_called_once()
+        self.assertEqual(run_level.call_args.kwargs["topology"], "vm-single")
 
     def test_menu_level3_prompts_for_adapter_selection_when_missing(self):
         registry = {
