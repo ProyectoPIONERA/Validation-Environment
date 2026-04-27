@@ -144,6 +144,37 @@ PIONERA_DS_1_CONNECTORS=citycouncil,company \
 python3 main.py inesdata hosts --topology local --dry-run
 ```
 
+### Inicio Rápido Para `vm-single` En Una VM
+
+Si vas a ejecutar el framework dentro de una VM Ubuntu y tu objetivo es
+`vm-single`, empieza ajustando `deployers/infrastructure/deployer.config` con
+un bloque como este:
+
+```ini
+MINIKUBE_DRIVER=docker
+MINIKUBE_CPUS=3
+MINIKUBE_MEMORY=6144
+MINIKUBE_PROFILE=minikube
+
+VM_EXTERNAL_IP=192.0.2.10
+INGRESS_EXTERNAL_IP=192.0.2.10
+```
+
+Notas prácticas:
+
+- usa una IP real de tu VM o del ingress publicado por tu cluster; aquí se usa
+  `192.0.2.10` solo como ejemplo documental;
+- si tu VM tiene mas recursos dedicados al framework, puedes subir Minikube a
+  `4 CPU` y `12288 MB`;
+- si despues de `Level 1` el valor real de `minikube ip` es distinto de la IP
+  configurada, actualiza `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP` con la IP
+  efectiva del cluster;
+- para `vm-single`, entra directamente por:
+
+```bash
+python3 main.py menu --topology vm-single
+```
+
 ## Hosts Locales
 
 El framework puede planificar o aplicar entradas en el fichero `hosts` del
