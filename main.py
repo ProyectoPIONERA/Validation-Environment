@@ -4271,7 +4271,7 @@ def run_level(
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
     if normalized_topology != "local" and not (
-        normalized_topology == "vm-single" and level_id in {1, 2, 3}
+        normalized_topology == "vm-single" and level_id in {1, 2, 3, 4}
     ) and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "

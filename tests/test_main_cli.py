@@ -1889,13 +1889,13 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["urls"], {"keycloak": "http://keycloak.example.local"})
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
 
-    def test_run_level_refuses_non_local_deployment_levels_until_vm_execution_exists(self):
+    def test_run_level_refuses_non_local_level_five_until_vm_execution_exists(self):
         adapter = FakeAdapter()
 
         with self.assertRaises(RuntimeError) as error:
-            main.run_level(adapter, 4, deployer_name="fake", topology="vm-single")
+            main.run_level(adapter, 5, deployer_name="fake", topology="vm-single")
 
-        self.assertIn("Real Level 4 execution is not enabled", str(error.exception))
+        self.assertIn("Real Level 5 execution is not enabled", str(error.exception))
         self.assertEqual(adapter.calls, [])
 
     def test_run_level_one_uses_vm_single_cluster_preflight(self):
@@ -1949,6 +1949,17 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["result"]["mode"], "vm-single")
         adapter.deployment.deploy_dataspace_for_topology.assert_called_once_with(topology="vm-single")
         self.assertEqual(adapter.calls, [])
+
+    def test_run_level_four_uses_vm_single_connector_deployment(self):
+        adapter = FakeAdapter()
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 4, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 4)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"], ["conn-a", "conn-b"])
+        self.assertEqual(adapter.calls, ["deploy_connectors"])
 
     def test_run_level_four_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
