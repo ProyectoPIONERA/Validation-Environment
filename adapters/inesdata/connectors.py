@@ -830,6 +830,9 @@ class INESDataConnectorsAdapter:
         return []
 
     def update_connector_host_aliases(self, values_file, connectors, connector_name=None, ds_name=None, ds_namespace=None):
+        if not self._is_local_topology():
+            return
+
         minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
 
         with open(values_file) as f:
@@ -2436,9 +2439,12 @@ class INESDataConnectorsAdapter:
 
         all_connectors = list(all_connectors)
         print("\nAll connectors deployed or already existing\n")
-        print("Configuring connector hosts...")
-        connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
-        self.infrastructure.manage_hosts_entries(connector_hosts)
+        if self._is_local_topology():
+            print("Configuring connector hosts...")
+            connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
+            self.infrastructure.manage_hosts_entries(connector_hosts)
+        else:
+            print(f"Skipping connector hosts synchronization for topology '{self.config_adapter.topology}'.")
         self.wait_for_all_connectors(all_connectors)
         return all_connectors
 

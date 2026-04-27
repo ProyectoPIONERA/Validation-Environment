@@ -289,6 +289,37 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             ],
         )
 
+    def test_update_connector_host_aliases_skips_non_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            values_path = config.connector_values_file("conn-a-pilot")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"hostAliases": []}, handle, sort_keys=False)
+
+            run = mock.Mock(return_value="192.168.49.2")
+            adapter = INESDataConnectorsAdapter(
+                run=run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            adapter.update_connector_host_aliases(
+                values_path,
+                ["conn-a-pilot", "conn-b-pilot"],
+                connector_name="conn-a-pilot",
+            )
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(rendered["hostAliases"], [])
+        run.assert_not_called()
+
     def test_update_connector_layout_metadata_persists_namespace_plan_for_connector(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -1471,6 +1502,58 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.create_connector.assert_called_once_with("conn-a-demo", ["conn-a-demo"])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
             self.assertEqual(infra.host_entries, [])
+
+    def test_deploy_connectors_skips_host_sync_for_vm_single(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+            with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                handle.write("hostAliases: []\n")
+
+            class Infra:
+                def __init__(self):
+                    self.host_entries = None
+                    self.host_calls = 0
+
+                def manage_hosts_entries(self, entries):
+                    self.host_calls += 1
+                    self.host_entries = entries
+                    return None
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo"],
+                }
+            ]
+            adapter.connector_already_exists = lambda *_args, **_kwargs: True
+            adapter.connector_is_healthy = lambda *_args, **_kwargs: True
+            adapter.connector_database_credentials_valid = lambda *_args, **_kwargs: True
+            adapter.create_connector = mock.Mock()
+            adapter.wait_for_all_connectors = mock.Mock()
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, ["conn-a-demo"])
+            adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+            self.assertEqual(infra.host_calls, 0)
+            self.assertIsNone(infra.host_entries)
 
     def test_deploy_connectors_prepares_local_images_before_creating_connectors(self):
         with tempfile.TemporaryDirectory() as tmpdir:

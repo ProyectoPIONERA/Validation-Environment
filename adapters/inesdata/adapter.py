@@ -47,15 +47,24 @@ class InesdataAdapter:
     def _default_run_silent(cls, cmd, cwd=None):
         return cls._default_run(cmd, capture=True, silent=True, check=False, cwd=cwd)
 
-    def __init__(self, run=None, run_silent=None, auto_mode_getter=lambda: False, config_cls=None, dry_run=False):
+    def __init__(
+        self,
+        run=None,
+        run_silent=None,
+        auto_mode_getter=lambda: False,
+        config_cls=None,
+        dry_run=False,
+        topology="local",
+    ):
         run = run or self._default_run
         run_silent = run_silent or self._default_run_silent
         self.run = run
         self.run_silent = run_silent
         self.auto_mode_getter = auto_mode_getter
         self.dry_run = dry_run
+        self.topology = str(topology or "local").strip().lower() or "local"
         self.config = config_cls or InesdataConfig
-        self.config_adapter = INESDataConfigAdapter(self.config)
+        self.config_adapter = INESDataConfigAdapter(self.config, topology=self.topology)
         self.infrastructure = SharedFoundationInfrastructureAdapter(
             run=run,
             run_silent=run_silent,
