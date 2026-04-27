@@ -124,3 +124,22 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             "cluster_creation": "skipped",
             "checks": checks,
         }
+
+    def deploy_infrastructure_for_topology(self, topology=LOCAL_TOPOLOGY):
+        """Run Level 2 foundation deployment using the safest topology-aware path."""
+        normalized_topology = normalize_topology(topology)
+        if normalized_topology == LOCAL_TOPOLOGY:
+            return self.deploy_infrastructure()
+        if normalized_topology != VM_SINGLE_TOPOLOGY:
+            raise RuntimeError(
+                f"Level 2 deploy_infrastructure_for_topology() is not implemented for topology "
+                f"'{normalized_topology}' yet."
+            )
+
+        return self._deploy_infrastructure_runtime(
+            skip_hosts=True,
+            host_sync_message=(
+                "Skipping client-side hosts synchronization for topology 'vm-single'. "
+                "Use the dedicated hosts command if you need local name resolution."
+            ),
+        )
