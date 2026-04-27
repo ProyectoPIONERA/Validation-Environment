@@ -1898,6 +1898,26 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("Real Level 4 execution is not enabled", str(error.exception))
         self.assertEqual(adapter.calls, [])
 
+    def test_run_level_one_uses_vm_single_cluster_preflight(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.setup_cluster_preflight = mock.Mock(
+            return_value={
+                "status": "ready",
+                "mode": "preflight",
+                "topology": "vm-single",
+                "cluster_creation": "skipped",
+            }
+        )
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 1, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 1)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["mode"], "preflight")
+        adapter.infrastructure.setup_cluster_preflight.assert_called_once_with(topology="vm-single")
+
     def test_run_level_four_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
         adapter.config_adapter.load_deployer_config = lambda: {

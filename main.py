@@ -4270,7 +4270,9 @@ def run_level(
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
-    if normalized_topology != "local" and level_id in {1, 2, 3, 4, 5}:
+    if normalized_topology != "local" and not (
+        normalized_topology == "vm-single" and level_id == 1
+    ) and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
             "Use the deployer dry-run/hosts plan first, then enable VM execution once the topology-specific "
@@ -4278,10 +4280,19 @@ def run_level(
         )
 
     if level_id == 1:
-        setup_cluster = _resolve_adapter_callable(adapter, "setup_cluster")
-        if not callable(setup_cluster):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
-        result = setup_cluster()
+        if normalized_topology == "vm-single":
+            setup_cluster_preflight = _resolve_adapter_callable(adapter, "infrastructure.setup_cluster_preflight")
+            if not callable(setup_cluster_preflight):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster_preflight() "
+                    f"for topology '{normalized_topology}'"
+                )
+            result = setup_cluster_preflight(topology=topology)
+        else:
+            setup_cluster = _resolve_adapter_callable(adapter, "setup_cluster")
+            if not callable(setup_cluster):
+                raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
+            result = setup_cluster()
     elif level_id == 2:
         deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
         if not callable(deploy_infrastructure):

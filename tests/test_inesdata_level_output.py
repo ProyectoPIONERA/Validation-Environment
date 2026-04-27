@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from adapters.inesdata.deployment import INESDataDeploymentAdapter
 from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
+from adapters.shared.infrastructure import SharedFoundationInfrastructureAdapter
 
 
 class LevelOutputConfig:
@@ -188,6 +189,44 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "Warning: minikube reported a transient ingress addon enable failure",
             output.getvalue(),
         )
+
+    def test_setup_cluster_preflight_reports_ready_for_vm_single(self):
+        infrastructure = SharedFoundationInfrastructureAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_unix_environment = lambda: None
+
+        command_results = {
+            "which kubectl": "/usr/bin/kubectl",
+            "kubectl version --client=true": "Client Version: v1.30.0",
+            "which helm": "/usr/bin/helm",
+            "helm version --short": "v3.15.0+g1234567",
+            "kubectl config current-context": "vm-single-context",
+            "kubectl cluster-info": "Kubernetes control plane is running",
+            "kubectl get nodes --no-headers": "vm-node Ready control-plane 1d v1.30.0",
+            "kubectl get ingressclass -o name": "ingressclass.networking.k8s.io/nginx",
+            "kubectl get storageclass -o name": "storageclass.storage.k8s.io/standard",
+            "kubectl auth can-i create namespace": "yes",
+        }
+        infrastructure.run = mock.Mock(side_effect=lambda command, **_kwargs: command_results.get(command))
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.setup_cluster_preflight(topology="vm-single")
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["mode"], "preflight")
+        self.assertEqual(result["topology"], "vm-single")
+        self.assertEqual(result["current_context"], "vm-single-context")
+        self.assertEqual(result["cluster_creation"], "skipped")
+        self.assertIn("LEVEL 1 - CLUSTER PREFLIGHT", output.getvalue())
+        self.assertIn("Topology 'vm-single' uses an existing Kubernetes cluster.", output.getvalue())
+        self.assertEqual(result["checks"][-1]["label"], "create namespace permission")
+        self.assertEqual(result["checks"][-1]["status"], "passed")
 
     def test_deploy_infrastructure_does_not_print_complete_on_failure(self):
         infrastructure = self._make_infrastructure()
