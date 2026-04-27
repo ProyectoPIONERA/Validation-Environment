@@ -3048,6 +3048,50 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(cleanup_kwargs["mode"], "dry-run")
         self.assertTrue(cleanup_kwargs["report_enabled"])
 
+    def test_resolve_validation_runtime_keeps_legacy_fallback_for_local_topology(self):
+        adapter = FakeAdapter()
+        failing_orchestrator = mock.Mock()
+        failing_orchestrator.resolve_context.side_effect = ValueError("boom")
+
+        with mock.patch.object(
+            main,
+            "build_deployer_orchestrator",
+            return_value=failing_orchestrator,
+        ):
+            result = main._resolve_validation_runtime(
+                adapter,
+                deployer_name="fake",
+                topology="local",
+            )
+
+        self.assertEqual(result["connectors"], ["conn-a", "conn-b"])
+        self.assertIsNone(result["validation_profile"])
+        self.assertIsNone(result["deployer_context"])
+        self.assertIsNone(result["deployer_name"])
+
+    def test_resolve_validation_runtime_fails_clearly_for_vm_single_without_topology_address(self):
+        adapter = FakeAdapter()
+        failing_orchestrator = mock.Mock()
+        failing_orchestrator.resolve_context.side_effect = ValueError(
+            "Topology 'vm-single' requires VM_EXTERNAL_IP, VM_SINGLE_IP, VM_SINGLE_ADDRESS, HOSTS_ADDRESS, or INGRESS_EXTERNAL_IP."
+        )
+
+        with mock.patch.object(
+            main,
+            "build_deployer_orchestrator",
+            return_value=failing_orchestrator,
+        ):
+            with self.assertRaises(RuntimeError) as exc:
+                main._resolve_validation_runtime(
+                    adapter,
+                    deployer_name="fake",
+                    topology="vm-single",
+                )
+
+        self.assertIn("deployer-aware validation context", str(exc.exception))
+        self.assertIn("PIONERA_VM_EXTERNAL_IP", str(exc.exception))
+        self.assertIn("vm-single", str(exc.exception))
+
     def test_test_data_cleanup_requires_local_infra_access_for_local_topology(self):
         adapter = FakeAdapterWithInfrastructure()
         adapter.infrastructure = types.SimpleNamespace(
