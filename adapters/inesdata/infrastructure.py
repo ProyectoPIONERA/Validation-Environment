@@ -28,10 +28,16 @@ class INESDataInfrastructureAdapter:
         "PG_PORT",
         "KC_USER",
         "KC_PASSWORD",
+        "KC_INTERNAL_URL",
+        "KC_URL",
+        "KEYCLOAK_HOSTNAME",
+        "KEYCLOAK_ADMIN_HOSTNAME",
         "MINIO_USER",
         "MINIO_PASSWORD",
         "MINIO_ADMIN_USER",
         "MINIO_ADMIN_PASS",
+        "MINIO_HOSTNAME",
+        "MINIO_CONSOLE_HOSTNAME",
     )
     POSTGRES_SERVICE_PORT = 5432
 
@@ -1713,6 +1719,20 @@ class INESDataInfrastructureAdapter:
                 continue
             if current.get(key) != value:
                 updates[key] = value
+
+        domain_base = str(current.get("DOMAIN_BASE") or "").strip()
+        if domain_base:
+            expected_access = {
+                "KC_INTERNAL_URL": f"http://auth.{domain_base}",
+                "KC_URL": f"http://admin.auth.{domain_base}",
+                "KEYCLOAK_HOSTNAME": f"auth.{domain_base}",
+                "KEYCLOAK_ADMIN_HOSTNAME": f"admin.auth.{domain_base}",
+                "MINIO_HOSTNAME": f"minio.{domain_base}",
+                "MINIO_CONSOLE_HOSTNAME": f"console.minio-s3.{domain_base}",
+            }
+            for key, value in expected_access.items():
+                if current.get(key) != value:
+                    updates[key] = value
 
         if not updates:
             return False

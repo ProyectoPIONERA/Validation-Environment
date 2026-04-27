@@ -707,6 +707,100 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.reconcile_vault_state_for_local_runtime.assert_called_once()
         infrastructure.sync_common_credentials_from_kubernetes.assert_called_once()
 
+    def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_minikube_host_aliases(self):
+        infrastructure = self._make_infrastructure()
+        run = mock.Mock(return_value=object())
+        deployment = INESDataDeploymentAdapter(
+            run=run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = FakeConnectorsAdapter()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=True)
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_dataspace_level3_pods = lambda *_args, **_kwargs: True
+        infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
+        deployment.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+        deployment.restart_registration_service = lambda: None
+        deployment.update_helm_values_with_host_aliases = mock.Mock()
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.deployment.ensure_python_requirements",
+            lambda *_args, **_kwargs: None,
+        ), mock.patch(
+            "adapters.inesdata.deployment.requests.get",
+            return_value=mock.Mock(status_code=200),
+        ), mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+        ):
+            deployment.deploy_dataspace_for_topology("vm-single")
+
+        rendered = output.getvalue()
+        self.assertIn("Topology 'vm-single' uses an existing cluster ingress.", rendered)
+        self.assertNotIn("MINIKUBE TUNNEL REQUIRED", rendered)
+        self.assertIn("Next step: run Level 4", rendered)
+        infrastructure.ensure_local_infra_access.assert_called_once()
+        deployment.update_helm_values_with_host_aliases.assert_not_called()
+        self.assertFalse(any(call.args and call.args[0] == "minikube ip" for call in run.call_args_list))
+
+    def test_deploy_dataspace_prefers_kc_internal_url_for_keycloak_readiness(self):
+        infrastructure = self._make_infrastructure()
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = FakeConnectorsAdapter()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=True)
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_dataspace_level3_pods = lambda *_args, **_kwargs: True
+        infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
+        deployment.restart_registration_service = lambda: None
+        deployment.update_helm_values_with_host_aliases = mock.Mock()
+        deployment.wait_for_keycloak_admin_ready = mock.Mock(return_value=True)
+        deployment.config_adapter.load_deployer_config = lambda: {
+            "KC_URL": "http://admin.auth.dev.ed.dataspaceunit.upm",
+            "KC_INTERNAL_URL": "http://auth.dev.ed.dataspaceunit.upm",
+            "KC_USER": "admin",
+            "KC_PASSWORD": "secret",
+        }
+
+        with mock.patch(
+            "adapters.inesdata.deployment.ensure_python_requirements",
+            lambda *_args, **_kwargs: None,
+        ), mock.patch(
+            "adapters.inesdata.deployment.requests.get",
+            return_value=mock.Mock(status_code=200),
+        ) as mocked_get, mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+        ):
+            deployment.deploy_dataspace_for_topology("vm-single")
+
+        mocked_get.assert_called_once_with(
+            "http://auth.dev.ed.dataspaceunit.upm/realms/master",
+            timeout=5,
+        )
+        deployment.wait_for_keycloak_admin_ready.assert_called_once_with(
+            "http://auth.dev.ed.dataspaceunit.upm",
+            "admin",
+            "secret",
+        )
+
     def test_level3_postgres_cleanup_reconciles_residual_role_directly(self):
         deployment = INESDataDeploymentAdapter(
             run=self._run,
@@ -1008,7 +1102,15 @@ class InesdataLevelOutputTests(unittest.TestCase):
     def test_sync_common_credentials_from_kubernetes_updates_stale_local_values(self):
         infrastructure = self._make_infrastructure()
         with open(self.config.deployer_config_path(), "w", encoding="utf-8") as handle:
-            handle.write("PG_PASSWORD=custom-pg\nKC_PASSWORD=custom-kc\n")
+            handle.write(
+                "PG_PASSWORD=custom-pg\n"
+                "KC_PASSWORD=custom-kc\n"
+                "DOMAIN_BASE=dev.ed.dataspaceunit.upm\n"
+                "KC_INTERNAL_URL=http://keycloak.dev.ed.dataspaceunit.upm\n"
+                "KC_URL=http://keycloak-admin.dev.ed.dataspaceunit.upm\n"
+                "KEYCLOAK_HOSTNAME=keycloak.dev.ed.dataspaceunit.upm\n"
+                "KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.dev.ed.dataspaceunit.upm\n"
+            )
         secret_values = {
             ("common", "common-srvs-postgresql", "postgres-password"): "real-pg",
             ("common", "common-srvs-keycloak", "admin-user"): "admin",
@@ -1020,7 +1122,14 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         self.assertTrue(result)
         with open(self.config.deployer_config_path(), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "PG_PASSWORD=real-pg\nKC_PASSWORD=real-kc\nKC_USER=admin\n")
+            config_text = handle.read()
+        self.assertIn("PG_PASSWORD=real-pg\n", config_text)
+        self.assertIn("KC_PASSWORD=real-kc\n", config_text)
+        self.assertIn("KC_USER=admin\n", config_text)
+        self.assertIn("KC_INTERNAL_URL=http://auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KC_URL=http://admin.auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KEYCLOAK_HOSTNAME=auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm\n", config_text)
 
     def test_port_forward_service_waits_for_port_to_open(self):
         infrastructure = self._make_infrastructure()

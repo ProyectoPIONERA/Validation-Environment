@@ -470,22 +470,29 @@ class SharedDataspaceDeploymentAdapter:
         print("Verifying Keycloak access...")
         deployer_config = self.config_adapter.load_deployer_config()
         kc_url = deployer_config.get("KC_URL")
+        kc_runtime_url = deployer_config.get("KC_INTERNAL_URL") or kc_url
         kc_user = deployer_config.get("KC_USER")
         kc_password = deployer_config.get("KC_PASSWORD")
 
-        if not kc_url:
-            self._fail("KC_URL not defined in deployer.config")
+        if not kc_runtime_url:
+            self._fail("KC_INTERNAL_URL/KC_URL not defined in deployer.config")
         if not kc_user or not kc_password:
             self._fail("KC_USER/KC_PASSWORD not defined in deployer.config")
 
         try:
-            response = requests.get(f"{kc_url}/realms/master", timeout=5)
+            response = requests.get(f"{kc_runtime_url}/realms/master", timeout=5)
             if response.status_code not in (200, 302):
-                self._fail("Keycloak not ready", root_cause=f"unexpected HTTP status {response.status_code}")
+                self._fail(
+                    "Keycloak not ready",
+                    root_cause=(
+                        f"unexpected HTTP status {response.status_code} from "
+                        f"{kc_runtime_url}/realms/master"
+                    ),
+                )
         except Exception:
-            self._fail("Keycloak not accessible. Verify minikube tunnel")
+            self._fail("Keycloak not accessible. Verify ingress hostname resolution")
 
-        if not self.wait_for_keycloak_admin_ready(kc_url, kc_user, kc_password):
+        if not self.wait_for_keycloak_admin_ready(kc_runtime_url, kc_user, kc_password):
             self._fail("Keycloak admin API not ready", root_cause="admin authentication did not succeed in time")
 
         if not os.path.exists(self.config.venv_path()):
