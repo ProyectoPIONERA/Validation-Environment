@@ -450,6 +450,40 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("LEVEL 2 COMPLETE", rendered)
         infrastructure._common_services_release_recoverable_after_helm_failure.assert_called_once_with()
 
+    def test_deploy_infrastructure_waits_for_runtime_when_helm_times_out_but_release_is_still_converging(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure.deploy_helm_release = mock.Mock(return_value=False)
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure._common_services_release_status = mock.Mock(return_value="failed")
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(
+            return_value=False
+        )
+        infrastructure._common_services_has_terminal_runtime_errors = mock.Mock(return_value=False)
+        infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure._repair_failed_common_services_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure()
+
+        self.assertIn("LEVEL 2 COMPLETE", output.getvalue())
+        self.assertIn("cold-start runtime finished converging", output.getvalue())
+        infrastructure._common_services_release_recoverable_after_helm_failure.assert_called_once_with()
+        infrastructure._common_services_has_terminal_runtime_errors.assert_called_once_with()
+        infrastructure.wait_for_level2_service_pods.assert_called_once_with(
+            infrastructure.config.NS_COMMON,
+            timeout=180,
+        )
+
     def test_deploy_infrastructure_repairs_failed_helm_release_after_runtime_readiness(self):
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_wsl_docker_config = lambda: True
@@ -554,6 +588,20 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
 
         self.assertFalse(infrastructure._common_services_release_recoverable_after_helm_failure())
+
+    def test_common_services_has_terminal_runtime_errors_detects_non_hook_crashloop(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(
+            return_value="\n".join(
+                [
+                    "common-srvs-keycloak-keycloak-config-cli-abc 0/1 Error 0 10s",
+                    "common-srvs-keycloak-0 0/1 CrashLoopBackOff 3 30s",
+                    "common-srvs-minio-0 1/1 Running 0 1m",
+                ]
+            )
+        )
+
+        self.assertTrue(infrastructure._common_services_has_terminal_runtime_errors())
 
     def test_verify_common_services_ready_for_level3_fails_when_helm_release_failed(self):
         infrastructure = self._make_infrastructure()
