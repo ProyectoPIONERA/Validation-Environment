@@ -255,7 +255,7 @@ class EdcAdapterTests(unittest.TestCase):
 
 
 class EdcConnectorTopologyTests(unittest.TestCase):
-    def test_edc_host_aliases_are_empty_outside_local_topology(self):
+    def test_edc_host_aliases_use_vm_single_topology_address(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
         adapter.topology = "vm-single"
         adapter.config = type("Config", (), {"MINIKUBE_IP": "192.168.49.2"})
@@ -265,6 +265,7 @@ class EdcConnectorTopologyTests(unittest.TestCase):
             {
                 "topology": "vm-single",
                 "ds_domain_base": staticmethod(lambda: "dev.ds.dataspaceunit.upm"),
+                "load_deployer_config": staticmethod(lambda: {"VM_EXTERNAL_IP": "192.168.49.2"}),
             },
         )()
         adapter.run_silent = mock.Mock(return_value="192.168.49.2")
@@ -272,10 +273,21 @@ class EdcConnectorTopologyTests(unittest.TestCase):
 
         aliases = adapter._host_aliases(["conn-a-demo"], ds_name="demo", connector_name="conn-a-demo")
 
-        self.assertEqual(aliases, [])
+        self.assertEqual(
+            aliases,
+            [
+                {
+                    "ip": "192.168.49.2",
+                    "hostnames": [
+                        "keycloak.dev.ds.dataspaceunit.upm",
+                        "conn-a-demo.dev.ds.dataspaceunit.upm",
+                    ],
+                }
+            ],
+        )
         adapter.run_silent.assert_not_called()
 
-    def test_edc_level4_local_images_skip_build_outside_local_topology(self):
+    def test_edc_level4_local_images_prepare_build_in_vm_single_topology(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
         adapter.topology = "vm-single"
         adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-single"})()
@@ -287,13 +299,13 @@ class EdcConnectorTopologyTests(unittest.TestCase):
         ):
             self.assertTrue(adapter._maybe_prepare_level4_local_edc_images())
 
-        connector_mock.assert_not_called()
-        dashboard_mock.assert_not_called()
+        connector_mock.assert_called_once_with("auto")
+        dashboard_mock.assert_called_once_with("auto")
 
-    def test_edc_level4_local_images_fail_when_required_outside_local_topology(self):
+    def test_edc_level4_local_images_fail_when_required_outside_supported_topology(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
-        adapter.topology = "vm-single"
-        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-single"})()
+        adapter.topology = "vm-distributed"
+        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-distributed"})()
 
         with (
             mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="required"),

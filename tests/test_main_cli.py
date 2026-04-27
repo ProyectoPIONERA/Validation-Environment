@@ -2670,6 +2670,43 @@ class MainCliTests(unittest.TestCase):
         image_prepare.assert_called_once_with(adapter)
         dashboard_prepare.assert_called_once()
 
+    def test_safe_edc_execution_prepares_vm_single_image_when_missing_override(self):
+        adapter = FakeAdapter()
+        adapter.config_adapter.load_deployer_config = lambda: {
+            "KC_URL": "http://keycloak.local",
+            "DS_1_NAME": "fake-ds",
+            "EDC_DASHBOARD_ENABLED": "true",
+        }
+
+        with mock.patch.object(
+            main,
+            "_prepare_edc_local_connector_image_override",
+            return_value={
+                "image_name": "validation-environment/edc-connector",
+                "image_tag": "local",
+                "minikube_profile": "minikube",
+            },
+        ) as image_prepare, mock.patch.object(
+            main,
+            "_prepare_edc_local_dashboard_images",
+            return_value={"status": "prepared"},
+        ) as dashboard_prepare, mock.patch.dict(
+            os.environ,
+            {
+                "PIONERA_USE_DEPLOYER_DEPLOY": "true",
+                "PIONERA_EXECUTE_DEPLOYER_DEPLOY": "true",
+            },
+            clear=True,
+        ):
+            main._ensure_safe_edc_deployer_execution(
+                adapter,
+                deployer_name="edc",
+                topology="vm-single",
+            )
+
+        image_prepare.assert_called_once_with(adapter)
+        dashboard_prepare.assert_called_once()
+
     def test_deploy_command_refuses_real_edc_execution_with_partial_image_override(self):
         adapter = FakeAdapter()
 
