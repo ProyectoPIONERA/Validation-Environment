@@ -55,10 +55,11 @@ vm-single
 vm-distributed
 ```
 
-`local` es la ruta de despliegue normal y usa Minikube. Las topologías
-`vm-single` y `vm-distributed` ya forman parte del contexto del deployer y de la
-planificación de hosts. La ejecución real no-local queda protegida por guardas
-hasta que la ruta Kubernetes correspondiente esté implementada para cada nivel.
+`local` es la ruta de despliegue normal y usa Minikube. `vm-single` ya dispone
+de ejecución real para la ruta base del dataspace en `inesdata` y `edc`, y usa
+el mismo modelo `role-aligned` de namespaces. `vm-distributed` sigue formando
+parte del contexto del deployer y de la planificación de hosts, pero todavía
+permanece como topología planificada.
 
 ## Inicio Rápido
 

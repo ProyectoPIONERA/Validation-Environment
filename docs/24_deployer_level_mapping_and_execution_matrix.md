@@ -30,17 +30,18 @@ su deployer y topologia.
 | Topologia | Hosts | Despliegue real `1-5` | Validacion |
 | --- | --- | --- | --- |
 | `local` | habilitado | habilitado segun adapter | habilitada |
-| `vm-single` | planificado por perfil VM | protegido por guarda | no habilitada como ejecucion real completa |
+| `vm-single` | habilitado por perfil VM | habilitado segun adapter y nivel | habilitada |
 | `vm-distributed` | planificado por perfil VM | protegido por guarda | no habilitada como ejecucion real completa |
 
-La proteccion de VM evita ejecutar despliegues incompletos sobre infraestructura
-no preparada.
+La proteccion de VM sigue aplicando a `vm-distributed` y a rutas todavia no
+habilitadas para un adapter concreto, como `Level 5` real de componentes en
+`edc`.
 
 ## INESData
 
 | Nivel | Estado |
 | --- | --- |
-| `1` a `4` | flujo local operativo |
+| `1` a `4` | flujo operativo en `local` y `vm-single` |
 | `5` | componentes compartidos operativos cuando estan configurados |
 | `6` | Newman, Playwright INESData, storage, componentes y reportes |
 
@@ -48,8 +49,8 @@ no preparada.
 
 | Nivel | Estado |
 | --- | --- |
-| `1` a `3` | reutiliza infraestructura y servicios compartidos |
-| `4` | conectores EDC y dashboard EDC operativos con imagen explicita |
+| `1` a `3` | reutiliza infraestructura y servicios compartidos en `local` y `vm-single` |
+| `4` | conectores EDC y dashboard EDC operativos en `local` y `vm-single` |
 | `5` | componentes compartidos no habilitados todavia para despliegue real EDC |
 | `6` | Newman, Playwright EDC y storage operativos |
 

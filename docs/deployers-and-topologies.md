@@ -22,9 +22,9 @@ vm3    tres máquinas virtuales
 
 `local` es la topología por defecto y la ruta soportada para despliegue normal.
 
-`vm-single` y `vm-distributed` ya forman parte del contexto del deployer y de la planificación de `hosts`. La ejecución real de despliegue no-local queda protegida por guardas hasta que la ruta Kubernetes correspondiente esté implementada para el nivel seleccionado.
+`vm-single` y `vm-distributed` ya forman parte del contexto del deployer y de la planificación de `hosts`. `vm-single` ya dispone de ejecución real para la ruta base del dataspace en `inesdata` y `edc`; `vm-distributed` sigue protegido por guardas hasta que exista una ruta Kubernetes cerrada para ese perfil.
 
-Esta protección evita ejecutar suposiciones locales contra un entorno VM.
+Esta protección evita ejecutar suposiciones locales contra un entorno VM allí donde la topología todavía no está cerrada.
 
 ## Local
 
@@ -45,6 +45,12 @@ El diagrama local de referencia está disponible en [Inicio rápido](./getting-s
 ## VM Single
 
 `vm-single` representa una máquina virtual respaldada por Kubernetes.
+
+Estado actual del framework:
+
+- `inesdata`: `Level 1` a `Level 6` operativos, con `Level 5` compartido para componentes configurados
+- `edc`: `Level 1` a `Level 4` y `Level 6` operativos
+- `edc Level 5`: pendiente de soporte real de componentes
 
 La topología necesita una dirección externa, suministrada mediante una de estas variables:
 

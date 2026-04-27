@@ -12,11 +12,12 @@ framework.
 | Topologia canonica | Alias visual | Estado actual |
 | --- | --- | --- |
 | `local` | local | despliegue real habilitado |
-| `vm-single` | vm1 | planificacion de hosts y perfil de topologia |
+| `vm-single` | vm1 | despliegue real habilitado para la ruta base de `inesdata` y `edc` |
 | `vm-distributed` | vm3 | planificacion de hosts y perfil de topologia |
 
-La ejecucion real de `Level 1` a `Level 5` para VM esta protegida por guardas.
-Esto evita romper el flujo local mientras se consolidan los artefactos de VM.
+`vm-distributed` sigue protegido por guardas y `edc` mantiene pendiente `Level 5`
+real de componentes. El resto de la ruta ya puede ejecutarse en `vm-single`
+sin depender del perfil `local`.
 
 ## Interpretacion de `vm-distributed`
 
