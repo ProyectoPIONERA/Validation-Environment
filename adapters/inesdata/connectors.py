@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
+from deployers.shared.lib.topology import LOCAL_TOPOLOGY, normalize_topology
 from .config import INESDataConfigAdapter, InesdataConfig
 from runtime_dependencies import ensure_python_requirements
 
@@ -30,8 +31,54 @@ class INESDataConnectorsAdapter:
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
 
+    def _normalized_topology(self):
+        return normalize_topology(
+            getattr(self.config_adapter, "topology", None)
+            or getattr(self, "topology", None)
+            or LOCAL_TOPOLOGY
+        )
+
     def _is_local_topology(self):
-        return str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower() == "local"
+        return self._normalized_topology() == LOCAL_TOPOLOGY
+
+    def _resolve_level4_local_image_policy(self, *, mode, label):
+        normalized_mode = str(mode or "auto").strip().lower() or "auto"
+        topology = self._normalized_topology()
+        if topology == LOCAL_TOPOLOGY:
+            return {
+                "topology": topology,
+                "mode": normalized_mode,
+                "prepare_local_images": True,
+                "allow_local_image_overrides": True,
+                "message": "",
+                "error": "",
+            }
+
+        if normalized_mode == "required":
+            return {
+                "topology": topology,
+                "mode": normalized_mode,
+                "prepare_local_images": False,
+                "allow_local_image_overrides": False,
+                "message": "",
+                "error": (
+                    f"{label} local image preparation mode 'required' is only supported in "
+                    f"topology '{LOCAL_TOPOLOGY}'. Configure pullable image references before "
+                    f"running Level 4 on topology '{topology}'."
+                ),
+            }
+
+        return {
+            "topology": topology,
+            "mode": normalized_mode,
+            "prepare_local_images": False,
+            "allow_local_image_overrides": False,
+            "message": (
+                f"Skipping {label} local image preparation for topology '{topology}'. "
+                "Using chart-configured image references."
+            ),
+            "error": "",
+        }
 
     @staticmethod
     def _is_connector_interface_pod(pod_name):
@@ -172,6 +219,14 @@ class INESDataConnectorsAdapter:
             return self._is_truthy(configured_value)
 
         return self._role_aligned_connector_port_forward_fallback_implicit()
+
+    def _ensure_local_runtime_access_if_required(self):
+        if not self._is_local_topology():
+            return True
+        ensure_local_access = getattr(self.infrastructure, "ensure_local_infra_access", None)
+        if not callable(ensure_local_access):
+            return True
+        return bool(ensure_local_access())
 
     def _role_aligned_connector_port_forward_fallback_implicit(self):
         if not self._is_local_topology():
@@ -415,7 +470,7 @@ class INESDataConnectorsAdapter:
         if self._vault_management_token_verified:
             return True
 
-        if not self.infrastructure.ensure_local_infra_access():
+        if not self._ensure_local_runtime_access_if_required():
             return False
 
         if not self.infrastructure.ensure_vault_unsealed():
@@ -830,6 +885,9 @@ class INESDataConnectorsAdapter:
         return []
 
     def update_connector_host_aliases(self, values_file, connectors, connector_name=None, ds_name=None, ds_namespace=None):
+        if not self._is_local_topology():
+            return
+
         minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
 
         with open(values_file) as f:
@@ -939,6 +997,12 @@ class INESDataConnectorsAdapter:
             yaml.dump(values, f, sort_keys=False)
 
     def _local_connector_image_override_path(self):
+        policy = self._resolve_level4_local_image_policy(
+            mode=self._level4_local_images_mode(),
+            label="INESData connector",
+        )
+        if not policy["allow_local_image_overrides"]:
+            return None
         override_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "build",
@@ -948,6 +1012,82 @@ class INESDataConnectorsAdapter:
         if os.path.isfile(override_path) and os.path.getsize(override_path) > 0:
             return override_path
         return None
+
+    def _explicit_connector_image_override_path(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+
+        connector_image_name = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_IMAGE_NAME")
+            or os.environ.get("INESDATA_CONNECTOR_IMAGE_NAME")
+            or deployer_config.get("INESDATA_CONNECTOR_IMAGE_NAME")
+        )
+        connector_image_tag = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_IMAGE_TAG")
+            or os.environ.get("INESDATA_CONNECTOR_IMAGE_TAG")
+            or deployer_config.get("INESDATA_CONNECTOR_IMAGE_TAG")
+        )
+        interface_image_name = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+            or os.environ.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+            or deployer_config.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+        )
+        interface_image_tag = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+            or os.environ.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+            or deployer_config.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+        )
+
+        connector_name_present = bool(str(connector_image_name or "").strip())
+        connector_tag_present = bool(str(connector_image_tag or "").strip())
+        interface_name_present = bool(str(interface_image_name or "").strip())
+        interface_tag_present = bool(str(interface_image_tag or "").strip())
+
+        if connector_name_present != connector_tag_present:
+            raise RuntimeError(
+                "INESData connector image override is incomplete. Set both "
+                "PIONERA_INESDATA_CONNECTOR_IMAGE_NAME and PIONERA_INESDATA_CONNECTOR_IMAGE_TAG."
+            )
+
+        if interface_name_present != interface_tag_present:
+            raise RuntimeError(
+                "INESData connector interface image override is incomplete. Set both "
+                "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME and "
+                "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG."
+            )
+
+        override = {}
+        if connector_name_present and connector_tag_present:
+            override["connector"] = {
+                "image": {
+                    "name": str(connector_image_name).strip(),
+                    "tag": str(connector_image_tag).strip(),
+                }
+            }
+
+        if interface_name_present and interface_tag_present:
+            override["connectorInterface"] = {
+                "image": {
+                    "name": str(interface_image_name).strip(),
+                    "tag": str(interface_image_tag).strip(),
+                }
+            }
+
+        if not override:
+            return None
+
+        override_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "build",
+            "runtime-overrides",
+        )
+        os.makedirs(override_dir, exist_ok=True)
+        override_path = os.path.join(override_dir, "connector-image-overrides.yaml")
+        with open(override_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(override, handle, sort_keys=False)
+        return override_path
 
     def _framework_root_dir(self):
         resolver = getattr(self.config, "script_dir", None)
@@ -983,6 +1123,17 @@ class INESDataConnectorsAdapter:
 
     def _maybe_prepare_level4_local_connector_images(self, namespace):
         mode = self._level4_local_images_mode()
+        policy = self._resolve_level4_local_image_policy(
+            mode=mode,
+            label="INESData connector",
+        )
+        if policy["error"]:
+            print(policy["error"])
+            return False
+        if not policy["prepare_local_images"]:
+            if policy["message"]:
+                print(policy["message"])
+            return True
         if mode == "disabled":
             print("Level 4 local INESData connector images disabled by configuration.")
             return True
@@ -2125,6 +2276,10 @@ class INESDataConnectorsAdapter:
         if local_image_override:
             values_files.append(local_image_override)
             print(f"Using local connector image overrides: {local_image_override}")
+        explicit_image_override = self._explicit_connector_image_override_path()
+        if explicit_image_override:
+            values_files.append(explicit_image_override)
+            print(f"Using explicit INESData connector image overrides: {explicit_image_override}")
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
@@ -2384,7 +2539,7 @@ class INESDataConnectorsAdapter:
             if stale:
                 print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
                 if not infra_ready:
-                    if not self.infrastructure.ensure_local_infra_access():
+                    if not self._ensure_local_runtime_access_if_required():
                         return []
                     infra_ready = True
                 if not vault_ready:
@@ -2436,9 +2591,12 @@ class INESDataConnectorsAdapter:
 
         all_connectors = list(all_connectors)
         print("\nAll connectors deployed or already existing\n")
-        print("Configuring connector hosts...")
-        connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
-        self.infrastructure.manage_hosts_entries(connector_hosts)
+        if self._is_local_topology():
+            print("Configuring connector hosts...")
+            connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
+            self.infrastructure.manage_hosts_entries(connector_hosts)
+        else:
+            print(f"Skipping connector hosts synchronization for topology '{self.config_adapter.topology}'.")
         self.wait_for_all_connectors(all_connectors)
         return all_connectors
 

@@ -90,6 +90,12 @@ class EDCDeploymentAdapter:
         self._stage_shared_dataspace_runtime_artifacts()
         return result
 
+    def deploy_dataspace_for_topology(self, topology="local"):
+        self._delegate.connectors_adapter = self.connectors_adapter
+        result = self._delegate.deploy_dataspace_for_topology(topology=topology)
+        self._stage_shared_dataspace_runtime_artifacts()
+        return result
+
     def build_recreate_dataspace_plan(self):
         self._delegate.connectors_adapter = self.connectors_adapter
         return self._delegate.build_recreate_dataspace_plan()

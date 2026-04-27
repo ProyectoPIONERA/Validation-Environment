@@ -1184,6 +1184,49 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         self.assertEqual(infrastructure.deploy_calls, [])
         adapter._maybe_prepare_level6_local_image.assert_not_called()
 
+    def test_components_skip_local_runtime_access_and_hosts_sync_for_vm_single(self):
+        infrastructure = FakeInfrastructure()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=False)
+        infrastructure.manage_hosts_entries = mock.Mock(return_value=True)
+        adapter = self._make_shared_adapter(infrastructure=infrastructure)
+        adapter.config_adapter.topology = "vm-single"
+        adapter.config_adapter.load_deployer_config = mock.Mock(return_value={})
+        adapter._cleanup_components = mock.Mock()
+        adapter._cleanup_legacy_component_releases = mock.Mock(return_value=None)
+        adapter.prepare_component_runtime_metadata = mock.Mock(
+            return_value=[
+                {
+                    "component": "ontology-hub",
+                    "normalized_component": "ontology-hub",
+                    "excluded": False,
+                    "error": None,
+                    "chart_dir": "/tmp/chart",
+                    "values_file": "/tmp/chart/values-demo.yaml",
+                    "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                    "release_name": "demo-ontology-hub",
+                }
+            ]
+        )
+        adapter.prepare_component_deployment_plan = mock.Mock(
+            return_value={
+                "component": "ontology-hub",
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp/chart",
+                "values_file": "/tmp/chart/values-demo.yaml",
+                "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ontology-hub",
+                "override_plan": {"has_override": True},
+            }
+        )
+        adapter.deploy_shared_component_runtime = mock.Mock(return_value={"component": "ontology-hub"})
+
+        with mock.patch("adapters.inesdata.components.os.path.exists", return_value=True):
+            result = adapter.COMPONENTS(["ontology-hub"])
+
+        self.assertEqual(result["deployed"], ["ontology-hub"])
+        infrastructure.ensure_local_infra_access.assert_not_called()
+        infrastructure.manage_hosts_entries.assert_not_called()
+
     def test_infer_component_urls_prefers_shared_runtime_resolver_when_available(self):
         adapter = self._make_shared_adapter()
         adapter.config_adapter.load_deployer_config = mock.Mock(return_value={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"})

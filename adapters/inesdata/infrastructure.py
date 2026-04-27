@@ -628,6 +628,10 @@ class INESDataInfrastructureAdapter:
         initializing or unhealthy; connector health belongs to Level 4.
         """
         timeout = timeout or self.config.TIMEOUT_NAMESPACE
+        transient_error_grace_seconds = max(
+            5,
+            min(int(getattr(self.config, "TIMEOUT_PORT", 30)), 15),
+        )
         dataspace = str(dataspace_name or namespace or "").strip()
         namespace = str(namespace or "").strip()
         if not namespace:
@@ -641,8 +645,10 @@ class INESDataInfrastructureAdapter:
         print(f"\nWaiting for Level 3 dataspace pods in namespace '{namespace}'...")
         start = time.time()
         last_stale_terminal_notice = None
+        transient_error_since = {}
 
         while True:
+            now = time.time()
             result = self.run_silent(f"kubectl get pods -n {shlex.quote(namespace)} --no-headers")
 
             if result:
@@ -663,12 +669,15 @@ class INESDataInfrastructureAdapter:
                 if selected:
                     all_ready = True
                     ready_running = []
-                    terminal_error = []
+                    fatal_terminal_error = []
+                    transient_error = []
                     progressing = []
+                    selected_names = set()
                     for columns in selected:
                         name = columns[0]
                         ready = columns[1] if len(columns) > 1 else ""
                         status = columns[2]
+                        selected_names.add(name)
 
                         is_ready = False
                         if status == "Running" and "/" in ready:
@@ -677,10 +686,18 @@ class INESDataInfrastructureAdapter:
                         elif status == "Running" and ready:
                             is_ready = True
 
-                        if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
-                            terminal_error.append((name, status))
+                        if status in ["CrashLoopBackOff", "ImagePullBackOff"]:
+                            fatal_terminal_error.append((name, status))
                             all_ready = False
                             continue
+
+                        if status == "Error":
+                            transient_error.append((name, status))
+                            transient_error_since.setdefault(name, now)
+                            all_ready = False
+                            continue
+
+                        transient_error_since.pop(name, None)
 
                         if status != "Running":
                             progressing.append((name, status))
@@ -694,6 +711,12 @@ class INESDataInfrastructureAdapter:
                         progressing.append((name, status))
                         all_ready = False
 
+                    transient_error_since = {
+                        name: first_seen
+                        for name, first_seen in transient_error_since.items()
+                        if name in selected_names
+                    }
+
                     if all_ready:
                         if ignored:
                             print(
@@ -704,9 +727,15 @@ class INESDataInfrastructureAdapter:
                         self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
                         return True
 
-                    if terminal_error and (ready_running or progressing):
+                    if fatal_terminal_error:
+                        name, status = fatal_terminal_error[0]
+                        print(f"\nLevel 3 pod in error state: {name} ({status})")
+                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                        return False
+
+                    if transient_error and (ready_running or progressing):
                         stale_terminal_notice = ", ".join(
-                            f"{name} ({status})" for name, status in terminal_error
+                            f"{name} ({status})" for name, status in transient_error
                         )
                         if stale_terminal_notice != last_stale_terminal_notice:
                             print(
@@ -714,13 +743,30 @@ class INESDataInfrastructureAdapter:
                                 f"{stale_terminal_notice}"
                             )
                             last_stale_terminal_notice = stale_terminal_notice
-                    elif terminal_error:
-                        name, status = terminal_error[0]
-                        print(f"\nLevel 3 pod in error state: {name} ({status})")
-                        self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
-                        return False
+                    elif transient_error:
+                        expired_transient_error = [
+                            (name, status)
+                            for name, status in transient_error
+                            if now - transient_error_since.get(name, now)
+                            >= transient_error_grace_seconds
+                        ]
+                        if expired_transient_error:
+                            name, status = expired_transient_error[0]
+                            print(f"\nLevel 3 pod in error state: {name} ({status})")
+                            self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
+                            return False
 
-            if time.time() - start > timeout:
+                        stale_terminal_notice = ", ".join(
+                            f"{name} ({status})" for name, status in transient_error
+                        )
+                        if stale_terminal_notice != last_stale_terminal_notice:
+                            print(
+                                "\nWaiting for transient Level 3 pod errors to recover: "
+                                f"{stale_terminal_notice}"
+                            )
+                            last_stale_terminal_notice = stale_terminal_notice
+
+            if now - start > timeout:
                 print("Timeout waiting for Level 3 dataspace pods")
                 self.run(f"kubectl get pods -n {shlex.quote(namespace)}", check=False)
                 return False
@@ -1528,6 +1574,13 @@ class INESDataInfrastructureAdapter:
         minio_values = values.get("minio", {})
         add_row_value("MINIO_USER", "minio.rootUser", minio_user, minio_values.get("rootUser"))
         add_row_value("MINIO_PASSWORD", "minio.rootPassword", minio_password, minio_values.get("rootPassword"))
+        domain_base = config.get("DOMAIN_BASE")
+        if domain_base:
+            add_row_value("DOMAIN_BASE", "keycloak.ingress.hostname", f"auth.{domain_base}", values["keycloak"]["ingress"]["hostname"])
+            add_row_value("DOMAIN_BASE", "keycloak.adminIngress.hostname", f"admin.auth.{domain_base}", values["keycloak"]["adminIngress"]["hostname"])
+            add_row_value("DOMAIN_BASE", "minio.ingress.hosts", f"minio.{domain_base}", values.get("minio", {}).get("ingress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("ingress", {}).get("hosts") else "")
+            add_row_value("DOMAIN_BASE", "minio.consoleIngress.hosts", f"console.minio-s3.{domain_base}", values.get("minio", {}).get("consoleIngress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("consoleIngress", {}).get("hosts") else "")
+
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
@@ -1556,6 +1609,36 @@ class INESDataInfrastructureAdapter:
             values["minio"]["rootUser"] = minio_user
         if minio_password:
             values["minio"]["rootPassword"] = minio_password
+
+        domain_base = config.get("DOMAIN_BASE")
+        if domain_base:
+            values["keycloak"]["ingress"]["hostname"] = f"auth.{domain_base}"
+            values["keycloak"]["adminIngress"]["hostname"] = f"admin.auth.{domain_base}"
+            
+            master_json_str = values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"]
+            try:
+                import json
+                master_json_data = json.loads(master_json_str)
+                if "attributes" not in master_json_data:
+                    master_json_data["attributes"] = {}
+                master_json_data["attributes"]["frontendUrl"] = f"http://admin.auth.{domain_base}"
+                values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"] = json.dumps(master_json_data, indent=2)
+            except Exception as e:
+                print(f"Warning: Could not update frontendUrl in master.json: {e}")
+
+            if "minio" in values and "ingress" in values["minio"]:
+                values["minio"]["ingress"]["hosts"] = [f"minio.{domain_base}"]
+            if "minio" in values and "consoleIngress" in values["minio"]:
+                values["minio"]["consoleIngress"]["hosts"] = [f"console.minio-s3.{domain_base}"]
+
+            # Also update TLS hosts if they exist
+            if "extraTls" in values["keycloak"]["ingress"]:
+                for tls in values["keycloak"]["ingress"]["extraTls"]:
+                    tls["hosts"] = [f"auth.{domain_base}"]
+            if "extraTls" in values["keycloak"]["adminIngress"]:
+                for tls in values["keycloak"]["adminIngress"]["extraTls"]:
+                    tls["hosts"] = [f"admin.auth.{domain_base}"]
+
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
             if item["name"] == "KEYCLOAK_USER":
@@ -2461,7 +2544,7 @@ class INESDataInfrastructureAdapter:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         self.complete_level(1)
 
-    def deploy_infrastructure(self):
+    def _deploy_infrastructure_runtime(self, *, skip_hosts=False, host_sync_message=None):
         self.announce_level(2, "DEPLOY COMMON SERVICES")
 
         if not self.ensure_wsl_docker_config():
@@ -2489,9 +2572,12 @@ class INESDataInfrastructureAdapter:
         self.sync_common_values()
         self.reconcile_common_services_source_of_truth()
 
-        print("\nConfiguring hosts...")
-        hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
-        self.manage_hosts_entries(hosts_entries)
+        if skip_hosts:
+            print(f"\n{host_sync_message or 'Skipping hosts synchronization for this topology.'}")
+        else:
+            print("\nConfiguring hosts...")
+            hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
+            self.manage_hosts_entries(hosts_entries)
 
         self.add_helm_repos()
 
@@ -2553,6 +2639,9 @@ class INESDataInfrastructureAdapter:
             self._fail("Level 2 did not leave common services ready for Level 3", root_cause=root_cause)
 
         self.complete_level(2)
+
+    def deploy_infrastructure(self):
+        self._deploy_infrastructure_runtime()
 
     def describe(self) -> str:
         return "INESDataInfrastructureAdapter contains infrastructure logic for INESData."

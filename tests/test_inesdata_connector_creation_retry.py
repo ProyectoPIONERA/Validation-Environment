@@ -289,6 +289,37 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             ],
         )
 
+    def test_update_connector_host_aliases_skips_non_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            values_path = config.connector_values_file("conn-a-pilot")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"hostAliases": []}, handle, sort_keys=False)
+
+            run = mock.Mock(return_value="192.168.49.2")
+            adapter = INESDataConnectorsAdapter(
+                run=run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            adapter.update_connector_host_aliases(
+                values_path,
+                ["conn-a-pilot", "conn-b-pilot"],
+                connector_name="conn-a-pilot",
+            )
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(rendered["hostAliases"], [])
+        run.assert_not_called()
+
     def test_update_connector_layout_metadata_persists_namespace_plan_for_connector(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -1129,6 +1160,178 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             ):
                 self.assertTrue(adapter._verify_vault_management_token(ds_name="demo"))
 
+    def test_prepare_vault_management_access_skips_local_infra_check_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class ConfigAdapterWithVault(ConnectorRetryConfigAdapter):
+                def __init__(self, root):
+                    super().__init__(root)
+                    self.topology = "vm-single"
+
+                def load_deployer_config(self):
+                    values = super().load_deployer_config()
+                    values.update(
+                        {
+                            "VT_URL": "http://vault.remote:8200",
+                            "VT_TOKEN": "root-token",
+                        }
+                    )
+                    return values
+
+            class Infra:
+                def __init__(self):
+                    self.local_calls = 0
+                    self.vault_calls = 0
+
+                def ensure_local_infra_access(self):
+                    self.local_calls += 1
+                    return False
+
+                def ensure_vault_unsealed(self):
+                    self.vault_calls += 1
+                    return True
+
+            infra = Infra()
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=ConfigAdapterWithVault(tmpdir),
+                config_cls=config,
+            )
+
+            with mock.patch.object(adapter, "_verify_vault_management_token", return_value=True):
+                self.assertTrue(adapter._prepare_vault_management_access(ds_name="demo"))
+
+            self.assertEqual(infra.local_calls, 0)
+            self.assertEqual(infra.vault_calls, 1)
+
+    def test_level4_local_image_policy_disables_local_overrides_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            policy = adapter._resolve_level4_local_image_policy(
+                mode="auto",
+                label="INESData connector",
+            )
+
+            self.assertEqual(policy["topology"], "vm-single")
+            self.assertFalse(policy["prepare_local_images"])
+            self.assertFalse(policy["allow_local_image_overrides"])
+            self.assertIn("chart-configured image references", policy["message"])
+
+    def test_local_connector_image_override_path_is_ignored_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            with (
+                mock.patch("adapters.inesdata.connectors.os.path.isfile", return_value=True),
+                mock.patch("adapters.inesdata.connectors.os.path.getsize", return_value=1),
+            ):
+                self.assertIsNone(adapter._local_connector_image_override_path())
+
+    def test_explicit_connector_image_override_path_writes_runtime_override_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=ConnectorRetryConfigAdapter(tmpdir),
+                config_cls=config,
+            )
+
+            fake_module_file = os.path.join(tmpdir, "connectors.py")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PIONERA_INESDATA_CONNECTOR_IMAGE_NAME": "registry.example/inesdata-connector",
+                    "PIONERA_INESDATA_CONNECTOR_IMAGE_TAG": "vm-single-fix",
+                    "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME": "registry.example/inesdata-interface",
+                    "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG": "vm-single-ui",
+                },
+                clear=False,
+            ), mock.patch("adapters.inesdata.connectors.__file__", fake_module_file):
+                override_path = adapter._explicit_connector_image_override_path()
+
+            self.assertIsNotNone(override_path)
+            with open(override_path, encoding="utf-8") as handle:
+                override = yaml.safe_load(handle)
+
+            self.assertEqual(
+                override["connector"]["image"],
+                {"name": "registry.example/inesdata-connector", "tag": "vm-single-fix"},
+            )
+            self.assertEqual(
+                override["connectorInterface"]["image"],
+                {"name": "registry.example/inesdata-interface", "tag": "vm-single-ui"},
+            )
+
+    def test_explicit_connector_image_override_path_fails_when_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=ConnectorRetryConfigAdapter(tmpdir),
+                config_cls=config,
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"PIONERA_INESDATA_CONNECTOR_IMAGE_NAME": "registry.example/inesdata-connector"},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "INESData connector image override is incomplete"):
+                    adapter._explicit_connector_image_override_path()
+
+    def test_level4_local_connector_images_fail_when_required_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            with (
+                mock.patch.object(adapter, "_level4_local_images_mode", return_value="required"),
+                mock.patch.object(adapter, "_framework_root_dir") as root_dir_mock,
+            ):
+                self.assertFalse(adapter._maybe_prepare_level4_local_connector_images("demo"))
+
+            root_dir_mock.assert_not_called()
+
     def test_create_connector_retries_after_initial_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
@@ -1471,6 +1674,58 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.create_connector.assert_called_once_with("conn-a-demo", ["conn-a-demo"])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
             self.assertEqual(infra.host_entries, [])
+
+    def test_deploy_connectors_skips_host_sync_for_vm_single(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            config_adapter.topology = "vm-single"
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+            with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                handle.write("hostAliases: []\n")
+
+            class Infra:
+                def __init__(self):
+                    self.host_entries = None
+                    self.host_calls = 0
+
+                def manage_hosts_entries(self, entries):
+                    self.host_calls += 1
+                    self.host_entries = entries
+                    return None
+
+            infra = Infra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo"],
+                }
+            ]
+            adapter.connector_already_exists = lambda *_args, **_kwargs: True
+            adapter.connector_is_healthy = lambda *_args, **_kwargs: True
+            adapter.connector_database_credentials_valid = lambda *_args, **_kwargs: True
+            adapter.create_connector = mock.Mock()
+            adapter.wait_for_all_connectors = mock.Mock()
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, ["conn-a-demo"])
+            adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+            self.assertEqual(infra.host_calls, 0)
+            self.assertIsNone(infra.host_entries)
 
     def test_deploy_connectors_prepares_local_images_before_creating_connectors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1910,6 +2165,95 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             with (
                 mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None),
                 mock.patch.object(adapter, "_local_connector_image_override_path", return_value=override_path),
+            ):
+                created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
+
+            self.assertTrue(created)
+            self.assertEqual(len(infra.deploy_calls), 1)
+            args, kwargs = infra.deploy_calls[0]
+            self.assertEqual(args[0], "conn-a-demo-demo")
+            self.assertEqual(args[1], "demo")
+            self.assertEqual(args[2], ["values-conn-a-demo.yaml", override_path])
+            self.assertEqual(kwargs["cwd"], config.connector_dir())
+
+    def test_create_connector_uses_explicit_image_override_during_initial_deploy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            def fake_run(cmd, **_kwargs):
+                if "bootstrap.py connector create" in cmd:
+                    with open(config.connector_values_file("conn-a-demo"), "w", encoding="utf-8") as handle:
+                        handle.write("hostAliases: []\n")
+                return object()
+
+            class ConfigAdapterWithoutExplicitImageOverrides(ConnectorRetryConfigAdapter):
+                def load_deployer_config(self):
+                    return {
+                        "KC_URL": "http://keycloak-admin.local",
+                        "KC_USER": "admin",
+                        "KC_PASSWORD": "secret",
+                    }
+
+            class RecordingInfra:
+                def __init__(self):
+                    self.deploy_calls = []
+
+                @staticmethod
+                def ensure_local_infra_access():
+                    return True
+
+                @staticmethod
+                def ensure_vault_unsealed():
+                    return True
+
+                def deploy_helm_release(self, *args, **kwargs):
+                    self.deploy_calls.append((args, kwargs))
+                    return True
+
+                @staticmethod
+                def wait_for_namespace_pods(*_args, **_kwargs):
+                    return True
+
+                @staticmethod
+                def manage_hosts_entries(*_args, **_kwargs):
+                    return None
+
+                @staticmethod
+                def get_pod_by_name(*_args, **_kwargs):
+                    return "minio"
+
+            infra = RecordingInfra()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=ConfigAdapterWithoutExplicitImageOverrides(tmpdir),
+                config_cls=config,
+            )
+            adapter.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+            adapter.setup_minio_bucket = lambda *_args, **_kwargs: True
+            adapter.force_clean_postgres_db = lambda *_args, **_kwargs: None
+            adapter.update_connector_host_aliases = lambda *_args, **_kwargs: None
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+
+            override_path = os.path.join(tmpdir, "connector-image-overrides.yaml")
+            with open(override_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "connector:\n"
+                    "  image:\n"
+                    "    name: registry.example/inesdata-connector\n"
+                    "    tag: vm-single-fix\n"
+                )
+
+            with (
+                mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None),
+                mock.patch.object(adapter, "_local_connector_image_override_path", return_value=None),
+                mock.patch.object(adapter, "_explicit_connector_image_override_path", return_value=override_path),
             ):
                 created = adapter.create_connector("conn-a-demo", ["conn-a-demo", "conn-b-demo"])
 

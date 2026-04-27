@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from adapters.inesdata.deployment import INESDataDeploymentAdapter
 from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
+from adapters.shared.infrastructure import SharedFoundationInfrastructureAdapter
 
 
 class LevelOutputConfig:
@@ -188,6 +189,77 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "Warning: minikube reported a transient ingress addon enable failure",
             output.getvalue(),
         )
+
+    def test_setup_cluster_preflight_reports_ready_for_vm_single(self):
+        infrastructure = SharedFoundationInfrastructureAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_unix_environment = lambda: None
+
+        command_results = {
+            "which kubectl": "/usr/bin/kubectl",
+            "kubectl version --client=true": "Client Version: v1.30.0",
+            "which helm": "/usr/bin/helm",
+            "helm version --short": "v3.15.0+g1234567",
+            "kubectl config current-context": "vm-single-context",
+            "kubectl cluster-info": "Kubernetes control plane is running",
+            "kubectl get nodes --no-headers": "vm-node Ready control-plane 1d v1.30.0",
+            "kubectl get ingressclass -o name": "ingressclass.networking.k8s.io/nginx",
+            "kubectl get storageclass -o name": "storageclass.storage.k8s.io/standard",
+            "kubectl auth can-i create namespace": "yes",
+        }
+        infrastructure.run = mock.Mock(side_effect=lambda command, **_kwargs: command_results.get(command))
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.setup_cluster_preflight(topology="vm-single")
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["mode"], "preflight")
+        self.assertEqual(result["topology"], "vm-single")
+        self.assertEqual(result["current_context"], "vm-single-context")
+        self.assertEqual(result["cluster_creation"], "skipped")
+        self.assertIn("LEVEL 1 - CLUSTER PREFLIGHT", output.getvalue())
+        self.assertIn("Topology 'vm-single' uses an existing Kubernetes cluster.", output.getvalue())
+        self.assertEqual(result["checks"][-1]["label"], "create namespace permission")
+        self.assertEqual(result["checks"][-1]["status"], "passed")
+
+    def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
+        infrastructure = SharedFoundationInfrastructureAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = mock.Mock()
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure.deploy_helm_release = mock.Mock(return_value=True)
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure._repair_failed_common_services_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure_for_topology("vm-single")
+
+        rendered = output.getvalue()
+        self.assertIn("Skipping client-side hosts synchronization for topology 'vm-single'.", rendered)
+        self.assertIn("LEVEL 2 COMPLETE", rendered)
+        infrastructure.manage_hosts_entries.assert_not_called()
+        infrastructure.deploy_helm_release.assert_called_once()
 
     def test_deploy_infrastructure_does_not_print_complete_on_failure(self):
         infrastructure = self._make_infrastructure()
@@ -756,6 +828,50 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "admin",
             "secret",
         )
+
+    def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_minikube_host_aliases(self):
+        infrastructure = self._make_infrastructure()
+        run = mock.Mock(return_value=object())
+        deployment = INESDataDeploymentAdapter(
+            run=run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = FakeConnectorsAdapter()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=True)
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_dataspace_level3_pods = lambda *_args, **_kwargs: True
+        infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
+        deployment.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+        deployment.restart_registration_service = lambda: None
+        deployment.update_helm_values_with_host_aliases = mock.Mock()
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.deployment.ensure_python_requirements",
+            lambda *_args, **_kwargs: None,
+        ), mock.patch(
+            "adapters.inesdata.deployment.requests.get",
+            return_value=mock.Mock(status_code=200),
+        ), mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+        ):
+            deployment.deploy_dataspace_for_topology("vm-single")
+
+        rendered = output.getvalue()
+        self.assertIn("Topology 'vm-single' uses an existing cluster ingress.", rendered)
+        self.assertNotIn("MINIKUBE TUNNEL REQUIRED", rendered)
+        self.assertIn("Next step: run Level 4", rendered)
+        infrastructure.ensure_local_infra_access.assert_called_once()
+        deployment.update_helm_values_with_host_aliases.assert_not_called()
+        self.assertFalse(any(call.args and call.args[0] == "minikube ip" for call in run.call_args_list))
 
     def test_level3_postgres_cleanup_reconciles_residual_role_directly(self):
         deployment = INESDataDeploymentAdapter(
@@ -1604,6 +1720,36 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Waiting for stale Level 3 rollout pods to disappear", rendered)
         self.assertIn("Level 3 dataspace pods ready", rendered)
         infrastructure.run.assert_called_once_with("kubectl get pods -n demoedc", check=False)
+
+    def test_wait_for_dataspace_level3_pods_tolerates_transient_error_before_running(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run = mock.Mock(return_value=object())
+        snapshots = iter([
+            "demo-registration-service-677f49d885-nbm85 0/1 Error 0 3s",
+            "demo-registration-service-677f49d885-nbm85 1/1 Running 1 5s",
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+        clock = iter([0.0, 0.0, 1.0, 2.0])
+
+        output = io.StringIO()
+        with mock.patch(
+            "adapters.inesdata.infrastructure.time.time",
+            side_effect=lambda: next(clock),
+        ), mock.patch(
+            "adapters.inesdata.infrastructure.time.sleep",
+            return_value=None,
+        ), contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_dataspace_level3_pods(
+                "demo",
+                dataspace_name="demo",
+                timeout=3,
+            )
+
+        self.assertTrue(result)
+        rendered = output.getvalue()
+        self.assertIn("Waiting for transient Level 3 pod errors to recover", rendered)
+        self.assertIn("Level 3 dataspace pods ready", rendered)
+        infrastructure.run.assert_called_once_with("kubectl get pods -n demo", check=False)
 
 
 if __name__ == "__main__":

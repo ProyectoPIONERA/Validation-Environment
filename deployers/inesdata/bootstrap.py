@@ -687,6 +687,24 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
         if str(config.get("EDC_DASHBOARD_PROXY_AUTH_MODE", "")).strip().lower() == "oidc-bff":
             urls["edc_dashboard_oidc_login"] = f"{connector_base}/edc-dashboard-api/auth/login"
     urls.update(common_access_urls(dataspace, environment, config))
+
+    public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
+    if public_hostname:
+        # Extract short connector name: conn-citycouncil-demo → citycouncil
+        short_name = connector
+        if short_name.startswith("conn-"):
+            short_name = short_name[len("conn-"):]
+        if short_name.endswith("-demo"):
+            short_name = short_name[: -len("-demo")]
+        base = f"https://{public_hostname}"
+        urls["external_connector_interface"] = f"{base}/c/{short_name}/inesdata-connector-interface/"
+        urls["external_management_api"] = f"{base}/c/{short_name}/management"
+        urls["external_shared_api"] = f"{base}/c/{short_name}/shared"
+        urls["external_federated_catalog"] = f"{base}/c/{short_name}/federatedcatalog"
+        urls["external_keycloak_realm"] = f"{base}/auth/realms/{dataspace}"
+        urls["external_keycloak_admin_console"] = f"{base}/auth/admin/{dataspace}/console/"
+        urls["external_minio_console"] = f"{base}/s3-console/"
+
     return urls
 
 
@@ -838,6 +856,18 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             keycloak_admin.create_realm(payload={"realm": realm_name, "enabled": True})
     keycloak_admin.change_current_realm(realm_name)
 
+    # Set realm frontendUrl if PUBLIC_HOSTNAME is configured (enables external HTTPS access via nginx proxy)
+    config = load_effective_deployer_config()
+    public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
+    if public_hostname:
+        click.echo(f'  + Setting realm frontendUrl to https://{public_hostname}/auth')
+        try:
+            realm_rep = keycloak_admin.get_realm(realm_name)
+            realm_rep.setdefault("attributes", {})["frontendUrl"] = f"https://{public_hostname}/auth"
+            keycloak_admin.update_realm(realm_name, payload=realm_rep)
+        except Exception as e:
+            click.echo(f'  ! Warning: could not set frontendUrl: {e}')
+
     # Check if the client scope exists and create it if it doesn't
     click.echo(f'  + Creating scope "dataspaceunit-dataspace-audience"' )
     client_scopes = keycloak_admin.get_client_scopes()
@@ -928,7 +958,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                 "post.logout.redirect.uris": "+",
                 "backchannel.logout.session.required": True
             },
-            "defaultClientScopes":["dataspaceunit-dataspace-audience","dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
+            "defaultClientScopes":["dataspaceunit-dataspace-audience", "dataspaceunit-nbf-claim", "profile", "email", "acr", "web-origins", "roles"]
         }
         keycloak_admin.create_client(payload=new_client)
 

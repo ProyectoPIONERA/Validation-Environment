@@ -235,6 +235,12 @@ class EdcAdapterTests(unittest.TestCase):
         adapter = InesdataAdapter(dry_run=True)
         self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
 
+    def test_inesdata_adapter_propagates_topology_to_config_adapter(self):
+        adapter = InesdataAdapter(dry_run=True, topology="vm-single")
+        self.assertEqual(adapter.topology, "vm-single")
+        self.assertEqual(adapter.config_adapter.topology, "vm-single")
+        self.assertFalse(adapter.connectors._is_local_topology())
+
     def test_inesdata_adapter_uses_shared_components_adapter(self):
         adapter = InesdataAdapter(dry_run=True)
         self.assertIsInstance(adapter.components, SharedComponentsAdapter)
@@ -246,6 +252,70 @@ class EdcAdapterTests(unittest.TestCase):
     def test_edc_adapter_uses_shared_components_adapter(self):
         adapter = EdcAdapter(dry_run=True)
         self.assertIsInstance(adapter.components, SharedComponentsAdapter)
+
+
+class EdcConnectorTopologyTests(unittest.TestCase):
+    def test_edc_host_aliases_use_vm_single_topology_address(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config = type("Config", (), {"MINIKUBE_IP": "192.168.49.2"})
+        adapter.config_adapter = type(
+            "ConfigAdapter",
+            (),
+            {
+                "topology": "vm-single",
+                "ds_domain_base": staticmethod(lambda: "dev.ds.dataspaceunit.upm"),
+                "load_deployer_config": staticmethod(lambda: {"VM_EXTERNAL_IP": "192.168.49.2"}),
+            },
+        )()
+        adapter.run_silent = mock.Mock(return_value="192.168.49.2")
+        adapter._host_alias_domains_for_dataspace = mock.Mock(return_value=["keycloak.dev.ds.dataspaceunit.upm"])
+
+        aliases = adapter._host_aliases(["conn-a-demo"], ds_name="demo", connector_name="conn-a-demo")
+
+        self.assertEqual(
+            aliases,
+            [
+                {
+                    "ip": "192.168.49.2",
+                    "hostnames": [
+                        "keycloak.dev.ds.dataspaceunit.upm",
+                        "conn-a-demo.dev.ds.dataspaceunit.upm",
+                    ],
+                }
+            ],
+        )
+        adapter.run_silent.assert_not_called()
+
+    def test_edc_level4_local_images_prepare_build_in_vm_single_topology(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-single"})()
+
+        with (
+            mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="auto"),
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_connector_image") as connector_mock,
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_dashboard_images") as dashboard_mock,
+        ):
+            self.assertTrue(adapter._maybe_prepare_level4_local_edc_images())
+
+        connector_mock.assert_called_once_with("auto")
+        dashboard_mock.assert_called_once_with("auto")
+
+    def test_edc_level4_local_images_fail_when_required_outside_supported_topology(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-distributed"
+        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-distributed"})()
+
+        with (
+            mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="required"),
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_connector_image") as connector_mock,
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_dashboard_images") as dashboard_mock,
+        ):
+            self.assertFalse(adapter._maybe_prepare_level4_local_edc_images())
+
+        connector_mock.assert_not_called()
+        dashboard_mock.assert_not_called()
 
     def test_edc_preview_components_marks_pending_support_without_deployable_urls(self):
         adapter = EdcAdapter(dry_run=True)
@@ -771,8 +841,10 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         chart_dir,
         requirements_path,
         native_bootstrap=False,
+        topology="local",
     ):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = topology
         adapter.config = type(
             "RuntimePrerequisitesConfig",
             (),
@@ -794,6 +866,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             "RuntimePrerequisitesConfigAdapter",
             (),
             {
+                "topology": topology,
                 "edc_connector_dir": lambda _self: chart_dir,
                 "edc_bootstrap_script": lambda _self: os.path.join(repo_dir, "bootstrap.py"),
             },
@@ -1005,6 +1078,42 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         requirements_mock.assert_not_called()
         infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
         infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
+
+    def test_prepare_runtime_prerequisites_skips_local_infra_check_for_vm_single(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_dir = os.path.join(tmpdir, "repo")
+            venv_dir = os.path.join(tmpdir, "venv")
+            chart_dir = os.path.join(tmpdir, "chart")
+            requirements_path = os.path.join(tmpdir, "requirements.txt")
+            os.makedirs(repo_dir)
+            os.makedirs(venv_dir)
+            os.makedirs(chart_dir)
+            with open(os.path.join(repo_dir, "bootstrap.py"), "w", encoding="utf-8") as handle:
+                handle.write("")
+            with open(requirements_path, "w", encoding="utf-8") as handle:
+                handle.write("")
+
+            adapter = self._make_runtime_prerequisites_adapter(
+                tmpdir,
+                repo_dir,
+                venv_dir,
+                chart_dir,
+                requirements_path,
+                topology="vm-single",
+            )
+            infrastructure = mock.Mock()
+            infrastructure.ensure_local_infra_access.return_value = False
+            infrastructure.ensure_vault_unsealed.return_value = True
+            adapter.infrastructure = infrastructure
+            adapter._verify_vault_management_token = lambda: True
+
+            with mock.patch("adapters.edc.connectors.ensure_python_requirements") as requirements_mock:
+                result = adapter._prepare_runtime_prerequisites()
+
+        self.assertEqual(result, (repo_dir, "/usr/bin/python3"))
+        requirements_mock.assert_called_once()
+        infrastructure.ensure_local_infra_access.assert_not_called()
+        infrastructure.ensure_vault_unsealed.assert_called_once()
 
     def test_connector_values_payload_maps_edc_runtime_and_shared_services(self):
         with tempfile.TemporaryDirectory() as tmpdir:

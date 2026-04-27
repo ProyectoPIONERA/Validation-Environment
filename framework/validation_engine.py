@@ -96,6 +96,7 @@ class ValidationEngine:
             "dataspace": dataspace,
             "keycloakUrl": keycloak_url,
             "keycloakClientId": "dataspace-users",
+            "providerParticipantId": provider,
             "providerProtocolAddress": self._protocol_address(provider),
             "consumerProtocolAddress": self._protocol_address(consumer),
             "e2e_expected_provider_bucket": f"{dataspace}-{provider}",
@@ -225,4 +226,3 @@ class ValidationEngine:
 
     def describe(self) -> str:
         return "ValidationEngine runs dataspace validation tests."
-

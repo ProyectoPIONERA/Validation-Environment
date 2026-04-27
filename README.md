@@ -125,6 +125,15 @@ deployers/infrastructure/deployer.config.example
 deployers/inesdata/deployer.config.example
 ```
 
+La variable `PUBLIC_HOSTNAME` en `deployers/infrastructure/deployer.config` controla
+el hostname público del entorno. Cuando está configurada, `bootstrap.py` la usa
+automáticamente para establecer el `frontendUrl` de Keycloak, lo que asegura que
+los tokens JWT contengan el issuer correcto para acceso externo vía HTTPS:
+
+```text
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+```
+
 También puedes sobreescribir valores con variables `PIONERA_*`, por ejemplo:
 
 ```bash
@@ -336,6 +345,35 @@ validación. Si vas a validar conectores ya desplegados, ejecuta `Level 6` desde
 el mismo checkout que ejecutó `Level 4`, porque las credenciales locales
 generadas para Keycloak, MinIO y conectores viven bajo
 `deployers/<adapter>/deployments/`.
+
+## Acceso Externo (entorno VM/PIONERA)
+
+En entornos desplegados en VM, los conectores y servicios pueden requerir un
+proxy externo para quedar accesibles desde fuera de la máquina host. El
+framework ya soporta `PUBLIC_HOSTNAME` para ajustar el `frontendUrl` de
+Keycloak, y además incluye un script operativo para preparar el acceso público
+vía nginx en la VM:
+
+```bash
+cd deployers/inesdata/scripts
+bash setup-nginx-proxy.sh [cluster_ip] [vm_ip] [public_hostname] [internal_domain]
+```
+
+Ejemplo:
+
+```bash
+bash setup-nginx-proxy.sh 192.168.49.2 192.168.122.64 org1.pionera.oeg.fi.upm.es pionera.oeg.fi.upm.es
+```
+
+El script:
+
+1. instala nginx e iptables persistentes en la VM;
+2. configura reglas de redirección hacia el clúster;
+3. ajusta el acceso a UIs de conectores, `/auth/` y `/s3-console/`;
+4. ayuda a publicar un hostname externo coherente para browser, Keycloak y MinIO.
+
+La arquitectura y las URLs de referencia están documentadas en
+[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md).
 
 ## CLI Principal
 
@@ -605,6 +643,7 @@ Orden recomendado:
 - [Validación](./docs/validation.md)
 - [Desarrollo y testing](./docs/development-and-testing.md)
 - [Troubleshooting](./docs/troubleshooting.md)
+- [Acceso externo a conectores (VM/PIONERA)](./docs/acceso_externo_conectores_pionera.md)
 
 ## Referencias Técnicas
 

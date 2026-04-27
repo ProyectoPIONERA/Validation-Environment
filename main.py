@@ -49,6 +49,7 @@ from deployers.infrastructure.lib.hosts_manager import (
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
+from deployers.infrastructure.lib.topology import LOCAL_TOPOLOGY, normalize_topology
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
 from validation.orchestration.hosts import (
     ensure_public_endpoints_accessible,
@@ -2488,9 +2489,12 @@ def _run_test_data_cleanup_if_enabled(adapter, connectors, deployer_context, exp
             "reason": "missing-deployer-context",
         }
 
+    context_topology = normalize_topology(
+        deployer_context.get("topology") if isinstance(deployer_context, dict) else getattr(deployer_context, "topology", None)
+    )
     infrastructure = getattr(adapter, "infrastructure", None)
     ensure_local_access = getattr(infrastructure, "ensure_local_infra_access", None)
-    if callable(ensure_local_access) and not ensure_local_access():
+    if context_topology == LOCAL_TOPOLOGY and callable(ensure_local_access) and not ensure_local_access():
         raise RuntimeError(
             "Pre-validation test data cleanup failed. Local infrastructure access is not ready."
         )
@@ -2608,6 +2612,19 @@ def _legacy_metrics_runtime(adapter):
     }
 
 
+def _vm_single_validation_context_failure_message(exc):
+    detail = str(exc or "").strip()
+    message = (
+        "Could not resolve deployer-aware validation context for topology 'vm-single'. "
+        "Configure PIONERA_VM_EXTERNAL_IP, PIONERA_VM_SINGLE_IP, "
+        "PIONERA_VM_SINGLE_ADDRESS, PIONERA_HOSTS_ADDRESS, or "
+        "PIONERA_INGRESS_EXTERNAL_IP before running Level 6 or 'validate'."
+    )
+    if detail:
+        return f"{message} Original error: {detail}"
+    return message
+
+
 def _resolve_validation_runtime(adapter, deployer_name=None, deployer_registry=None, topology="local"):
     if not _should_use_deployer_validate():
         return _legacy_validation_runtime(adapter)
@@ -2625,9 +2642,11 @@ def _resolve_validation_runtime(adapter, deployer_name=None, deployer_registry=N
         connectors = orchestrator.get_cluster_connectors(context)
         if not connectors:
             connectors = _resolve_connectors(adapter)
-    except Exception:
+    except Exception as exc:
         if _env_flag("PIONERA_REQUIRE_DEPLOYER_VALIDATE", default=False):
             raise
+        if normalize_topology(topology) == "vm-single":
+            raise RuntimeError(_vm_single_validation_context_failure_message(exc)) from exc
         return _legacy_validation_runtime(adapter)
 
     return {
@@ -3080,6 +3099,10 @@ def _prepare_edc_local_dashboard_images(adapter, config):
     }
 
 
+def _edc_topology_supports_local_image_preparation(topology):
+    return normalize_topology(topology or LOCAL_TOPOLOGY) in {LOCAL_TOPOLOGY, "vm-single"}
+
+
 def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="local"):
     normalized_deployer = str(deployer_name or _infer_deployer_name_from_adapter(adapter)).strip().lower()
     if normalized_deployer != "edc":
@@ -3133,7 +3156,11 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="l
     ).strip()
 
     if not explicit_image_name or not explicit_image_tag:
-        if normalized_topology == "local" and not explicit_image_name and not explicit_image_tag:
+        if (
+            _edc_topology_supports_local_image_preparation(normalized_topology)
+            and not explicit_image_name
+            and not explicit_image_tag
+        ):
             prepared = _prepare_edc_local_connector_image_override(adapter)
             explicit_image_name = prepared["image_name"]
             explicit_image_tag = prepared["image_tag"]
@@ -3155,7 +3182,7 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="l
             f"'{default_image_name}:{default_image_tag}'. Provide an explicit working image override."
         )
 
-    if normalized_topology == "local":
+    if _edc_topology_supports_local_image_preparation(normalized_topology):
         _prepare_edc_local_dashboard_images(adapter, config)
 
 
@@ -4270,7 +4297,9 @@ def run_level(
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
-    if normalized_topology != "local" and level_id in {1, 2, 3, 4, 5}:
+    if normalized_topology != "local" and not (
+        normalized_topology == "vm-single" and level_id in {1, 2, 3, 4, 5}
+    ) and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
             "Use the deployer dry-run/hosts plan first, then enable VM execution once the topology-specific "
@@ -4278,20 +4307,55 @@ def run_level(
         )
 
     if level_id == 1:
-        setup_cluster = _resolve_adapter_callable(adapter, "setup_cluster")
-        if not callable(setup_cluster):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
-        result = setup_cluster()
+        if normalized_topology == "vm-single":
+            setup_cluster_preflight = _resolve_adapter_callable(adapter, "infrastructure.setup_cluster_preflight")
+            if not callable(setup_cluster_preflight):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster_preflight() "
+                    f"for topology '{normalized_topology}'"
+                )
+            result = setup_cluster_preflight(topology=topology)
+        else:
+            setup_cluster = _resolve_adapter_callable(adapter, "setup_cluster")
+            if not callable(setup_cluster):
+                raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
+            result = setup_cluster()
     elif level_id == 2:
-        deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
-        if not callable(deploy_infrastructure):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 2 deploy_infrastructure()")
-        result = deploy_infrastructure()
+        if normalized_topology == "vm-single":
+            deploy_infrastructure = _resolve_adapter_callable(
+                adapter,
+                "infrastructure.deploy_infrastructure_for_topology",
+            )
+            if not callable(deploy_infrastructure):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 2 "
+                    f"deploy_infrastructure_for_topology() for topology '{normalized_topology}'"
+                )
+            result = deploy_infrastructure(topology=topology)
+        else:
+            deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
+            if not callable(deploy_infrastructure):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 2 deploy_infrastructure()"
+                )
+            result = deploy_infrastructure()
     elif level_id == 3:
-        deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
-        if not callable(deploy_dataspace):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 3 deploy_dataspace()")
-        result = deploy_dataspace()
+        if normalized_topology == "vm-single":
+            deploy_dataspace = _resolve_adapter_callable(
+                adapter,
+                "deployment.deploy_dataspace_for_topology",
+            )
+            if not callable(deploy_dataspace):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 3 "
+                    f"deploy_dataspace_for_topology() for topology '{normalized_topology}'"
+                )
+            result = deploy_dataspace(topology=topology)
+        else:
+            deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
+            if not callable(deploy_dataspace):
+                raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 3 deploy_dataspace()")
+            result = deploy_dataspace()
     elif level_id == 4:
         if resolved_deployer_name == "edc":
             _ensure_safe_edc_deployer_execution(

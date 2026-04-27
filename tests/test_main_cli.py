@@ -1889,14 +1889,98 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["urls"], {"keycloak": "http://keycloak.example.local"})
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
 
-    def test_run_level_refuses_non_local_deployment_levels_until_vm_execution_exists(self):
+    def test_run_level_five_uses_vm_single_component_deployment(self):
+        adapter = FakeAdapter()
+        fake_orchestrator = mock.Mock()
+        fake_orchestrator.resolve_context = mock.Mock(
+            return_value={"topology": "vm-single", "components": ["ontology-hub"]}
+        )
+        fake_orchestrator.deployer = mock.Mock()
+        fake_orchestrator.deployer.deploy_components = mock.Mock(
+            return_value={
+                "deployed": ["ontology-hub"],
+                "urls": {"ontology-hub": "http://ontology-hub.example.local"},
+            }
+        )
+
+        with mock.patch.object(main, "build_deployer_orchestrator", return_value=fake_orchestrator), mock.patch.object(
+            main,
+            "_resolve_level_access_urls",
+            return_value={},
+        ):
+            result = main.run_level(adapter, 5, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 5)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["deployed"], ["ontology-hub"])
+        fake_orchestrator.resolve_context.assert_called_once_with(topology="vm-single")
+        fake_orchestrator.deployer.deploy_components.assert_called_once_with(
+            {"topology": "vm-single", "components": ["ontology-hub"]}
+        )
+        self.assertEqual(adapter.calls, [])
+
+    def test_run_level_one_uses_vm_single_cluster_preflight(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.setup_cluster_preflight = mock.Mock(
+            return_value={
+                "status": "ready",
+                "mode": "preflight",
+                "topology": "vm-single",
+                "cluster_creation": "skipped",
+            }
+        )
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 1, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 1)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["mode"], "preflight")
+        adapter.infrastructure.setup_cluster_preflight.assert_called_once_with(topology="vm-single")
+
+    def test_run_level_two_uses_vm_single_topology_deploy_infrastructure(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.deploy_infrastructure_for_topology = mock.Mock(
+            return_value={"status": "deployed", "mode": "vm-single"}
+        )
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 2, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 2)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["mode"], "vm-single")
+        adapter.infrastructure.deploy_infrastructure_for_topology.assert_called_once_with(topology="vm-single")
+        self.assertEqual(adapter.calls, [])
+
+    def test_run_level_three_uses_vm_single_topology_deploy_dataspace(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.deployment = mock.Mock()
+        adapter.deployment.deploy_dataspace_for_topology = mock.Mock(
+            return_value={"status": "deployed", "mode": "vm-single"}
+        )
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 3, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 3)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["mode"], "vm-single")
+        adapter.deployment.deploy_dataspace_for_topology.assert_called_once_with(topology="vm-single")
+        self.assertEqual(adapter.calls, [])
+
+    def test_run_level_four_uses_vm_single_connector_deployment(self):
         adapter = FakeAdapter()
 
-        with self.assertRaises(RuntimeError) as error:
-            main.run_level(adapter, 4, deployer_name="fake", topology="vm-single")
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 4, deployer_name="fake", topology="vm-single")
 
-        self.assertIn("Real Level 4 execution is not enabled", str(error.exception))
-        self.assertEqual(adapter.calls, [])
+        self.assertEqual(result["level"], 4)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"], ["conn-a", "conn-b"])
+        self.assertEqual(adapter.calls, ["deploy_connectors"])
 
     def test_run_level_four_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
@@ -2586,6 +2670,43 @@ class MainCliTests(unittest.TestCase):
         image_prepare.assert_called_once_with(adapter)
         dashboard_prepare.assert_called_once()
 
+    def test_safe_edc_execution_prepares_vm_single_image_when_missing_override(self):
+        adapter = FakeAdapter()
+        adapter.config_adapter.load_deployer_config = lambda: {
+            "KC_URL": "http://keycloak.local",
+            "DS_1_NAME": "fake-ds",
+            "EDC_DASHBOARD_ENABLED": "true",
+        }
+
+        with mock.patch.object(
+            main,
+            "_prepare_edc_local_connector_image_override",
+            return_value={
+                "image_name": "validation-environment/edc-connector",
+                "image_tag": "local",
+                "minikube_profile": "minikube",
+            },
+        ) as image_prepare, mock.patch.object(
+            main,
+            "_prepare_edc_local_dashboard_images",
+            return_value={"status": "prepared"},
+        ) as dashboard_prepare, mock.patch.dict(
+            os.environ,
+            {
+                "PIONERA_USE_DEPLOYER_DEPLOY": "true",
+                "PIONERA_EXECUTE_DEPLOYER_DEPLOY": "true",
+            },
+            clear=True,
+        ):
+            main._ensure_safe_edc_deployer_execution(
+                adapter,
+                deployer_name="edc",
+                topology="vm-single",
+            )
+
+        image_prepare.assert_called_once_with(adapter)
+        dashboard_prepare.assert_called_once()
+
     def test_deploy_command_refuses_real_edc_execution_with_partial_image_override(self):
         adapter = FakeAdapter()
 
@@ -2984,6 +3105,102 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(cleanup_kwargs["connectors"], ["conn-deployer-a", "conn-deployer-b"])
         self.assertEqual(cleanup_kwargs["mode"], "dry-run")
         self.assertTrue(cleanup_kwargs["report_enabled"])
+
+    def test_resolve_validation_runtime_keeps_legacy_fallback_for_local_topology(self):
+        adapter = FakeAdapter()
+        failing_orchestrator = mock.Mock()
+        failing_orchestrator.resolve_context.side_effect = ValueError("boom")
+
+        with mock.patch.object(
+            main,
+            "build_deployer_orchestrator",
+            return_value=failing_orchestrator,
+        ):
+            result = main._resolve_validation_runtime(
+                adapter,
+                deployer_name="fake",
+                topology="local",
+            )
+
+        self.assertEqual(result["connectors"], ["conn-a", "conn-b"])
+        self.assertIsNone(result["validation_profile"])
+        self.assertIsNone(result["deployer_context"])
+        self.assertIsNone(result["deployer_name"])
+
+    def test_resolve_validation_runtime_fails_clearly_for_vm_single_without_topology_address(self):
+        adapter = FakeAdapter()
+        failing_orchestrator = mock.Mock()
+        failing_orchestrator.resolve_context.side_effect = ValueError(
+            "Topology 'vm-single' requires VM_EXTERNAL_IP, VM_SINGLE_IP, VM_SINGLE_ADDRESS, HOSTS_ADDRESS, or INGRESS_EXTERNAL_IP."
+        )
+
+        with mock.patch.object(
+            main,
+            "build_deployer_orchestrator",
+            return_value=failing_orchestrator,
+        ):
+            with self.assertRaises(RuntimeError) as exc:
+                main._resolve_validation_runtime(
+                    adapter,
+                    deployer_name="fake",
+                    topology="vm-single",
+                )
+
+        self.assertIn("deployer-aware validation context", str(exc.exception))
+        self.assertIn("PIONERA_VM_EXTERNAL_IP", str(exc.exception))
+        self.assertIn("vm-single", str(exc.exception))
+
+    def test_test_data_cleanup_requires_local_infra_access_for_local_topology(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = types.SimpleNamespace(
+            ensure_local_infra_access=mock.Mock(return_value=True)
+        )
+
+        with mock.patch.object(
+            main,
+            "run_pre_validation_cleanup",
+            return_value={"status": "completed", "summary": {"deleted_total": 1}},
+        ) as cleanup_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_TEST_DATA_CLEANUP": "true"},
+            clear=False,
+        ):
+            result = main._run_test_data_cleanup_if_enabled(
+                adapter,
+                ["conn-a", "conn-b"],
+                {"topology": "local", "dataspace_name": "fake-ds"},
+                "/tmp/cleanup-local",
+            )
+
+        self.assertEqual(result["status"], "completed")
+        adapter.infrastructure.ensure_local_infra_access.assert_called_once()
+        cleanup_runner.assert_called_once()
+
+    def test_test_data_cleanup_skips_local_infra_access_for_vm_single_topology(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = types.SimpleNamespace(
+            ensure_local_infra_access=mock.Mock(return_value=False)
+        )
+
+        with mock.patch.object(
+            main,
+            "run_pre_validation_cleanup",
+            return_value={"status": "completed", "summary": {"deleted_total": 1}},
+        ) as cleanup_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_TEST_DATA_CLEANUP": "true"},
+            clear=False,
+        ):
+            result = main._run_test_data_cleanup_if_enabled(
+                adapter,
+                ["conn-a", "conn-b"],
+                {"topology": "vm-single", "dataspace_name": "fake-ds"},
+                "/tmp/cleanup-vm-single",
+            )
+
+        self.assertEqual(result["status"], "completed")
+        adapter.infrastructure.ensure_local_infra_access.assert_not_called()
+        cleanup_runner.assert_called_once()
 
     def test_level6_public_endpoint_preflight_builds_dataspace_and_connector_urls(self):
         adapter = FakeAdapterWithInfrastructure()
