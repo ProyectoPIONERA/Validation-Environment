@@ -392,6 +392,12 @@ python3 main.py edc recreate-dataspace --topology local --confirm-dataspace demo
 - métricas;
 - reportes en `experiments/`.
 
+En el layout `role-aligned`, `Level 5` publica componentes opcionales en
+`components_namespace`. `Level 6` valida esos componentes después de las suites
+del dataspace. Hoy `ontology-hub` se valida por defecto cuando está
+configurado, mientras que la UI PT5 de `ai-model-hub` sigue siendo opt-in con
+`AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`.
+
 Colecciones Newman principales:
 
 | Colección | Uso |

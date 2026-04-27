@@ -14,6 +14,7 @@ COMPONENT_KEY = "ontology-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "functional", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[3] / "ui"
 COMPONENT_FUNCTIONAL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_EXPERIMENTS_DIR = Path(__file__).resolve().parents[4] / "experiments" / "_standalone"
 PLAYWRIGHT_COMMAND_PREFIX = [
     os.path.join(".", "node_modules", ".bin", "playwright"),
@@ -30,18 +31,21 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
 
 def _build_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
     if experiment_dir:
-        base_dir = os.path.join(experiment_dir, "components", COMPONENT_KEY, "functional")
+        experiment_path = Path(experiment_dir)
+        if not experiment_path.is_absolute():
+            experiment_path = PROJECT_ROOT / experiment_path
+        base_dir = experiment_path / "components" / COMPONENT_KEY / "functional"
     else:
-        base_dir = os.path.join(str(DEFAULT_EXPERIMENTS_DIR), "components", COMPONENT_KEY, "functional")
+        base_dir = DEFAULT_EXPERIMENTS_DIR / "components" / COMPONENT_KEY / "functional"
 
     paths = {
-        "base_dir": base_dir,
-        "output_dir": os.path.join(base_dir, "test-results"),
-        "html_report_dir": os.path.join(base_dir, "playwright-report"),
-        "blob_report_dir": os.path.join(base_dir, "blob-report"),
-        "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ontology_hub_functional_validation.json"),
-        "resolved_runtime_json": os.path.join(base_dir, "resolved_runtime.json"),
+        "base_dir": str(base_dir),
+        "output_dir": str(base_dir / "test-results"),
+        "html_report_dir": str(base_dir / "playwright-report"),
+        "blob_report_dir": str(base_dir / "blob-report"),
+        "json_report_file": str(base_dir / "results.json"),
+        "report_json": str(base_dir / "ontology_hub_functional_validation.json"),
+        "resolved_runtime_json": str(base_dir / "resolved_runtime.json"),
     }
     for path in paths.values():
         if path.endswith('.json'):
@@ -234,6 +238,11 @@ def run_ontology_hub_functional_validation(base_url: str, experiment_dir: str | 
         **os.environ,
         "ONTOLOGY_HUB_BASE_URL": normalized_base_url,
         "ONTOLOGY_HUB_RUNTIME_FILE": artifact_paths["resolved_runtime_json"],
+        "ONTOLOGY_HUB_COMPONENTS_NAMESPACE": str(runtime.get("componentsNamespace") or "components"),
+        "ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS": str(runtime.get("uiExpectTimeoutMs") or 15000),
+        "ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS": str(runtime.get("uiActionTimeoutMs") or 15000),
+        "ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS": str(runtime.get("uiNavigationTimeoutMs") or 15000),
+        "ONTOLOGY_HUB_UI_READY_TIMEOUT_MS": str(runtime.get("uiReadyTimeoutMs") or 15000),
         "ONTOLOGY_HUB_UI_WORKERS": "1",
         "PLAYWRIGHT_OUTPUT_DIR": artifact_paths["output_dir"],
         "PLAYWRIGHT_HTML_REPORT_DIR": artifact_paths["html_report_dir"],

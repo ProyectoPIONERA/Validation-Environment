@@ -109,3 +109,32 @@ class AIModelHubComponentUIValidationTests(unittest.TestCase):
             self.assertGreaterEqual(len(result["evidence_index"]), 8)
             self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["json_report_file"]))
+
+    def test_run_ai_model_hub_ui_validation_resolves_relative_experiment_dir_against_project_root(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
+            payload = _build_playwright_results_payload()
+            relative_experiment_dir = os.path.relpath(tmpdir, start=os.getcwd())
+
+            def fake_subprocess_run(command, cwd=None, env=None):
+                self.assertTrue(os.path.isabs(env["PLAYWRIGHT_JSON_REPORT_FILE"]))
+                with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                return subprocess.CompletedProcess(command, 0)
+
+            with (
+                mock.patch.dict(os.environ, {"AI_MODEL_HUB_ENABLE_UI_VALIDATION": "1"}, clear=False),
+                mock.patch(
+                    "validation.components.ai_model_hub.ui_runner.subprocess.run",
+                    side_effect=fake_subprocess_run,
+                ),
+            ):
+                result = run_ai_model_hub_ui_validation(
+                    "http://ai-model-hub.example.local",
+                    experiment_dir=relative_experiment_dir,
+                )
+
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["summary"]["total"], 8)
+            self.assertEqual(result["summary"]["passed"], 8)
+            self.assertEqual(result["summary"]["failed"], 0)
+            self.assertTrue(os.path.isabs(result["artifacts"]["json_report_file"]))

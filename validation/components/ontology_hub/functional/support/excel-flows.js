@@ -3,6 +3,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const { gotoEdition } = require("../../ui/support/bootstrap");
+const { resolveOntologyHubTimeouts } = require("../../ui/runtime");
 const { OntologyHubVocabFormPage } = require("../../ui/pages/vocab-form.page");
 const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
 const { probeVocabularyDetail } = require("../../ui/support/capabilities");
@@ -20,6 +21,7 @@ const DEFAULT_REPOSITORY_URI =
 const URI_VOCAB_STATE_KEY = "oh-app-03-uri-vocabulary";
 const REPOSITORY_VOCAB_STATE_KEY = "oh-app-04-repository-vocabulary";
 const VERSION_STATE_KEY = "oh-app-11-version-state";
+const { readyTimeoutMs, navigationTimeoutMs } = resolveOntologyHubTimeouts();
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -235,13 +237,16 @@ async function signInToEdition(page, runtime, credentials = {}) {
   const email = normalizeText(credentials.email || runtime.adminEmail);
   const password = normalizeText(credentials.password || runtime.adminPassword);
 
-  await page.goto(`${runtime.baseUrl}/edition`, { waitUntil: "commit", timeout: 5000 });
-  await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+  await page.goto(`${runtime.baseUrl}/edition`, {
+    waitUntil: "commit",
+    timeout: navigationTimeoutMs,
+  });
+  await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   if (/\/edition\/login\/?$/i.test(page.url())) {
     await fillMarked(page.getByPlaceholder("Email"), email);
     await fillMarked(page.getByPlaceholder("Password"), password);
     await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
-    await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   }
 
   const invalidCredentials = normalizeText(await safeTextContent(page.locator("#formErrors")));
@@ -252,7 +257,7 @@ async function signInToEdition(page, runtime, credentials = {}) {
   await page
     .locator("a[href='/edition/logout'], a[href='/edition/'], a[href^='/edition/users/']")
     .first()
-    .waitFor({ state: "visible", timeout: 5000 });
+    .waitFor({ state: "visible", timeout: readyTimeoutMs });
 
   return page.url();
 }
@@ -283,7 +288,7 @@ async function ensureTagSelected(page, tagLabel) {
   }
 
   await clickMarked(page.locator(".fieldTagsAddAction"));
-  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: readyTimeoutMs });
 
   const tagPattern = new RegExp(`^\\s*${escapeRegExp(normalized)}\\s*$`, "i");
   let tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
@@ -293,7 +298,7 @@ async function ensureTagSelected(page, tagLabel) {
     await fillMarked(page.locator("#newTagLabel"), normalized);
     await clickMarked(page.locator("#btnCreateTag"));
     tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
-    await tagOption.waitFor({ state: "visible", timeout: 5000 });
+    await tagOption.waitFor({ state: "visible", timeout: readyTimeoutMs });
   }
 
   await clickMarked(tagOption);
@@ -303,7 +308,7 @@ async function ensureTagSelected(page, tagLabel) {
         (node) => String(node.value || "").trim().toLowerCase() === expectedTag.toLowerCase(),
       ),
     normalized,
-    { timeout: 5000 },
+    { timeout: readyTimeoutMs },
   );
 
   await page.keyboard.press("Escape").catch(() => {});
@@ -336,7 +341,7 @@ async function ensureMultilingualTextareas(page, fieldKind, primaryLanguage, sec
 
 async function fillVocabularyMetadata(page, runtime) {
   const createHeader = page.getByRole("heading", { name: "Create a new Vocabulary", exact: true });
-  await createHeader.waitFor({ state: "visible", timeout: 5000 });
+  await createHeader.waitFor({ state: "visible", timeout: readyTimeoutMs });
 
   await fillMarked(page.locator("#inputVocabPrefix"), runtime.creationPrefix);
   if ((await page.locator("#inputVocabUri").count()) > 0 && normalizeText(runtime.creationUri)) {
@@ -419,7 +424,7 @@ async function confirmVisibleDialog(page, labels = [/^confirm$/i]) {
 async function runIndexAllFromEdition(page, runtime) {
   await gotoEdition(page, runtime);
   const indexAllForm = page.locator("form[action='/edition/indexAll']").first();
-  await indexAllForm.waitFor({ state: "visible", timeout: 5000 });
+  await indexAllForm.waitFor({ state: "visible", timeout: readyTimeoutMs });
   await clickMarked(indexAllForm.locator("button.featureLink, button[type='submit']").first());
 
   const confirmed = await page
@@ -482,7 +487,7 @@ async function waitForPublicVocabularyDetail(page, runtime, prefix, title = "") 
 async function createVocabularyByUri(page, runtime) {
   await gotoEdition(page, runtime);
   await clickMarked(page.locator(".createVocab"));
-  await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
   await fillMarked(page.locator("#formDialogCreateVocabFromURI input[name='uri']"), runtime.creationUri);
   await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
   await page.waitForLoadState("domcontentloaded");
@@ -519,7 +524,7 @@ async function createVocabularyByUri(page, runtime) {
 async function createVocabularyFromRepository(page, runtime) {
   await gotoEdition(page, runtime);
   await clickMarked(page.locator(".createVocab"));
-  await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
   await fillMarked(page
     .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']"), runtime.creationRepositoryUri);
   await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));

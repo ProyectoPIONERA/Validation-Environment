@@ -1,4 +1,10 @@
 const { clickMarked } = require("../support/live-marker");
+const { resolveOntologyHubTimeouts } = require("../runtime");
+
+const {
+  readyTimeoutMs,
+  navigationTimeoutMs,
+} = resolveOntologyHubTimeouts();
 
 class OntologyHubTermsPage {
   constructor(page) {
@@ -10,8 +16,8 @@ class OntologyHubTermsPage {
     if (query) {
       url.searchParams.set("q", query);
     }
-    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: 5000 });
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: navigationTimeoutMs });
+    await this.page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   }
 
   async expectReady() {
@@ -40,11 +46,11 @@ class OntologyHubTermsPage {
     await this.expectHealthyPage();
     await this.page.locator(".count-items .count").first().waitFor({
       state: "attached",
-      timeout: 5000,
+      timeout: readyTimeoutMs,
     });
     await this.page.locator("#SearchGrid li.SearchBoxclass, #SearchGrid li").first().waitFor({
       state: "attached",
-      timeout: 5000,
+      timeout: readyTimeoutMs,
     });
   }
 
@@ -67,7 +73,7 @@ class OntologyHubTermsPage {
 
   async clickFacetLink(groupLabel, valueLabel) {
     await clickMarked(this.facetLink(groupLabel, valueLabel));
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await this.page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   }
 
   async currentResultCount() {

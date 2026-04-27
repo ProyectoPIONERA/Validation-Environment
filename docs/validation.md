@@ -14,6 +14,14 @@ Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 - recolección de métricas;
 - generación de reportes de experimento.
 
+Cuando hay componentes configurados con runner registrado, `Level 6` ejecuta su
+validacion despues de las suites del dataspace. En el estado actual:
+
+- `ontology-hub` corre por defecto como validacion de componente;
+- `ai-model-hub` corre su bootstrap por defecto;
+- la UI PT5 de `ai-model-hub` sigue siendo opt-in con
+  `AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`.
+
 En topología `local`, antes de limpiar datos o ejecutar suites, `Level 6`
 comprueba que los hostnames públicos del entorno sean accesibles desde la
 máquina que lanza el framework. Si esta comprobación falla, revisa que

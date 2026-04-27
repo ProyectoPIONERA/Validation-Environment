@@ -1,4 +1,10 @@
 const { clickMarked } = require("../support/live-marker");
+const { resolveOntologyHubTimeouts } = require("../runtime");
+
+const {
+  readyTimeoutMs,
+  navigationTimeoutMs,
+} = resolveOntologyHubTimeouts();
 
 class OntologyHubVocabDetailPage {
   constructor(page) {
@@ -8,16 +14,16 @@ class OntologyHubVocabDetailPage {
   async goto(baseUrl, prefix) {
     await this.page.goto(`${baseUrl}/dataset/vocabs/${prefix}`, {
       waitUntil: "commit",
-      timeout: 5000,
+      timeout: navigationTimeoutMs,
     });
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await this.page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   }
 
   async expectReady(prefix, titleText = "") {
     const headingLocator = this.page.getByRole("heading", { level: 1 }).first();
     let headingText = "";
     try {
-      await headingLocator.waitFor({ state: "visible", timeout: 5000 });
+      await headingLocator.waitFor({ state: "visible", timeout: readyTimeoutMs });
       headingText = ((await headingLocator.textContent().catch(() => "")) || "").trim();
 
       const expectedMarkers = [prefix, titleText].filter(Boolean);
@@ -53,7 +59,7 @@ class OntologyHubVocabDetailPage {
 
     await this.page
       .getByRole("heading", { name: "Metadata", level: 2 })
-      .waitFor({ state: "visible", timeout: 5000 })
+      .waitFor({ state: "visible", timeout: readyTimeoutMs })
       .catch(() => {});
 
     const prefixLocator = this.page.locator("section#post").getByText(prefix, { exact: false }).first();

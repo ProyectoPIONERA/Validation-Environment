@@ -38,6 +38,12 @@ El flujo actual es:
 11. Ejecuta validaciones de componentes cuando `COMPONENTS` contiene componentes con runner registrado.
 12. Persiste `experiment_results.json` con resultados API, UI, Kafka y componentes.
 
+La validacion de componentes se ejecuta despues del smoke UI del dataspace. Esto
+permite separar:
+
+- validacion del dataspace base del adapter activo;
+- validacion de componentes opcionales desplegados en `Level 5`.
+
 ## Qué hace `ValidationEngine`
 
 `ValidationEngine` toma la lista de conectores y genera todas las parejas proveedor-consumidor.
@@ -87,10 +93,16 @@ Por tanto, `Level 6` ya no debe entenderse como “solo Newman”, sino como el 
 En la práctica:
 
 - `COMPONENTS=ontology-hub` hace que `Level 5` lo despliegue
+- `COMPONENTS=ai-model-hub` hace que `Level 5` lo despliegue para `inesdata`
+  cuando el adapter tiene soporte real
+- en el layout `role-aligned`, los componentes se publican en
+  `components_namespace`, no en el namespace compacto del dataspace
 - para `ontology-hub`, `Level 5` usa un checkout local en `adapters/inesdata/sources/Ontology-Hub`; si no existe, lo clona automáticamente
 - `Level 5` reconstruye esa imagen en el host y la carga en minikube antes del despliegue
 - ese flujo es deliberadamente estricto: no usa overrides de `source dir` ni de imagen para `ontology-hub`
 - y hace que `Level 6` intente validarlo automáticamente
+- para `ai-model-hub`, `Level 6` ejecuta siempre el bootstrap del componente y
+  solo lanza la UI PT5 si `AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`
 - si el componente no tiene runner o no puede inferirse su URL, queda como `skipped` en vez de romper toda la ejecución
 
 ## Qué papel tiene cada capa de validación

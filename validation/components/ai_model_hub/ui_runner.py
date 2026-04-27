@@ -10,6 +10,7 @@ COMPONENT_KEY = "ai-model-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ai_model_hub", "ui", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent / "ui"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EXPERIMENTS_DIR = Path(__file__).resolve().parents[3] / "experiments" / "_standalone"
 PLAYWRIGHT_COMMAND = [os.path.join(".", "node_modules", ".bin", "playwright"), "test", "--config", PLAYWRIGHT_CONFIG_RELATIVE]
 UI_VALIDATION_ENV = "AI_MODEL_HUB_ENABLE_UI_VALIDATION"
@@ -125,17 +126,20 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
 
 def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
     if experiment_dir:
-        base_dir = os.path.join(experiment_dir, "components", COMPONENT_KEY, "ui")
+        experiment_path = Path(experiment_dir)
+        if not experiment_path.is_absolute():
+            experiment_path = PROJECT_ROOT / experiment_path
+        base_dir = experiment_path / "components" / COMPONENT_KEY / "ui"
     else:
-        base_dir = os.path.join(str(DEFAULT_EXPERIMENTS_DIR), "components", COMPONENT_KEY, "ui")
+        base_dir = DEFAULT_EXPERIMENTS_DIR / "components" / COMPONENT_KEY / "ui"
 
     paths = {
-        "base_dir": base_dir,
-        "output_dir": os.path.join(base_dir, "test-results"),
-        "html_report_dir": os.path.join(base_dir, "playwright-report"),
-        "blob_report_dir": os.path.join(base_dir, "blob-report"),
-        "json_report_file": os.path.join(base_dir, "results.json"),
-        "report_json": os.path.join(base_dir, "ai_model_hub_ui_validation.json"),
+        "base_dir": str(base_dir),
+        "output_dir": str(base_dir / "test-results"),
+        "html_report_dir": str(base_dir / "playwright-report"),
+        "blob_report_dir": str(base_dir / "blob-report"),
+        "json_report_file": str(base_dir / "results.json"),
+        "report_json": str(base_dir / "ai_model_hub_ui_validation.json"),
     }
     for path in paths.values():
         if path.endswith(".json"):

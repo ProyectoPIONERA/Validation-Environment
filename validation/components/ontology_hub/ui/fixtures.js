@@ -1,13 +1,14 @@
 const fs = require("fs");
 
 const { test: base, expect } = require("./playwright-runtime");
-const { resolveOntologyHubRuntime } = require("./runtime");
+const { resolveOntologyHubRuntime, resolveOntologyHubTimeouts } = require("./runtime");
 const { ensureOntologyHubBootstrap } = require("./support/bootstrap");
+const timeouts = resolveOntologyHubTimeouts();
 
 const test = base.extend({
   page: async ({ page }, use) => {
-    page.setDefaultTimeout(5000);
-    page.setDefaultNavigationTimeout(5000);
+    page.setDefaultTimeout(timeouts.readyTimeoutMs);
+    page.setDefaultNavigationTimeout(timeouts.navigationTimeoutMs);
     await use(page);
   },
 

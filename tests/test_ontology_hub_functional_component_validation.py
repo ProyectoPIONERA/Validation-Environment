@@ -3,11 +3,14 @@ import tempfile
 import unittest
 from unittest import mock
 
+from validation.components.ontology_hub.functional import runtime_preparation
 from validation.components.ontology_hub.functional.component_runner import (
     run_ontology_hub_component_validation,
 )
 from validation.components.ontology_hub.functional.ui_runner import (
+    PROJECT_ROOT,
     PLAYWRIGHT_WORKDIR,
+    _build_artifact_paths,
     _prepare_functional_runtime,
     run_ontology_hub_functional_validation,
 )
@@ -16,6 +19,13 @@ from validation.components.ontology_hub.functional.ui_runner import (
 class OntologyHubFunctionalComponentValidationTests(unittest.TestCase):
     def test_functional_ui_runner_uses_validation_ui_as_workdir(self):
         self.assertTrue(str(PLAYWRIGHT_WORKDIR).endswith("Validation-Environment/validation/ui"))
+
+    def test_build_artifact_paths_resolves_relative_experiment_dir_under_project_root(self):
+        paths = _build_artifact_paths("experiments/relative-ontology-hub-test")
+
+        self.assertTrue(
+            paths["json_report_file"].startswith(str(PROJECT_ROOT / "experiments")),
+        )
 
     def test_functional_ui_runner_uses_framework_preparation_hook(self):
         with mock.patch(
@@ -41,6 +51,29 @@ class OntologyHubFunctionalComponentValidationTests(unittest.TestCase):
 
         self.assertFalse(prepared)
         self.assertEqual(error["type"], "RuntimePreparationError")
+
+    def test_reset_runtime_uses_component_namespace_from_runtime(self):
+        commands = []
+
+        def fake_run(command, check=False):
+            commands.append(command)
+            return object()
+
+        with mock.patch(
+            "validation.components.ontology_hub.functional.runtime_preparation._run",
+            side_effect=fake_run,
+        ):
+            result = runtime_preparation.reset_ontology_hub_for_functional(
+                {
+                    "dataspace": "demo",
+                    "componentsNamespace": "components",
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertTrue(commands)
+        self.assertIn("deployment/demo-ontology-hub-mongodb -n components", commands[0])
+        self.assertTrue(all(" -n components" in command for command in commands))
 
     def test_functional_ui_runner_reports_reason_when_playwright_cannot_start(self):
         with tempfile.TemporaryDirectory() as tmpdir, mock.patch(

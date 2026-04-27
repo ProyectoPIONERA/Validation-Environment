@@ -1,4 +1,10 @@
 const { clickMarked, fillMarked } = require("../support/live-marker");
+const { resolveOntologyHubTimeouts } = require("../runtime");
+
+const {
+  readyTimeoutMs,
+  navigationTimeoutMs,
+} = resolveOntologyHubTimeouts();
 
 class OntologyHubVocabCatalogPage {
   constructor(page) {
@@ -11,8 +17,8 @@ class OntologyHubVocabCatalogPage {
     if (query) {
       url.searchParams.set("q", query);
     }
-    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: 5000 });
-    await this.page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    await this.page.goto(url.toString(), { waitUntil: "commit", timeout: navigationTimeoutMs });
+    await this.page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
   }
 
   async expectReady() {
@@ -26,11 +32,11 @@ class OntologyHubVocabCatalogPage {
   async waitForResults() {
     await this.page.locator(".count-items .count").first().waitFor({
       state: "attached",
-      timeout: 5000,
+      timeout: readyTimeoutMs,
     });
     await this.resultItems().first().waitFor({
       state: "attached",
-      timeout: 5000,
+      timeout: readyTimeoutMs,
     });
   }
 
@@ -39,13 +45,13 @@ class OntologyHubVocabCatalogPage {
       .locator("#SearchGrid")
       .getByText(prefixOrLabel, { exact: false })
       .first()
-      .waitFor({ state: "visible", timeout: 5000 });
+      .waitFor({ state: "visible", timeout: readyTimeoutMs });
   }
 
   async openResult(prefix) {
     const exactPrefix = new RegExp(`^\\s*${escapeRegExp(prefix)}\\s*$`, "i");
     const target = this.page.locator("#SearchGrid .prefix a").filter({ hasText: exactPrefix }).first();
-    await target.waitFor({ state: "visible", timeout: 5000 });
+    await target.waitFor({ state: "visible", timeout: readyTimeoutMs });
     const label = ((await target.textContent()) || "").trim();
     await clickMarked(target);
     return label;

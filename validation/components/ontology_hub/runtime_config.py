@@ -208,6 +208,11 @@ def resolve_ontology_hub_runtime(
         "dataspace": dataspace,
         "dsDomain": ds_domain,
         "baseUrl": resolved_base_url,
+        "componentsNamespace": (
+            current_env.get("ONTOLOGY_HUB_COMPONENTS_NAMESPACE")
+            or deployer_config.get("COMPONENTS_NAMESPACE")
+            or "components"
+        ).strip(),
         "adminEmail": _resolve_runtime_value(
             current_env,
             {
@@ -285,6 +290,14 @@ def resolve_ontology_hub_runtime(
         or _chart_validation_value(chart_values, "validation", "ui", "listingSearchTerm")
         or "s4grid",
         "uiWorkers": _env_int(current_env, "ONTOLOGY_HUB_UI_WORKERS", 1),
+        "uiExpectTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS", 15000),
+        "uiActionTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS", 15000),
+        "uiNavigationTimeoutMs": _env_int(
+            current_env,
+            "ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS",
+            15000,
+        ),
+        "uiReadyTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_READY_TIMEOUT_MS", 15000),
         "strictPreflight": _env_bool(current_env, "ONTOLOGY_HUB_UI_STRICT_PREFLIGHT", False),
         "preflightTimeout": _env_int(current_env, "ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT", 120),
     }

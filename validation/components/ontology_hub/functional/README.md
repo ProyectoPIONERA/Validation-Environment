@@ -51,9 +51,10 @@ se lanza automaticamente desde `Level 6`.
 
 Al ejecutarse desde el menu, `Ontology Hub Functional` usa por defecto un
 `hard reset` del runtime antes de lanzar la suite. Esto reinicia
-`demo-ontology-hub-mongodb`, `demo-ontology-hub-elasticsearch` y
-`demo-ontology-hub`, y despues espera una comprobacion HTTP basica sobre
-`/dataset` y `/edition`.
+los deployments del release `<dataspace>-ontology-hub` dentro de
+`components_namespace` (por ejemplo `demo-ontology-hub-mongodb`,
+`demo-ontology-hub-elasticsearch` y `demo-ontology-hub` en `components`), y
+despues espera una comprobacion HTTP basica sobre `/dataset` y `/edition`.
 
 El modo `soft` sigue existiendo como opcion manual para intentos de limpieza
 funcional sin reiniciar pods, pero ya no es el comportamiento por defecto
@@ -62,7 +63,7 @@ de Ontology Hub.
 
 Si hace falta cambiar el comportamiento, se puede forzar con:
 - `ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=soft`: intenta limpiar usuarios, agentes, vocabularios y tags sin reiniciar pods.
-- `ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=hard`: reinicia `demo-ontology-hub-mongodb`, `demo-ontology-hub-elasticsearch` y `demo-ontology-hub`.
+- `ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=hard`: reinicia los deployments del release `<dataspace>-ontology-hub` en `components_namespace`.
 - `ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=off`: no limpia ni reinicia antes de lanzar la suite.
 - Compatibilidad: se siguen aceptando `ONTOLOGY_HUB_APP_FLOWS_RESET_MODE` y `ONTOLOGY_HUB_APP_FLOWS_GENERATED_DIR` como alias antiguos.
 

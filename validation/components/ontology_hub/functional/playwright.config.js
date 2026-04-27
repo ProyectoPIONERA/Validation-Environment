@@ -1,6 +1,7 @@
 const path = require("path");
 
 const { defineConfig } = require("../ui/playwright-runtime");
+const { resolveOntologyHubTimeouts } = require("../ui/runtime");
 
 const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results";
 const htmlReportDir = process.env.PLAYWRIGHT_HTML_REPORT_DIR || "playwright-report";
@@ -21,13 +22,14 @@ const validationTimeoutMs =
   Number.isFinite(configuredValidationTimeoutMs) && configuredValidationTimeoutMs > 0
     ? configuredValidationTimeoutMs
     : 120000;
+const timeouts = resolveOntologyHubTimeouts();
 
 module.exports = defineConfig({
   testDir: path.join(__dirname, "specs"),
   testMatch: "**/*.spec.js",
   timeout: validationTimeoutMs,
   expect: {
-    timeout: 5000,
+    timeout: timeouts.expectTimeoutMs,
   },
   workers,
   reporter: [
@@ -43,8 +45,8 @@ module.exports = defineConfig({
     screenshot: "only-on-failure",
     video: "on",
     ignoreHTTPSErrors: true,
-    actionTimeout: 5000,
-    navigationTimeout: 5000,
+    actionTimeout: timeouts.actionTimeoutMs,
+    navigationTimeout: timeouts.navigationTimeoutMs,
     launchOptions: headedGpuFix
       ? {
           args: ["--disable-gpu"],

@@ -78,6 +78,10 @@ function normalizeRuntime(runtime) {
     baseUrl: String(runtime.baseUrl || "").replace(/\/$/, ""),
     creationRepositoryUri: normalizeRepositoryUri(runtime.creationRepositoryUri),
     uiWorkers: normalizePositiveInteger(runtime.uiWorkers, 1),
+    uiExpectTimeoutMs: normalizePositiveInteger(runtime.uiExpectTimeoutMs, 15000),
+    uiActionTimeoutMs: normalizePositiveInteger(runtime.uiActionTimeoutMs, 15000),
+    uiNavigationTimeoutMs: normalizePositiveInteger(runtime.uiNavigationTimeoutMs, 15000),
+    uiReadyTimeoutMs: normalizePositiveInteger(runtime.uiReadyTimeoutMs, 15000),
     preflightTimeout: normalizePositiveInteger(runtime.preflightTimeout, 120),
     strictPreflight: Boolean(runtime.strictPreflight),
   };
@@ -172,6 +176,22 @@ function resolveOntologyHubRuntime() {
       process.env.ONTOLOGY_HUB_CREATION_REVIEW || "Validated through the Playwright ontology flow.",
     listingSearchTerm: process.env.ONTOLOGY_HUB_LISTING_QUERY || "s4grid",
     uiWorkers: normalizePositiveInteger(process.env.ONTOLOGY_HUB_UI_WORKERS, 1),
+    uiExpectTimeoutMs: normalizePositiveInteger(
+      process.env.ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS,
+      15000,
+    ),
+    uiActionTimeoutMs: normalizePositiveInteger(
+      process.env.ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS,
+      15000,
+    ),
+    uiNavigationTimeoutMs: normalizePositiveInteger(
+      process.env.ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS,
+      15000,
+    ),
+    uiReadyTimeoutMs: normalizePositiveInteger(
+      process.env.ONTOLOGY_HUB_UI_READY_TIMEOUT_MS,
+      15000,
+    ),
     strictPreflight: ["1", "true", "yes", "on"].includes(
       String(process.env.ONTOLOGY_HUB_UI_STRICT_PREFLIGHT || "").toLowerCase(),
     ),
@@ -181,6 +201,17 @@ function resolveOntologyHubRuntime() {
   return normalizeRuntime(fileRuntime ? { ...fallbackRuntime, ...fileRuntime } : fallbackRuntime);
 }
 
+function resolveOntologyHubTimeouts() {
+  const runtime = resolveOntologyHubRuntime();
+  return {
+    expectTimeoutMs: normalizePositiveInteger(runtime.uiExpectTimeoutMs, 15000),
+    actionTimeoutMs: normalizePositiveInteger(runtime.uiActionTimeoutMs, 15000),
+    navigationTimeoutMs: normalizePositiveInteger(runtime.uiNavigationTimeoutMs, 15000),
+    readyTimeoutMs: normalizePositiveInteger(runtime.uiReadyTimeoutMs, 15000),
+  };
+}
+
 module.exports = {
   resolveOntologyHubRuntime,
+  resolveOntologyHubTimeouts,
 };

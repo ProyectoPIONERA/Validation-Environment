@@ -1,4 +1,7 @@
 const { clickMarked } = require("../support/live-marker");
+const { resolveOntologyHubTimeouts } = require("../runtime");
+
+const { readyTimeoutMs } = resolveOntologyHubTimeouts();
 
 class OntologyHubHomePage {
   constructor(page) {
@@ -28,7 +31,7 @@ class OntologyHubHomePage {
 
   async openVocabularyBubble(prefix) {
     const bubble = this.vocabularyBubble(prefix);
-    await bubble.waitFor({ state: "visible", timeout: 5000 });
+    await bubble.waitFor({ state: "visible", timeout: readyTimeoutMs });
     const circle = bubble.locator("circle").first();
     if ((await circle.count()) > 0) {
       await clickMarked(circle);

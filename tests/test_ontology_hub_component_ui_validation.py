@@ -86,9 +86,14 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
 
         self.assertEqual(runtime["adminEmail"], "qa-admin@example.org")
         self.assertEqual(runtime["adminPassword"], "super-secret-password")
+        self.assertEqual(runtime["componentsNamespace"], "components")
         self.assertEqual(runtime["creationRepositoryUri"], "https://github.com/example/repo")
         self.assertEqual(runtime["creationPrimaryLanguage"], "en")
         self.assertEqual(runtime["creationSecondaryLanguage"], "es")
+        self.assertEqual(runtime["uiExpectTimeoutMs"], 15000)
+        self.assertEqual(runtime["uiActionTimeoutMs"], 15000)
+        self.assertEqual(runtime["uiNavigationTimeoutMs"], 15000)
+        self.assertEqual(runtime["uiReadyTimeoutMs"], 15000)
 
     def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_secret_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -112,6 +117,31 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
 
         self.assertEqual(runtime["adminEmail"], "file-admin@example.org")
         self.assertEqual(runtime["adminPassword"], "file-secret-password")
+
+    def test_resolve_ontology_hub_runtime_honors_component_namespace_and_timeout_overrides(self):
+        with mock.patch(
+            "validation.components.ontology_hub.runtime_config._parse_key_value_file",
+            return_value={
+                "DS_1_NAME": "demo",
+                "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+                "COMPONENTS_NAMESPACE": "components",
+            },
+        ):
+            runtime = resolve_ontology_hub_runtime(
+                environ={
+                    "ONTOLOGY_HUB_COMPONENTS_NAMESPACE": "custom-components",
+                    "ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS": "21000",
+                    "ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS": "22000",
+                    "ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS": "23000",
+                    "ONTOLOGY_HUB_UI_READY_TIMEOUT_MS": "24000",
+                }
+            )
+
+        self.assertEqual(runtime["componentsNamespace"], "custom-components")
+        self.assertEqual(runtime["uiExpectTimeoutMs"], 21000)
+        self.assertEqual(runtime["uiActionTimeoutMs"], 22000)
+        self.assertEqual(runtime["uiNavigationTimeoutMs"], 23000)
+        self.assertEqual(runtime["uiReadyTimeoutMs"], 24000)
 
     def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_explicit_values_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

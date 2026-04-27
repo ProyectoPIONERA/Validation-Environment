@@ -26,8 +26,21 @@ def _run(cmd, check=False):
     return result
 
 
-def _ontology_hub_release_name():
-    return f"{InesdataConfig.dataspace_name()}-ontology-hub"
+def _ontology_hub_release_name(runtime=None):
+    dataspace = str((runtime or {}).get("dataspace") or "").strip()
+    if not dataspace:
+        dataspace = InesdataConfig.dataspace_name()
+    return f"{dataspace}-ontology-hub"
+
+
+def _ontology_hub_components_namespace(runtime=None):
+    namespace = str((runtime or {}).get("componentsNamespace") or "").strip()
+    if namespace:
+        return namespace
+    namespace = str(os.environ.get("ONTOLOGY_HUB_COMPONENTS_NAMESPACE") or "").strip()
+    if namespace:
+        return namespace
+    return "components"
 
 
 def ontology_hub_functional_reset_mode():
@@ -41,10 +54,10 @@ def ontology_hub_functional_reset_mode():
     return mode
 
 
-def reset_ontology_hub_for_functional():
+def reset_ontology_hub_for_functional(runtime=None):
     """Recreate the runtime used by the Ontology Hub functional suite on the current namespace."""
-    namespace = InesdataConfig.namespace_demo()
-    release_name = _ontology_hub_release_name()
+    namespace = _ontology_hub_components_namespace(runtime)
+    release_name = _ontology_hub_release_name(runtime)
     namespace_q = shlex.quote(namespace)
 
     deployments = [
@@ -462,13 +475,13 @@ def prepare_ontology_hub_for_functional(runtime):
         return wait_for_ontology_hub_preflight(base_url, timeout_seconds=60)
 
     if mode == "hard":
-        if not reset_ontology_hub_for_functional():
+        if not reset_ontology_hub_for_functional(runtime):
             return False
         return wait_for_ontology_hub_preflight(base_url)
 
     if not soft_cleanup_ontology_hub_for_functional(runtime):
         print("\nOntology Hub soft cleanup failed. Falling back to hard reset...\n")
-        if not reset_ontology_hub_for_functional():
+        if not reset_ontology_hub_for_functional(runtime):
             return False
         return wait_for_ontology_hub_preflight(base_url)
 
@@ -476,7 +489,7 @@ def prepare_ontology_hub_for_functional(runtime):
         return True
 
     print("\nOntology Hub soft cleanup left the app unhealthy. Falling back to hard reset...\n")
-    if not reset_ontology_hub_for_functional():
+    if not reset_ontology_hub_for_functional(runtime):
         return False
     return wait_for_ontology_hub_preflight(base_url)
 

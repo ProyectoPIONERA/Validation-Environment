@@ -1,4 +1,7 @@
 const { clickMarked } = require("../../ui/support/live-marker");
+const { resolveOntologyHubTimeouts } = require("../../ui/runtime");
+
+const { readyTimeoutMs, navigationTimeoutMs } = resolveOntologyHubTimeouts();
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -61,7 +64,7 @@ function pickLanguageLabel(labels, preferredCode) {
   return normalizedLabels[0]?.raw || "";
 }
 
-async function waitForCatalogReady(page, timeoutMs = 5000) {
+async function waitForCatalogReady(page, timeoutMs = readyTimeoutMs) {
   try {
     await page.locator("#searchInput").waitFor({ state: "visible", timeout: timeoutMs });
   } catch (error) {
@@ -73,7 +76,7 @@ async function waitForCatalogReady(page, timeoutMs = 5000) {
   }
 }
 
-async function waitForTermsReady(page, timeoutMs = 5000) {
+async function waitForTermsReady(page, timeoutMs = readyTimeoutMs) {
   try {
     await page.locator("#searchInput").waitFor({ state: "visible", timeout: timeoutMs });
   } catch (error) {
@@ -99,7 +102,7 @@ async function waitForSelectorAny(page, selectors, timeoutMs, label) {
   }
 }
 
-async function waitForCatalogResults(page, timeoutMs = 5000) {
+async function waitForCatalogResults(page, timeoutMs = readyTimeoutMs) {
   await waitForSelectorAny(
     page,
     [".count-items .count", "#SearchGrid li"],
@@ -108,7 +111,7 @@ async function waitForCatalogResults(page, timeoutMs = 5000) {
   );
 }
 
-async function waitForTermsResults(page, timeoutMs = 5000) {
+async function waitForTermsResults(page, timeoutMs = readyTimeoutMs) {
   await waitForSelectorAny(
     page,
     [
@@ -127,7 +130,7 @@ async function openFirstCatalogResult(page) {
   if ((await prefixLink.count()) > 0) {
     const label = normalizeText(await prefixLink.textContent());
     await clickMarked(prefixLink);
-    await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs });
     return { label, source: "prefix-link" };
   }
 
@@ -135,7 +138,7 @@ async function openFirstCatalogResult(page) {
   if ((await fallback.count()) > 0) {
     const label = normalizeText(await fallback.textContent());
     await clickMarked(fallback);
-    await page.waitForLoadState("domcontentloaded", { timeout: 5000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs });
     return { label, source: "first-link" };
   }
 

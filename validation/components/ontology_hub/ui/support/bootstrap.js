@@ -1,6 +1,7 @@
 const fs = require("fs");
 const { checkMarked, clickMarked, fillMarked, selectOptionMarked } = require("./live-marker");
 const path = require("path");
+const { resolveOntologyHubTimeouts } = require("../runtime");
 
 const {
   probeTermSearchApi,
@@ -10,6 +11,7 @@ const {
 } = require("./capabilities");
 
 const bootstrapCache = new Map();
+const { readyTimeoutMs, navigationTimeoutMs } = resolveOntologyHubTimeouts();
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -157,7 +159,7 @@ async function waitForSelectedTag(page, tagLabel) {
         (node) => String(node.value || "").trim().toLowerCase() === expectedTag,
       ),
     expected,
-    { timeout: 5000 },
+    { timeout: readyTimeoutMs },
   );
 }
 
@@ -178,7 +180,7 @@ async function ensureVocabularyTag(page, runtime) {
   }
 
   await clickMarked(page.locator(".fieldTagsAddAction"));
-  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#listOfTags").waitFor({ state: "visible", timeout: readyTimeoutMs });
 
   const tagPattern = new RegExp(`^\\s*${escapeRegExp(tagLabel)}\\s*$`, "i");
   let tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
@@ -193,7 +195,7 @@ async function ensureVocabularyTag(page, runtime) {
           }
           return /\/edition\/tags\/?$/.test(new URL(response.url()).pathname);
         },
-        { timeout: 5000 },
+        { timeout: readyTimeoutMs },
       )
       .catch(() => null);
 
@@ -218,7 +220,7 @@ async function ensureVocabularyTag(page, runtime) {
     }
 
     tagOption = page.locator("#tagsPickerList .tagFromList").filter({ hasText: tagPattern }).first();
-    await tagOption.waitFor({ state: "visible", timeout: 5000 });
+    await tagOption.waitFor({ state: "visible", timeout: readyTimeoutMs });
     created = true;
   }
 
@@ -269,11 +271,11 @@ async function submitVocabularyMetadata(page, runtime) {
         }
         return /^\/edition\/vocabs(?:\/[^/]+)?\/?$/.test(new URL(response.url()).pathname);
       },
-      { timeout: 5000 },
+      { timeout: navigationTimeoutMs },
     )
     .catch(() => null);
   const redirectPromise = page
-    .waitForURL(/\/dataset\/vocabs\/[^/]+\/?$/, { timeout: 5000 })
+    .waitForURL(/\/dataset\/vocabs\/[^/]+\/?$/, { timeout: navigationTimeoutMs })
     .then(() => true)
     .catch(() => false);
 
@@ -382,7 +384,7 @@ async function gotoEdition(page, runtime) {
   }
 
   try {
-    await page.locator(".createVocab").waitFor({ state: "visible", timeout: 5000 });
+    await page.locator(".createVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
   } catch (error) {
     const formErrors = await page.locator("#formErrors").textContent().catch(() => "");
     throw new Error(
@@ -407,12 +409,12 @@ async function ensurePublicDetail(page, runtime, prefix, title) {
       });
 
       const metadata = page.locator("section#posts").getByText("Metadata", { exact: true });
-      await metadata.waitFor({ state: "visible", timeout: 5000 });
+      await metadata.waitFor({ state: "visible", timeout: readyTimeoutMs });
 
       if (title) {
         await page.locator("section#post").getByText(title, { exact: false }).first().waitFor({
           state: "visible",
-          timeout: 5000,
+          timeout: readyTimeoutMs,
         });
       }
       return;
@@ -551,7 +553,7 @@ async function createVocabularyFromUri(page, runtime) {
     );
   }
 
-  await duplicateError.waitFor({ state: "visible", timeout: 5000 });
+  await duplicateError.waitFor({ state: "visible", timeout: readyTimeoutMs });
   return {
     created: false,
     duplicateByPrefix: true,
