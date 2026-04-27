@@ -2485,13 +2485,17 @@ class INESDataInfrastructureAdapter:
 
         print("\nDeploying common services...")
         common_release_exists = self._common_services_release_exists()
+        common_services_startup_timeout = max(
+            int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)),
+            180,
+        )
         common_services_deployed = self.deploy_helm_release(
             self.config.helm_release_common(),
             self.config.NS_COMMON,
             values_path,
             cwd=common_dir,
             wait=False,
-            timeout_seconds=None if common_release_exists else 45,
+            timeout_seconds=None if common_release_exists else common_services_startup_timeout,
         )
         if not common_services_deployed and not self._common_services_release_recoverable_after_helm_failure():
             self._fail("Error deploying common services")
@@ -2499,7 +2503,7 @@ class INESDataInfrastructureAdapter:
         # Keycloak can take noticeably longer than PostgreSQL/MinIO on fresh
         # installs, so give the pre-Vault readiness check the same minimum
         # budget we already use for the final Level 2 verification.
-        pre_vault_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+        pre_vault_timeout = common_services_startup_timeout
         if not self.wait_for_level2_service_pods(self.config.NS_COMMON, timeout=pre_vault_timeout):
             self._fail(
                 "Services did not reach the pre-Vault-ready state",

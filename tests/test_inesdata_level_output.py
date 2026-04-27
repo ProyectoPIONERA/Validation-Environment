@@ -1339,7 +1339,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("Core services detected", output.getvalue())
 
-    def test_deploy_infrastructure_uses_short_timeout_for_first_common_services_install(self):
+    def test_deploy_infrastructure_uses_startup_budget_timeout_for_first_common_services_install(self):
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_wsl_docker_config = lambda: True
         infrastructure.sync_common_values = lambda: None
@@ -1364,7 +1364,35 @@ class InesdataLevelOutputTests(unittest.TestCase):
 
         infrastructure.deploy_infrastructure()
 
-        self.assertEqual(seen.get("timeout_seconds"), 45)
+        self.assertEqual(seen.get("timeout_seconds"), 180)
+
+    def test_deploy_infrastructure_reuses_longer_pod_wait_budget_for_first_common_services_install(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.TIMEOUT_POD_WAIT = 240
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        seen = {}
+
+        def fake_deploy(*_args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        infrastructure.deploy_helm_release = fake_deploy
+
+        infrastructure.deploy_infrastructure()
+
+        self.assertEqual(seen.get("timeout_seconds"), 240)
 
     def test_deploy_infrastructure_does_not_force_short_timeout_for_existing_common_release(self):
         infrastructure = self._make_infrastructure()
