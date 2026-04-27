@@ -229,6 +229,58 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
                 "pilot-registration-service.pilot-core.svc.cluster.local:8080",
             )
 
+    def test_host_alias_domains_use_synced_common_service_hostnames(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = DataspaceAwareConfig(tmpdir)
+            with open(config.deployer_config_path(), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "DS_1_NAME=pilot\n"
+                    "DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm\n"
+                    "KEYCLOAK_HOSTNAME=auth.dev.ed.dataspaceunit.upm\n"
+                    "KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm\n"
+                    "MINIO_HOSTNAME=minio.dev.ed.dataspaceunit.upm\n"
+                    "MINIO_CONSOLE_HOSTNAME=console.minio-s3.dev.ed.dataspaceunit.upm\n"
+                )
+
+            adapter = INESDataConfigAdapter(config)
+
+            self.assertEqual(
+                adapter.host_alias_domains(ds_name="pilot"),
+                [
+                    "auth.dev.ed.dataspaceunit.upm",
+                    "admin.auth.dev.ed.dataspaceunit.upm",
+                    "minio.dev.ed.dataspaceunit.upm",
+                    "console.minio-s3.dev.ed.dataspaceunit.upm",
+                    "registration-service-pilot.dev.ds.dataspaceunit.upm",
+                ],
+            )
+
+    def test_generate_hosts_uses_synced_common_service_hostnames(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = DataspaceAwareConfig(tmpdir)
+            with open(config.deployer_config_path(), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "DS_1_NAME=pilot\n"
+                    "DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm\n"
+                    "KEYCLOAK_HOSTNAME=auth.dev.ed.dataspaceunit.upm\n"
+                    "KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm\n"
+                    "MINIO_HOSTNAME=minio.dev.ed.dataspaceunit.upm\n"
+                    "MINIO_CONSOLE_HOSTNAME=console.minio-s3.dev.ed.dataspaceunit.upm\n"
+                )
+
+            adapter = INESDataConfigAdapter(config)
+
+            self.assertEqual(
+                adapter.generate_hosts(ds_name="pilot"),
+                [
+                    "127.0.0.1 auth.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 admin.auth.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 minio.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 console.minio-s3.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 registration-service-pilot.dev.ds.dataspaceunit.upm",
+                ],
+            )
+
     def test_prefixed_environment_overrides_can_isolate_the_active_dataspace(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = DataspaceAwareConfig(tmpdir)
