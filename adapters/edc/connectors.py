@@ -1137,7 +1137,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return self._fail_runtime_prerequisite(
                 f"EDC connector chart directory not found: {self._edc_connector_dir()}"
             )
-        if not self.infrastructure.ensure_local_infra_access():
+        if not self._ensure_local_runtime_access_if_required():
             return self._fail_runtime_prerequisite(
                 "EDC Level 4 cannot continue because local access to PostgreSQL, Vault or MinIO is not ready."
             )

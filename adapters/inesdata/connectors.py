@@ -173,6 +173,14 @@ class INESDataConnectorsAdapter:
 
         return self._role_aligned_connector_port_forward_fallback_implicit()
 
+    def _ensure_local_runtime_access_if_required(self):
+        if not self._is_local_topology():
+            return True
+        ensure_local_access = getattr(self.infrastructure, "ensure_local_infra_access", None)
+        if not callable(ensure_local_access):
+            return True
+        return bool(ensure_local_access())
+
     def _role_aligned_connector_port_forward_fallback_implicit(self):
         if not self._is_local_topology():
             return False
@@ -415,7 +423,7 @@ class INESDataConnectorsAdapter:
         if self._vault_management_token_verified:
             return True
 
-        if not self.infrastructure.ensure_local_infra_access():
+        if not self._ensure_local_runtime_access_if_required():
             return False
 
         if not self.infrastructure.ensure_vault_unsealed():
@@ -2387,7 +2395,7 @@ class INESDataConnectorsAdapter:
             if stale:
                 print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
                 if not infra_ready:
-                    if not self.infrastructure.ensure_local_infra_access():
+                    if not self._ensure_local_runtime_access_if_required():
                         return []
                     infra_ready = True
                 if not vault_ready:

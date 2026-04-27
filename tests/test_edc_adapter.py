@@ -799,8 +799,10 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         chart_dir,
         requirements_path,
         native_bootstrap=False,
+        topology="local",
     ):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = topology
         adapter.config = type(
             "RuntimePrerequisitesConfig",
             (),
@@ -822,6 +824,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             "RuntimePrerequisitesConfigAdapter",
             (),
             {
+                "topology": topology,
                 "edc_connector_dir": lambda _self: chart_dir,
                 "edc_bootstrap_script": lambda _self: os.path.join(repo_dir, "bootstrap.py"),
             },
@@ -1033,6 +1036,42 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         requirements_mock.assert_not_called()
         infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
         infrastructure.sync_vault_token_to_deployer_config.assert_not_called()
+
+    def test_prepare_runtime_prerequisites_skips_local_infra_check_for_vm_single(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_dir = os.path.join(tmpdir, "repo")
+            venv_dir = os.path.join(tmpdir, "venv")
+            chart_dir = os.path.join(tmpdir, "chart")
+            requirements_path = os.path.join(tmpdir, "requirements.txt")
+            os.makedirs(repo_dir)
+            os.makedirs(venv_dir)
+            os.makedirs(chart_dir)
+            with open(os.path.join(repo_dir, "bootstrap.py"), "w", encoding="utf-8") as handle:
+                handle.write("")
+            with open(requirements_path, "w", encoding="utf-8") as handle:
+                handle.write("")
+
+            adapter = self._make_runtime_prerequisites_adapter(
+                tmpdir,
+                repo_dir,
+                venv_dir,
+                chart_dir,
+                requirements_path,
+                topology="vm-single",
+            )
+            infrastructure = mock.Mock()
+            infrastructure.ensure_local_infra_access.return_value = False
+            infrastructure.ensure_vault_unsealed.return_value = True
+            adapter.infrastructure = infrastructure
+            adapter._verify_vault_management_token = lambda: True
+
+            with mock.patch("adapters.edc.connectors.ensure_python_requirements") as requirements_mock:
+                result = adapter._prepare_runtime_prerequisites()
+
+        self.assertEqual(result, (repo_dir, "/usr/bin/python3"))
+        requirements_mock.assert_called_once()
+        infrastructure.ensure_local_infra_access.assert_not_called()
+        infrastructure.ensure_vault_unsealed.assert_called_once()
 
     def test_connector_values_payload_maps_edc_runtime_and_shared_services(self):
         with tempfile.TemporaryDirectory() as tmpdir:
