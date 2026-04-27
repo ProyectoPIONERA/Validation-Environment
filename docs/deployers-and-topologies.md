@@ -79,8 +79,9 @@ kubectl get ingress -A
 
 Regla práctica:
 
-- usa la IP de `hostname -I` si el tráfico público entra por la IP principal de la VM;
-- usa la IP de `minikube ip` si el ingress publicado realmente responde por la IP del perfil Minikube;
+- usa la IP de `hostname -I` solo como valor provisional inicial;
+- en la mayoría de instalaciones con Minikube `docker`, el valor final bueno será `minikube ip`;
+- deja la IP de la VM como valor final solo si el ingress está publicado explícitamente sobre esa IP o detrás de un proxy externo que termina allí;
 - después de `Level 1`, si `minikube ip` no coincide con la IP configurada, actualiza `PIONERA_VM_EXTERNAL_IP` o `VM_EXTERNAL_IP` antes de `Levels 3-6`.
 
 ## VM Distributed

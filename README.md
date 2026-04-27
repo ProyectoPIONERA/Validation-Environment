@@ -150,6 +150,14 @@ Si vas a ejecutar el framework dentro de una VM Ubuntu y tu objetivo es
 `vm-single`, empieza ajustando `deployers/infrastructure/deployer.config` con
 un bloque como este:
 
+```bash
+cd ~/Validation-Environment
+cp deployers/infrastructure/deployer.config.example deployers/infrastructure/deployer.config
+nano deployers/infrastructure/deployer.config
+```
+
+Si el fichero local ya existe, omite el `cp` y edítalo directamente.
+
 ```ini
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=3
@@ -166,12 +174,25 @@ Notas prácticas:
   `192.0.2.10` solo como ejemplo documental;
 - si tu VM tiene mas recursos dedicados al framework, puedes subir Minikube a
   `4 CPU` y `12288 MB`;
+- si entras por el menú con `--topology vm-single` y faltan
+  `VM_EXTERNAL_IP`/`INGRESS_EXTERNAL_IP`, el framework puede detectar una
+  dirección candidata con `hostname -I` o `minikube ip` y ofrecer escribirla
+  automáticamente en `deployers/infrastructure/deployer.config`;
+- después de guardar el fichero, puedes comprobar los valores activos con:
+
+```bash
+grep -E '^(MINIKUBE_|VM_EXTERNAL_IP|INGRESS_EXTERNAL_IP)=' \
+  deployers/infrastructure/deployer.config
+```
+
 - antes de arrancar `Level 1`, obtén la IP principal de la VM con:
 
 ```bash
 hostname -I
 ```
 
+- usa esa IP de la VM solo como valor provisional inicial en
+  `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP`;
 - después de `Level 1`, obtén la IP real del cluster con:
 
 ```bash
@@ -185,13 +206,12 @@ kubectl get ingress -A
 ```
 
 - regla práctica:
-  - si los hostnames públicos del framework entran por la IP de la VM, usa esa
-    IP en `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP`;
-  - si los hostnames públicos entran por la IP real de Minikube, usa
-    `minikube ip`;
-- si despues de `Level 1` el valor real de `minikube ip` es distinto de la IP
-  configurada, actualiza `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP` con la IP
-  efectiva del cluster;
+  - en la mayoría de instalaciones con Minikube `docker`, el valor final bueno
+    será `minikube ip`;
+  - usa la IP de la VM como valor final solo si has publicado el ingress
+    explícitamente sobre esa IP o a través de un proxy externo que termina allí;
+  - si `minikube ip` es distinto del valor provisional, actualiza
+    `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP` antes de `Levels 3-6`;
 - para `vm-single`, entra directamente por:
 
 ```bash
