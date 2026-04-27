@@ -26,7 +26,6 @@ MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=4
 MINIKUBE_MEMORY=12288
 MINIKUBE_PROFILE=minikube
-# For vm-single/vm-distributed, set these to the real VM or ingress IP before Levels 3-6.
 VM_EXTERNAL_IP=
 VM_COMMON_IP=
 VM_DATASPACE_IP=
