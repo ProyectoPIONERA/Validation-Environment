@@ -1830,6 +1830,41 @@ class INESDataInfrastructureAdapter:
         )
         return True
 
+    def _common_services_has_terminal_runtime_errors(self):
+        namespace = str(getattr(self.config, "NS_COMMON", "") or "").strip()
+        if not namespace:
+            return False
+
+        result = self.run_silent(f"kubectl get pods -n {shlex.quote(namespace)} --no-headers")
+        if not result:
+            return False
+
+        terminal_statuses = {
+            "CrashLoopBackOff",
+            "Error",
+            "ImagePullBackOff",
+            "ErrImagePull",
+            "CreateContainerConfigError",
+            "CreateContainerError",
+            "RunContainerError",
+        }
+
+        for line in result.splitlines():
+            columns = line.split()
+            if len(columns) < 3:
+                continue
+
+            name = columns[0]
+            status = columns[2]
+
+            if self._is_ignored_transient_hook_pod(namespace, name):
+                continue
+
+            if status in terminal_statuses:
+                return True
+
+        return False
+
     def _repair_failed_common_services_helm_release(self, values_path, common_dir):
         status = self._common_services_release_status()
         if status != "failed":
@@ -2458,7 +2493,15 @@ class INESDataInfrastructureAdapter:
             timeout_seconds=None if common_release_exists else common_services_startup_timeout,
         )
         if not common_services_deployed and not self._common_services_release_recoverable_after_helm_failure():
-            self._fail("Error deploying common services")
+            release_status = self._common_services_release_status()
+            if release_status and not self._common_services_has_terminal_runtime_errors():
+                print(
+                    "Helm reported a common services failure before the cold-start runtime "
+                    f"finished converging (release status: {release_status}). Waiting for "
+                    "framework-level readiness checks before aborting..."
+                )
+            else:
+                self._fail("Error deploying common services")
 
         # Keycloak can take noticeably longer than PostgreSQL/MinIO on fresh
         # installs, so give the pre-Vault readiness check the same minimum
