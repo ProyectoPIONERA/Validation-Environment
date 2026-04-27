@@ -2612,6 +2612,19 @@ def _legacy_metrics_runtime(adapter):
     }
 
 
+def _vm_single_validation_context_failure_message(exc):
+    detail = str(exc or "").strip()
+    message = (
+        "Could not resolve deployer-aware validation context for topology 'vm-single'. "
+        "Configure PIONERA_VM_EXTERNAL_IP, PIONERA_VM_SINGLE_IP, "
+        "PIONERA_VM_SINGLE_ADDRESS, PIONERA_HOSTS_ADDRESS, or "
+        "PIONERA_INGRESS_EXTERNAL_IP before running Level 6 or 'validate'."
+    )
+    if detail:
+        return f"{message} Original error: {detail}"
+    return message
+
+
 def _resolve_validation_runtime(adapter, deployer_name=None, deployer_registry=None, topology="local"):
     if not _should_use_deployer_validate():
         return _legacy_validation_runtime(adapter)
@@ -2629,9 +2642,11 @@ def _resolve_validation_runtime(adapter, deployer_name=None, deployer_registry=N
         connectors = orchestrator.get_cluster_connectors(context)
         if not connectors:
             connectors = _resolve_connectors(adapter)
-    except Exception:
+    except Exception as exc:
         if _env_flag("PIONERA_REQUIRE_DEPLOYER_VALIDATE", default=False):
             raise
+        if normalize_topology(topology) == "vm-single":
+            raise RuntimeError(_vm_single_validation_context_failure_message(exc)) from exc
         return _legacy_validation_runtime(adapter)
 
     return {
