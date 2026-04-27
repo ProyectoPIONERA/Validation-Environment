@@ -31,7 +31,7 @@ class InesdataConfig:
     }
 
     MINIKUBE_DRIVER = "docker"
-    MINIKUBE_CPUS = 10
+    MINIKUBE_CPUS = 4
     MINIKUBE_MEMORY = 12288
     MINIKUBE_PROFILE = "minikube"
     MINIKUBE_ADDONS = ["ingress"]
@@ -359,7 +359,7 @@ class INESDataConfigAdapter:
             ),
             "cpus": self._normalized_positive_int_string(
                 config.get("MINIKUBE_CPUS"),
-                getattr(self.config, "MINIKUBE_CPUS", 10),
+                getattr(self.config, "MINIKUBE_CPUS", 4),
             ),
             "memory": self._normalized_positive_int_string(
                 config.get("MINIKUBE_MEMORY"),

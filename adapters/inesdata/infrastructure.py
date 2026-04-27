@@ -117,7 +117,7 @@ class INESDataInfrastructureAdapter:
 
         return {
             "driver": str(runtime.get("driver") or _default("MINIKUBE_DRIVER", "docker")).strip() or "docker",
-            "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", 10)),
+            "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", 4)),
             "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", 12288)),
             "profile": str(runtime.get("profile") or _default("MINIKUBE_PROFILE", "minikube")).strip() or "minikube",
         }
