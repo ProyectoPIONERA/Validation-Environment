@@ -54,7 +54,15 @@ from validation.orchestration.hosts import (
     ensure_public_endpoints_accessible,
     normalize_public_endpoint_url,
 )
+from validation.orchestration.components import (
+    run_component_validations as run_level6_component_validations,
+    should_run_component_validation as should_run_level6_component_validation,
+)
 from validation.orchestration.kafka import run_kafka_edc_validation
+from validation.components.runner import (
+    run_component_validations as run_registered_component_validations,
+    summarize_component_results,
+)
 from validation.ui import interactive_menu as ui_interactive_menu
 from validation.ui.ui_runner import run_playwright_validation
 import requests
@@ -3294,6 +3302,16 @@ def _append_hosts_level_lines(lines, label, hostnames):
         lines.append(f"- {value}")
 
 
+def _append_component_list_lines(lines, label, values):
+    normalized = [str(value or "").strip() for value in (values or []) if str(value or "").strip()]
+    if not normalized:
+        return
+
+    lines.append(f"{label}: {len(normalized)}")
+    for value in normalized:
+        lines.append(f"- {value}")
+
+
 def _humanize_hosts_sync_reason(reason):
     normalized = str(reason or "").strip().lower()
     if not normalized:
@@ -3763,6 +3781,9 @@ def run_validate(
     )
 
     playwright_result = None
+    playwright_failure = None
+    component_results = []
+    component_validation_summary = None
     if validation_profile is not None:
         if not getattr(validation_profile, "playwright_enabled", False):
             playwright_result = {
@@ -3835,8 +3856,78 @@ def run_validate(
                 experiment_dir=experiment_dir,
             )
             if playwright_result.get("status") != "passed":
+                playwright_failure = playwright_result.get("status")
+
+        component_groups = list(getattr(validation_profile, "component_groups", []) or [])
+        infer_component_urls = _resolve_adapter_callable(adapter, "components.infer_component_urls")
+        if getattr(validation_profile, "component_validation_enabled", False):
+            if deployer_context is None:
+                component_results = [
+                    {
+                        "component": component,
+                        "status": "skipped",
+                        "reason": "missing-deployer-context",
+                    }
+                    for component in component_groups
+                ]
+            elif not callable(infer_component_urls):
+                component_results = [
+                    {
+                        "component": component,
+                        "status": "skipped",
+                        "reason": "component_url_inference_unavailable",
+                    }
+                    for component in component_groups
+                ]
+            elif not should_run_level6_component_validation(
+                component_groups,
+                env=os.environ,
+                env_flag_enabled=_env_flag,
+            ):
+                component_results = [
+                    {
+                        "component": component,
+                        "status": "skipped",
+                        "reason": "disabled",
+                    }
+                    for component in component_groups
+                ]
+            else:
+                print("\nRunning component validation suite...")
+                try:
+                    component_results = run_level6_component_validations(
+                        component_groups,
+                        infer_component_urls=infer_component_urls,
+                        run_component_validations_fn=run_registered_component_validations,
+                        experiment_dir=experiment_dir,
+                    ) or []
+                except Exception as exc:
+                    component_results = [
+                        {
+                            "component": "_component-validation",
+                            "status": "failed",
+                            "error": {
+                                "type": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                        }
+                    ]
+
+                for result in component_results:
+                    component = result.get("component", "unknown-component")
+                    status = result.get("status", "unknown")
+                    if status == "passed":
+                        print(f"  Component validation passed for {component}")
+                    elif status == "failed":
+                        print(f"  Warning: component validation failed for {component}")
+                    else:
+                        reason = result.get("reason") or (result.get("error") or {}).get("message", "unknown reason")
+                        print(f"  Component validation skipped for {component} ({reason})")
+            if component_results:
+                component_validation_summary = summarize_component_results(component_results)
+            if playwright_failure is not None:
                 raise RuntimeError(
-                    f"Playwright validation failed with status '{playwright_result.get('status')}'"
+                    f"Playwright validation failed with status '{playwright_failure}'"
                 )
 
     return {
@@ -3846,6 +3937,8 @@ def run_validate(
         "kafka_edc_results": kafka_edc_results,
         "storage_checks": list(getattr(validation_engine, "last_storage_checks", []) or []),
         "playwright": playwright_result,
+        "component_results": component_results,
+        "component_validation_summary": component_validation_summary,
         "test_data_cleanup": test_data_cleanup,
         "public_endpoint_preflight": public_endpoint_preflight,
         "hosts_sync": hosts_sync,
@@ -4825,6 +4918,32 @@ def _print_action_result(result):
                         level_result = level_payload.get("result")
                         if isinstance(level_result, dict):
                             level_urls = level_result.get("urls")
+                            if int(level_payload.get("level") or 0) == 5:
+                                _append_component_list_lines(
+                                    lines,
+                                    "Level 5 configured components",
+                                    level_result.get("configured"),
+                                )
+                                _append_component_list_lines(
+                                    lines,
+                                    "Level 5 deployable now",
+                                    level_result.get("deployable"),
+                                )
+                                _append_component_list_lines(
+                                    lines,
+                                    "Level 5 pending adapter support",
+                                    level_result.get("pending_support"),
+                                )
+                                _append_component_list_lines(
+                                    lines,
+                                    "Level 5 unsupported for adapter",
+                                    level_result.get("unsupported"),
+                                )
+                                _append_component_list_lines(
+                                    lines,
+                                    "Level 5 unknown components",
+                                    level_result.get("unknown"),
+                                )
                     if level_urls:
                         heading = f"Level {level_payload.get('level')} URLs"
                         _append_url_lines(lines, level_urls, heading=heading)

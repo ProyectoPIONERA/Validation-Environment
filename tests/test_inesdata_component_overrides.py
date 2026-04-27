@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import adapters.inesdata.components as components_module
 from adapters.inesdata.components import INESDataComponentsAdapter
 from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
+from adapters.shared.components import SharedComponentsAdapter
 
 
 class FakeConfig:
@@ -55,6 +56,16 @@ class InesdataComponentOverridesTests(unittest.TestCase):
             auto_mode_getter=lambda: True,
             infrastructure_adapter=infrastructure or FakeInfrastructure(),
             config_cls=FakeConfig,
+        )
+
+    def _make_shared_adapter(self, infrastructure=None):
+        return SharedComponentsAdapter(
+            run=mock.Mock(return_value="ok"),
+            run_silent=mock.Mock(return_value=""),
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure or FakeInfrastructure(),
+            config_cls=FakeConfig,
+            active_adapter="inesdata",
         )
 
     def test_ontology_hub_hostname_prefers_deployer_config_inference(self):
@@ -139,6 +150,72 @@ class InesdataComponentOverridesTests(unittest.TestCase):
             },
         )
 
+    def test_ai_model_hub_override_payload_derives_public_url_and_connector_config(self):
+        adapter = self._make_adapter()
+
+        payload = adapter._component_values_override_payload(
+            "ai-model-hub",
+            {
+                "DS_DOMAIN_BASE": "custom.ds.example.org",
+                "DS_1_CONNECTORS": "citycouncil,company",
+            },
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "ingress": {
+                    "enabled": True,
+                    "host": "ai-model-hub-demo.custom.ds.example.org",
+                },
+                "config": {
+                    "edcConnectorConfig": [
+                        {
+                            "connectorName": "Consumer",
+                            "managementUrl": "http://conn-company-demo.custom.ds.example.org/management",
+                            "defaultUrl": "http://conn-company-demo.custom.ds.example.org/api",
+                            "protocolUrl": "http://conn-company-demo.custom.ds.example.org/protocol",
+                            "federatedCatalogEnabled": False,
+                        },
+                        {
+                            "connectorName": "Provider",
+                            "managementUrl": "http://conn-citycouncil-demo.custom.ds.example.org/management",
+                            "defaultUrl": "http://conn-citycouncil-demo.custom.ds.example.org/api",
+                            "protocolUrl": "http://conn-citycouncil-demo.custom.ds.example.org/protocol",
+                            "federatedCatalogEnabled": False,
+                        },
+                    ]
+                },
+            },
+        )
+
+    def test_shared_components_adapter_plans_override_values_payload(self):
+        adapter = self._make_shared_adapter()
+
+        plan = adapter.plan_component_override_values(
+            "ontology-hub",
+            chart_dir="/tmp/chart",
+            deployer_config={"DS_DOMAIN_BASE": "custom.ds.example.org"},
+        )
+
+        self.assertEqual(plan["normalized_component"], "ontology-hub")
+        self.assertEqual(plan["chart_dir"], "/tmp/chart")
+        self.assertTrue(plan["has_override"])
+        self.assertEqual(plan["filename_prefix"], "ontology-hub-override-")
+        self.assertEqual(
+            plan["payload"],
+            {
+                "ingress": {
+                    "enabled": True,
+                    "host": "ontology-hub-demo.custom.ds.example.org",
+                },
+                "env": {
+                    "SELF_HOST_URL": "http://ontology-hub-demo.custom.ds.example.org",
+                    "BASE_URL": "http://ontology-hub-demo.custom.ds.example.org",
+                },
+            },
+        )
+
     def test_resolve_ontology_hub_self_host_alias_ip_prefers_explicit_valid_ip(self):
         adapter = self._make_adapter()
 
@@ -180,6 +257,57 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         self.assertIn("-f values-demo.yaml", command)
         self.assertIn("-f /tmp/ontology-hub-override.yaml", command)
         self.assertEqual(run.call_args.kwargs["cwd"], "/tmp/chart")
+
+    def test_legacy_component_runtime_keeps_ontology_hub_override_and_namespace(self):
+        infrastructure = FakeInfrastructure()
+        adapter = self._make_adapter(infrastructure=infrastructure)
+
+        with tempfile.TemporaryDirectory() as chart_dir:
+            values_file = os.path.join(chart_dir, "values-demo.yaml")
+            with open(values_file, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"ingress": {"enabled": False}}, handle, sort_keys=False)
+
+            with mock.patch.object(adapter, "_cleanup_components", return_value=None), mock.patch.object(
+                adapter.config,
+                "repo_dir",
+                return_value=chart_dir,
+            ), mock.patch.object(
+                adapter,
+                "_resolve_component_chart_dir",
+                return_value=chart_dir,
+            ), mock.patch.object(
+                adapter,
+                "_resolve_component_values_file",
+                return_value=values_file,
+            ), mock.patch.object(
+                adapter,
+                "_resolve_component_release_name",
+                return_value="demo-ontology-hub",
+            ), mock.patch.object(
+                adapter,
+                "_maybe_prepare_level6_local_image",
+                return_value=False,
+            ), mock.patch.object(
+                adapter,
+                "_wait_for_component_rollout",
+                return_value=True,
+            ):
+                result = adapter.deploy_components(
+                    ["ontology-hub"],
+                    ds_name="demo",
+                    namespace="components",
+                    deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+                )
+
+        self.assertEqual(result["deployed"], ["ontology-hub"])
+        self.assertEqual(len(infrastructure.deploy_calls), 1)
+        args, kwargs = infrastructure.deploy_calls[0]
+        self.assertEqual(args[0], "demo-ontology-hub")
+        self.assertEqual(args[1], "components")
+        self.assertEqual(kwargs["cwd"], chart_dir)
+        self.assertEqual(args[2][0], "values-demo.yaml")
+        self.assertEqual(len(args[2]), 2)
+        self.assertTrue(os.path.basename(args[2][1]).startswith("ontology-hub-override-"))
 
     def test_resolve_ontology_hub_source_dir_uses_canonical_checkout_even_if_override_is_present(self):
         adapter = self._make_adapter()
@@ -415,6 +543,680 @@ class InesdataComponentOverridesTests(unittest.TestCase):
             "app.kubernetes.io/instance=demo-ontology-hub",
             timeout_seconds=1800,
             label="ontology-hub",
+        )
+
+    def test_write_component_values_override_file_uses_shared_override_planner_when_available(self):
+        adapter = self._make_shared_adapter()
+        adapter.plan_component_override_values = mock.Mock(
+            return_value={
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp",
+                "payload": {
+                    "ingress": {
+                        "enabled": True,
+                        "host": "ontology-hub-demo.custom.ds.example.org",
+                    }
+                },
+                "has_override": True,
+                "filename_prefix": "ontology-hub-override-",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            override_path = adapter._write_component_values_override_file(
+                tmpdir,
+                "ontology-hub",
+                {"DS_DOMAIN_BASE": "custom.ds.example.org"},
+            )
+            self.assertIsNotNone(override_path)
+            with open(override_path, "r", encoding="utf-8") as handle:
+                payload = yaml.safe_load(handle)
+
+        self.assertEqual(
+            payload,
+            {
+                "ingress": {
+                    "enabled": True,
+                    "host": "ontology-hub-demo.custom.ds.example.org",
+                }
+            },
+        )
+        adapter.plan_component_override_values.assert_called_once()
+
+    def test_shared_components_adapter_resolves_runtime_metadata_from_existing_helpers(self):
+        adapter = self._make_shared_adapter()
+        adapter.config_adapter.load_deployer_config = mock.Mock(return_value={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"})
+        adapter._resolve_component_chart_dir = mock.Mock(return_value="/tmp/chart")
+        adapter._resolve_component_values_file = mock.Mock(return_value="/tmp/chart/values-demo.yaml")
+        adapter._infer_component_hostname = mock.Mock(return_value="ontology-hub-demo.dev.ds.dataspaceunit.upm")
+        adapter._resolve_component_release_name = mock.Mock(return_value="demo-ontology-hub")
+
+        metadata = adapter.resolve_component_runtime_metadata(
+            "ontology-hub",
+            ds_name="demo",
+            namespace="demo",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+        self.assertEqual(metadata["normalized_component"], "ontology-hub")
+        self.assertEqual(metadata["chart_dir"], "/tmp/chart")
+        self.assertEqual(metadata["values_file"], "/tmp/chart/values-demo.yaml")
+        self.assertEqual(metadata["host"], "ontology-hub-demo.dev.ds.dataspaceunit.upm")
+        self.assertEqual(metadata["release_name"], "demo-ontology-hub")
+        adapter._resolve_component_chart_dir.assert_called_once_with("ontology-hub")
+        adapter._resolve_component_values_file.assert_called_once_with(
+            "/tmp/chart",
+            ds_name="demo",
+            namespace="demo",
+        )
+
+    def test_shared_components_adapter_defaults_runtime_metadata_to_components_namespace(self):
+        adapter = self._make_shared_adapter()
+        adapter.config_adapter.load_deployer_config = mock.Mock(
+            return_value={
+                "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+                "NAMESPACE_PROFILE": "role-aligned",
+                "DS_1_NAME": "demo",
+                "DS_1_NAMESPACE": "demo",
+            }
+        )
+        adapter._resolve_component_chart_dir = mock.Mock(return_value="/tmp/chart")
+        adapter._resolve_component_values_file = mock.Mock(return_value="/tmp/chart/values-components.yaml")
+        adapter._infer_component_hostname = mock.Mock(return_value="ontology-hub-demo.dev.ds.dataspaceunit.upm")
+        adapter._resolve_component_release_name = mock.Mock(return_value="demo-ontology-hub")
+
+        metadata = adapter.resolve_component_runtime_metadata(
+            "ontology-hub",
+            ds_name="demo",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+        self.assertEqual(metadata["namespace"], "components")
+        adapter._resolve_component_values_file.assert_called_once_with(
+            "/tmp/chart",
+            ds_name="demo",
+            namespace="components",
+        )
+
+    def test_shared_components_adapter_prepares_runtime_metadata_for_batch_resolution(self):
+        adapter = self._make_shared_adapter()
+        adapter.resolve_component_runtime_metadata = mock.Mock(
+            side_effect=[
+                {
+                    "normalized_component": "ontology-hub",
+                    "chart_dir": "/tmp/chart",
+                    "values_file": "/tmp/chart/values-demo.yaml",
+                    "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                    "release_name": "demo-ontology-hub",
+                },
+                {
+                    "normalized_component": "ai-model-hub",
+                    "chart_dir": "/tmp/chart-ai",
+                    "values_file": "/tmp/chart-ai/values-demo.yaml",
+                    "host": "",
+                    "release_name": "demo-ai-model-hub",
+                },
+            ]
+        )
+
+        prepared = adapter.prepare_component_runtime_metadata(
+            ["ontology-hub", "ai-model-hub", "registration-service"],
+            ds_name="demo",
+            namespace="demo",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+        self.assertEqual(
+            [item["normalized_component"] for item in prepared],
+            ["ontology-hub", "ai-model-hub", "registration-service"],
+        )
+        self.assertFalse(prepared[0]["excluded"])
+        self.assertIsNone(prepared[0]["error"])
+        self.assertFalse(prepared[1]["excluded"])
+        self.assertTrue(prepared[2]["excluded"])
+        self.assertEqual(adapter.resolve_component_runtime_metadata.call_count, 2)
+
+    def test_cleanup_legacy_component_releases_removes_demo_release_before_components_deploy(self):
+        adapter = self._make_shared_adapter()
+        adapter.config_adapter.load_deployer_config = mock.Mock(
+            return_value={
+                "NAMESPACE_PROFILE": "role-aligned",
+                "DS_1_NAME": "demo",
+                "DS_1_NAMESPACE": "demo",
+            }
+        )
+        adapter._resolve_component_release_name = mock.Mock(return_value="demo-ontology-hub")
+        adapter.run_silent = mock.Mock(return_value="STATUS: deployed")
+        adapter._cleanup_components = mock.Mock()
+
+        cleaned_namespace = adapter._cleanup_legacy_component_releases(
+            ["ontology-hub"],
+            active_namespace="components",
+            ds_name="demo",
+            deployer_config={"NAMESPACE_PROFILE": "role-aligned"},
+        )
+
+        self.assertEqual(cleaned_namespace, "demo")
+        adapter._cleanup_components.assert_called_once_with(["ontology-hub"], "demo")
+        adapter.run_silent.assert_called_once_with("helm status demo-ontology-hub -n demo")
+
+    def test_shared_components_adapter_prepares_component_deployment_plan(self):
+        adapter = self._make_shared_adapter()
+        adapter.plan_component_override_values = mock.Mock(
+            return_value={
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp/chart",
+                "payload": {"ingress": {"enabled": True}},
+                "has_override": True,
+                "filename_prefix": "ontology-hub-override-",
+            }
+        )
+
+        plan = adapter.prepare_component_deployment_plan(
+            "ontology-hub",
+            ds_name="demo",
+            namespace="demo",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            runtime_metadata={
+                "chart_dir": "/tmp/chart",
+                "values_file": "/tmp/chart/values-demo.yaml",
+                "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ontology-hub",
+            },
+        )
+
+        self.assertEqual(plan["normalized_component"], "ontology-hub")
+        self.assertEqual(plan["chart_dir"], "/tmp/chart")
+        self.assertEqual(plan["values_file"], "/tmp/chart/values-demo.yaml")
+        self.assertEqual(plan["release_name"], "demo-ontology-hub")
+        self.assertEqual(
+            plan["override_plan"],
+            {
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp/chart",
+                "payload": {"ingress": {"enabled": True}},
+                "has_override": True,
+                "filename_prefix": "ontology-hub-override-",
+            },
+        )
+        adapter.plan_component_override_values.assert_called_once_with(
+            "ontology-hub",
+            chart_dir="/tmp/chart",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+    def test_shared_components_adapter_deploys_ontology_hub_runtime_via_shared_helper(self):
+        infrastructure = FakeInfrastructure()
+        adapter = self._make_shared_adapter(infrastructure=infrastructure)
+        adapter._maybe_prepare_level6_local_image = mock.Mock(return_value=True)
+        adapter._wait_for_component_rollout = mock.Mock(return_value=True)
+        adapter.verify_component_publication = mock.Mock(return_value={"verified": True})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            values_file = os.path.join(tmpdir, "values-demo.yaml")
+            with open(values_file, "w", encoding="utf-8") as handle:
+                handle.write("ingress:\n  enabled: true\n")
+
+            override_file = os.path.join(tmpdir, "ontology-hub-override.yaml")
+            with open(override_file, "w", encoding="utf-8") as handle:
+                handle.write("ingress:\n  enabled: true\n")
+
+            adapter._write_component_values_override_file = mock.Mock(return_value=override_file)
+
+            result = adapter.deploy_shared_component_runtime(
+                "ontology-hub",
+                deployment_plan={
+                    "chart_dir": tmpdir,
+                    "values_file": values_file,
+                    "release_name": "demo-ontology-hub",
+                    "override_plan": {"has_override": True},
+                },
+                namespace="demo",
+                deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            )
+
+        self.assertEqual(result["component"], "ontology-hub")
+        self.assertTrue(result["built_local_image"])
+        self.assertEqual(result["publication"], {"verified": True})
+        self.assertEqual(len(infrastructure.deploy_calls), 1)
+        deploy_args, deploy_kwargs = infrastructure.deploy_calls[0]
+        self.assertEqual(deploy_args[0], "demo-ontology-hub")
+        self.assertEqual(deploy_args[1], "demo")
+        self.assertEqual(deploy_args[2], ["values-demo.yaml", override_file])
+        self.assertEqual(deploy_kwargs["cwd"], os.path.dirname(values_file))
+        adapter._maybe_prepare_level6_local_image.assert_called_once_with(
+            "ontology-hub",
+            values_file,
+            {"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+        adapter._wait_for_component_rollout.assert_called_once_with(
+            "demo",
+            "demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+        adapter.run.assert_called_once_with(
+            "kubectl rollout restart deployment/demo-ontology-hub -n demo",
+            check=False,
+        )
+        adapter.verify_component_publication.assert_called_once_with(
+            "ontology-hub",
+            deployment_plan={
+                "chart_dir": os.path.dirname(values_file),
+                "values_file": values_file,
+                "release_name": "demo-ontology-hub",
+                "override_plan": {"has_override": True},
+            },
+            namespace="demo",
+        )
+        self.assertFalse(os.path.exists(override_file))
+
+    def test_verify_component_publication_accepts_ingress_and_public_routes(self):
+        adapter = self._make_shared_adapter()
+        adapter.run_silent = mock.Mock(return_value="ontology-hub-demo.dev.ds.dataspaceunit.upm")
+
+        dataset_response = mock.Mock(status_code=200, headers={})
+        edition_response = mock.Mock(status_code=302, headers={"Location": "/edition/login"})
+
+        with mock.patch("adapters.shared.components.requests.get", side_effect=[dataset_response, edition_response]):
+            result = adapter.verify_component_publication(
+                "ontology-hub",
+                deployment_plan={
+                    "release_name": "demo-ontology-hub",
+                    "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                },
+                namespace="components",
+                timeout_seconds=1,
+                poll_interval_seconds=1,
+            )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["ingress_host"], "ontology-hub-demo.dev.ds.dataspaceunit.upm")
+        self.assertEqual(
+            result["dataset_url"],
+            "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset",
+        )
+        self.assertEqual(
+            result["edition_url"],
+            "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/edition",
+        )
+        adapter.run_silent.assert_called_once_with(
+            "kubectl get ingress demo-ontology-hub -n components -o jsonpath='{.spec.rules[0].host}'"
+        )
+
+    def test_verify_component_publication_fails_when_ingress_is_missing(self):
+        adapter = self._make_shared_adapter()
+        adapter.run_silent = mock.Mock(return_value="")
+
+        with self.assertRaisesRegex(RuntimeError, "ingress 'demo-ontology-hub' is missing in namespace 'components'"):
+            adapter.verify_component_publication(
+                "ontology-hub",
+                deployment_plan={
+                    "release_name": "demo-ontology-hub",
+                    "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                },
+                namespace="components",
+                timeout_seconds=1,
+                poll_interval_seconds=1,
+            )
+
+    def test_verify_component_publication_accepts_ai_model_hub_ingress_and_runtime_routes(self):
+        adapter = self._make_shared_adapter()
+        adapter.run_silent = mock.Mock(return_value="ai-model-hub-demo.dev.ds.dataspaceunit.upm")
+
+        root_response = mock.Mock(status_code=200, headers={})
+        config_response = mock.Mock(status_code=200, headers={})
+
+        with mock.patch("adapters.shared.components.requests.get", side_effect=[root_response, config_response]):
+            result = adapter.verify_component_publication(
+                "ai-model-hub",
+                deployment_plan={
+                    "release_name": "demo-ai-model-hub",
+                    "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                },
+                namespace="components",
+                timeout_seconds=1,
+                poll_interval_seconds=1,
+            )
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["ingress_host"], "ai-model-hub-demo.dev.ds.dataspaceunit.upm")
+        self.assertEqual(result["root_url"], "http://ai-model-hub-demo.dev.ds.dataspaceunit.upm")
+        self.assertEqual(
+            result["config_url"],
+            "http://ai-model-hub-demo.dev.ds.dataspaceunit.upm/config/app-config.json",
+        )
+        adapter.run_silent.assert_called_once_with(
+            "kubectl get ingress demo-ai-model-hub -n components -o jsonpath='{.spec.rules[0].host}'"
+        )
+
+    def test_shared_components_adapter_deploy_component_release_writes_override_and_cleans_it_up(self):
+        infrastructure = FakeInfrastructure()
+        adapter = self._make_shared_adapter(infrastructure=infrastructure)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            values_file = os.path.join(tmpdir, "values-demo.yaml")
+            with open(values_file, "w", encoding="utf-8") as handle:
+                handle.write("ingress:\n  enabled: true\n")
+
+            override_file = os.path.join(tmpdir, "ontology-hub-override.yaml")
+            with open(override_file, "w", encoding="utf-8") as handle:
+                handle.write("ingress:\n  enabled: true\n")
+
+            adapter._write_component_values_override_file = mock.Mock(return_value=override_file)
+
+            result = adapter.deploy_component_release(
+                "ontology-hub",
+                deployment_plan={
+                    "chart_dir": tmpdir,
+                    "values_file": values_file,
+                    "release_name": "demo-ontology-hub",
+                    "override_plan": {"has_override": True},
+                },
+                namespace="demo",
+                deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            )
+
+        self.assertEqual(result["component"], "ontology-hub")
+        self.assertEqual(result["values_files"], ["values-demo.yaml", override_file])
+        self.assertEqual(len(infrastructure.deploy_calls), 1)
+        deploy_args, deploy_kwargs = infrastructure.deploy_calls[0]
+        self.assertEqual(deploy_args[0], "demo-ontology-hub")
+        self.assertEqual(deploy_args[1], "demo")
+        self.assertEqual(deploy_args[2], ["values-demo.yaml", override_file])
+        self.assertEqual(deploy_kwargs["cwd"], os.path.dirname(values_file))
+        self.assertFalse(os.path.exists(override_file))
+
+    def test_shared_components_adapter_finalize_component_runtime_restarts_and_waits_for_ontology_hub(self):
+        adapter = self._make_shared_adapter()
+        adapter._wait_for_component_rollout = mock.Mock(return_value=True)
+
+        result = adapter.finalize_component_runtime(
+            "ontology-hub",
+            release_name="demo-ontology-hub",
+            namespace="demo",
+            built_local_image=True,
+        )
+
+        self.assertEqual(result["component"], "ontology-hub")
+        self.assertTrue(result["built_local_image"])
+        self.assertTrue(result["waited_for_rollout"])
+        adapter.run.assert_called_once_with(
+            "kubectl rollout restart deployment/demo-ontology-hub -n demo",
+            check=False,
+        )
+        adapter._wait_for_component_rollout.assert_called_once_with(
+            "demo",
+            "demo-ontology-hub",
+            timeout_seconds=1800,
+            label="ontology-hub",
+        )
+
+    def test_shared_components_adapter_prepares_component_runtime_execution(self):
+        adapter = self._make_shared_adapter()
+        adapter._maybe_prepare_level6_local_image = mock.Mock(return_value=True)
+
+        result = adapter.prepare_component_runtime_execution(
+            "ontology-hub",
+            deployment_plan={
+                "values_file": "/tmp/chart/values-demo.yaml",
+                "release_name": "demo-ontology-hub",
+            },
+            namespace="demo",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+        self.assertEqual(result["component"], "ontology-hub")
+        self.assertEqual(result["release_name"], "demo-ontology-hub")
+        self.assertEqual(result["namespace"], "demo")
+        self.assertTrue(result["built_local_image"])
+        self.assertEqual(result["deployer_config"], {"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"})
+        adapter._maybe_prepare_level6_local_image.assert_called_once_with(
+            "ontology-hub",
+            "/tmp/chart/values-demo.yaml",
+            {"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+        )
+
+    def test_shared_components_adapter_finalize_component_runtime_skips_rollout_for_non_ontology_component(self):
+        adapter = self._make_shared_adapter()
+        adapter._wait_for_component_rollout = mock.Mock(return_value=True)
+
+        result = adapter.finalize_component_runtime(
+            "ai-model-hub",
+            release_name="demo-ai-model-hub",
+            namespace="demo",
+            built_local_image=False,
+        )
+
+        self.assertEqual(result["component"], "ai-model-hub")
+        self.assertFalse(result["built_local_image"])
+        self.assertFalse(result["waited_for_rollout"])
+        adapter.run.assert_not_called()
+        adapter._wait_for_component_rollout.assert_not_called()
+
+    def test_components_delegate_ontology_hub_runtime_to_shared_helper(self):
+        infrastructure = FakeInfrastructure()
+        adapter = self._make_shared_adapter(infrastructure=infrastructure)
+        adapter.config_adapter.load_deployer_config = mock.Mock(return_value={})
+        adapter._cleanup_components = mock.Mock()
+        adapter._cleanup_legacy_component_releases = mock.Mock(return_value=None)
+        adapter.prepare_component_runtime_metadata = mock.Mock(
+            return_value=[
+                {
+                    "component": "ontology-hub",
+                    "normalized_component": "ontology-hub",
+                    "excluded": False,
+                    "error": None,
+                    "chart_dir": "/tmp/chart",
+                    "values_file": "/tmp/chart/values-demo.yaml",
+                    "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                    "release_name": "demo-ontology-hub",
+                }
+            ]
+        )
+        adapter.prepare_component_deployment_plan = mock.Mock(
+            return_value={
+                "component": "ontology-hub",
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp/chart",
+                "values_file": "/tmp/chart/values-demo.yaml",
+                "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ontology-hub",
+                "override_plan": {"has_override": True},
+            }
+        )
+        adapter.deploy_shared_component_runtime = mock.Mock(return_value={"component": "ontology-hub"})
+
+        with mock.patch("adapters.inesdata.components.os.path.exists", return_value=True):
+            result = adapter.COMPONENTS(["ontology-hub"])
+
+        self.assertEqual(result["deployed"], ["ontology-hub"])
+        self.assertEqual(
+            result["urls"],
+            {"ontology-hub": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm"},
+        )
+        adapter.deploy_shared_component_runtime.assert_called_once_with(
+            "ontology-hub",
+            deployment_plan={
+                "component": "ontology-hub",
+                "normalized_component": "ontology-hub",
+                "chart_dir": "/tmp/chart",
+                "values_file": "/tmp/chart/values-demo.yaml",
+                "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ontology-hub",
+                "override_plan": {"has_override": True},
+            },
+            namespace="components",
+            deployer_config={},
+        )
+        adapter._cleanup_legacy_component_releases.assert_called_once_with(
+            ["ontology-hub"],
+            active_namespace="components",
+            ds_name="demo",
+            deployer_config={},
+        )
+        adapter._cleanup_components.assert_called_once_with(["ontology-hub"], "components")
+        self.assertEqual(infrastructure.deploy_calls, [])
+
+    def test_components_keep_ai_model_hub_on_legacy_runtime_path(self):
+        infrastructure = FakeInfrastructure()
+        adapter = self._make_shared_adapter(infrastructure=infrastructure)
+        adapter.config_adapter.load_deployer_config = mock.Mock(return_value={})
+        adapter._cleanup_components = mock.Mock()
+        adapter._cleanup_legacy_component_releases = mock.Mock(return_value=None)
+        adapter.verify_component_publication = mock.Mock(return_value={"verified": True})
+        adapter.prepare_component_runtime_metadata = mock.Mock(
+            return_value=[
+                {
+                    "component": "ai-model-hub",
+                    "normalized_component": "ai-model-hub",
+                    "excluded": False,
+                    "error": None,
+                    "chart_dir": "/tmp/chart-ai",
+                    "values_file": "/tmp/chart-ai/values-demo.yaml",
+                    "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                    "release_name": "demo-ai-model-hub",
+                }
+            ]
+        )
+        adapter.prepare_component_deployment_plan = mock.Mock(
+            return_value={
+                "component": "ai-model-hub",
+                "normalized_component": "ai-model-hub",
+                "chart_dir": "/tmp/chart-ai",
+                "values_file": "/tmp/chart-ai/values-demo.yaml",
+                "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ai-model-hub",
+                "override_plan": {"has_override": False},
+            }
+        )
+        adapter._maybe_prepare_level6_local_image = mock.Mock(return_value=False)
+        adapter._write_component_values_override_file = mock.Mock(return_value=None)
+        adapter.deploy_component_release = mock.Mock(
+            return_value={
+                "component": "ai-model-hub",
+                "release_name": "demo-ai-model-hub",
+                "namespace": "demo",
+                "values_files": ["values-demo.yaml"],
+            }
+        )
+        adapter.prepare_component_runtime_execution = mock.Mock(
+            return_value={
+                "component": "ai-model-hub",
+                "release_name": "demo-ai-model-hub",
+                "namespace": "components",
+                "deployer_config": {},
+                "built_local_image": False,
+            }
+        )
+        adapter.finalize_component_runtime = mock.Mock(
+            return_value={
+                "component": "ai-model-hub",
+                "release_name": "demo-ai-model-hub",
+                "namespace": "components",
+                "built_local_image": False,
+                "waited_for_rollout": False,
+            }
+        )
+
+        with mock.patch("adapters.inesdata.components.os.path.exists", return_value=True):
+            result = adapter.COMPONENTS(["ai-model-hub"])
+
+        self.assertEqual(result["deployed"], ["ai-model-hub"])
+        self.assertEqual(
+            result["urls"],
+            {"ai-model-hub": "http://ai-model-hub-demo.dev.ds.dataspaceunit.upm"},
+        )
+        adapter.deploy_component_release.assert_called_once_with(
+            "ai-model-hub",
+            deployment_plan={
+                "component": "ai-model-hub",
+                "normalized_component": "ai-model-hub",
+                "chart_dir": "/tmp/chart-ai",
+                "values_file": "/tmp/chart-ai/values-demo.yaml",
+                "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ai-model-hub",
+                "override_plan": {"has_override": False},
+            },
+            namespace="components",
+            deployer_config={},
+        )
+        adapter.prepare_component_runtime_execution.assert_called_once_with(
+            "ai-model-hub",
+            deployment_plan={
+                "component": "ai-model-hub",
+                "normalized_component": "ai-model-hub",
+                "chart_dir": "/tmp/chart-ai",
+                "values_file": "/tmp/chart-ai/values-demo.yaml",
+                "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ai-model-hub",
+                "override_plan": {"has_override": False},
+            },
+            namespace="components",
+            deployer_config={},
+        )
+        adapter.finalize_component_runtime.assert_called_once_with(
+            "ai-model-hub",
+            release_name="demo-ai-model-hub",
+            namespace="components",
+            built_local_image=False,
+        )
+        adapter.verify_component_publication.assert_called_once_with(
+            "ai-model-hub",
+            deployment_plan={
+                "component": "ai-model-hub",
+                "normalized_component": "ai-model-hub",
+                "chart_dir": "/tmp/chart-ai",
+                "values_file": "/tmp/chart-ai/values-demo.yaml",
+                "host": "ai-model-hub-demo.dev.ds.dataspaceunit.upm",
+                "release_name": "demo-ai-model-hub",
+                "override_plan": {"has_override": False},
+            },
+            namespace="components",
+        )
+        adapter._cleanup_legacy_component_releases.assert_called_once_with(
+            ["ai-model-hub"],
+            active_namespace="components",
+            ds_name="demo",
+            deployer_config={},
+        )
+        adapter._cleanup_components.assert_called_once_with(["ai-model-hub"], "components")
+        self.assertEqual(infrastructure.deploy_calls, [])
+        adapter._maybe_prepare_level6_local_image.assert_not_called()
+
+    def test_infer_component_urls_prefers_shared_runtime_resolver_when_available(self):
+        adapter = self._make_shared_adapter()
+        adapter.config_adapter.load_deployer_config = mock.Mock(return_value={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"})
+        adapter.prepare_component_runtime_metadata = mock.Mock(
+            side_effect=[
+                [
+                    {
+                        "normalized_component": "ontology-hub",
+                        "host": "ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                        "error": None,
+                        "excluded": False,
+                    },
+                    {
+                        "normalized_component": "ai-model-hub",
+                        "host": "",
+                        "error": None,
+                        "excluded": False,
+                    },
+                ]
+            ]
+        )
+
+        urls = adapter.infer_component_urls(["ontology-hub", "ai-model-hub"])
+
+        self.assertEqual(
+            urls,
+            {"ontology-hub": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm"},
+        )
+        adapter.prepare_component_runtime_metadata.assert_called_once_with(
+            ["ontology-hub", "ai-model-hub"],
+            ds_name="demo",
+            namespace="components",
+            deployer_config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
         )
 
 

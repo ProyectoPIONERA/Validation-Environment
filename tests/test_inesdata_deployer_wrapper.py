@@ -1,9 +1,11 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from adapters.shared.components import SharedComponentsAdapter
 from deployers.inesdata.deployer import InesdataDeployer
 
 
@@ -94,8 +96,13 @@ class FakeComponentsAdapter:
     def __init__(self):
         self.calls = []
 
-    def deploy_components(self, components):
-        self.calls.append(list(components))
+    def deploy_components(self, components, **kwargs):
+        self.calls.append(
+            {
+                "components": list(components),
+                "kwargs": dict(kwargs),
+            }
+        )
         return {"deployed": list(components), "urls": {"ontology-hub": "http://ontology-hub-demo"}}
 
 
@@ -159,7 +166,39 @@ class InesdataDeployerWrapperTests(unittest.TestCase):
         result = deployer.deploy_components(context)
 
         self.assertEqual(result["deployed"], ["ontology-hub", "ai-model-hub"])
-        self.assertEqual(components_adapter.calls, [["ontology-hub", "ai-model-hub"]])
+        self.assertEqual(result["configured"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(result["deployable"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(result["pending_support"], [])
+        self.assertEqual(
+            components_adapter.calls,
+            [
+                {
+                    "components": ["ontology-hub", "ai-model-hub"],
+                    "kwargs": {
+                        "ds_name": "demo",
+                        "namespace": "components",
+                        "deployer_config": context.config,
+                    },
+                }
+            ],
+        )
+
+    def test_resolve_components_adapter_reuses_shared_adapter_from_runtime_adapter(self):
+        adapter = FakeAdapter()
+        adapter.components = SharedComponentsAdapter(
+            run=mock.Mock(return_value="ok"),
+            run_silent=mock.Mock(return_value=""),
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=mock.Mock(),
+            config_adapter=adapter.config_adapter,
+            config_cls=FakeConfig,
+            active_adapter="inesdata",
+        )
+        deployer = InesdataDeployer(adapter=adapter, config_cls=FakeConfig)
+
+        resolved = deployer._resolve_components_adapter()
+
+        self.assertIs(resolved, adapter.components)
 
     def test_resolve_context_can_plan_role_aligned_namespaces_without_changing_execution_roles(self):
         adapter = FakeAdapter()

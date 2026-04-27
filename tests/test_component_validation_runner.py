@@ -1,9 +1,13 @@
 import unittest
 from unittest import mock
 
+from validation.components.ai_model_hub.component_runner import (
+    run_ai_model_hub_component_validation,
+)
 from validation.components.ontology_hub.functional.component_runner import (
     run_ontology_hub_component_validation as run_ontology_hub_functional_component_validation,
 )
+from validation.components.registry import COMPONENT_REGISTRY, get_component_registration
 from validation.components.runner import (
     COMPONENT_RUNNERS,
     run_component_validations,
@@ -18,6 +22,22 @@ class ComponentValidationRunnerTests(unittest.TestCase):
             run_ontology_hub_functional_component_validation,
         )
 
+    def test_ai_model_hub_uses_component_runner_by_default(self):
+        self.assertIs(
+            COMPONENT_RUNNERS["ai-model-hub"],
+            run_ai_model_hub_component_validation,
+        )
+
+    def test_component_registry_declares_supported_adapters(self):
+        ontology_registration = get_component_registration("ontology-hub")
+        ai_model_registration = get_component_registration("ai-model-hub")
+
+        self.assertEqual(ontology_registration.supported_adapters, ("inesdata", "edc"))
+        self.assertEqual(ontology_registration.deployable_adapters, ("inesdata",))
+        self.assertEqual(ai_model_registration.supported_adapters, ("inesdata", "edc"))
+        self.assertEqual(ai_model_registration.deployable_adapters, ("inesdata",))
+        self.assertEqual(COMPONENT_REGISTRY["ai-model-hub"].validation_groups, ("ai-model-hub",))
+
     def test_unregistered_component_is_reported_as_skipped(self):
         results = run_component_validations(
             {
@@ -28,8 +48,9 @@ class ComponentValidationRunnerTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["status"], "skipped")
         self.assertEqual(results[0]["reason"], "no_validator_registered")
+        self.assertEqual(results[0]["supported_adapters"], [])
 
-    def test_ai_model_hub_remains_opt_in_and_unregistered_by_default(self):
+    def test_ai_model_hub_runs_when_registered_in_common_runner(self):
         results = run_component_validations(
             {
                 "ai-model-hub": "http://ai-model-hub.example.local",
@@ -38,8 +59,7 @@ class ComponentValidationRunnerTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["component"], "ai-model-hub")
-        self.assertEqual(results[0]["status"], "skipped")
-        self.assertEqual(results[0]["reason"], "no_validator_registered")
+        self.assertNotEqual(results[0]["status"], "skipped")
 
     def test_registered_component_uses_configured_runner(self):
         fake_runner = mock.Mock(

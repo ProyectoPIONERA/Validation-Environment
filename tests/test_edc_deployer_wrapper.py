@@ -19,6 +19,7 @@ class FakeConfigAdapter:
             "DS_1_NAMESPACE": "demoedc",
             "DS_1_CONNECTORS": "citycounciledc,companyedc",
             "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+            "COMPONENTS": "ontology-hub,ai-model-hub",
         }
 
     @staticmethod
@@ -146,7 +147,13 @@ class EdcDeployerWrapperTests(unittest.TestCase):
         deployer = EdcDeployer(adapter=FakeAdapter(), config_cls=FakeConfig, topology="local")
         context = deployer.resolve_context(topology="local")
 
-        self.assertEqual(deployer.deploy_components(context), {"deployed": [], "urls": {}})
+        result = deployer.deploy_components(context)
+
+        self.assertEqual(result["deployed"], [])
+        self.assertEqual(result["urls"], {})
+        self.assertEqual(result["configured"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(result["deployable"], [])
+        self.assertEqual(result["pending_support"], ["ontology-hub", "ai-model-hub"])
 
     def test_resolve_context_can_plan_role_aligned_namespaces_without_changing_execution_roles(self):
         adapter = FakeAdapter()

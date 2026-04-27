@@ -1,5 +1,21 @@
 """Common contracts and helpers for deployer-based orchestration."""
 
+from .components import (
+    COMPONENT_CONTRACTS,
+    ComponentContract,
+    build_component_preview,
+    component_validation_groups,
+    component_values_file_candidates,
+    components_for_adapter,
+    configured_component_host,
+    configured_optional_components,
+    get_component_contract,
+    infer_component_hostname,
+    normalize_component_key,
+    resolve_component_release_name,
+    strip_url_scheme,
+    summarize_components_for_adapter,
+)
 from .config_loader import (
     apply_pionera_environment_overrides,
     iter_dataspace_slots,
@@ -32,6 +48,9 @@ from .orchestrator import DeployerOrchestrator
 from .topology import SUPPORTED_TOPOLOGIES, build_topology_profile, normalize_topology
 
 __all__ = [
+    "COMPONENT_CONTRACTS",
+    "ComponentContract",
+    "build_component_preview",
     "DeploymentContext",
     "DeployerOrchestrator",
     "HostBlock",
@@ -47,18 +66,29 @@ __all__ = [
     "blocks_as_dict",
     "build_context_host_blocks",
     "build_topology_profile",
+    "component_validation_groups",
+    "component_values_file_candidates",
+    "components_for_adapter",
+    "configured_component_host",
+    "configured_optional_components",
+    "get_component_contract",
     "hostnames_by_level",
+    "infer_component_hostname",
     "iter_dataspace_slots",
     "load_deployer_config",
     "apply_pionera_environment_overrides",
     "load_layered_deployer_config",
     "merge_missing_managed_blocks",
     "normalize_namespace_profile",
+    "normalize_component_key",
     "normalize_topology",
     "parse_hostnames",
     "remove_managed_blocks",
     "render_managed_block",
     "resolve_namespace_profile_plan",
+    "resolve_component_release_name",
+    "strip_url_scheme",
+    "summarize_components_for_adapter",
     "upsert_managed_block",
     "upsert_managed_blocks",
 ]

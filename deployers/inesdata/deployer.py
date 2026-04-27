@@ -5,7 +5,13 @@ from typing import Any
 
 from adapters.inesdata.adapter import InesdataAdapter
 from adapters.inesdata.components import INESDataComponentsAdapter
+from adapters.shared.components import SharedComponentsAdapter
 from adapters.inesdata.config import INESDataConfigAdapter, InesdataConfig
+from deployers.shared.lib.components import (
+    component_validation_groups,
+    components_for_adapter,
+    summarize_components_for_adapter,
+)
 from deployers.infrastructure.lib.contracts import DeploymentContext, ValidationProfile
 from deployers.infrastructure.lib.namespaces import resolve_namespace_profile_plan
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
@@ -111,10 +117,26 @@ class InesdataDeployer:
         return []
 
     def deploy_components(self, context: DeploymentContext) -> dict[str, Any]:
-        components = list(context.components or [])
+        summary = summarize_components_for_adapter(context.config, self.name())
+        components = list(summary.get("deployable") or [])
         if not components:
-            return {"deployed": [], "urls": {}}
-        return self._resolve_components_adapter().deploy_components(components)
+            return {
+                "deployed": [],
+                "urls": {},
+                **summary,
+            }
+        components_namespace = str(getattr(context.namespace_roles, "components_namespace", "") or "").strip()
+        result = self._resolve_components_adapter().deploy_components(
+            components,
+            ds_name=context.dataspace_name,
+            namespace=components_namespace,
+            deployer_config=context.config,
+        )
+        payload = dict(result or {})
+        payload.setdefault("deployed", list(components))
+        payload.setdefault("urls", {})
+        payload.update(summary)
+        return payload
 
     def get_cluster_connectors(self, context: DeploymentContext | None = None) -> list[str]:
         resolved = self.adapter.get_cluster_connectors()
@@ -125,33 +147,36 @@ class InesdataDeployer:
         return []
 
     def get_validation_profile(self, context: DeploymentContext) -> ValidationProfile:
+        component_groups = component_validation_groups(context.components)
         return ValidationProfile(
             adapter=self.name(),
             newman_enabled=True,
             test_data_cleanup_enabled=True,
             playwright_enabled=True,
             playwright_config="validation/ui/playwright.config.ts",
-            component_validation_enabled=bool(context.components),
-            component_groups=list(context.components),
+            component_validation_enabled=bool(component_groups),
+            component_groups=component_groups,
         )
 
     def _resolve_components_adapter(self) -> INESDataComponentsAdapter:
         if self._components_adapter is None:
-            self._components_adapter = INESDataComponentsAdapter(
-                run=self.adapter.run,
-                run_silent=self.adapter.run_silent,
-                auto_mode_getter=self.auto_mode_getter,
-                infrastructure_adapter=self.adapter.infrastructure,
-                config_adapter=self.config_adapter,
-                config_cls=self.config,
-            )
+            adapter_components = getattr(self.adapter, "components", None)
+            if isinstance(adapter_components, INESDataComponentsAdapter):
+                self._components_adapter = adapter_components
+            else:
+                self._components_adapter = SharedComponentsAdapter(
+                    run=self.adapter.run,
+                    run_silent=self.adapter.run_silent,
+                    auto_mode_getter=self.auto_mode_getter,
+                    infrastructure_adapter=self.adapter.infrastructure,
+                    config_adapter=self.config_adapter,
+                    config_cls=self.config,
+                    active_adapter=self.name(),
+                )
         return self._components_adapter
 
     def _configured_optional_components(self, config: dict[str, Any]) -> list[str]:
-        raw = str(config.get("COMPONENTS", "") or "").strip()
-        if not raw:
-            return []
-        return [token.strip() for token in raw.split(",") if token.strip()]
+        return components_for_adapter(config, self.name(), deployable_only=True)
 
     def _resolve_primary_connectors(self, dataspace_name: str, config: dict[str, Any]) -> list[str]:
         loader = getattr(getattr(self.adapter, "connectors", None), "load_dataspace_connectors", None)

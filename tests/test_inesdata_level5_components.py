@@ -22,7 +22,19 @@ class InesdataLevel5ComponentsTests(unittest.TestCase):
             result["urls"]["ontology-hub"],
             "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
         )
-        self.assertEqual(components_adapter.calls, [["ontology-hub"]])
+        self.assertEqual(
+            components_adapter.calls,
+            [
+                {
+                    "components": ["ontology-hub"],
+                    "kwargs": {
+                        "ds_name": "demo",
+                        "namespace": "components",
+                        "deployer_config": context.config,
+                    },
+                }
+            ],
+        )
         mock_input.assert_not_called()
 
 
@@ -83,8 +95,13 @@ class _FakeComponentsAdapter:
     def __init__(self):
         self.calls = []
 
-    def deploy_components(self, components):
-        self.calls.append(list(components))
+    def deploy_components(self, components, **kwargs):
+        self.calls.append(
+            {
+                "components": list(components),
+                "kwargs": dict(kwargs),
+            }
+        )
         return {
             "deployed": list(components),
             "urls": {

@@ -7,10 +7,10 @@ import socket
 import subprocess
 
 from .config import INESDataConfigAdapter, InesdataConfig
-from .components import INESDataComponentsAdapter
 from .connectors import INESDataConnectorsAdapter
 from .deployment import INESDataDeploymentAdapter
-from adapters.shared import SharedFoundationInfrastructureAdapter
+from deployers.shared.lib.components import build_component_preview
+from adapters.shared import SharedComponentsAdapter, SharedFoundationInfrastructureAdapter
 
 
 class InesdataAdapter:
@@ -79,13 +79,14 @@ class InesdataAdapter:
             config_adapter=self.config_adapter,
             config_cls=self.config,
         )
-        self.components = INESDataComponentsAdapter(
+        self.components = SharedComponentsAdapter(
             run=run,
             run_silent=run_silent,
             auto_mode_getter=auto_mode_getter,
             infrastructure_adapter=self.infrastructure,
             config_adapter=self.config_adapter,
             config_cls=self.config,
+            active_adapter="inesdata",
         )
         self.deployment.connectors_adapter = self.connectors
         self.connectors.deployment_adapter = self.deployment
@@ -346,9 +347,21 @@ class InesdataAdapter:
         }
 
     def _preview_components(self):
-        config = self.config_adapter.load_deployer_config() or {}
-        raw = str(config.get("COMPONENTS", "") or "").strip()
-        configured = [token.strip() for token in raw.split(",") if token.strip()]
+        summary_getter = getattr(self.components, "configured_components_summary", None)
+        if callable(summary_getter):
+            summary = dict(summary_getter() or {})
+        else:
+            config = self.config_adapter.load_deployer_config() or {}
+            configured = [token.strip() for token in str(config.get("COMPONENTS", "") or "").split(",") if token.strip()]
+            summary = {
+                "configured": configured,
+                "deployable": configured,
+                "pending_support": [],
+                "unsupported": [],
+                "unknown": [],
+            }
+
+        configured = list(summary.get("configured") or [])
         if not configured:
             return {
                 "status": "not-applicable",
@@ -358,30 +371,22 @@ class InesdataAdapter:
             }
 
         try:
-            inferred_urls = self.components.infer_component_urls(configured)
+            inferred_urls = self.components.infer_component_urls(summary.get("deployable") or [])
         except Exception as exc:
             inferred_urls = {}
             issues = [str(exc)]
         else:
             issues = []
-
-        component_entries = []
-        for component in configured:
-            normalized = str(component).strip()
-            component_entries.append(
-                {
-                    "name": normalized,
-                    "url": inferred_urls.get(normalized),
-                    "status": "planned",
-                }
-            )
-
-        return {
-            "status": "planned",
-            "action": "deploy_components",
-            "components": component_entries,
-            "issues": issues,
-        }
+        payload = build_component_preview(
+            configured=configured,
+            deployable=summary.get("deployable"),
+            pending_support=summary.get("pending_support"),
+            unsupported=summary.get("unsupported"),
+            unknown=summary.get("unknown"),
+            inferred_urls=inferred_urls,
+        )
+        payload["issues"] = issues
+        return payload
 
     def preview_deploy(self):
         common_services = self._preview_common_services()

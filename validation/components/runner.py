@@ -1,23 +1,21 @@
 import json
 from datetime import datetime
-from typing import Callable, Dict, List
+from typing import Dict, List
 
-from validation.components.ontology_hub.functional.component_runner import (
-    run_ontology_hub_component_validation as run_ontology_hub_functional_component_validation,
+from validation.components.registry import (
+    ComponentRunner,
+    get_component_registration,
+    registered_component_runners,
 )
 
 
-ComponentRunner = Callable[[str, str | None], dict]
-
-
-COMPONENT_RUNNERS: Dict[str, ComponentRunner] = {
-    "ontology-hub": run_ontology_hub_functional_component_validation,
-}
+COMPONENT_RUNNERS: Dict[str, ComponentRunner] = registered_component_runners()
 
 
 def run_component_validations(component_urls: Dict[str, str], experiment_dir: str | None = None) -> List[dict]:
     results: List[dict] = []
     for component, base_url in sorted((component_urls or {}).items()):
+        registration = get_component_registration(component)
         runner = COMPONENT_RUNNERS.get(component)
         if runner is None:
             results.append(
@@ -26,6 +24,7 @@ def run_component_validations(component_urls: Dict[str, str], experiment_dir: st
                     "base_url": base_url,
                     "status": "skipped",
                     "reason": "no_validator_registered",
+                    "supported_adapters": list(registration.supported_adapters) if registration else [],
                     "timestamp": datetime.now().isoformat(),
                 }
             )

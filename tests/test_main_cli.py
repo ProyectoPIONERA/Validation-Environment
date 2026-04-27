@@ -210,6 +210,39 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Level 5 URLs:", output)
         self.assertIn("Ontology Hub: http://ontology-hub-demo.dev.ds.dataspaceunit.upm", output)
 
+    def test_action_result_prints_level5_component_support_breakdown(self):
+        payload = {
+            "status": "completed",
+            "adapter": "edc",
+            "topology": "local",
+            "levels": [
+                {
+                    "level": 5,
+                    "name": "Deploy Components",
+                    "status": "completed",
+                    "result": {
+                        "deployed": [],
+                        "urls": {},
+                        "configured": ["ontology-hub", "ai-model-hub"],
+                        "deployable": [],
+                        "pending_support": ["ontology-hub", "ai-model-hub"],
+                        "unsupported": [],
+                        "unknown": [],
+                    },
+                }
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Level 5 configured components: 2", output)
+        self.assertIn("Level 5 pending adapter support: 2", output)
+        self.assertIn("- ontology-hub", output)
+        self.assertIn("- ai-model-hub", output)
+
     def test_action_result_prints_available_access_urls_in_multiline_format(self):
         payload = {
             "status": "available",
@@ -3438,6 +3471,164 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["playwright"]["status"], "passed")
         readiness_probe.assert_called_once()
         playwright_runner.assert_called_once()
+
+    def test_validate_command_runs_component_validation_after_playwright_when_enabled(self):
+        events = []
+
+        def fake_playwright(*args, **kwargs):
+            events.append("playwright")
+            return {"status": "passed", "summary": {"total_specs": 3}}
+
+        def fake_component_validation(
+            components,
+            *,
+            infer_component_urls,
+            run_component_validations_fn,
+            experiment_dir,
+        ):
+            events.append("components")
+            self.assertEqual(components, ["ontology-hub"])
+            self.assertEqual(
+                infer_component_urls(components),
+                {"ontology-hub": "http://ontology-hub.example.local"},
+            )
+            self.assertIs(run_component_validations_fn, main.run_registered_component_validations)
+            self.assertTrue(experiment_dir)
+            return [{"component": "ontology-hub", "status": "passed"}]
+
+        with mock.patch.object(
+            FakeDeployer,
+            "get_validation_profile",
+            return_value={
+                "adapter": "fake",
+                "newman_enabled": True,
+                "playwright_enabled": True,
+                "playwright_config": "validation/ui/playwright.config.ts",
+                "component_validation_enabled": True,
+                "component_groups": ["ontology-hub"],
+            },
+        ), mock.patch.object(
+            main,
+            "run_playwright_validation",
+            side_effect=fake_playwright,
+        ) as playwright_runner, mock.patch.object(
+            main,
+            "run_level6_component_validations",
+            side_effect=fake_component_validation,
+        ) as component_runner:
+            result = main.main(
+                ["fake", "validate"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(events, ["playwright", "components"])
+        self.assertEqual(result["playwright"]["status"], "passed")
+        self.assertEqual(result["component_results"][0]["component"], "ontology-hub")
+        self.assertEqual(result["component_results"][0]["status"], "passed")
+        self.assertEqual(result["component_validation_summary"]["passed"], 1)
+        playwright_runner.assert_called_once()
+        component_runner.assert_called_once()
+
+    def test_validate_command_can_disable_component_validation_explicitly(self):
+        with mock.patch.object(
+            FakeDeployer,
+            "get_validation_profile",
+            return_value={
+                "adapter": "fake",
+                "newman_enabled": True,
+                "playwright_enabled": True,
+                "playwright_config": "validation/ui/playwright.config.ts",
+                "component_validation_enabled": True,
+                "component_groups": ["ontology-hub"],
+            },
+        ), mock.patch.object(
+            main,
+            "run_playwright_validation",
+            return_value={"status": "passed", "summary": {"total_specs": 3}},
+        ) as playwright_runner, mock.patch.object(
+            main,
+            "run_level6_component_validations",
+        ) as component_runner, mock.patch.dict(
+            os.environ,
+            {"LEVEL6_RUN_COMPONENT_VALIDATION": "false"},
+            clear=False,
+        ):
+            result = main.main(
+                ["fake", "validate"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["playwright"]["status"], "passed")
+        self.assertEqual(result["component_results"][0]["component"], "ontology-hub")
+        self.assertEqual(result["component_results"][0]["status"], "skipped")
+        self.assertEqual(result["component_results"][0]["reason"], "disabled")
+        self.assertEqual(result["component_validation_summary"]["skipped"], 1)
+        playwright_runner.assert_called_once()
+        component_runner.assert_not_called()
+
+    def test_validate_command_still_runs_component_validation_when_playwright_fails(self):
+        events = []
+
+        def fake_playwright(*args, **kwargs):
+            events.append("playwright")
+            return {"status": "failed", "summary": {"total_specs": 3, "failed_specs": 1}}
+
+        def fake_component_validation(
+            components,
+            *,
+            infer_component_urls,
+            run_component_validations_fn,
+            experiment_dir,
+        ):
+            events.append("components")
+            self.assertEqual(components, ["ontology-hub"])
+            self.assertEqual(
+                infer_component_urls(components),
+                {"ontology-hub": "http://ontology-hub.example.local"},
+            )
+            self.assertIs(run_component_validations_fn, main.run_registered_component_validations)
+            self.assertTrue(experiment_dir)
+            return [{"component": "ontology-hub", "status": "passed"}]
+
+        with mock.patch.object(
+            FakeDeployer,
+            "get_validation_profile",
+            return_value={
+                "adapter": "fake",
+                "newman_enabled": True,
+                "playwright_enabled": True,
+                "playwright_config": "validation/ui/playwright.config.ts",
+                "component_validation_enabled": True,
+                "component_groups": ["ontology-hub"],
+            },
+        ), mock.patch.object(
+            main,
+            "run_playwright_validation",
+            side_effect=fake_playwright,
+        ) as playwright_runner, mock.patch.object(
+            main,
+            "run_level6_component_validations",
+            side_effect=fake_component_validation,
+        ) as component_runner:
+            with self.assertRaises(RuntimeError) as exc:
+                main.main(
+                    ["fake", "validate"],
+                    adapter_registry=self.registry,
+                    deployer_registry=self.deployer_registry,
+                    validation_engine_cls=FakeValidationEngine,
+                    experiment_storage=FakeStorage,
+                )
+
+        self.assertEqual(events, ["playwright", "components"])
+        self.assertIn("Playwright validation failed with status 'failed'", str(exc.exception))
+        playwright_runner.assert_called_once()
+        component_runner.assert_called_once()
 
     def test_validate_command_fails_clearly_when_inesdata_portal_is_not_ready(self):
         with mock.patch.object(

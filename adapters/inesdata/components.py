@@ -6,6 +6,13 @@ import ipaddress
 
 import yaml
 
+from deployers.shared.lib.components import (
+    resolve_component_release_name,
+    component_values_file_candidates,
+    configured_component_host,
+    infer_component_hostname,
+    strip_url_scheme,
+)
 from deployers.infrastructure.lib.paths import shared_artifact_roots
 from .config import INESDataConfigAdapter, InesdataConfig
 
@@ -153,11 +160,7 @@ class INESDataComponentsAdapter:
         )
 
     def _resolve_component_values_file(self, chart_dir: str, ds_name: str, namespace: str) -> str:
-        candidates = [
-            os.path.join(chart_dir, f"values-{ds_name}.yaml"),
-            os.path.join(chart_dir, f"values-{namespace}.yaml"),
-            os.path.join(chart_dir, "values.yaml"),
-        ]
+        candidates = component_values_file_candidates(chart_dir, ds_name, namespace)
         for candidate in candidates:
             if os.path.isfile(candidate):
                 return candidate
@@ -168,12 +171,143 @@ class INESDataComponentsAdapter:
         )
 
     def _resolve_component_release_name(self, normalized_component: str) -> str:
-        ds_name = self._dataspace_name()
-        if normalized_component == "registration-service":
-            return self.config.helm_release_rs()
-        if normalized_component == "public-portal":
-            return f"{ds_name}-dataspace-pp"
-        return f"{ds_name}-{normalized_component}"
+        return resolve_component_release_name(
+            normalized_component,
+            dataspace_name=self._dataspace_name(),
+            registration_service_release_name=self.config.helm_release_rs(),
+        )
+
+    def _resolve_dataspace_index(self, *, ds_name=None, ds_namespace=None, deployer_config=None) -> int:
+        resolved_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        resolved_name = str(ds_name or "").strip()
+        resolved_namespace = str(ds_namespace or "").strip()
+
+        dataspace_index_getter = getattr(self.config_adapter, "dataspace_index", None)
+        if callable(dataspace_index_getter):
+            try:
+                resolved_index = int(
+                    dataspace_index_getter(
+                        ds_name=resolved_name or None,
+                        ds_namespace=resolved_namespace or None,
+                    )
+                )
+            except TypeError:
+                try:
+                    resolved_index = int(dataspace_index_getter(resolved_name or None, resolved_namespace or None))
+                except Exception:
+                    resolved_index = 1
+            except Exception:
+                resolved_index = 1
+            return resolved_index if resolved_index >= 1 else 1
+
+        index = 1
+        while True:
+            configured_name = str(resolved_config.get(f"DS_{index}_NAME") or "").strip()
+            configured_namespace = str(
+                resolved_config.get(f"DS_{index}_NAMESPACE") or configured_name
+            ).strip()
+            if not configured_name:
+                break
+            if resolved_name and configured_name == resolved_name:
+                return index
+            if resolved_namespace and configured_namespace == resolved_namespace:
+                return index
+            index += 1
+        return 1
+
+    def _resolve_legacy_components_namespace(self, *, ds_name=None, deployer_config=None) -> str:
+        resolved_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        resolved_name = str(ds_name or self._dataspace_name() or "").strip() or self._dataspace_name()
+        resolved_index = self._resolve_dataspace_index(
+            ds_name=resolved_name,
+            deployer_config=resolved_config,
+        )
+
+        configured_namespace = str(
+            resolved_config.get(f"DS_{resolved_index}_NAMESPACE")
+            or resolved_config.get(f"DS_{resolved_index}_NAME")
+            or ""
+        ).strip()
+        if configured_namespace:
+            return configured_namespace
+
+        primary_namespace_getter = getattr(self.config_adapter, "primary_dataspace_namespace", None)
+        if callable(primary_namespace_getter):
+            try:
+                resolved_primary_namespace = str(primary_namespace_getter() or "").strip()
+            except Exception:
+                resolved_primary_namespace = ""
+            if resolved_primary_namespace:
+                return resolved_primary_namespace
+
+        legacy_namespace_getter = getattr(self.config, "namespace_demo", None)
+        if callable(legacy_namespace_getter):
+            try:
+                resolved_legacy_namespace = str(legacy_namespace_getter() or "").strip()
+            except Exception:
+                resolved_legacy_namespace = ""
+            if resolved_legacy_namespace:
+                return resolved_legacy_namespace
+
+        return resolved_name
+
+    @staticmethod
+    def _extract_components_namespace(namespace_plan) -> str:
+        if isinstance(namespace_plan, dict):
+            namespace_roles = namespace_plan.get("namespace_roles") or namespace_plan.get("planned_namespace_roles") or {}
+        else:
+            namespace_roles = namespace_plan
+
+        if isinstance(namespace_roles, dict):
+            resolved_namespace = namespace_roles.get("components_namespace")
+        else:
+            resolved_namespace = getattr(namespace_roles, "components_namespace", None)
+
+        return str(resolved_namespace or "").strip()
+
+    def _resolve_components_namespace(self, *, ds_name=None, namespace=None, deployer_config=None) -> str:
+        explicit_namespace = str(namespace or "").strip()
+        if explicit_namespace:
+            return explicit_namespace
+
+        resolved_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        resolved_name = str(ds_name or self._dataspace_name() or "").strip() or self._dataspace_name()
+        resolved_legacy_namespace = self._resolve_legacy_components_namespace(
+            ds_name=resolved_name,
+            deployer_config=resolved_config,
+        )
+        resolved_index = self._resolve_dataspace_index(
+            ds_name=resolved_name,
+            ds_namespace=resolved_legacy_namespace,
+            deployer_config=resolved_config,
+        )
+
+        namespace_plan_getter = getattr(self.config_adapter, "namespace_plan_for_dataspace", None)
+        if callable(namespace_plan_getter):
+            try:
+                namespace_plan = namespace_plan_getter(
+                    ds_name=resolved_name,
+                    ds_namespace=resolved_legacy_namespace,
+                    ds_index=resolved_index,
+                )
+            except TypeError:
+                try:
+                    namespace_plan = namespace_plan_getter(
+                        ds_name=resolved_name,
+                        ds_namespace=resolved_legacy_namespace,
+                    )
+                except Exception:
+                    namespace_plan = None
+            except Exception:
+                namespace_plan = None
+            resolved_components_namespace = self._extract_components_namespace(namespace_plan)
+            if resolved_components_namespace:
+                return resolved_components_namespace
+
+        configured_namespace = str(resolved_config.get("COMPONENTS_NAMESPACE") or "").strip()
+        if configured_namespace:
+            return configured_namespace
+        return "components"
 
     @staticmethod
     def _parse_bool(value, default=False) -> bool:
@@ -190,12 +324,7 @@ class INESDataComponentsAdapter:
 
     @staticmethod
     def _strip_url_scheme(host_or_url: str) -> str:
-        value = (host_or_url or "").strip().rstrip("/")
-        if value.startswith("http://"):
-            return value[len("http://"):]
-        if value.startswith("https://"):
-            return value[len("https://"):]
-        return value
+        return strip_url_scheme(host_or_url)
 
     def _cleanup_components(self, components, namespace: str):
         namespace = (namespace or "").strip()
@@ -244,6 +373,43 @@ class INESDataComponentsAdapter:
                 )
                 if reclaim and reclaim.strip().upper() == "RETAIN":
                     self.run(f"kubectl delete pv {pv_q}", check=False)
+
+    def _cleanup_legacy_component_releases(
+        self,
+        components,
+        *,
+        active_namespace,
+        ds_name=None,
+        deployer_config=None,
+    ):
+        resolved_active_namespace = str(active_namespace or "").strip()
+        if not resolved_active_namespace:
+            return None
+
+        legacy_namespace = self._resolve_legacy_components_namespace(
+            ds_name=ds_name,
+            deployer_config=deployer_config,
+        )
+        if not legacy_namespace or legacy_namespace == resolved_active_namespace:
+            return None
+
+        legacy_ns_q = shlex.quote(legacy_namespace)
+        for component in list(components or []):
+            normalized = self._normalize_component_key(component)
+            if normalized in self._LEVEL6_EXCLUDED_KEYS:
+                continue
+            release_name = self._resolve_component_release_name(normalized)
+            rel_q = shlex.quote(release_name)
+            status = self.run_silent(f"helm status {rel_q} -n {legacy_ns_q}")
+            if status is None:
+                continue
+            print(
+                "\nDetected legacy component release outside components namespace; "
+                f"cleaning {release_name} from {legacy_namespace} before deploying to {resolved_active_namespace}"
+            )
+            self._cleanup_components(components, legacy_namespace)
+            return legacy_namespace
+        return None
 
     @staticmethod
     def _safe_load_yaml_file(path: str) -> dict:
@@ -530,51 +696,95 @@ class INESDataComponentsAdapter:
 
     def _infer_component_hostname(self, normalized_component: str, values_file: str, deployer_config: dict):
         """Infer component hostname (ingress host) from Helm values."""
-        configured_host = self._configured_component_host(normalized_component, deployer_config)
-        if configured_host:
-            return configured_host
-
         try:
             values = self._safe_load_yaml_file(values_file)
         except Exception:
             return None
 
-        ingress = (values or {}).get("ingress") or {}
-        enabled = bool(ingress.get("enabled"))
-        if not enabled:
-            return None
-
-        host = (ingress.get("host") or "").strip()
-        if host:
-            return host
-
-        ds_name = (getattr(self.config, "DS_NAME", "") or "").strip()
-        ds_domain = (deployer_config.get("DS_DOMAIN_BASE") or "").strip()
-        if ds_name and ds_domain:
-            return f"{normalized_component}-{ds_name}.{ds_domain}"
-
-        return None
+        return infer_component_hostname(
+            normalized_component,
+            values,
+            deployer_config,
+            dataspace_name=(getattr(self.config, "DS_NAME", "") or "").strip(),
+        )
 
     def _configured_component_host(self, normalized_component: str, deployer_config: dict) -> str:
-        normalized = self._normalize_component_key(normalized_component)
-
-        env_key = normalized.upper().replace("-", "_")
-        explicit = (
-            deployer_config.get(f"{env_key}_HOST")
-            or deployer_config.get(f"{env_key}_HOSTNAME")
-            or deployer_config.get(f"{env_key}_URL")
+        return configured_component_host(
+            normalized_component,
+            deployer_config,
+            dataspace_name=(getattr(self.config, "DS_NAME", "") or "").strip(),
         )
-        explicit_host = self._strip_url_scheme(explicit)
-        if explicit_host:
-            return explicit_host
 
-        if normalized == "ontology-hub":
-            ds_domain = (deployer_config.get("DS_DOMAIN_BASE") or "").strip()
-            ds_name = (getattr(self.config, "DS_NAME", "") or "").strip()
-            if ds_domain and ds_name:
-                return f"ontology-hub-{ds_name}.{ds_domain}"
+    def _resolve_dataspace_connector_ids(self, *, ds_name=None, deployer_config=None):
+        resolved_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        resolved_name = str(ds_name or self._dataspace_name() or "").strip() or self._dataspace_name()
+        resolved_index = self._resolve_dataspace_index(
+            ds_name=resolved_name,
+            deployer_config=resolved_config,
+        )
 
-        return ""
+        raw = str(resolved_config.get(f"DS_{resolved_index}_CONNECTORS") or "").strip()
+        connector_ids = []
+        for token in raw.split(","):
+            normalized = str(token or "").strip()
+            if not normalized:
+                continue
+            if normalized.startswith("conn-"):
+                connector_ids.append(normalized)
+            else:
+                connector_ids.append(f"conn-{normalized}-{resolved_name}")
+        return connector_ids
+
+    def _connector_public_base_url(self, connector_id: str, deployer_config: dict) -> str:
+        resolved_connector_id = str(connector_id or "").strip()
+        if not resolved_connector_id:
+            return ""
+
+        resolved_domain = str((deployer_config or {}).get("DS_DOMAIN_BASE") or "").strip()
+        if not resolved_domain:
+            return ""
+        return self._to_http_url(f"{resolved_connector_id}.{resolved_domain}")
+
+    def _ai_model_hub_connector_config(self, *, ds_name=None, deployer_config=None) -> list[dict]:
+        resolved_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        connector_ids = self._resolve_dataspace_connector_ids(
+            ds_name=ds_name,
+            deployer_config=resolved_config,
+        )
+        if not connector_ids:
+            return []
+
+        provider_id = connector_ids[0] if connector_ids else ""
+        consumer_id = connector_ids[1] if len(connector_ids) > 1 else ""
+        entries = []
+
+        if consumer_id:
+            consumer_base = self._connector_public_base_url(consumer_id, resolved_config)
+            if consumer_base:
+                entries.append(
+                    {
+                        "connectorName": "Consumer",
+                        "managementUrl": f"{consumer_base}/management",
+                        "defaultUrl": f"{consumer_base}/api",
+                        "protocolUrl": f"{consumer_base}/protocol",
+                        "federatedCatalogEnabled": False,
+                    }
+                )
+
+        if provider_id:
+            provider_base = self._connector_public_base_url(provider_id, resolved_config)
+            if provider_base:
+                entries.append(
+                    {
+                        "connectorName": "Provider",
+                        "managementUrl": f"{provider_base}/management",
+                        "defaultUrl": f"{provider_base}/api",
+                        "protocolUrl": f"{provider_base}/protocol",
+                        "federatedCatalogEnabled": False,
+                    }
+                )
+
+        return entries
 
     def _component_values_override_payload(self, normalized_component: str, deployer_config: dict) -> dict:
         normalized = self._normalize_component_key(normalized_component)
@@ -606,6 +816,21 @@ class INESDataComponentsAdapter:
                     deployer_config.get("ONTOLOGY_HUB_SAMPLE_DATA_ENABLED"),
                     default=True,
                 )
+
+        if normalized == "ai-model-hub":
+            host = self._configured_component_host(normalized, deployer_config)
+            if host:
+                overrides["ingress"] = {
+                    "enabled": True,
+                    "host": host,
+                }
+
+            connector_config = self._ai_model_hub_connector_config(
+                ds_name=self._dataspace_name(),
+                deployer_config=deployer_config,
+            )
+            if connector_config:
+                overrides.setdefault("config", {})["edcConnectorConfig"] = connector_config
 
         return overrides
 
@@ -644,7 +869,16 @@ class INESDataComponentsAdapter:
             return False
 
     def _write_component_values_override_file(self, chart_dir: str, normalized_component: str, deployer_config: dict):
-        payload = self._component_values_override_payload(normalized_component, deployer_config)
+        override_planner = getattr(self, "plan_component_override_values", None)
+        if callable(override_planner):
+            override_plan = override_planner(
+                normalized_component,
+                chart_dir=chart_dir,
+                deployer_config=deployer_config,
+            )
+            payload = dict(override_plan.get("payload") or {})
+        else:
+            payload = self._component_values_override_payload(normalized_component, deployer_config)
         if not payload:
             return None
 
@@ -749,35 +983,70 @@ class INESDataComponentsAdapter:
             label=label,
         )
 
-    def deploy_components(self, components):
-        return self.COMPONENTS(components)
+    def deploy_components(self, components, *, ds_name=None, namespace=None, deployer_config=None):
+        return self.COMPONENTS(
+            components,
+            ds_name=ds_name,
+            namespace=namespace,
+            deployer_config=deployer_config,
+        )
 
-    def infer_component_urls(self, components):
+    def infer_component_urls(self, components, *, ds_name=None, namespace=None, deployer_config=None):
         if not components:
             return {}
 
-        ds_name = self._dataspace_name()
-        namespace = self.config.namespace_demo()
-        deployer_config = self.config_adapter.load_deployer_config() or {}
+        ds_name = str(ds_name or self._dataspace_name() or "").strip()
+        deployer_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        namespace = self._resolve_components_namespace(
+            ds_name=ds_name,
+            namespace=namespace,
+            deployer_config=deployer_config,
+        )
+        runtime_batch_resolver = getattr(self, "prepare_component_runtime_metadata", None)
+        runtime_resolver = getattr(self, "resolve_component_runtime_metadata", None)
 
         inferred_hosts = {}
-        for component in components:
-            normalized = self._normalize_component_key(component)
-            if normalized in self._LEVEL6_EXCLUDED_KEYS:
-                continue
-            try:
-                chart_dir = self._resolve_component_chart_dir(normalized)
-                values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
-                host = self._infer_component_hostname(normalized, values_file, deployer_config)
-            except Exception:
-                host = None
+        if callable(runtime_batch_resolver):
+            prepared_metadata = runtime_batch_resolver(
+                components,
+                ds_name=ds_name,
+                namespace=namespace,
+                deployer_config=deployer_config,
+            )
+            for metadata in prepared_metadata:
+                if metadata.get("excluded") or metadata.get("error"):
+                    continue
+                normalized = metadata.get("normalized_component")
+                host = metadata.get("host")
+                if normalized and host:
+                    inferred_hosts[normalized] = host
+        else:
+            for component in components:
+                normalized = self._normalize_component_key(component)
+                if normalized in self._LEVEL6_EXCLUDED_KEYS:
+                    continue
+                try:
+                    if callable(runtime_resolver):
+                        runtime_metadata = runtime_resolver(
+                            normalized,
+                            ds_name=ds_name,
+                            namespace=namespace,
+                            deployer_config=deployer_config,
+                        )
+                        host = runtime_metadata.get("host")
+                    else:
+                        chart_dir = self._resolve_component_chart_dir(normalized)
+                        values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
+                        host = self._infer_component_hostname(normalized, values_file, deployer_config)
+                except Exception:
+                    host = None
 
-            if host:
-                inferred_hosts[normalized] = host
+                if host:
+                    inferred_hosts[normalized] = host
 
         return {k: self._to_http_url(v) for k, v in inferred_hosts.items() if v}
 
-    def COMPONENTS(self, components):
+    def COMPONENTS(self, components, *, ds_name=None, namespace=None, deployer_config=None):
         if not components:
             print("No components selected for deployment")
             return {"deployed": [], "urls": {}}
@@ -796,27 +1065,72 @@ class INESDataComponentsAdapter:
         if callable(reconcile_vault_state) and not reconcile_vault_state():
             self._fail("Vault token could not be synchronized with the shared local runtime")
 
-        ds_name = self._dataspace_name()
-        namespace = self.config.namespace_demo()
-
-        deployer_config = self.config_adapter.load_deployer_config() or {}
+        deployer_config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        ds_name = str(ds_name or self._dataspace_name() or "").strip()
+        namespace = self._resolve_components_namespace(
+            ds_name=ds_name,
+            namespace=namespace,
+            deployer_config=deployer_config,
+        )
+        runtime_batch_resolver = getattr(self, "prepare_component_runtime_metadata", None)
+        runtime_resolver = getattr(self, "resolve_component_runtime_metadata", None)
+        deployment_plan_builder = getattr(self, "prepare_component_deployment_plan", None)
+        component_release_deployer = getattr(self, "deploy_component_release", None)
+        runtime_execution_preparer = getattr(self, "prepare_component_runtime_execution", None)
+        runtime_finalizer = getattr(self, "finalize_component_runtime", None)
+        publication_verifier = getattr(self, "verify_component_publication", None)
+        shared_runtime_deployer = getattr(self, "deploy_shared_component_runtime", None)
+        self._cleanup_legacy_component_releases(
+            components,
+            active_namespace=namespace,
+            ds_name=ds_name,
+            deployer_config=deployer_config,
+        )
         self._cleanup_components(components, namespace)
 
+        prepared_metadata = None
+        metadata_by_component = {}
         inferred_hosts = {}
-        for component in components:
-            normalized = self._normalize_component_key(component)
-            if normalized in self._LEVEL6_EXCLUDED_KEYS:
-                continue
+        if callable(runtime_batch_resolver):
+            prepared_metadata = runtime_batch_resolver(
+                components,
+                ds_name=ds_name,
+                namespace=namespace,
+                deployer_config=deployer_config,
+            )
+            for metadata in prepared_metadata:
+                normalized = metadata.get("normalized_component")
+                if normalized:
+                    metadata_by_component[normalized] = metadata
+                if metadata.get("excluded") or metadata.get("error"):
+                    continue
+                host = metadata.get("host")
+                if normalized and host:
+                    inferred_hosts[normalized] = host
+        else:
+            for component in components:
+                normalized = self._normalize_component_key(component)
+                if normalized in self._LEVEL6_EXCLUDED_KEYS:
+                    continue
 
-            try:
-                chart_dir = self._resolve_component_chart_dir(normalized)
-                values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
-                host = self._infer_component_hostname(normalized, values_file, deployer_config)
-            except Exception:
-                host = None
+                try:
+                    if callable(runtime_resolver):
+                        runtime_metadata = runtime_resolver(
+                            normalized,
+                            ds_name=ds_name,
+                            namespace=namespace,
+                            deployer_config=deployer_config,
+                        )
+                        host = runtime_metadata.get("host")
+                    else:
+                        chart_dir = self._resolve_component_chart_dir(normalized)
+                        values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
+                        host = self._infer_component_hostname(normalized, values_file, deployer_config)
+                except Exception:
+                    host = None
 
-            if host:
-                inferred_hosts[normalized] = host
+                if host:
+                    inferred_hosts[normalized] = host
 
         if inferred_hosts:
             print("\nComponent hostnames inferred from values:")
@@ -840,63 +1154,167 @@ class INESDataComponentsAdapter:
                     "Deploy it via Level 3 (dataspace) and remove it from COMPONENTS."
                 )
 
-            chart_dir = self._resolve_component_chart_dir(normalized)
-            values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
-            release_name = self._resolve_component_release_name(normalized)
-            override_values_file = None
-
-            built_local_image = False
-            try:
-                built_local_image = self._maybe_prepare_level6_local_image(normalized, values_file, deployer_config)
-            except Exception as exc:
-                self._fail(
-                    f"Error preparing local images for component '{normalized}'",
-                    root_cause=str(exc),
-                )
-
-            print(f"\nDeploying component: {normalized}")
-            print(f"  Chart: {chart_dir}")
-            print(f"  Values: {os.path.basename(values_file)}")
-            print(f"  Release: {release_name}")
-            print(f"  Namespace: {namespace}")
-            try:
-                override_values_file = self._write_component_values_override_file(
-                    chart_dir,
+            if normalized in metadata_by_component and not metadata_by_component[normalized].get("error"):
+                runtime_metadata = metadata_by_component[normalized]
+            elif callable(runtime_resolver):
+                runtime_metadata = runtime_resolver(
                     normalized,
-                    deployer_config,
+                    ds_name=ds_name,
+                    namespace=namespace,
+                    deployer_config=deployer_config,
                 )
-                values_files = [os.path.basename(values_file)]
-                if override_values_file:
-                    values_files.append(override_values_file)
-                    print(f"  Override values: {os.path.basename(override_values_file)}")
+            else:
+                runtime_metadata = None
 
-                if not self.infrastructure.deploy_helm_release(
-                    release_name,
-                    namespace,
-                    values_files,
-                    cwd=chart_dir,
-                ):
-                    self._fail(f"Error deploying component '{normalized}'")
-            finally:
-                if override_values_file and os.path.exists(override_values_file):
-                    os.unlink(override_values_file)
-
-            if built_local_image:
-                print(f"Restarting deployment/{release_name} to pick up local image...\n")
-                self.run(
-                    f"kubectl rollout restart deployment/{release_name} -n {namespace}",
-                    check=False,
+            if callable(deployment_plan_builder):
+                deployment_plan = deployment_plan_builder(
+                    normalized,
+                    ds_name=ds_name,
+                    namespace=namespace,
+                    deployer_config=deployer_config,
+                    runtime_metadata=runtime_metadata,
                 )
+                chart_dir = deployment_plan["chart_dir"]
+                values_file = deployment_plan["values_file"]
+                release_name = deployment_plan["release_name"]
+                override_plan = dict(deployment_plan.get("override_plan") or {})
+            else:
+                if runtime_metadata:
+                    chart_dir = runtime_metadata["chart_dir"]
+                    values_file = runtime_metadata["values_file"]
+                    release_name = runtime_metadata["release_name"]
+                else:
+                    chart_dir = self._resolve_component_chart_dir(normalized)
+                    values_file = self._resolve_component_values_file(chart_dir, ds_name=ds_name, namespace=namespace)
+                    release_name = self._resolve_component_release_name(normalized)
+                override_planner = getattr(self, "plan_component_override_values", None)
+                if callable(override_planner):
+                    override_plan = dict(
+                        override_planner(
+                            normalized,
+                            chart_dir=chart_dir,
+                            deployer_config=deployer_config,
+                        )
+                        or {}
+                    )
+                else:
+                    legacy_payload = self._component_values_override_payload(normalized, deployer_config)
+                    override_plan = {
+                        "normalized_component": normalized,
+                        "chart_dir": chart_dir,
+                        "payload": legacy_payload,
+                        "has_override": bool(legacy_payload),
+                        "filename_prefix": f"{normalized}-override-" if legacy_payload else None,
+                    }
+            current_deployment_plan = {
+                "component": component,
+                "normalized_component": normalized,
+                "chart_dir": chart_dir,
+                "values_file": values_file,
+                "host": runtime_metadata.get("host") if runtime_metadata else None,
+                "release_name": release_name,
+                "override_plan": override_plan,
+            }
 
-            if normalized == "ontology-hub":
-                timeout_seconds = 1800
-                if not self._wait_for_component_rollout(
-                    namespace,
-                    release_name,
-                    timeout_seconds=timeout_seconds,
-                    label=normalized,
-                ):
-                    self._fail(f"Timeout waiting for component '{normalized}' deployment rollout")
+            if callable(shared_runtime_deployer):
+                shared_runtime_result = shared_runtime_deployer(
+                    normalized,
+                    deployment_plan=current_deployment_plan,
+                    namespace=namespace,
+                    deployer_config=deployer_config,
+                )
+                if shared_runtime_result is not None:
+                    deployed.append(normalized)
+                    continue
+
+            if callable(runtime_execution_preparer):
+                execution = runtime_execution_preparer(
+                    normalized,
+                    deployment_plan=current_deployment_plan,
+                    namespace=namespace,
+                    deployer_config=deployer_config,
+                )
+                built_local_image = execution["built_local_image"]
+            else:
+                built_local_image = False
+                try:
+                    built_local_image = self._maybe_prepare_level6_local_image(normalized, values_file, deployer_config)
+                except Exception as exc:
+                    self._fail(
+                        f"Error preparing local images for component '{normalized}'",
+                        root_cause=str(exc),
+                    )
+
+            if callable(component_release_deployer):
+                component_release_deployer(
+                    normalized,
+                    deployment_plan=current_deployment_plan,
+                    namespace=namespace,
+                    deployer_config=deployer_config,
+                )
+            else:
+                override_values_file = None
+                print(f"\nDeploying component: {normalized}")
+                print(f"  Chart: {chart_dir}")
+                print(f"  Values: {os.path.basename(values_file)}")
+                print(f"  Release: {release_name}")
+                print(f"  Namespace: {namespace}")
+                try:
+                    if override_plan.get("has_override"):
+                        override_values_file = self._write_component_values_override_file(
+                            chart_dir,
+                            normalized,
+                            deployer_config,
+                        )
+                    else:
+                        override_values_file = None
+                    values_files = [os.path.basename(values_file)]
+                    if override_values_file:
+                        values_files.append(override_values_file)
+                        print(f"  Override values: {os.path.basename(override_values_file)}")
+
+                    if not self.infrastructure.deploy_helm_release(
+                        release_name,
+                        namespace,
+                        values_files,
+                        cwd=chart_dir,
+                    ):
+                        self._fail(f"Error deploying component '{normalized}'")
+                finally:
+                    if override_values_file and os.path.exists(override_values_file):
+                        os.unlink(override_values_file)
+
+            if callable(runtime_finalizer):
+                runtime_finalizer(
+                    normalized,
+                    release_name=release_name,
+                    namespace=namespace,
+                    built_local_image=built_local_image,
+                )
+            else:
+                if built_local_image:
+                    print(f"Restarting deployment/{release_name} to pick up local image...\n")
+                    self.run(
+                        f"kubectl rollout restart deployment/{release_name} -n {namespace}",
+                        check=False,
+                    )
+
+                    if normalized == "ontology-hub":
+                        timeout_seconds = 1800
+                        if not self._wait_for_component_rollout(
+                            namespace,
+                            release_name,
+                        timeout_seconds=timeout_seconds,
+                        label=normalized,
+                        ):
+                            self._fail(f"Timeout waiting for component '{normalized}' deployment rollout")
+
+            if callable(publication_verifier):
+                publication_verifier(
+                    normalized,
+                    deployment_plan=current_deployment_plan,
+                    namespace=namespace,
+                )
 
             deployed.append(normalized)
 

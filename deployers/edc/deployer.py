@@ -4,6 +4,11 @@ from typing import Any
 
 from adapters.edc.adapter import EdcAdapter
 from adapters.edc.config import EDCConfigAdapter, EdcConfig
+from deployers.shared.lib.components import (
+    component_validation_groups,
+    components_for_adapter,
+    summarize_components_for_adapter,
+)
 from deployers.infrastructure.lib.contracts import DeploymentContext, ValidationProfile
 from deployers.infrastructure.lib.namespaces import resolve_namespace_profile_plan
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
@@ -74,7 +79,7 @@ class EdcDeployer:
             dataspace_name=dataspace_name,
             ds_domain_base=ds_domain_base,
             connectors=self._resolve_primary_connectors(dataspace_name, config),
-            components=[],
+            components=components_for_adapter(config, self.name(), deployable_only=True),
             namespace_profile=namespace_plan["namespace_profile"],
             namespace_roles=namespace_plan["namespace_roles"],
             planned_namespace_roles=namespace_plan["planned_namespace_roles"],
@@ -101,7 +106,11 @@ class EdcDeployer:
         return []
 
     def deploy_components(self, context: DeploymentContext) -> dict[str, Any]:
-        return {"deployed": [], "urls": {}}
+        return {
+            "deployed": [],
+            "urls": {},
+            **summarize_components_for_adapter(context.config, self.name()),
+        }
 
     def get_cluster_connectors(self, context: DeploymentContext | None = None) -> list[str]:
         resolved = self.adapter.get_cluster_connectors()
@@ -112,14 +121,15 @@ class EdcDeployer:
         return []
 
     def get_validation_profile(self, context: DeploymentContext) -> ValidationProfile:
+        component_groups = component_validation_groups(context.components)
         return ValidationProfile(
             adapter=self.name(),
             newman_enabled=True,
             test_data_cleanup_enabled=True,
             playwright_enabled=True,
             playwright_config="validation/ui/playwright.edc.config.ts",
-            component_validation_enabled=False,
-            component_groups=[],
+            component_validation_enabled=bool(component_groups),
+            component_groups=component_groups,
         )
 
     def _resolve_primary_connectors(self, dataspace_name: str, config: dict[str, Any]) -> list[str]:

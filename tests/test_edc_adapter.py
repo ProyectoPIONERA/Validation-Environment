@@ -15,6 +15,7 @@ from adapters.edc.adapter import EdcAdapter
 from adapters.edc.connectors import EDCConnectorsAdapter
 from adapters.edc.deployment import EDCDeploymentAdapter, EdcSharedDataspaceConfig
 from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
+from adapters.shared.components import SharedComponentsAdapter
 from adapters.shared.infrastructure import SharedFoundationInfrastructureAdapter
 from adapters.inesdata.adapter import InesdataAdapter
 
@@ -234,9 +235,42 @@ class EdcAdapterTests(unittest.TestCase):
         adapter = InesdataAdapter(dry_run=True)
         self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
 
+    def test_inesdata_adapter_uses_shared_components_adapter(self):
+        adapter = InesdataAdapter(dry_run=True)
+        self.assertIsInstance(adapter.components, SharedComponentsAdapter)
+
     def test_edc_adapter_uses_shared_foundation_infrastructure_adapter(self):
         adapter = EdcAdapter(dry_run=True)
         self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
+
+    def test_edc_adapter_uses_shared_components_adapter(self):
+        adapter = EdcAdapter(dry_run=True)
+        self.assertIsInstance(adapter.components, SharedComponentsAdapter)
+
+    def test_edc_preview_components_marks_pending_support_without_deployable_urls(self):
+        adapter = EdcAdapter(dry_run=True)
+        adapter.config_adapter.load_deployer_config = lambda: {
+            "ENVIRONMENT": "DEV",
+            "DS_1_NAME": "demoedc",
+            "DS_1_NAMESPACE": "demoedc",
+            "COMPONENTS": "ontology-hub,ai-model-hub",
+        }
+
+        preview = adapter._preview_components()
+
+        self.assertEqual(preview["status"], "pending-support")
+        self.assertEqual(preview["action"], "skip")
+        self.assertEqual(preview["configured"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(preview["deployable"], [])
+        self.assertEqual(preview["pending_support"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(
+            [component["status"] for component in preview["components"]],
+            ["pending-support", "pending-support"],
+        )
+        self.assertEqual(
+            [component["url"] for component in preview["components"]],
+            [None, None],
+        )
 
     def test_edc_adapter_reuses_common_services_when_ready(self):
         adapter = EdcAdapter.__new__(EdcAdapter)
