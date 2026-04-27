@@ -4821,7 +4821,7 @@ def _interactive_ensure_hosts_ready_for_levels(
 ):
     normalized_adapter = str(current_adapter or "").strip().lower()
     normalized_topology = str(topology or "local").strip().lower()
-    if normalized_adapter != "edc" or normalized_topology != "local":
+    if normalized_adapter != "edc" or normalized_topology not in {LOCAL_TOPOLOGY, "vm-single"}:
         return True
 
     selected_levels = {int(level) for level in (levels or [])}

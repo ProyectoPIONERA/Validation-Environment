@@ -1615,6 +1615,34 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("conn-b.example.local", hosts_content)
         self.assertIn("EDC host entries are missing", stdout.getvalue())
 
+    def test_edc_interactive_hosts_preflight_applies_only_missing_entries_for_vm_single(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write("127.0.0.1 localhost\n192.0.2.10 conn-a.example.local\n")
+            hosts_file.flush()
+
+            stdout = io.StringIO()
+            with mock.patch("builtins.input", side_effect=["Y"]), contextlib.redirect_stdout(stdout):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "edc",
+                    levels=[4],
+                    adapter_registry={"edc": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"edc": "fake_deployer_module:FakeVmDeployer"},
+                    topology="vm-single",
+                )
+
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertTrue(result)
+        self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
+        self.assertIn("192.0.2.10 registration-service-fake-ds.example.local", hosts_content)
+        self.assertIn("192.0.2.10 conn-b.example.local", hosts_content)
+        self.assertIn("EDC host entries are missing", stdout.getvalue())
+
     def test_edc_interactive_hosts_preflight_can_cancel_level(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
             os.environ,
