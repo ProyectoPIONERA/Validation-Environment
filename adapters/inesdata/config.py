@@ -522,18 +522,10 @@ class INESDataConfigAdapter:
         ds_name = ds_name or self.primary_dataspace_name()
         hosts = []
 
-        if config.get("KEYCLOAK_HOSTNAME"):
-            hosts.append(f"127.0.0.1 {config.get('KEYCLOAK_HOSTNAME')}")
+        for hostname in self._common_service_host_alias_domains(config):
+            hosts.append(f"127.0.0.1 {hostname}")
 
-        if config.get("MINIO_HOSTNAME"):
-            hosts.append(f"127.0.0.1 {config.get('MINIO_HOSTNAME')}")
-
-        domain = config.get("DOMAIN_BASE")
         ds_domain = config.get("DS_DOMAIN_BASE")
-
-        if domain:
-            hosts.append(f"127.0.0.1 keycloak-admin.{domain}")
-            hosts.append(f"127.0.0.1 console.minio-s3.{domain}")
 
         if ds_domain and ds_name:
             hosts.append(f"127.0.0.1 registration-service-{ds_name}.{ds_domain}")
@@ -544,13 +536,39 @@ class INESDataConfigAdapter:
         resolved_name = str(ds_name or self.primary_dataspace_name()).strip() or self.primary_dataspace_name()
         del ds_namespace
         ds_domain = self.ds_domain_base() or "dev.ds.dataspaceunit.upm"
-        return [
-            "keycloak.dev.ed.dataspaceunit.upm",
-            "keycloak-admin.dev.ed.dataspaceunit.upm",
-            "minio.dev.ed.dataspaceunit.upm",
-            "console.minio-s3.dev.ed.dataspaceunit.upm",
-            f"registration-service-{resolved_name}.{ds_domain}",
+        hostnames = self._common_service_host_alias_domains(self.load_deployer_config())
+        hostnames.append(f"registration-service-{resolved_name}.{ds_domain}")
+        return hostnames
+
+    @staticmethod
+    def _clean_hostname(value):
+        hostname = str(value or "").strip()
+        if not hostname:
+            return ""
+        if "://" in hostname:
+            hostname = hostname.split("://", 1)[1]
+        return hostname.split("/", 1)[0].strip()
+
+    def _common_service_host_alias_domains(self, config):
+        domain = str(config.get("DOMAIN_BASE") or "dev.ed.dataspaceunit.upm").strip() or "dev.ed.dataspaceunit.upm"
+        hostnames = [
+            self._clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
+            or self._clean_hostname(config.get("KC_INTERNAL_URL"))
+            or f"keycloak.{domain}",
+            self._clean_hostname(config.get("KEYCLOAK_ADMIN_HOSTNAME"))
+            or self._clean_hostname(config.get("KC_URL"))
+            or f"keycloak-admin.{domain}",
+            self._clean_hostname(config.get("MINIO_HOSTNAME"))
+            or self._clean_hostname(config.get("MINIO_ENDPOINT"))
+            or f"minio.{domain}",
+            self._clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
+            or f"console.minio-s3.{domain}",
         ]
+        deduped = []
+        for hostname in hostnames:
+            if hostname and hostname not in deduped:
+                deduped.append(hostname)
+        return deduped
 
     def generate_connector_hosts(self, connectors):
         config = self.load_deployer_config()
