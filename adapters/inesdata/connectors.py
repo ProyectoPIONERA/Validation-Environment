@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
+from deployers.shared.lib.topology import LOCAL_TOPOLOGY, normalize_topology
 from .config import INESDataConfigAdapter, InesdataConfig
 from runtime_dependencies import ensure_python_requirements
 
@@ -30,8 +31,54 @@ class INESDataConnectorsAdapter:
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
 
+    def _normalized_topology(self):
+        return normalize_topology(
+            getattr(self.config_adapter, "topology", None)
+            or getattr(self, "topology", None)
+            or LOCAL_TOPOLOGY
+        )
+
     def _is_local_topology(self):
-        return str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower() == "local"
+        return self._normalized_topology() == LOCAL_TOPOLOGY
+
+    def _resolve_level4_local_image_policy(self, *, mode, label):
+        normalized_mode = str(mode or "auto").strip().lower() or "auto"
+        topology = self._normalized_topology()
+        if topology == LOCAL_TOPOLOGY:
+            return {
+                "topology": topology,
+                "mode": normalized_mode,
+                "prepare_local_images": True,
+                "allow_local_image_overrides": True,
+                "message": "",
+                "error": "",
+            }
+
+        if normalized_mode == "required":
+            return {
+                "topology": topology,
+                "mode": normalized_mode,
+                "prepare_local_images": False,
+                "allow_local_image_overrides": False,
+                "message": "",
+                "error": (
+                    f"{label} local image preparation mode 'required' is only supported in "
+                    f"topology '{LOCAL_TOPOLOGY}'. Configure pullable image references before "
+                    f"running Level 4 on topology '{topology}'."
+                ),
+            }
+
+        return {
+            "topology": topology,
+            "mode": normalized_mode,
+            "prepare_local_images": False,
+            "allow_local_image_overrides": False,
+            "message": (
+                f"Skipping {label} local image preparation for topology '{topology}'. "
+                "Using chart-configured image references."
+            ),
+            "error": "",
+        }
 
     @staticmethod
     def _is_connector_interface_pod(pod_name):
@@ -950,6 +997,12 @@ class INESDataConnectorsAdapter:
             yaml.dump(values, f, sort_keys=False)
 
     def _local_connector_image_override_path(self):
+        policy = self._resolve_level4_local_image_policy(
+            mode=self._level4_local_images_mode(),
+            label="INESData connector",
+        )
+        if not policy["allow_local_image_overrides"]:
+            return None
         override_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "build",
@@ -994,6 +1047,17 @@ class INESDataConnectorsAdapter:
 
     def _maybe_prepare_level4_local_connector_images(self, namespace):
         mode = self._level4_local_images_mode()
+        policy = self._resolve_level4_local_image_policy(
+            mode=mode,
+            label="INESData connector",
+        )
+        if policy["error"]:
+            print(policy["error"])
+            return False
+        if not policy["prepare_local_images"]:
+            if policy["message"]:
+                print(policy["message"])
+            return True
         if mode == "disabled":
             print("Level 4 local INESData connector images disabled by configuration.")
             return True

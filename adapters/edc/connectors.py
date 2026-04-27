@@ -323,9 +323,18 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         return True
 
     def _maybe_prepare_level4_local_edc_images(self):
-        if str(getattr(self, "topology", "local") or "local").strip().lower() != "local":
-            return True
         mode = self._level4_edc_local_images_mode()
+        policy = self._resolve_level4_local_image_policy(
+            mode=mode,
+            label="EDC",
+        )
+        if policy["error"]:
+            print(policy["error"])
+            return False
+        if not policy["prepare_local_images"]:
+            if policy["message"]:
+                print(policy["message"])
+            return True
         if mode == "disabled":
             if not self._edc_connector_image_override_configured():
                 print(

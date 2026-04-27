@@ -275,6 +275,36 @@ class EdcConnectorTopologyTests(unittest.TestCase):
         self.assertEqual(aliases, [])
         adapter.run_silent.assert_not_called()
 
+    def test_edc_level4_local_images_skip_build_outside_local_topology(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-single"})()
+
+        with (
+            mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="auto"),
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_connector_image") as connector_mock,
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_dashboard_images") as dashboard_mock,
+        ):
+            self.assertTrue(adapter._maybe_prepare_level4_local_edc_images())
+
+        connector_mock.assert_not_called()
+        dashboard_mock.assert_not_called()
+
+    def test_edc_level4_local_images_fail_when_required_outside_local_topology(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config_adapter = type("ConfigAdapter", (), {"topology": "vm-single"})()
+
+        with (
+            mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="required"),
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_connector_image") as connector_mock,
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_dashboard_images") as dashboard_mock,
+        ):
+            self.assertFalse(adapter._maybe_prepare_level4_local_edc_images())
+
+        connector_mock.assert_not_called()
+        dashboard_mock.assert_not_called()
+
     def test_edc_preview_components_marks_pending_support_without_deployable_urls(self):
         adapter = EdcAdapter(dry_run=True)
         adapter.config_adapter.load_deployer_config = lambda: {
