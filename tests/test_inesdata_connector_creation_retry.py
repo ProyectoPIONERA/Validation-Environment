@@ -93,6 +93,41 @@ class RoleAlignedConnectorRetryConfigAdapter(ConnectorRetryConfigAdapter):
 
 
 class ConnectorCreationRetryTests(unittest.TestCase):
+    def test_force_clean_postgres_db_retries_until_database_and_role_are_gone(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            infra = mock.Mock()
+            infra.ensure_local_infra_access = mock.Mock(return_value=True)
+            run_calls = []
+            db_results = iter(["1\n", ""])
+            role_results = iter(["1\n", ""])
+
+            def fake_run(command, **_kwargs):
+                run_calls.append(command)
+                return object()
+
+            def fake_run_silent(command, **_kwargs):
+                if "FROM pg_database" in command:
+                    return next(db_results)
+                if "FROM pg_roles" in command:
+                    return next(role_results)
+                return ""
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=fake_run_silent,
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=ConnectorRetryConfigAdapter(tmpdir),
+                config_cls=ConnectorRetryConfig(tmpdir),
+            )
+
+            with mock.patch("adapters.inesdata.connectors.time.sleep", return_value=None):
+                cleaned = adapter.force_clean_postgres_db("demo_db", "demo_user")
+
+        self.assertTrue(cleaned)
+        self.assertEqual(len(run_calls), 6)
+        infra.ensure_local_infra_access.assert_called_once()
+
     def test_build_internal_protocol_address_uses_cross_namespace_service_fqdn_when_role_aligned(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             adapter = INESDataConnectorsAdapter(
@@ -142,9 +177,11 @@ class ConnectorCreationRetryTests(unittest.TestCase):
     def test_update_connector_service_discovery_uses_cross_namespace_registration_service_hostname(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
+            captured = {}
 
             class RoleAlignedConfigAdapter(ConnectorRetryConfigAdapter):
                 def registration_service_internal_hostname(self, **_kwargs):
+                    captured.update(_kwargs)
                     return "demo-registration-service.demo-core.svc.cluster.local:8080"
 
             config_adapter = RoleAlignedConfigAdapter(tmpdir)
@@ -171,16 +208,19 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 config_adapter=config_adapter,
                 config_cls=config,
             )
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
             adapter.load_dataspace_connectors = lambda: [
                 {
                     "name": "demo",
                     "namespace": "demo",
+                    "namespace_profile": "role-aligned",
                     "connectors": ["conn-a-demo", "conn-b-demo"],
                     "connector_details": [
                         {
                             "name": "conn-a-demo",
                             "role": "provider",
                             "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
                         }
                     ],
                 }
@@ -195,6 +235,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             rendered["services"]["registrationService"]["hostname"],
             "demo-registration-service.demo-core.svc.cluster.local:8080",
         )
+        self.assertEqual(captured["connector_namespace"], "demo-provider")
 
     def test_update_connector_host_aliases_uses_connector_dataspace_registration_hostname(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1501,6 +1542,254 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertIn("--deploy-target connectors", events[0][1])
             self.assertIn("--skip-deploy", events[0][1])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+
+    def test_deploy_connectors_cleans_stale_connectors_in_discovered_target_namespace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            config_adapter = ConnectorRetryConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+
+            class Infra:
+                @staticmethod
+                def ensure_local_infra_access():
+                    return True
+
+                @staticmethod
+                def ensure_vault_unsealed():
+                    return True
+
+                @staticmethod
+                def manage_hosts_entries(_entries):
+                    return None
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=Infra(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "runtime_namespace": "demo",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                            "registration_service_namespace": "demo-core",
+                            "planned_registration_service_namespace": "demo-core",
+                        }
+                    ],
+                }
+            ]
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+            adapter._maybe_prepare_level4_local_connector_images = lambda _namespace: True
+            adapter._prepare_vault_management_access = lambda *_args, **_kwargs: True
+            discovery_calls = []
+
+            def discover_existing(ds_name, namespace, include_runtime_artifacts=True):
+                discovery_calls.append((ds_name, namespace, include_runtime_artifacts))
+                return {"conn-stale-demo"} if namespace == "demo-provider" else set()
+
+            adapter._discover_existing_connectors = discover_existing
+            cleanup_calls = []
+            adapter._cleanup_connector_state = lambda connector, repo_dir, ds_name, python_exec, namespace=None: cleanup_calls.append(
+                (connector, namespace)
+            )
+            adapter.connector_already_exists = lambda *_args, **_kwargs: False
+            def create_connector(connector, _connectors):
+                with open(config.connector_values_file(connector), "w", encoding="utf-8") as handle:
+                    handle.write("hostAliases: []\n")
+                return True
+
+            adapter.create_connector = mock.Mock(side_effect=create_connector)
+            adapter.wait_for_all_connectors = mock.Mock()
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, ["conn-a-demo"])
+            self.assertEqual(
+                discovery_calls,
+                [
+                    ("demo", "demo-provider", False),
+                ],
+            )
+            self.assertEqual(cleanup_calls, [("conn-stale-demo", "demo-provider")])
+            adapter.create_connector.assert_called_once_with("conn-a-demo", ["conn-a-demo"])
+            adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+
+    def test_discover_existing_connectors_can_ignore_runtime_artifacts_for_namespace_scoped_discovery(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+            creds_dir = os.path.join(tmpdir, "deployments", "DEV", "demo")
+            os.makedirs(creds_dir, exist_ok=True)
+            with open(
+                os.path.join(creds_dir, "credentials-connector-conn-stale-demo.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("{}")
+
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=ConnectorRetryConfigAdapter(tmpdir),
+                config_cls=config,
+            )
+
+            with_runtime_artifacts = adapter._discover_existing_connectors("demo", "demo-provider")
+            namespace_scoped = adapter._discover_existing_connectors(
+                "demo",
+                "demo-provider",
+                include_runtime_artifacts=False,
+            )
+
+            self.assertEqual(with_runtime_artifacts, {"conn-stale-demo"})
+            self.assertEqual(namespace_scoped, set())
+
+    def test_get_cluster_connectors_prefers_namespace_scoped_discovery_for_role_aligned_dataspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: "",
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=RoleAlignedConnectorRetryConfigAdapter(tmpdir),
+                config_cls=lambda: None,
+            )
+            adapter.config = ConnectorRetryConfig(tmpdir)
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo", "conn-b-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                        },
+                        {
+                            "name": "conn-b-demo",
+                            "role": "consumer",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-consumer",
+                        },
+                    ],
+                }
+            ]
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+            discovery_calls = []
+
+            def discover_existing(ds_name, namespace, include_runtime_artifacts=True):
+                discovery_calls.append((ds_name, namespace, include_runtime_artifacts))
+                if namespace == "demo-provider":
+                    return {"conn-a-demo"}
+                if namespace == "demo-consumer":
+                    return {"conn-b-demo"}
+                return set()
+
+            adapter._discover_existing_connectors = discover_existing
+
+            connectors = adapter.get_cluster_connectors()
+
+            self.assertEqual(connectors, ["conn-a-demo", "conn-b-demo"])
+            self.assertEqual(
+                discovery_calls,
+                [
+                    ("demo", "demo-provider", False),
+                    ("demo", "demo-consumer", False),
+                ],
+            )
+
+    def test_show_connector_logs_prefers_namespace_scoped_role_aligned_listing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = INESDataConnectorsAdapter(
+                run=mock.Mock(),
+                run_silent=lambda cmd, **_kwargs: {
+                    "kubectl get pods -n demo-provider --no-headers": (
+                        "conn-a-demo-6bf9f7c9c8-abcd1 1/1 Running 0 1m\n"
+                    ),
+                    "kubectl get pods -n demo-consumer --no-headers": (
+                        "conn-b-demo-7cf8d8d5bd-efgh2 1/1 Running 0 1m\n"
+                    ),
+                }.get(cmd, ""),
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=RoleAlignedConnectorRetryConfigAdapter(tmpdir),
+                config_cls=lambda: None,
+            )
+            adapter.config = ConnectorRetryConfig(tmpdir)
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "namespace_profile": "role-aligned",
+                    "connectors": ["conn-a-demo", "conn-b-demo"],
+                    "connector_details": [
+                        {
+                            "name": "conn-a-demo",
+                            "role": "provider",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-provider",
+                        },
+                        {
+                            "name": "conn-b-demo",
+                            "role": "consumer",
+                            "active_namespace": "demo",
+                            "planned_namespace": "demo-consumer",
+                        },
+                    ],
+                }
+            ]
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+            discovery_calls = []
+
+            def discover_existing(ds_name, namespace, include_runtime_artifacts=True):
+                discovery_calls.append((ds_name, namespace, include_runtime_artifacts))
+                if namespace == "demo-provider":
+                    return {"conn-a-demo"}
+                if namespace == "demo-consumer":
+                    return {"conn-b-demo"}
+                return set()
+
+            adapter._discover_existing_connectors = discover_existing
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), mock.patch(
+                "builtins.input",
+                side_effect=["2", "N"],
+            ):
+                adapter.show_connector_logs()
+
+            self.assertEqual(
+                discovery_calls,
+                [
+                    ("demo", "demo-provider", False),
+                    ("demo", "demo-consumer", False),
+                ],
+            )
+            rendered = output.getvalue()
+            self.assertIn("1 - conn-a-demo (demo-provider) -> conn-a-demo-6bf9f7c9c8-abcd1", rendered)
+            self.assertIn("2 - conn-b-demo (demo-consumer) -> conn-b-demo-7cf8d8d5bd-efgh2", rendered)
+            adapter.run.assert_called_once_with(
+                "kubectl logs conn-b-demo-7cf8d8d5bd-efgh2 -n demo-consumer",
+                check=False,
+            )
 
     def test_deploy_connectors_aborts_after_failed_recreation(self):
         with tempfile.TemporaryDirectory() as tmpdir:

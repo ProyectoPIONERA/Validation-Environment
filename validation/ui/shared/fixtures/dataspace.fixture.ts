@@ -21,10 +21,14 @@ async function writeJsonArtifact(testInfo: TestInfo, name: string, payload: unkn
 }
 
 export const test = base.extend<DataspaceFixtures>({
-  dataspaceRuntime: async ({ page, request }, use) => {
+  dataspaceRuntime: async ({ page }, use) => {
     const runtime = resolveDataspacePortalRuntime();
-    await installEdcDashboardRouteBridge(page, request, runtime);
-    await use(runtime);
+    const disposeRouteBridge = await installEdcDashboardRouteBridge(page, runtime);
+    try {
+      await use(runtime);
+    } finally {
+      await disposeRouteBridge();
+    }
   },
 
   captureStep: async ({}, use, testInfo) => {

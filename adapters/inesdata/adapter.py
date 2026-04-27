@@ -331,7 +331,7 @@ class InesdataAdapter:
                     "registration_service_namespace": layout.get("registration_service_namespace"),
                     "planned_registration_service_namespace": layout.get("planned_registration_service_namespace"),
                     "status": "ready" if ready else "missing",
-                    "issues": [] if ready else ["connector runtime pod not found in dataspace namespace"],
+                    "issues": [] if ready else ["connector runtime pod not found in target namespace"],
                 }
             )
             all_ready = all_ready and ready

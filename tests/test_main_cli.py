@@ -425,6 +425,28 @@ class EdcDashboardReadinessTests(unittest.TestCase):
             },
         )
 
+    def _role_aligned_context(self):
+        return types.SimpleNamespace(
+            dataspace_name="demoedc",
+            ds_domain_base="dev.ds.dataspaceunit.upm",
+            connectors=["conn-citycounciledc-demoedc", "conn-companyedc-demoedc"],
+            namespace_profile="role-aligned",
+            namespace_roles=types.SimpleNamespace(
+                registration_service_namespace="demoedc",
+                provider_namespace="demoedc",
+                consumer_namespace="demoedc",
+            ),
+            planned_namespace_roles=types.SimpleNamespace(
+                registration_service_namespace="demoedc-core",
+                provider_namespace="demoedc-provider",
+                consumer_namespace="demoedc-consumer",
+            ),
+            config={
+                "KC_INTERNAL_URL": "http://common-srvs-keycloak.common-srvs.svc.cluster.local",
+                "KC_URL": "http://keycloak.dev.ed.dataspaceunit.upm",
+            },
+        )
+
     def test_probe_edc_dashboard_readiness_requires_public_http_routes(self):
         context = self._context()
 
@@ -453,6 +475,51 @@ class EdcDashboardReadinessTests(unittest.TestCase):
         self.assertEqual(
             keycloak_gate["url"],
             "http://keycloak.dev.ed.dataspaceunit.upm/realms/demoedc/.well-known/openid-configuration",
+        )
+
+    def test_probe_edc_dashboard_readiness_uses_planned_role_namespaces_in_role_aligned(self):
+        context = self._role_aligned_context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/edc-dashboard"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/edc-dashboard-api/auth/me"):
+                return types.SimpleNamespace(status_code=401, headers={})
+            if url.endswith("/management/v3/assets/request"):
+                return types.SimpleNamespace(status_code=405, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        endpoint_calls = []
+
+        def fake_endpoint_ready(namespace, service_name):
+            endpoint_calls.append((namespace, service_name))
+            return True, "1 endpoint address(es)"
+
+        with mock.patch.object(
+            main,
+            "_kubectl_endpoint_ready",
+            side_effect=fake_endpoint_ready,
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get):
+            readiness = main._probe_edc_dashboard_readiness(context)
+
+        self.assertEqual(readiness["status"], "passed")
+        self.assertEqual(
+            readiness["connector_namespaces"],
+            {
+                "conn-citycounciledc-demoedc": "demoedc-provider",
+                "conn-companyedc-demoedc": "demoedc-consumer",
+            },
+        )
+        self.assertEqual(
+            endpoint_calls,
+            [
+                ("demoedc-provider", "conn-citycounciledc-demoedc-dashboard"),
+                ("demoedc-provider", "conn-citycounciledc-demoedc-dashboard-proxy"),
+                ("demoedc-consumer", "conn-companyedc-demoedc-dashboard"),
+                ("demoedc-consumer", "conn-companyedc-demoedc-dashboard-proxy"),
+            ],
         )
 
     def test_probe_edc_dashboard_readiness_rejects_http_503_even_with_ready_endpoints(self):
@@ -534,6 +601,16 @@ class InesdataPortalReadinessTests(unittest.TestCase):
             },
         )
 
+    def _role_aligned_context(self):
+        context = self._context()
+        context.namespace_profile = "role-aligned"
+        context.planned_namespace_roles = types.SimpleNamespace(
+            registration_service_namespace="demo-core",
+            provider_namespace="demo-provider",
+            consumer_namespace="demo-consumer",
+        )
+        return context
+
     def test_probe_inesdata_portal_readiness_requires_public_http_routes(self):
         context = self._context()
 
@@ -551,8 +628,8 @@ class InesdataPortalReadinessTests(unittest.TestCase):
 
         with mock.patch.object(
             main,
-            "_probe_service_ready_across_namespaces",
-            return_value=(True, "1 endpoint address(es)", "demo"),
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
         ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
             main.requests,
             "post",
@@ -578,6 +655,54 @@ class InesdataPortalReadinessTests(unittest.TestCase):
             "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/protocol/openid-connect/token",
         )
 
+    def test_probe_inesdata_portal_readiness_uses_planned_role_namespaces_in_role_aligned(self):
+        context = self._role_aligned_context()
+
+        def fake_http_get(url, **kwargs):
+            if url.endswith("/.well-known/openid-configuration"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            if url.endswith("/inesdata-connector-interface/"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        def fake_http_post(url, **kwargs):
+            if url.endswith("/protocol/openid-connect/token"):
+                return types.SimpleNamespace(status_code=200, headers={})
+            raise AssertionError(f"Unexpected URL probed: {url}")
+
+        endpoint_calls = []
+
+        def fake_endpoint_ready(namespace, service_name):
+            endpoint_calls.append((namespace, service_name))
+            return True, "1 endpoint address(es)"
+
+        with mock.patch.object(
+            main,
+            "_kubectl_endpoint_ready",
+            side_effect=fake_endpoint_ready,
+        ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
+            main.requests,
+            "post",
+            side_effect=fake_http_post,
+        ):
+            readiness = main._probe_inesdata_portal_readiness(context)
+
+        self.assertEqual(readiness["status"], "passed")
+        self.assertEqual(
+            readiness["connector_namespaces"],
+            {
+                "conn-citycouncil-demo": "demo-provider",
+                "conn-company-demo": "demo-consumer",
+            },
+        )
+        self.assertEqual(
+            endpoint_calls,
+            [
+                ("demo-provider", "conn-citycouncil-demo-interface"),
+                ("demo-consumer", "conn-company-demo-interface"),
+            ],
+        )
+
     def test_probe_inesdata_portal_readiness_rejects_http_503_even_with_ready_services(self):
         context = self._context()
 
@@ -595,8 +720,8 @@ class InesdataPortalReadinessTests(unittest.TestCase):
 
         with mock.patch.object(
             main,
-            "_probe_service_ready_across_namespaces",
-            return_value=(True, "1 endpoint address(es)", "demo"),
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
         ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
             main.requests,
             "post",
@@ -630,8 +755,8 @@ class InesdataPortalReadinessTests(unittest.TestCase):
 
         with mock.patch.object(
             main,
-            "_probe_service_ready_across_namespaces",
-            return_value=(True, "1 endpoint address(es)", "demo"),
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
         ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
             main.requests,
             "post",
@@ -665,8 +790,8 @@ class InesdataPortalReadinessTests(unittest.TestCase):
 
         with mock.patch.object(
             main,
-            "_probe_service_ready_across_namespaces",
-            return_value=(True, "1 endpoint address(es)", "demo"),
+            "_kubectl_endpoint_ready",
+            return_value=(True, "1 endpoint address(es)"),
         ), mock.patch.object(main.requests, "get", side_effect=fake_http_get), mock.patch.object(
             main.requests,
             "post",

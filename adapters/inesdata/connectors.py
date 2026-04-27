@@ -42,6 +42,15 @@ class INESDataConnectorsAdapter:
     def _is_connector_runtime_pod(cls, pod_name):
         return pod_name.startswith("conn-") and not cls._is_connector_interface_pod(pod_name)
 
+    @classmethod
+    def _connector_name_from_runtime_pod_name(cls, pod_name):
+        if not cls._is_connector_runtime_pod(pod_name):
+            return ""
+        parts = pod_name.rsplit("-", 2)
+        if len(parts) == 3:
+            return parts[0]
+        return pod_name.rsplit("-", 1)[0]
+
     @staticmethod
     def _fail(message, root_cause=None):
         if root_cause:
@@ -734,23 +743,25 @@ class INESDataConnectorsAdapter:
         suffix = f"-{ds_name}"
         return connector_name.endswith(suffix)
 
-    def _discover_existing_connectors(self, ds_name, namespace):
+    def _discover_existing_connectors(self, ds_name, namespace, include_runtime_artifacts=True):
         existing = set()
 
-        # Credentials-based detection.
-        creds_dir = os.path.join(
-            self.config.repo_dir(),
-            "deployments",
-            "DEV",
-            ds_name,
-        )
-        if os.path.isdir(creds_dir):
-            for entry in os.listdir(creds_dir):
-                if not (entry.startswith("credentials-connector-") and entry.endswith(".json")):
-                    continue
-                connector = entry[len("credentials-connector-"):-len(".json")]
-                if connector and self._connector_belongs_to_dataspace(connector, ds_name):
-                    existing.add(connector)
+        if include_runtime_artifacts:
+            # Runtime credentials are useful as a fallback signal that a connector was bootstrapped,
+            # but they are not namespace-scoped and must not drive role-aligned namespace mapping.
+            creds_dir = os.path.join(
+                self.config.repo_dir(),
+                "deployments",
+                "DEV",
+                ds_name,
+            )
+            if os.path.isdir(creds_dir):
+                for entry in os.listdir(creds_dir):
+                    if not (entry.startswith("credentials-connector-") and entry.endswith(".json")):
+                        continue
+                    connector = entry[len("credentials-connector-"):-len(".json")]
+                    if connector and self._connector_belongs_to_dataspace(connector, ds_name):
+                        existing.add(connector)
 
         # Helm releases-based detection.
         releases = self.run_silent(f"helm list -n {namespace} --no-headers")
@@ -856,7 +867,11 @@ class INESDataConnectorsAdapter:
             if entry.get("name")
         }
         connector_layout = connector_details.get(connector_name, {})
-        connector_namespace = connector_layout.get("active_namespace") or ds_namespace
+        connector_namespace = (
+            self._connector_target_namespace(connector_name, dataspace=dataspace)
+            or connector_layout.get("active_namespace")
+            or ds_namespace
+        )
         hostname_getter = getattr(self.config_adapter, "registration_service_internal_hostname", None)
         if callable(hostname_getter):
             return hostname_getter(
@@ -1023,17 +1038,32 @@ class INESDataConnectorsAdapter:
         return True
 
     def get_deployed_connectors(self, namespace):
+        return list(self._runtime_connector_pods_by_namespace(namespace).keys())
+
+    def _runtime_connector_rows_by_namespace(self, namespace):
         result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
         if not result:
             return []
 
-        connectors = []
+        rows = []
         for line in result.splitlines():
-            pod_name = line.split()[0]
-            if self._is_connector_runtime_pod(pod_name):
-                connector = pod_name.rsplit("-", 2)[0]
-                if connector not in connectors:
-                    connectors.append(connector)
+            cols = line.split()
+            if not cols:
+                continue
+            pod_name = cols[0]
+            connector = self._connector_name_from_runtime_pod_name(pod_name)
+            if not connector:
+                continue
+            status = cols[2] if len(cols) >= 3 else ""
+            rows.append((connector, pod_name, status))
+
+        return rows
+
+    def _runtime_connector_pods_by_namespace(self, namespace):
+        connectors = {}
+        for connector, pod_name, _status in self._runtime_connector_rows_by_namespace(namespace):
+            if connector not in connectors:
+                connectors[connector] = pod_name
 
         return connectors
 
@@ -1850,11 +1880,66 @@ class INESDataConnectorsAdapter:
                 f"-d postgres -c \"DROP ROLE IF EXISTS {db_user};\"",
             ),
         ]
-        for label, command in cleanup_steps:
-            if self.run(command, check=False, silent=True) is None:
-                print(f"  Warning: PostgreSQL cleanup step failed: {label}")
+        max_attempts = 3
+        postgres_ready = getattr(self.infrastructure, "ensure_local_infra_access", None)
 
+        for attempt in range(1, max_attempts + 1):
+            for label, command in cleanup_steps:
+                if self.run(command, check=False, silent=True) is None:
+                    print(f"  Warning: PostgreSQL cleanup step failed: {label}")
+
+            database_exists = self._postgres_database_exists(db_name, pg_host, pg_port, pg_user, pg_password)
+            role_exists = self._postgres_role_exists(db_user, pg_host, pg_port, pg_user, pg_password)
+            if database_exists is False and role_exists is False:
+                print("PostgreSQL cleanup complete\n")
+                return True
+
+            if attempt >= max_attempts:
+                break
+
+            remaining = []
+            if database_exists is not False:
+                remaining.append(f"database '{db_name}'")
+            if role_exists is not False:
+                remaining.append(f"role '{db_user}'")
+            if remaining:
+                print(
+                    "  PostgreSQL cleanup not fully applied yet; retrying after infrastructure check: "
+                    + ", ".join(remaining)
+                )
+
+            if callable(postgres_ready) and not postgres_ready():
+                print("  Warning: local PostgreSQL access could not be re-established before retrying cleanup")
+            time.sleep(2)
+
+        print(
+            "  Warning: PostgreSQL cleanup could not be fully verified for "
+            f"database '{db_name}' and role '{db_user}'"
+        )
         print("PostgreSQL cleanup complete\n")
+        return False
+
+    def _postgres_database_exists(self, db_name, pg_host, pg_port, pg_user, pg_password):
+        escaped_name = str(db_name or "").replace("'", "''")
+        result = self.run_silent(
+            f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+            f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+            f"-d postgres -t -A -c \"SELECT 1 FROM pg_database WHERE datname = '{escaped_name}';\""
+        )
+        if result is None:
+            return None
+        return result.strip() == "1"
+
+    def _postgres_role_exists(self, role_name, pg_host, pg_port, pg_user, pg_password):
+        escaped_name = str(role_name or "").replace("'", "''")
+        result = self.run_silent(
+            f"PGPASSWORD={shlex.quote(str(pg_password))} psql -h {shlex.quote(str(pg_host))} "
+            f"-p {shlex.quote(str(pg_port))} -U {shlex.quote(str(pg_user))} "
+            f"-d postgres -t -A -c \"SELECT 1 FROM pg_roles WHERE rolname = '{escaped_name}';\""
+        )
+        if result is None:
+            return None
+        return result.strip() == "1"
 
     def _remove_connector_values_file(self, connector_name):
         values_file = self.config.connector_values_file(connector_name)
@@ -2129,13 +2214,8 @@ class INESDataConnectorsAdapter:
 
         failed = False
         for namespace, pods in namespace_outputs:
-            for line in pods.splitlines():
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                pod_name = parts[0]
-                status = parts[2]
-                if self._is_connector_runtime_pod(pod_name) and status != "Running":
+            for connector_name, pod_name, status in self._runtime_connector_rows_by_namespace(namespace):
+                if status != "Running":
                     print(f"Connector pod not running: {pod_name} ({status}) in namespace {namespace}")
                     failed = True
 
@@ -2186,29 +2266,56 @@ class INESDataConnectorsAdapter:
 
     def show_connector_logs(self):
         connector_pods = []
-        for namespace in self._all_connector_scan_namespaces():
-            pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
-            if not pods:
+        seen = set()
+        dataspaces = self.load_dataspace_connectors() or []
+
+        for dataspace in dataspaces:
+            ds_name = str(dataspace.get("name") or "").strip()
+            if not ds_name:
                 continue
-            for line in pods.splitlines():
-                pod_name = line.split()[0]
-                if self._is_connector_runtime_pod(pod_name):
-                    connector_pods.append((namespace, pod_name))
+            for namespace in self._dataspace_connector_target_namespaces(dataspace, dataspaces=dataspaces):
+                runtime_pods = self._runtime_connector_pods_by_namespace(namespace)
+                if not runtime_pods:
+                    continue
+                discovered = self._discover_existing_connectors(
+                    ds_name,
+                    namespace,
+                    include_runtime_artifacts=False,
+                )
+                for connector_name in sorted(discovered):
+                    pod_name = runtime_pods.get(connector_name)
+                    if not pod_name:
+                        continue
+                    key = (namespace, connector_name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    connector_pods.append((namespace, connector_name, pod_name))
+
+        if not connector_pods:
+            for namespace in self._all_connector_scan_namespaces():
+                runtime_pods = self._runtime_connector_pods_by_namespace(namespace)
+                for connector_name, pod_name in runtime_pods.items():
+                    key = (namespace, connector_name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    connector_pods.append((namespace, connector_name, pod_name))
 
         if not connector_pods:
             print("No pods found in namespace")
             return
 
         print("Available connectors:\n")
-        for i, (namespace, pod) in enumerate(connector_pods, 1):
-            print(f"{i} - {pod} ({namespace})")
+        for i, (namespace, connector_name, pod_name) in enumerate(connector_pods, 1):
+            print(f"{i} - {connector_name} ({namespace}) -> {pod_name}")
 
         choice = input("\nSelect connector for logs (number): ")
         if not choice.isdigit() or int(choice) < 1 or int(choice) > len(connector_pods):
             print("Invalid selection")
             return
 
-        selected_namespace, selected_pod = connector_pods[int(choice) - 1]
+        selected_namespace, _selected_connector, selected_pod = connector_pods[int(choice) - 1]
         follow = input("Follow logs in real-time? (Y/N): ").strip().upper()
 
         if follow == "Y":
@@ -2265,10 +2372,15 @@ class INESDataConnectorsAdapter:
             print(f"Connectors defined: {connectors}\n")
 
             desired = set(connectors or [])
-            existing = set()
+            existing_namespaces = {}
             for target_namespace in target_namespaces:
-                existing.update(self._discover_existing_connectors(ds_name, target_namespace))
-            stale = sorted(existing - desired)
+                for connector_name in self._discover_existing_connectors(
+                    ds_name,
+                    target_namespace,
+                    include_runtime_artifacts=False,
+                ):
+                    existing_namespaces.setdefault(connector_name, target_namespace)
+            stale = sorted(set(existing_namespaces) - desired)
             if stale:
                 print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
                 if not infra_ready:
@@ -2282,11 +2394,7 @@ class INESDataConnectorsAdapter:
                 if not self._prepare_vault_management_access(ds_name=ds_name):
                     return []
                 for stale_connector in stale:
-                    stale_namespace = self._connector_target_namespace(
-                        stale_connector,
-                        dataspace=ds,
-                        dataspaces=dataspaces,
-                    )
+                    stale_namespace = existing_namespaces.get(stale_connector) or namespace
                     self._cleanup_connector_state(
                         stale_connector,
                         repo_dir,
@@ -2336,6 +2444,24 @@ class INESDataConnectorsAdapter:
 
     def get_cluster_connectors(self):
         connectors = set()
+        dataspaces = self.load_dataspace_connectors() or []
+
+        for dataspace in dataspaces:
+            ds_name = str(dataspace.get("name") or "").strip()
+            if not ds_name:
+                continue
+            for namespace in self._dataspace_connector_target_namespaces(dataspace, dataspaces=dataspaces):
+                connectors.update(
+                    self._discover_existing_connectors(
+                        ds_name,
+                        namespace,
+                        include_runtime_artifacts=False,
+                    )
+                )
+
+        if connectors:
+            return sorted(connectors)
+
         for namespace in self._all_connector_scan_namespaces():
             output = self.run(f"kubectl get pods -n {namespace} --no-headers", capture=True)
             if not output:

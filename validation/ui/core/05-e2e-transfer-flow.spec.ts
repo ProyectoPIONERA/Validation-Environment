@@ -10,7 +10,10 @@ import { CatalogPage } from "../components/consumer/catalog.page";
 import { ContractOffersPage } from "../components/consumer/contract-offers.page";
 import { ContractsPage } from "../components/consumer/contracts.page";
 import { TransferHistoryPage } from "../components/consumer/transfer-history.page";
-import { bootstrapProviderContractArtifacts } from "../shared/utils/provider-bootstrap";
+import {
+  bootstrapProviderContractArtifacts,
+  waitForConsumerCatalogDatasetReadiness,
+} from "../shared/utils/provider-bootstrap";
 import { resolveDataspacePortalRuntime } from "../shared/utils/dataspace-runtime";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
 
@@ -214,6 +217,11 @@ test("05 e2e transfer flow: provider UI bootstrap + consumer negotiation and tra
 
     report.providerBootstrap = await bootstrapProviderContractArtifacts(request, runtime, assetId, suffix);
     await attachJson(testInfo, "provider-bootstrap-report", report.providerBootstrap);
+    await attachJson(
+      testInfo,
+      "consumer-catalog-api-readiness",
+      await waitForConsumerCatalogDatasetReadiness(request, runtime, assetId),
+    );
 
     consumerSession = await createRecordedSession(browser, testInfo, "consumer-session");
     const consumerPage = consumerSession.page;

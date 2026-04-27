@@ -1,3 +1,4 @@
+import { request as playwrightRequest } from "@playwright/test";
 import type { APIRequestContext, Page, Route } from "@playwright/test";
 
 import type {
@@ -112,16 +113,16 @@ function filteredHeaders(route: Route, bearerToken?: string): Record<string, str
 
 export async function installEdcDashboardRouteBridge(
   page: Page,
-  request: APIRequestContext,
   runtime: DataspacePortalRuntime,
-): Promise<void> {
+): Promise<() => Promise<void>> {
   if (runtime.adapter !== "edc") {
-    return;
+    return async () => {};
   }
 
+  const bridgeRequest = await playwrightRequest.newContext();
   const tokenCache: TokenCache = new Map();
 
-  await page.route("**/edc-dashboard-api/connectors/**", async (route) => {
+  const routeHandler = async (route: Route) => {
     const requestUrl = new URL(route.request().url());
     const relativePath = requestUrl.pathname.replace(/^\/edc-dashboard-api\/connectors\//, "");
     const segments = relativePath.split("/").filter(Boolean);
@@ -162,14 +163,14 @@ export async function installEdcDashboardRouteBridge(
     }
 
     const bearerToken = serviceName === "management"
-      ? await issueConnectorToken(request, runtime, connector, tokenCache)
+      ? await issueConnectorToken(bridgeRequest, runtime, connector, tokenCache)
       : undefined;
 
     const targetUrlWithQuery = requestUrl.search
       ? `${targetUrl}${requestUrl.search}`
       : targetUrl;
 
-    const upstreamResponse = await request.fetch(targetUrlWithQuery, {
+    const upstreamResponse = await bridgeRequest.fetch(targetUrlWithQuery, {
       method: route.request().method(),
       headers: filteredHeaders(route, bearerToken),
       data: route.request().postDataBuffer() ?? undefined,
@@ -180,5 +181,12 @@ export async function installEdcDashboardRouteBridge(
       headers: upstreamResponse.headers(),
       body: await upstreamResponse.body(),
     });
-  });
+  };
+
+  await page.route("**/edc-dashboard-api/connectors/**", routeHandler);
+
+  return async () => {
+    await page.unroute("**/edc-dashboard-api/connectors/**", routeHandler);
+    await bridgeRequest.dispose();
+  };
 }

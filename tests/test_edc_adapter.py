@@ -1307,6 +1307,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
                 "connectors": ["conn-citycouncil-demo"],
             }
         ]
+        adapter._discover_existing_connectors = lambda ds_name, namespace, include_runtime_artifacts=True: set()
         adapter._conflicting_runtime_resources = lambda connector, namespace: [
             "deployment/conn-citycouncil-demo"
         ]
@@ -1394,6 +1395,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
                     "connectors": ["conn-citycounciledc-demoedc"],
                 }
             ]
+            adapter._discover_existing_connectors = lambda ds_name, namespace, include_runtime_artifacts=True: set()
             adapter._conflicting_runtime_resources = lambda connector, namespace: []
             adapter._prepare_connector_prerequisites = lambda connector, ds_name, namespace, repo_dir, python_exec: (
                 events.append("prepare-prerequisites") or True
@@ -1462,6 +1464,7 @@ class EdcConnectorAdapterTests(unittest.TestCase):
                 ],
             }
         ]
+        adapter._discover_existing_connectors = lambda ds_name, namespace, include_runtime_artifacts=True: set()
         adapter._conflicting_runtime_resources = lambda connector, namespace: []
         adapter._maybe_prepare_level4_local_edc_images = lambda: True
         calls = []
@@ -1502,6 +1505,154 @@ class EdcConnectorAdapterTests(unittest.TestCase):
             "demoedc-provider",
             "/tmp/values.yaml",
             cwd=adapter._edc_connector_dir(),
+        )
+
+    def test_deploy_connectors_cleans_stale_connectors_in_discovered_target_namespace(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "local"
+        adapter.config = type(
+            "Config",
+            (),
+            {
+                "TIMEOUT_POD_WAIT": 120,
+            },
+        )
+        adapter._prepare_runtime_prerequisites = lambda: ("/tmp/repo", "/tmp/python")
+        adapter.load_dataspace_connectors = lambda: [
+            {
+                "name": "demoedc",
+                "namespace": "demoedc",
+                "namespace_profile": "role-aligned",
+                "connectors": ["conn-citycounciledc-demoedc"],
+                "connector_details": [
+                    {
+                        "name": "conn-citycounciledc-demoedc",
+                        "role": "provider",
+                        "runtime_namespace": "demoedc",
+                        "active_namespace": "demoedc",
+                        "planned_namespace": "demoedc-provider",
+                        "registration_service_namespace": "demoedc-core",
+                        "planned_registration_service_namespace": "demoedc-core",
+                    }
+                ],
+            }
+        ]
+        adapter._conflicting_runtime_resources = lambda connector, namespace: []
+        adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+        adapter._maybe_prepare_level4_local_edc_images = lambda: True
+        discovery_calls = []
+
+        def discover_existing(ds_name, namespace, include_runtime_artifacts=True):
+            discovery_calls.append((ds_name, namespace, include_runtime_artifacts))
+            return {"conn-staleedc-demoedc"} if namespace == "demoedc-provider" else set()
+
+        adapter._discover_existing_connectors = discover_existing
+        cleanup_calls = []
+        adapter._cleanup_connector_state = lambda connector, repo_dir, ds_name, python_exec, namespace=None: cleanup_calls.append(
+            (connector, namespace)
+        )
+        calls = []
+        adapter._prepare_connector_prerequisites = lambda connector, ds_name, namespace, repo_dir, python_exec: (
+            calls.append(("prepare", connector, namespace)) or True
+        )
+        adapter._render_values_file = lambda connector, ds_name, connectors, connector_namespace=None: (
+            calls.append(("values", connector, connector_namespace)) or "/tmp/values.yaml"
+        )
+        adapter._edc_connector_dir = lambda: "/tmp/edc-connector-chart"
+        adapter.config_adapter = mock.Mock()
+        adapter.config_adapter.generate_connector_hosts.return_value = []
+        adapter._wait_for_edc_deployment_rollout = lambda deployment, namespace, timeout=300, label=None: (
+            calls.append(("rollout", deployment, namespace)) or True
+        )
+        adapter._restart_local_edc_deployments_if_needed = lambda connector, namespace, rollout_timeout=300: (
+            calls.append(("restart", connector, namespace)) or True
+        )
+        adapter.wait_for_all_connectors = lambda connectors: True
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.deploy_helm_release.return_value = True
+
+        deployed = adapter.deploy_connectors()
+
+        self.assertEqual(deployed, ["conn-citycounciledc-demoedc"])
+        self.assertEqual(
+            discovery_calls,
+            [
+                ("demoedc", "demoedc-provider", False),
+            ],
+        )
+        self.assertEqual(cleanup_calls, [("conn-staleedc-demoedc", "demoedc-provider")])
+        self.assertEqual(
+            calls,
+            [
+                ("prepare", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("values", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("rollout", "conn-citycounciledc-demoedc", "demoedc-provider"),
+                ("restart", "conn-citycounciledc-demoedc", "demoedc-provider"),
+            ],
+        )
+
+    def test_get_cluster_connectors_prefers_namespace_scoped_discovery_for_role_aligned_edc_dataspace(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "local"
+        adapter.config = type(
+            "Config",
+            (),
+            {
+                "namespace_demo": staticmethod(lambda: "demoedc"),
+            },
+        )
+        adapter.load_dataspace_connectors = lambda: [
+            {
+                "name": "demoedc",
+                "namespace": "demoedc",
+                "namespace_profile": "role-aligned",
+                "connectors": [
+                    "conn-citycounciledc-demoedc",
+                    "conn-companyedc-demoedc",
+                ],
+                "connector_details": [
+                    {
+                        "name": "conn-citycounciledc-demoedc",
+                        "role": "provider",
+                        "runtime_namespace": "demoedc",
+                        "active_namespace": "demoedc",
+                        "planned_namespace": "demoedc-provider",
+                    },
+                    {
+                        "name": "conn-companyedc-demoedc",
+                        "role": "consumer",
+                        "runtime_namespace": "demoedc",
+                        "active_namespace": "demoedc",
+                        "planned_namespace": "demoedc-consumer",
+                    },
+                ],
+            }
+        ]
+        adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+        discovery_calls = []
+
+        def discover_existing(ds_name, namespace, include_runtime_artifacts=True):
+            discovery_calls.append((ds_name, namespace, include_runtime_artifacts))
+            if namespace == "demoedc-provider":
+                return {"conn-citycounciledc-demoedc"}
+            if namespace == "demoedc-consumer":
+                return {"conn-companyedc-demoedc"}
+            return set()
+
+        adapter._discover_existing_connectors = discover_existing
+
+        connectors = adapter.get_cluster_connectors()
+
+        self.assertEqual(
+            connectors,
+            ["conn-citycounciledc-demoedc", "conn-companyedc-demoedc"],
+        )
+        self.assertEqual(
+            discovery_calls,
+            [
+                ("demoedc", "demoedc-provider", False),
+                ("demoedc", "demoedc-consumer", False),
+            ],
         )
 
     def test_preview_deploy_connectors_reports_render_summary_without_secrets(self):
@@ -1603,6 +1754,82 @@ class EdcConnectorAdapterTests(unittest.TestCase):
         self.assertEqual(second_connector["role"], "consumer")
         self.assertEqual(second_connector["target_namespace"], "demoedc-consumer")
         self.assertEqual(second_connector["planned_namespace"], "demoedc-consumer")
+
+    def test_preview_deploy_connectors_renders_values_with_target_namespace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = self._make_role_aligned_adapter(tmpdir)
+            adapter._level4_role_aligned_connector_namespaces_requested = lambda: True
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demoedc",
+                    "namespace": "demoedc",
+                    "namespace_profile": "role-aligned",
+                    "namespace_roles": {
+                        "registration_service_namespace": "demoedc-core",
+                        "provider_namespace": "demoedc",
+                        "consumer_namespace": "demoedc",
+                    },
+                    "planned_namespace_roles": {
+                        "registration_service_namespace": "demoedc-core",
+                        "provider_namespace": "demoedc-provider",
+                        "consumer_namespace": "demoedc-consumer",
+                    },
+                    "connector_roles": {
+                        "provider": "conn-citycounciledc-demoedc",
+                        "consumer": "conn-companyedc-demoedc",
+                        "additional": [],
+                    },
+                    "connector_details": [
+                        {
+                            "name": "conn-citycounciledc-demoedc",
+                            "role": "provider",
+                            "runtime_namespace": "demoedc",
+                            "active_namespace": "demoedc",
+                            "planned_namespace": "demoedc-provider",
+                            "registration_service_namespace": "demoedc-core",
+                            "planned_registration_service_namespace": "demoedc-core",
+                        }
+                    ],
+                    "connectors": [
+                        "conn-citycounciledc-demoedc",
+                    ],
+                }
+            ]
+            adapter._conflicting_runtime_resources = lambda connector, namespace: []
+            recorded_namespaces = []
+
+            def fake_values_payload(connector_name, ds_name, connector_hostnames, connector_namespace=None):
+                del connector_name, ds_name, connector_hostnames
+                recorded_namespaces.append(connector_namespace)
+                return {
+                    "connector": {
+                        "name": "conn-citycounciledc-demoedc",
+                        "image": {"name": "ghcr.io/proyectopionera/edc-connector", "tag": "latest"},
+                        "ingress": {
+                            "hostname": "conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm",
+                            "protocol": "http",
+                        },
+                    },
+                    "services": {
+                        "registrationService": {
+                            "hostname": "demoedc-registration-service.demoedc-core.svc.cluster.local:8080",
+                            "protocol": "http",
+                        },
+                        "db": {"name": "db_conn_citycounciledc_demoedc"},
+                        "minio": {"bucket": "demoedc-conn-citycounciledc-demoedc"},
+                    },
+                    "hostAliases": [{"hostnames": ["keycloak.dev.ed.dataspaceunit.upm"]}],
+                }
+
+            adapter._connector_values_payload = fake_values_payload
+
+            preview = adapter.preview_deploy_connectors()
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(recorded_namespaces, ["demoedc-provider"])
+        connector = preview["dataspaces"][0]["connectors"][0]
+        self.assertEqual(connector["target_namespace"], "demoedc-provider")
+        self.assertIsNotNone(connector["render_summary"])
 
     def test_prepare_connector_prerequisites_recreates_partial_bootstrap_when_runtime_is_missing(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)

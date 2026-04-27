@@ -242,6 +242,94 @@ def _edc_dashboard_namespace(deployer_context):
     return str(getattr(deployer_context, "dataspace_name", "") or "").strip()
 
 
+def _namespace_role_value(roles, key, default=""):
+    if hasattr(roles, key):
+        value = getattr(roles, key)
+    elif isinstance(roles, dict):
+        value = roles.get(key)
+    else:
+        value = None
+    return str(value or default).strip()
+
+
+def _edc_dashboard_connector_namespaces(deployer_context):
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    default_namespace = _edc_dashboard_namespace(deployer_context)
+    if not connectors:
+        return {}
+
+    runtime_roles = getattr(deployer_context, "namespace_roles", None)
+    provider_namespace = _namespace_role_value(
+        runtime_roles,
+        "provider_namespace",
+        default_namespace,
+    ) or default_namespace
+    consumer_namespace = _namespace_role_value(
+        runtime_roles,
+        "consumer_namespace",
+        provider_namespace,
+    ) or provider_namespace
+
+    if _context_namespace_profile(deployer_context) == "role-aligned":
+        planned_roles = getattr(deployer_context, "planned_namespace_roles", None)
+        provider_namespace = _namespace_role_value(
+            planned_roles,
+            "provider_namespace",
+            provider_namespace,
+        ) or provider_namespace
+        consumer_namespace = _namespace_role_value(
+            planned_roles,
+            "consumer_namespace",
+            consumer_namespace,
+        ) or consumer_namespace
+
+    connector_namespaces = {connectors[0]: provider_namespace}
+    if len(connectors) >= 2:
+        connector_namespaces[connectors[1]] = consumer_namespace
+    for connector in connectors[2:]:
+        connector_namespaces[connector] = default_namespace
+    return connector_namespaces
+
+
+def _inesdata_interface_connector_namespaces(deployer_context):
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    default_namespace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
+    if not connectors:
+        return {}
+
+    runtime_roles = getattr(deployer_context, "namespace_roles", None)
+    provider_namespace = _namespace_role_value(
+        runtime_roles,
+        "provider_namespace",
+        default_namespace,
+    ) or default_namespace
+    consumer_namespace = _namespace_role_value(
+        runtime_roles,
+        "consumer_namespace",
+        provider_namespace,
+    ) or provider_namespace
+
+    if _context_namespace_profile(deployer_context) == "role-aligned":
+        planned_roles = getattr(deployer_context, "planned_namespace_roles", None)
+        provider_namespace = _namespace_role_value(
+            planned_roles,
+            "provider_namespace",
+            provider_namespace,
+        ) or provider_namespace
+        consumer_namespace = _namespace_role_value(
+            planned_roles,
+            "consumer_namespace",
+            consumer_namespace,
+        ) or consumer_namespace
+
+    connector_namespaces = {connectors[0]: provider_namespace}
+    if len(connectors) >= 2:
+        connector_namespaces[connectors[1]] = consumer_namespace
+    for connector in connectors[2:]:
+        connector_namespaces[connector] = default_namespace
+    return connector_namespaces
+
+
 def _context_namespace_profile(context):
     return str(getattr(context, "namespace_profile", "compact") or "compact").strip() or "compact"
 
@@ -656,15 +744,19 @@ def _edc_dashboard_http_gates(deployer_context, connectors, timeout_seconds):
 
 
 def _probe_edc_dashboard_readiness(deployer_context):
-    namespace = _edc_dashboard_namespace(deployer_context)
     connectors = list(getattr(deployer_context, "connectors", []) or [])
+    connector_namespaces = _edc_dashboard_connector_namespaces(deployer_context)
+    namespaces = sorted({namespace for namespace in connector_namespaces.values() if namespace})
+    namespace = namespaces[0] if len(namespaces) == 1 else ""
     gates = []
     http_timeout = _positive_float_env("PIONERA_EDC_DASHBOARD_HTTP_TIMEOUT_SECONDS", 5)
 
-    if not namespace:
+    if not connector_namespaces:
         return {
             "status": "failed",
             "namespace": namespace,
+            "namespaces": namespaces,
+            "connector_namespaces": connector_namespaces,
             "connectors": connectors,
             "gates": [{"gate": "namespace", "ready": False, "detail": "namespace is empty"}],
         }
@@ -673,17 +765,20 @@ def _probe_edc_dashboard_readiness(deployer_context):
         return {
             "status": "failed",
             "namespace": namespace,
+            "namespaces": namespaces,
+            "connector_namespaces": connector_namespaces,
             "connectors": connectors,
             "gates": [{"gate": "connectors", "ready": False, "detail": "no connectors resolved"}],
         }
 
     for connector in connectors:
+        connector_namespace = connector_namespaces.get(connector) or namespace
         for suffix in ("dashboard", "dashboard-proxy"):
             service_name = f"{connector}-{suffix}"
-            ready, detail = _kubectl_endpoint_ready(namespace, service_name)
+            ready, detail = _kubectl_endpoint_ready(connector_namespace, service_name)
             gates.append({
                 "gate": f"{suffix}:{connector}",
-                "namespace": namespace,
+                "namespace": connector_namespace,
                 "service": service_name,
                 "ready": ready,
                 "detail": detail,
@@ -695,6 +790,8 @@ def _probe_edc_dashboard_readiness(deployer_context):
     return {
         "status": status,
         "namespace": namespace,
+        "namespaces": namespaces,
+        "connector_namespaces": connector_namespaces,
         "connectors": connectors,
         "gates": gates,
     }
@@ -761,13 +858,14 @@ def _edc_dashboard_readiness_failure_message(readiness):
 
 def _probe_inesdata_portal_readiness(deployer_context):
     connectors = list(getattr(deployer_context, "connectors", []) or [])
-    namespace_roles = getattr(deployer_context, "namespace_roles", None)
-    namespaces = []
-    if namespace_roles is not None:
-        for attribute in ("provider_namespace", "consumer_namespace", "registration_service_namespace"):
-            value = getattr(namespace_roles, attribute, None)
-            if value:
-                namespaces.append(value)
+    connector_namespaces = _inesdata_interface_connector_namespaces(deployer_context)
+    namespaces = list(connector_namespaces.values())
+    registration_namespace = _namespace_role_value(
+        getattr(deployer_context, "namespace_roles", None),
+        "registration_service_namespace",
+    )
+    if registration_namespace:
+        namespaces.append(registration_namespace)
     http_timeout = _positive_float_env("PIONERA_INESDATA_PORTAL_HTTP_TIMEOUT_SECONDS", 5)
     dataspace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
     gates = []
@@ -806,14 +904,15 @@ def _probe_inesdata_portal_readiness(deployer_context):
 
     for connector in connectors:
         service_name = f"{connector}-interface"
-        service_ready, service_detail, namespace = _probe_service_ready_across_namespaces(
+        connector_namespace = connector_namespaces.get(connector)
+        service_ready, service_detail = _kubectl_endpoint_ready(
+            connector_namespace,
             service_name,
-            namespaces,
         )
         gates.append(
             {
                 "gate": f"interface:{connector}",
-                "namespace": namespace,
+                "namespace": connector_namespace,
                 "service": service_name,
                 "ready": service_ready,
                 "detail": service_detail,
@@ -841,6 +940,7 @@ def _probe_inesdata_portal_readiness(deployer_context):
     return {
         "status": status,
         "namespaces": namespaces,
+        "connector_namespaces": connector_namespaces,
         "connectors": connectors,
         "gates": gates,
     }

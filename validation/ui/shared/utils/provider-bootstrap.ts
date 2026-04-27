@@ -31,6 +31,44 @@ type ConsumerTransferArtifacts = {
   assetId: string;
 };
 
+const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
+const TRANSIENT_HTTP_MAX_ATTEMPTS = 4;
+const TRANSIENT_HTTP_RETRY_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientHttpStatus(status: number): boolean {
+  return TRANSIENT_HTTP_STATUSES.has(status);
+}
+
+async function transientHttpError(action: string, response: { status(): number; text(): Promise<string> }): Promise<Error> {
+  const body = await response.text().catch(() => "");
+  return new Error(`${action} failed with HTTP ${response.status()}: ${body.slice(0, 500)}`);
+}
+
+async function executeRetriableRequest<TResponse extends { ok(): boolean; status(): number; text(): Promise<string> }>(
+  action: string,
+  execute: () => Promise<TResponse>,
+  maxAttempts = TRANSIENT_HTTP_MAX_ATTEMPTS,
+): Promise<TResponse> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await execute();
+    if (response.ok()) {
+      return response;
+    }
+
+    if (!isTransientHttpStatus(response.status()) || attempt >= maxAttempts) {
+      throw await transientHttpError(action, response);
+    }
+
+    await sleep(TRANSIENT_HTTP_RETRY_DELAY_MS * attempt);
+  }
+
+  throw new Error(`${action} failed before issuing a request`);
+}
+
 async function ensureOk(response: { ok(): boolean; status(): number; text(): Promise<string> }, action: string) {
   if (response.ok()) {
     return;
@@ -41,9 +79,8 @@ async function ensureOk(response: { ok(): boolean; status(): number; text(): Pro
 }
 
 async function issueUserToken(request: APIRequestContext, runtime: DataspacePortalRuntime): Promise<string> {
-  const response = await request.post(
-    `${runtime.keycloakUrl}/realms/${runtime.dataspace}/protocol/openid-connect/token`,
-    {
+  const response = await executeRetriableRequest("Provider token request", () =>
+    request.post(`${runtime.keycloakUrl}/realms/${runtime.dataspace}/protocol/openid-connect/token`, {
       form: {
         grant_type: "password",
         client_id: runtime.keycloakClientId,
@@ -51,9 +88,8 @@ async function issueUserToken(request: APIRequestContext, runtime: DataspacePort
         password: runtime.provider.password,
         scope: "openid profile email",
       },
-    },
+    }),
   );
-  await ensureOk(response, "Provider token request");
   const body = await response.json();
   const token = body?.access_token;
   if (!token) {
@@ -63,9 +99,8 @@ async function issueUserToken(request: APIRequestContext, runtime: DataspacePort
 }
 
 async function issueConsumerToken(request: APIRequestContext, runtime: DataspacePortalRuntime): Promise<string> {
-  const response = await request.post(
-    `${runtime.keycloakUrl}/realms/${runtime.dataspace}/protocol/openid-connect/token`,
-    {
+  const response = await executeRetriableRequest("Consumer token request", () =>
+    request.post(`${runtime.keycloakUrl}/realms/${runtime.dataspace}/protocol/openid-connect/token`, {
       form: {
         grant_type: "password",
         client_id: runtime.keycloakClientId,
@@ -73,9 +108,8 @@ async function issueConsumerToken(request: APIRequestContext, runtime: Dataspace
         password: runtime.consumer.password,
         scope: "openid profile email",
       },
-    },
+    }),
   );
-  await ensureOk(response, "Consumer token request");
   const body = await response.json();
   const token = body?.access_token;
   if (!token) {
@@ -90,27 +124,28 @@ async function createPolicy(
   providerToken: string,
   policyId: string,
 ): Promise<void> {
-  const response = await request.post(`${runtime.provider.managementBaseUrl}/policydefinitions`, {
-    headers: {
-      Authorization: `Bearer ${providerToken}`,
-      "Content-Type": "application/json",
-    },
-    data: {
-      "@context": {
-        "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
-        odrl: "http://www.w3.org/ns/odrl/2/",
+  await executeRetriableRequest("Create policy", () =>
+    request.post(`${runtime.provider.managementBaseUrl}/policydefinitions`, {
+      headers: {
+        Authorization: `Bearer ${providerToken}`,
+        "Content-Type": "application/json",
       },
-      "@id": policyId,
-      policy: {
-        "@context": "http://www.w3.org/ns/odrl.jsonld",
-        "@type": "Set",
-        permission: [],
-        prohibition: [],
-        obligation: [],
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+          odrl: "http://www.w3.org/ns/odrl/2/",
+        },
+        "@id": policyId,
+        policy: {
+          "@context": "http://www.w3.org/ns/odrl.jsonld",
+          "@type": "Set",
+          permission: [],
+          prohibition: [],
+          obligation: [],
+        },
       },
-    },
-  });
-  await ensureOk(response, "Create policy");
+    }),
+  );
 }
 
 async function createAsset(
@@ -120,36 +155,37 @@ async function createAsset(
   assetId: string,
   sourceObjectName = "todos",
 ): Promise<void> {
-  const response = await request.post(`${runtime.provider.managementBaseUrl}/assets`, {
-    headers: {
-      Authorization: `Bearer ${providerToken}`,
-      "Content-Type": "application/json",
-    },
-    data: {
-      "@context": {
-        "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
-        dct: "http://purl.org/dc/terms/",
-        dcat: "http://www.w3.org/ns/dcat#",
+  await executeRetriableRequest("Create asset", () =>
+    request.post(`${runtime.provider.managementBaseUrl}/assets`, {
+      headers: {
+        Authorization: `Bearer ${providerToken}`,
+        "Content-Type": "application/json",
       },
-      "@id": assetId,
-      "@type": "Asset",
-      properties: {
-        name: `UI Negotiation Asset ${assetId}`,
-        version: "1.0.0",
-        shortDescription: "Asset bootstrap for UI negotiation validation",
-        assetType: "dataset",
-        assetData: {},
-        "dct:description": "Asset bootstrap for UI negotiation validation",
-        "dcat:keyword": ["validation", "ui", "negotiation"],
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+          dct: "http://purl.org/dc/terms/",
+          dcat: "http://www.w3.org/ns/dcat#",
+        },
+        "@id": assetId,
+        "@type": "Asset",
+        properties: {
+          name: `UI Negotiation Asset ${assetId}`,
+          version: "1.0.0",
+          shortDescription: "Asset bootstrap for UI negotiation validation",
+          assetType: "dataset",
+          assetData: {},
+          "dct:description": "Asset bootstrap for UI negotiation validation",
+          "dcat:keyword": ["validation", "ui", "negotiation"],
+        },
+        dataAddress: {
+          type: "HttpData",
+          baseUrl: "https://jsonplaceholder.typicode.com/todos",
+          name: sourceObjectName,
+        },
       },
-      dataAddress: {
-        type: "HttpData",
-        baseUrl: "https://jsonplaceholder.typicode.com/todos",
-        name: sourceObjectName,
-      },
-    },
-  });
-  await ensureOk(response, "Create asset");
+    }),
+  );
 }
 
 async function createContractDefinition(
@@ -160,28 +196,29 @@ async function createContractDefinition(
   policyId: string,
   assetId: string,
 ): Promise<void> {
-  const response = await request.post(`${runtime.provider.managementBaseUrl}/contractdefinitions`, {
-    headers: {
-      Authorization: `Bearer ${providerToken}`,
-      "Content-Type": "application/json",
-    },
-    data: {
-      "@context": {
-        "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+  await executeRetriableRequest("Create contract definition", () =>
+    request.post(`${runtime.provider.managementBaseUrl}/contractdefinitions`, {
+      headers: {
+        Authorization: `Bearer ${providerToken}`,
+        "Content-Type": "application/json",
       },
-      "@id": contractDefinitionId,
-      accessPolicyId: policyId,
-      contractPolicyId: policyId,
-      assetsSelector: [
-        {
-          operandLeft: "https://w3id.org/edc/v0.0.1/ns/id",
-          operator: "=",
-          operandRight: assetId,
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
         },
-      ],
-    },
-  });
-  await ensureOk(response, "Create contract definition");
+        "@id": contractDefinitionId,
+        accessPolicyId: policyId,
+        contractPolicyId: policyId,
+        assetsSelector: [
+          {
+            operandLeft: "https://w3id.org/edc/v0.0.1/ns/id",
+            operator: "=",
+            operandRight: assetId,
+          },
+        ],
+      },
+    }),
+  );
 }
 
 export async function bootstrapProviderContractArtifacts(
@@ -247,28 +284,86 @@ export async function fetchConsumerCatalogResponse(
   counterPartyId?: string,
 ): Promise<unknown> {
   const consumerToken = await issueConsumerToken(request, runtime);
-  const response = await request.post(`${runtime.consumer.managementBaseUrl}/catalog/request`, {
-    headers: {
-      Authorization: `Bearer ${consumerToken}`,
-      "Content-Type": "application/json",
-    },
-    data: {
-      "@context": {
-        "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+  const response = await executeRetriableRequest("Consumer catalog request", () =>
+    request.post(`${runtime.consumer.managementBaseUrl}/catalog/request`, {
+      headers: {
+        Authorization: `Bearer ${consumerToken}`,
+        "Content-Type": "application/json",
       },
-      "@type": "CatalogRequest",
-      counterPartyAddress,
-      counterPartyId,
-      protocol: "dataspace-protocol-http",
-      querySpec: {
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+        },
+        "@type": "CatalogRequest",
+        counterPartyAddress,
+        counterPartyId,
+        protocol: "dataspace-protocol-http",
+        querySpec: {
+          offset: 0,
+          limit: 100,
+          filterExpression: [],
+        },
+      },
+    }),
+  );
+  return await response.json();
+}
+
+function consumerManagementRoot(runtime: DataspacePortalRuntime): string {
+  return runtime.consumer.managementBaseUrl.replace(/\/v3\/?$/, "");
+}
+
+async function fetchConsumerFederatedCatalogResponse(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  querySpec: Record<string, unknown> = {},
+): Promise<unknown> {
+  const consumerToken = await issueConsumerToken(request, runtime);
+  const response = await executeRetriableRequest("Consumer federated catalog request", () =>
+    request.post(`${consumerManagementRoot(runtime)}/federatedcatalog/request`, {
+      headers: {
+        Authorization: `Bearer ${consumerToken}`,
+        "Content-Type": "application/json",
+      },
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+        },
         offset: 0,
         limit: 100,
         filterExpression: [],
+        ...querySpec,
       },
-    },
-  });
-  await ensureOk(response, "Consumer catalog request");
+    }),
+  );
+
   return await response.json();
+}
+
+async function fetchConsumerFederatedCatalogCount(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  querySpec: Record<string, unknown> = {},
+): Promise<number> {
+  const consumerToken = await issueConsumerToken(request, runtime);
+  const response = await executeRetriableRequest("Consumer federated catalog count", () =>
+    request.post(`${consumerManagementRoot(runtime)}/pagination/count?type=federatedCatalog`, {
+      headers: {
+        Authorization: `Bearer ${consumerToken}`,
+        "Content-Type": "application/json",
+      },
+      data: {
+        "@context": {
+          "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+        },
+        filterExpression: [],
+        ...querySpec,
+      },
+    }),
+  );
+
+  const body = await response.json();
+  return typeof body === "number" ? body : Number(body || 0);
 }
 
 function findCatalogDataset(catalogResponse: any, assetId: string): any {
@@ -283,6 +378,43 @@ function findCatalogDataset(catalogResponse: any, assetId: string): any {
 function catalogDatasetOffer(dataset: any): any {
   const offer = dataset?.["odrl:hasPolicy"] || dataset?.policy;
   return Array.isArray(offer) ? offer[0] : offer;
+}
+
+function federatedCatalogs(catalogResponse: any): any[] {
+  return Array.isArray(catalogResponse) ? catalogResponse : [];
+}
+
+function federatedCatalogDatasets(catalog: any): any[] {
+  const datasets = catalog?.["http://www.w3.org/ns/dcat#dataset"] || catalog?.["dcat:dataset"];
+  if (Array.isArray(datasets)) {
+    return datasets;
+  }
+  return datasets ? [datasets] : [];
+}
+
+function findFederatedCatalogDataset(catalogResponse: any, assetId: string): { catalog: any; dataset: any } | undefined {
+  for (const catalog of federatedCatalogs(catalogResponse)) {
+    const dataset = federatedCatalogDatasets(catalog).find(
+      (entry: any) => entry?.["@id"] === assetId || entry?.id === assetId,
+    );
+    if (dataset) {
+      return { catalog, dataset };
+    }
+  }
+  return undefined;
+}
+
+function federatedCatalogDatasetOffer(dataset: any): any {
+  const offers = dataset?.["odrl:hasPolicy"];
+  const firstOffer = Array.isArray(offers) ? offers[0] : offers;
+  return firstOffer?.["edc:offer"] || firstOffer?.offer || firstOffer;
+}
+
+function federatedCatalogDatasetCount(catalogResponse: any): number {
+  return federatedCatalogs(catalogResponse).reduce(
+    (count, catalog) => count + federatedCatalogDatasets(catalog).length,
+    0,
+  );
 }
 
 function resolveCatalogParticipantId(catalogResponse: any, fallback: string): string {
@@ -348,6 +480,36 @@ async function fetchConsumerCatalogDatasetWithOffer(
   );
 }
 
+async function fetchConsumerFederatedCatalogDatasetWithOffer(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  assetId: string,
+  timeoutMs = 120_000,
+): Promise<{ catalogResponse: any; dataset: any; datasetCount: number }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastDatasetFound = false;
+
+  while (Date.now() < deadline) {
+    const catalogResponse = await fetchConsumerFederatedCatalogResponse(request, runtime);
+    const match = findFederatedCatalogDataset(catalogResponse, assetId);
+    if (match) {
+      lastDatasetFound = true;
+      if (federatedCatalogDatasetOffer(match.dataset)?.["@id"]) {
+        const datasetCount = await fetchConsumerFederatedCatalogCount(request, runtime);
+        if (datasetCount > 0) {
+          return { catalogResponse, dataset: match.dataset, datasetCount };
+        }
+      }
+    }
+    await sleep(2000);
+  }
+
+  throw new Error(
+    `Federated catalog dataset '${assetId}' did not expose an offer policy in time. ` +
+      `Last catalog state: ${lastDatasetFound ? "dataset without offer policy" : "dataset not found"}`,
+  );
+}
+
 export async function waitForConsumerCatalogDatasetReadiness(
   request: APIRequestContext,
   runtime: DataspacePortalRuntime,
@@ -355,19 +517,35 @@ export async function waitForConsumerCatalogDatasetReadiness(
   counterPartyAddress: string = runtime.provider.protocolBaseUrl,
   counterPartyId: string = runtime.provider.connectorName,
 ): Promise<CatalogDatasetReadiness> {
-  const { catalogResponse, dataset } = await fetchConsumerCatalogDatasetWithOffer(
-    request,
-    runtime,
-    assetId,
-    counterPartyAddress,
-    counterPartyId,
-  );
-  const datasets = Array.isArray(catalogResponse?.["dcat:dataset"])
-    ? catalogResponse["dcat:dataset"]
-    : Array.isArray(catalogResponse?.datasets)
-      ? catalogResponse.datasets
-      : [];
-  const offer = catalogDatasetOffer(dataset);
+  const useFederatedCatalog = runtime.adapter === "inesdata";
+  let catalogResponse: any;
+  let dataset: any;
+  let datasetCount = 0;
+  let offer: any;
+
+  if (useFederatedCatalog) {
+    const readiness = await fetchConsumerFederatedCatalogDatasetWithOffer(request, runtime, assetId);
+    catalogResponse = readiness.catalogResponse;
+    dataset = readiness.dataset;
+    datasetCount = readiness.datasetCount;
+    offer = federatedCatalogDatasetOffer(dataset);
+  } else {
+    const readiness = await fetchConsumerCatalogDatasetWithOffer(
+      request,
+      runtime,
+      assetId,
+      counterPartyAddress,
+      counterPartyId,
+    );
+    catalogResponse = readiness.catalogResponse;
+    dataset = readiness.dataset;
+    datasetCount = Array.isArray(catalogResponse?.["dcat:dataset"])
+      ? catalogResponse["dcat:dataset"].length
+      : Array.isArray(catalogResponse?.datasets)
+        ? catalogResponse.datasets.length
+        : 0;
+    offer = catalogDatasetOffer(dataset);
+  }
 
   return {
     assetId,
@@ -375,7 +553,7 @@ export async function waitForConsumerCatalogDatasetReadiness(
     counterPartyId,
     datasetId: String(dataset?.["@id"] || dataset?.id || ""),
     offerId: String(offer?.["@id"] || ""),
-    datasetCount: datasets.length,
+    datasetCount,
   };
 }
 

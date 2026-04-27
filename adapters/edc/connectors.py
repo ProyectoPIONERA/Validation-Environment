@@ -1033,16 +1033,17 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
             for connector in connectors:
                 connector_layout = connector_details.get(connector, {})
+                target_namespace = self._connector_target_namespace(
+                    connector,
+                    dataspace=dataspace,
+                    dataspaces=dataspaces,
+                )
                 connector_preview = {
                     "name": connector,
                     "role": connector_layout.get("role"),
                     "release_name": f"{connector}-{ds_name}",
                     "namespace": namespace,
-                    "target_namespace": self._connector_target_namespace(
-                        connector,
-                        dataspace=dataspace,
-                        dataspaces=dataspaces,
-                    ),
+                    "target_namespace": target_namespace,
                     "active_namespace": connector_layout.get("active_namespace", namespace),
                     "planned_namespace": connector_layout.get("planned_namespace", namespace),
                     "registration_service_namespace": connector_layout.get(
@@ -1094,7 +1095,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                         connector,
                         ds_name,
                         connectors,
-                        connector_namespace=namespace,
+                        connector_namespace=target_namespace,
                     )
                     connector_preview["render_summary"] = self._redacted_values_preview(payload)
 
@@ -1228,16 +1229,17 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         self.ensure_minio_policy_attached(connector_name, ds_name=ds_name)
         return True
 
-    def _discover_existing_connectors(self, ds_name, namespace):
+    def _discover_existing_connectors(self, ds_name, namespace, include_runtime_artifacts=True):
         existing = set()
-        creds_dir = self._edc_runtime_dir(ds_name=ds_name)
-        if os.path.isdir(creds_dir):
-            for entry in os.listdir(creds_dir):
-                if not (entry.startswith("credentials-connector-") and entry.endswith(".json")):
-                    continue
-                connector = entry[len("credentials-connector-"):-len(".json")]
-                if connector and self._connector_belongs_to_dataspace(connector, ds_name):
-                    existing.add(connector)
+        if include_runtime_artifacts:
+            creds_dir = self._edc_runtime_dir(ds_name=ds_name)
+            if os.path.isdir(creds_dir):
+                for entry in os.listdir(creds_dir):
+                    if not (entry.startswith("credentials-connector-") and entry.endswith(".json")):
+                        continue
+                    connector = entry[len("credentials-connector-"):-len(".json")]
+                    if connector and self._connector_belongs_to_dataspace(connector, ds_name):
+                        existing.add(connector)
 
         releases = self.run_silent(f"helm list -n {namespace} --no-headers")
         if releases:
@@ -1356,6 +1358,28 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             if self._role_aligned_level4_namespaces_active(dataspace, dataspaces=dataspaces):
                 print(f"Target connector namespaces: {target_namespaces}")
             print(f"Connectors defined: {connectors}\n")
+
+            desired = set(connectors or [])
+            existing_namespaces = {}
+            for target_namespace in target_namespaces:
+                for connector_name in self._discover_existing_connectors(
+                    ds_name,
+                    target_namespace,
+                    include_runtime_artifacts=False,
+                ):
+                    existing_namespaces.setdefault(connector_name, target_namespace)
+            stale = sorted(set(existing_namespaces) - desired)
+            if stale:
+                print(f"Found stale connectors for dataspace '{ds_name}': {stale}")
+                for stale_connector in stale:
+                    stale_namespace = existing_namespaces.get(stale_connector) or namespace
+                    self._cleanup_connector_state(
+                        stale_connector,
+                        repo_dir,
+                        ds_name,
+                        python_exec,
+                        namespace=stale_namespace,
+                    )
 
             for connector in connectors:
                 target_namespace = self._connector_target_namespace(

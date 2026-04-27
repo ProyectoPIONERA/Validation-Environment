@@ -26,6 +26,15 @@ class ConnectorReadinessConfigAdapter:
     def ds_domain_base():
         return "dev.ds.dataspaceunit.upm"
 
+    @staticmethod
+    def load_deployer_config():
+        return {
+            "DS_1_NAME": "demo",
+            "DS_1_NAMESPACE": "demo",
+            "DS_1_CONNECTORS": "a,b",
+            "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+        }
+
 
 class ConnectorManagementReadinessTests(unittest.TestCase):
     @staticmethod
