@@ -1889,13 +1889,34 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["urls"], {"keycloak": "http://keycloak.example.local"})
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
 
-    def test_run_level_refuses_non_local_level_five_until_vm_execution_exists(self):
+    def test_run_level_five_uses_vm_single_component_deployment(self):
         adapter = FakeAdapter()
+        fake_orchestrator = mock.Mock()
+        fake_orchestrator.resolve_context = mock.Mock(
+            return_value={"topology": "vm-single", "components": ["ontology-hub"]}
+        )
+        fake_orchestrator.deployer = mock.Mock()
+        fake_orchestrator.deployer.deploy_components = mock.Mock(
+            return_value={
+                "deployed": ["ontology-hub"],
+                "urls": {"ontology-hub": "http://ontology-hub.example.local"},
+            }
+        )
 
-        with self.assertRaises(RuntimeError) as error:
-            main.run_level(adapter, 5, deployer_name="fake", topology="vm-single")
+        with mock.patch.object(main, "build_deployer_orchestrator", return_value=fake_orchestrator), mock.patch.object(
+            main,
+            "_resolve_level_access_urls",
+            return_value={},
+        ):
+            result = main.run_level(adapter, 5, deployer_name="fake", topology="vm-single")
 
-        self.assertIn("Real Level 5 execution is not enabled", str(error.exception))
+        self.assertEqual(result["level"], 5)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["deployed"], ["ontology-hub"])
+        fake_orchestrator.resolve_context.assert_called_once_with(topology="vm-single")
+        fake_orchestrator.deployer.deploy_components.assert_called_once_with(
+            {"topology": "vm-single", "components": ["ontology-hub"]}
+        )
         self.assertEqual(adapter.calls, [])
 
     def test_run_level_one_uses_vm_single_cluster_preflight(self):
