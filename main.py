@@ -49,6 +49,7 @@ from deployers.infrastructure.lib.hosts_manager import (
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
+from deployers.infrastructure.lib.topology import LOCAL_TOPOLOGY, normalize_topology
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
 from validation.orchestration.hosts import (
     ensure_public_endpoints_accessible,
@@ -2488,9 +2489,12 @@ def _run_test_data_cleanup_if_enabled(adapter, connectors, deployer_context, exp
             "reason": "missing-deployer-context",
         }
 
+    context_topology = normalize_topology(
+        deployer_context.get("topology") if isinstance(deployer_context, dict) else getattr(deployer_context, "topology", None)
+    )
     infrastructure = getattr(adapter, "infrastructure", None)
     ensure_local_access = getattr(infrastructure, "ensure_local_infra_access", None)
-    if callable(ensure_local_access) and not ensure_local_access():
+    if context_topology == LOCAL_TOPOLOGY and callable(ensure_local_access) and not ensure_local_access():
         raise RuntimeError(
             "Pre-validation test data cleanup failed. Local infrastructure access is not ready."
         )

@@ -3048,6 +3048,58 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(cleanup_kwargs["mode"], "dry-run")
         self.assertTrue(cleanup_kwargs["report_enabled"])
 
+    def test_test_data_cleanup_requires_local_infra_access_for_local_topology(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = types.SimpleNamespace(
+            ensure_local_infra_access=mock.Mock(return_value=True)
+        )
+
+        with mock.patch.object(
+            main,
+            "run_pre_validation_cleanup",
+            return_value={"status": "completed", "summary": {"deleted_total": 1}},
+        ) as cleanup_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_TEST_DATA_CLEANUP": "true"},
+            clear=False,
+        ):
+            result = main._run_test_data_cleanup_if_enabled(
+                adapter,
+                ["conn-a", "conn-b"],
+                {"topology": "local", "dataspace_name": "fake-ds"},
+                "/tmp/cleanup-local",
+            )
+
+        self.assertEqual(result["status"], "completed")
+        adapter.infrastructure.ensure_local_infra_access.assert_called_once()
+        cleanup_runner.assert_called_once()
+
+    def test_test_data_cleanup_skips_local_infra_access_for_vm_single_topology(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = types.SimpleNamespace(
+            ensure_local_infra_access=mock.Mock(return_value=False)
+        )
+
+        with mock.patch.object(
+            main,
+            "run_pre_validation_cleanup",
+            return_value={"status": "completed", "summary": {"deleted_total": 1}},
+        ) as cleanup_runner, mock.patch.dict(
+            os.environ,
+            {"PIONERA_TEST_DATA_CLEANUP": "true"},
+            clear=False,
+        ):
+            result = main._run_test_data_cleanup_if_enabled(
+                adapter,
+                ["conn-a", "conn-b"],
+                {"topology": "vm-single", "dataspace_name": "fake-ds"},
+                "/tmp/cleanup-vm-single",
+            )
+
+        self.assertEqual(result["status"], "completed")
+        adapter.infrastructure.ensure_local_infra_access.assert_not_called()
+        cleanup_runner.assert_called_once()
+
     def test_level6_public_endpoint_preflight_builds_dataspace_and_connector_urls(self):
         adapter = FakeAdapterWithInfrastructure()
         context = types.SimpleNamespace(
