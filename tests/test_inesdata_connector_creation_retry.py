@@ -1160,6 +1160,54 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             ):
                 self.assertTrue(adapter._verify_vault_management_token(ds_name="demo"))
 
+    def test_prepare_vault_management_access_skips_local_infra_check_outside_local_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class ConfigAdapterWithVault(ConnectorRetryConfigAdapter):
+                def __init__(self, root):
+                    super().__init__(root)
+                    self.topology = "vm-single"
+
+                def load_deployer_config(self):
+                    values = super().load_deployer_config()
+                    values.update(
+                        {
+                            "VT_URL": "http://vault.remote:8200",
+                            "VT_TOKEN": "root-token",
+                        }
+                    )
+                    return values
+
+            class Infra:
+                def __init__(self):
+                    self.local_calls = 0
+                    self.vault_calls = 0
+
+                def ensure_local_infra_access(self):
+                    self.local_calls += 1
+                    return False
+
+                def ensure_vault_unsealed(self):
+                    self.vault_calls += 1
+                    return True
+
+            infra = Infra()
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=infra,
+                config_adapter=ConfigAdapterWithVault(tmpdir),
+                config_cls=config,
+            )
+
+            with mock.patch.object(adapter, "_verify_vault_management_token", return_value=True):
+                self.assertTrue(adapter._prepare_vault_management_access(ds_name="demo"))
+
+            self.assertEqual(infra.local_calls, 0)
+            self.assertEqual(infra.vault_calls, 1)
+
     def test_create_connector_retries_after_initial_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
