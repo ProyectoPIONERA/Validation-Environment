@@ -1013,6 +1013,82 @@ class INESDataConnectorsAdapter:
             return override_path
         return None
 
+    def _explicit_connector_image_override_path(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+
+        connector_image_name = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_IMAGE_NAME")
+            or os.environ.get("INESDATA_CONNECTOR_IMAGE_NAME")
+            or deployer_config.get("INESDATA_CONNECTOR_IMAGE_NAME")
+        )
+        connector_image_tag = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_IMAGE_TAG")
+            or os.environ.get("INESDATA_CONNECTOR_IMAGE_TAG")
+            or deployer_config.get("INESDATA_CONNECTOR_IMAGE_TAG")
+        )
+        interface_image_name = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+            or os.environ.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+            or deployer_config.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME")
+        )
+        interface_image_tag = (
+            os.environ.get("PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+            or os.environ.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+            or deployer_config.get("INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG")
+        )
+
+        connector_name_present = bool(str(connector_image_name or "").strip())
+        connector_tag_present = bool(str(connector_image_tag or "").strip())
+        interface_name_present = bool(str(interface_image_name or "").strip())
+        interface_tag_present = bool(str(interface_image_tag or "").strip())
+
+        if connector_name_present != connector_tag_present:
+            raise RuntimeError(
+                "INESData connector image override is incomplete. Set both "
+                "PIONERA_INESDATA_CONNECTOR_IMAGE_NAME and PIONERA_INESDATA_CONNECTOR_IMAGE_TAG."
+            )
+
+        if interface_name_present != interface_tag_present:
+            raise RuntimeError(
+                "INESData connector interface image override is incomplete. Set both "
+                "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME and "
+                "PIONERA_INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG."
+            )
+
+        override = {}
+        if connector_name_present and connector_tag_present:
+            override["connector"] = {
+                "image": {
+                    "name": str(connector_image_name).strip(),
+                    "tag": str(connector_image_tag).strip(),
+                }
+            }
+
+        if interface_name_present and interface_tag_present:
+            override["connectorInterface"] = {
+                "image": {
+                    "name": str(interface_image_name).strip(),
+                    "tag": str(interface_image_tag).strip(),
+                }
+            }
+
+        if not override:
+            return None
+
+        override_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "build",
+            "runtime-overrides",
+        )
+        os.makedirs(override_dir, exist_ok=True)
+        override_path = os.path.join(override_dir, "connector-image-overrides.yaml")
+        with open(override_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(override, handle, sort_keys=False)
+        return override_path
+
     def _framework_root_dir(self):
         resolver = getattr(self.config, "script_dir", None)
         if callable(resolver):
@@ -2200,6 +2276,10 @@ class INESDataConnectorsAdapter:
         if local_image_override:
             values_files.append(local_image_override)
             print(f"Using local connector image overrides: {local_image_override}")
+        explicit_image_override = self._explicit_connector_image_override_path()
+        if explicit_image_override:
+            values_files.append(explicit_image_override)
+            print(f"Using explicit INESData connector image overrides: {explicit_image_override}")
 
         if not self.infrastructure.deploy_helm_release(
             release_name,
