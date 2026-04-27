@@ -1536,11 +1536,12 @@ class MainCliTests(unittest.TestCase):
         adapter = FakeAdapterWithInfrastructure()
         adapter.infrastructure = SharedInfrastructure()
 
+        stdout = io.StringIO()
         with mock.patch.object(main, "build_adapter", return_value=adapter), mock.patch.object(
             main,
             "_interactive_confirm",
             return_value=True,
-        ) as confirm, mock.patch.object(main, "run_level") as run_level:
+        ) as confirm, mock.patch.object(main, "run_level") as run_level, contextlib.redirect_stdout(stdout):
             result = main._run_interactive_level2_with_shared_foundation(
                 adapter_registry={"fake": "fake_adapter_module:FakeAdapterWithInfrastructure"},
                 deployer_registry=self.deployer_registry,
@@ -1553,6 +1554,7 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(adapter.infrastructure.completed, [2])
         self.assertEqual(confirm.call_count, 1)
         run_level.assert_not_called()
+        self.assertIn("Level 2 manages the shared foundation used by all adapters in this cluster.", stdout.getvalue())
 
     def test_interactive_level2_can_recreate_healthy_shared_common_services(self):
         class SharedInfrastructure:

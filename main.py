@@ -4521,7 +4521,7 @@ def _run_interactive_level2_with_shared_foundation(
         if common_ready:
             print()
             print("Shared common services are already healthy.")
-            print("Level 2 manages the shared foundation used by all local adapters.")
+            print("Level 2 manages the shared foundation used by all adapters in this cluster.")
 
             if _interactive_confirm("Reuse shared common services?", default=True):
                 announcer = getattr(infrastructure, "announce_level", None)
