@@ -2498,7 +2498,7 @@ class INESDataInfrastructureAdapter:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         self.complete_level(1)
 
-    def deploy_infrastructure(self):
+    def _deploy_infrastructure_runtime(self, *, skip_hosts=False, host_sync_message=None):
         self.announce_level(2, "DEPLOY COMMON SERVICES")
 
         if not self.ensure_wsl_docker_config():
@@ -2526,9 +2526,12 @@ class INESDataInfrastructureAdapter:
         self.sync_common_values()
         self.reconcile_common_services_source_of_truth()
 
-        print("\nConfiguring hosts...")
-        hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
-        self.manage_hosts_entries(hosts_entries)
+        if skip_hosts:
+            print(f"\n{host_sync_message or 'Skipping hosts synchronization for this topology.'}")
+        else:
+            print("\nConfiguring hosts...")
+            hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
+            self.manage_hosts_entries(hosts_entries)
 
         self.add_helm_repos()
 
@@ -2590,6 +2593,9 @@ class INESDataInfrastructureAdapter:
             self._fail("Level 2 did not leave common services ready for Level 3", root_cause=root_cause)
 
         self.complete_level(2)
+
+    def deploy_infrastructure(self):
+        self._deploy_infrastructure_runtime()
 
     def describe(self) -> str:
         return "INESDataInfrastructureAdapter contains infrastructure logic for INESData."

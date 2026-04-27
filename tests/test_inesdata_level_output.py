@@ -228,6 +228,39 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertEqual(result["checks"][-1]["label"], "create namespace permission")
         self.assertEqual(result["checks"][-1]["status"], "passed")
 
+    def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
+        infrastructure = SharedFoundationInfrastructureAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = mock.Mock()
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure.deploy_helm_release = mock.Mock(return_value=True)
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure._repair_failed_common_services_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure_for_topology("vm-single")
+
+        rendered = output.getvalue()
+        self.assertIn("Skipping client-side hosts synchronization for topology 'vm-single'.", rendered)
+        self.assertIn("LEVEL 2 COMPLETE", rendered)
+        infrastructure.manage_hosts_entries.assert_not_called()
+        infrastructure.deploy_helm_release.assert_called_once()
+
     def test_deploy_infrastructure_does_not_print_complete_on_failure(self):
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_wsl_docker_config = lambda: True

@@ -1918,6 +1918,22 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["result"]["mode"], "preflight")
         adapter.infrastructure.setup_cluster_preflight.assert_called_once_with(topology="vm-single")
 
+    def test_run_level_two_uses_vm_single_topology_deploy_infrastructure(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.deploy_infrastructure_for_topology = mock.Mock(
+            return_value={"status": "deployed", "mode": "vm-single"}
+        )
+
+        with mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(adapter, 2, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["level"], 2)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["result"]["mode"], "vm-single")
+        adapter.infrastructure.deploy_infrastructure_for_topology.assert_called_once_with(topology="vm-single")
+        self.assertEqual(adapter.calls, [])
+
     def test_run_level_four_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
         adapter.config_adapter.load_deployer_config = lambda: {

@@ -4271,7 +4271,7 @@ def run_level(
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
     if normalized_topology != "local" and not (
-        normalized_topology == "vm-single" and level_id == 1
+        normalized_topology == "vm-single" and level_id in {1, 2}
     ) and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
@@ -4294,10 +4294,24 @@ def run_level(
                 raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
             result = setup_cluster()
     elif level_id == 2:
-        deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
-        if not callable(deploy_infrastructure):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 2 deploy_infrastructure()")
-        result = deploy_infrastructure()
+        if normalized_topology == "vm-single":
+            deploy_infrastructure = _resolve_adapter_callable(
+                adapter,
+                "infrastructure.deploy_infrastructure_for_topology",
+            )
+            if not callable(deploy_infrastructure):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 2 "
+                    f"deploy_infrastructure_for_topology() for topology '{normalized_topology}'"
+                )
+            result = deploy_infrastructure(topology=topology)
+        else:
+            deploy_infrastructure = _resolve_adapter_callable(adapter, "deploy_infrastructure")
+            if not callable(deploy_infrastructure):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 2 deploy_infrastructure()"
+                )
+            result = deploy_infrastructure()
     elif level_id == 3:
         deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
         if not callable(deploy_dataspace):
