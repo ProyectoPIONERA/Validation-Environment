@@ -235,6 +235,12 @@ class EdcAdapterTests(unittest.TestCase):
         adapter = InesdataAdapter(dry_run=True)
         self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
 
+    def test_inesdata_adapter_propagates_topology_to_config_adapter(self):
+        adapter = InesdataAdapter(dry_run=True, topology="vm-single")
+        self.assertEqual(adapter.topology, "vm-single")
+        self.assertEqual(adapter.config_adapter.topology, "vm-single")
+        self.assertFalse(adapter.connectors._is_local_topology())
+
     def test_inesdata_adapter_uses_shared_components_adapter(self):
         adapter = InesdataAdapter(dry_run=True)
         self.assertIsInstance(adapter.components, SharedComponentsAdapter)
@@ -246,6 +252,28 @@ class EdcAdapterTests(unittest.TestCase):
     def test_edc_adapter_uses_shared_components_adapter(self):
         adapter = EdcAdapter(dry_run=True)
         self.assertIsInstance(adapter.components, SharedComponentsAdapter)
+
+
+class EdcConnectorTopologyTests(unittest.TestCase):
+    def test_edc_host_aliases_are_empty_outside_local_topology(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config = type("Config", (), {"MINIKUBE_IP": "192.168.49.2"})
+        adapter.config_adapter = type(
+            "ConfigAdapter",
+            (),
+            {
+                "topology": "vm-single",
+                "ds_domain_base": staticmethod(lambda: "dev.ds.dataspaceunit.upm"),
+            },
+        )()
+        adapter.run_silent = mock.Mock(return_value="192.168.49.2")
+        adapter._host_alias_domains_for_dataspace = mock.Mock(return_value=["keycloak.dev.ds.dataspaceunit.upm"])
+
+        aliases = adapter._host_aliases(["conn-a-demo"], ds_name="demo", connector_name="conn-a-demo")
+
+        self.assertEqual(aliases, [])
+        adapter.run_silent.assert_not_called()
 
     def test_edc_preview_components_marks_pending_support_without_deployable_urls(self):
         adapter = EdcAdapter(dry_run=True)

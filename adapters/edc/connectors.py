@@ -543,6 +543,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         return f"{base_url}/protocol"
 
     def _host_aliases(self, connector_hostnames, ds_name=None, ds_namespace=None, connector_name=None):
+        if not self._is_local_topology():
+            return []
+
         minikube_ip = self.run_silent("minikube ip") or self.config.MINIKUBE_IP
         hostnames = self._host_alias_domains_for_dataspace(
             ds_name=ds_name,
@@ -1456,9 +1459,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
         deduplicated = sorted(set(all_connectors))
         print("\nAll generic EDC connectors deployed or updated\n")
-        print("Configuring connector hosts...")
-        connector_hosts = self.config_adapter.generate_connector_hosts(deduplicated)
-        self.infrastructure.manage_hosts_entries(connector_hosts)
+        if self._is_local_topology():
+            print("Configuring connector hosts...")
+            connector_hosts = self.config_adapter.generate_connector_hosts(deduplicated)
+            self.infrastructure.manage_hosts_entries(connector_hosts)
+        else:
+            print(f"Skipping connector hosts synchronization for topology '{self.config_adapter.topology}'.")
         if not self.wait_for_all_connectors(deduplicated):
             return []
         return deduplicated

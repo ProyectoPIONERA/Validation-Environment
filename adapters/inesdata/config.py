@@ -288,8 +288,9 @@ class InesdataConfig:
 class INESDataConfigAdapter:
     """Contains INESData configuration access logic."""
 
-    def __init__(self, config_cls=None):
+    def __init__(self, config_cls=None, topology="local"):
         self.config = config_cls or InesdataConfig
+        self.topology = str(topology or "local").strip().lower() or "local"
 
     def copy_local_deployer_config(self):
         local_config = self.config.deployer_config_path()
