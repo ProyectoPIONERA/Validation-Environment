@@ -77,6 +77,51 @@ class INESDataInfrastructureAdapter:
             return getter()
         return (getattr(self.config, "DS_NAME", "demo") or "demo").strip() or "demo"
 
+    def _minikube_runtime_config(self):
+        getter = getattr(self.config_adapter, "foundation_minikube_runtime", None)
+        if callable(getter):
+            try:
+                runtime = dict(getter() or {})
+            except Exception:
+                runtime = {}
+        else:
+            runtime = {}
+        if not runtime:
+            load_config = getattr(self.config_adapter, "load_deployer_config", None)
+            if callable(load_config):
+                try:
+                    deployer_config = dict(load_config() or {})
+                except Exception:
+                    deployer_config = {}
+                runtime = {
+                    "driver": deployer_config.get("MINIKUBE_DRIVER"),
+                    "cpus": deployer_config.get("MINIKUBE_CPUS"),
+                    "memory": deployer_config.get("MINIKUBE_MEMORY"),
+                    "profile": deployer_config.get("MINIKUBE_PROFILE"),
+                }
+
+        def _default(attr_name, fallback):
+            value = getattr(self.config, attr_name, fallback)
+            normalized = str(value or "").strip()
+            return normalized or str(fallback)
+
+        def _positive_int_string(value, fallback):
+            fallback_value = str(fallback or "").strip() or "0"
+            try:
+                parsed = int(str(value or "").strip())
+            except (TypeError, ValueError):
+                return fallback_value
+            if parsed <= 0:
+                return fallback_value
+            return str(parsed)
+
+        return {
+            "driver": str(runtime.get("driver") or _default("MINIKUBE_DRIVER", "docker")).strip() or "docker",
+            "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", 10)),
+            "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", 12288)),
+            "profile": str(runtime.get("profile") or _default("MINIKUBE_PROFILE", "minikube")).strip() or "minikube",
+        }
+
     def _registration_service_namespace(self):
         config_namespace_getter = getattr(self.config, "registration_service_namespace", None)
         if callable(config_namespace_getter):
@@ -2500,6 +2545,9 @@ class INESDataInfrastructureAdapter:
         self.ensure_unix_environment()
         if not self.ensure_wsl_docker_config():
             self._fail("Could not adjust WSL Docker configuration safely")
+        runtime = self._minikube_runtime_config()
+        profile = shlex.quote(runtime["profile"])
+        driver = shlex.quote(runtime["driver"])
 
         print("Checking Minikube installation...")
         if self.run("which minikube", capture=True) is None:
@@ -2521,19 +2569,19 @@ class INESDataInfrastructureAdapter:
 
         print("Docker is running")
         print("\nDeleting existing Minikube cluster (clean state)...\n")
-        self.run("minikube delete", check=False)
+        self.run(f"minikube delete -p {profile}", check=False)
 
         print("\nStarting fresh Minikube cluster...\n")
         self.run(
-            f"minikube start --driver={self.config.MINIKUBE_DRIVER} "
-            f"--cpus={self.config.MINIKUBE_CPUS} --memory={self.config.MINIKUBE_MEMORY}"
+            f"minikube start -p {profile} --driver={driver} "
+            f"--cpus={runtime['cpus']} --memory={runtime['memory']}"
         )
 
         if not self.wait_for_kubernetes_ready():
             self._fail("Cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
 
         print("\nEnabling ingress addon...\n")
-        if self.run_silent("minikube addons enable ingress") is None:
+        if self.run_silent(f"minikube -p {profile} addons enable ingress") is None:
             print(
                 "Warning: minikube reported a transient ingress addon enable failure; "
                 "verifying ingress controller readiness directly."

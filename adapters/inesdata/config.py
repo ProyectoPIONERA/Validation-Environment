@@ -332,6 +332,46 @@ class INESDataConfigAdapter:
         )
 
     @staticmethod
+    def _normalized_string(value, fallback):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+        return str(fallback or "").strip()
+
+    @staticmethod
+    def _normalized_positive_int_string(value, fallback):
+        fallback_value = str(fallback or "").strip() or "0"
+        try:
+            parsed = int(str(value or "").strip())
+        except (TypeError, ValueError):
+            return fallback_value
+        if parsed <= 0:
+            return fallback_value
+        return str(parsed)
+
+    def foundation_minikube_runtime(self):
+        """Return shared Level 1 Minikube runtime settings with config/env overrides."""
+        config = self.load_deployer_config()
+        return {
+            "driver": self._normalized_string(
+                config.get("MINIKUBE_DRIVER"),
+                getattr(self.config, "MINIKUBE_DRIVER", "docker"),
+            ),
+            "cpus": self._normalized_positive_int_string(
+                config.get("MINIKUBE_CPUS"),
+                getattr(self.config, "MINIKUBE_CPUS", 10),
+            ),
+            "memory": self._normalized_positive_int_string(
+                config.get("MINIKUBE_MEMORY"),
+                getattr(self.config, "MINIKUBE_MEMORY", 12288),
+            ),
+            "profile": self._normalized_string(
+                config.get("MINIKUBE_PROFILE"),
+                getattr(self.config, "MINIKUBE_PROFILE", "minikube"),
+            ),
+        }
+
+    @staticmethod
     def _resolve_optional_path(base_dir, raw_path):
         if not raw_path:
             return None

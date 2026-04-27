@@ -95,6 +95,76 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
         self.assertEqual(config["PG_PASSWORD"], "real-db-password")
         self.assertEqual(config["DS_1_NAME"], "demo")
 
+    def test_foundation_minikube_runtime_prefers_shared_infrastructure_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata"), exist_ok=True)
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write(
+                    "MINIKUBE_DRIVER=kvm2\n"
+                    "MINIKUBE_CPUS=4\n"
+                    "MINIKUBE_MEMORY=8192\n"
+                    "MINIKUBE_PROFILE=ubuntu-vm\n"
+                )
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            runtime = INESDataConfigAdapter(TempConfig).foundation_minikube_runtime()
+
+        self.assertEqual(
+            runtime,
+            {
+                "driver": "kvm2",
+                "cpus": "4",
+                "memory": "8192",
+                "profile": "ubuntu-vm",
+            },
+        )
+
+    def test_foundation_minikube_runtime_allows_pionera_environment_overrides(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata"), exist_ok=True)
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write(
+                    "MINIKUBE_DRIVER=docker\n"
+                    "MINIKUBE_CPUS=4\n"
+                    "MINIKUBE_MEMORY=8192\n"
+                    "MINIKUBE_PROFILE=minikube\n"
+                )
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PIONERA_MINIKUBE_CPUS": "6",
+                    "PIONERA_MINIKUBE_MEMORY": "16384",
+                    "PIONERA_MINIKUBE_PROFILE": "vm-override",
+                },
+                clear=False,
+            ):
+                runtime = INESDataConfigAdapter(TempConfig).foundation_minikube_runtime()
+
+        self.assertEqual(runtime["driver"], "docker")
+        self.assertEqual(runtime["cpus"], "6")
+        self.assertEqual(runtime["memory"], "16384")
+        self.assertEqual(runtime["profile"], "vm-override")
+
     def test_primary_dataspace_name_prefers_deployer_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = DataspaceAwareConfig(tmpdir)

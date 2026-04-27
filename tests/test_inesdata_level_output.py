@@ -95,6 +95,9 @@ class LevelOutputConfig:
 
 
 class LevelOutputConfigAdapter:
+    def __init__(self, deployer_config=None):
+        self.deployer_config = dict(deployer_config or {})
+
     def copy_local_deployer_config(self):
         return None
 
@@ -102,11 +105,13 @@ class LevelOutputConfigAdapter:
         return []
 
     def load_deployer_config(self):
-        return {
+        base = {
             "KC_URL": "http://keycloak.local",
             "KC_USER": "admin",
             "KC_PASSWORD": "secret",
         }
+        base.update(self.deployer_config)
+        return base
 
     def get_pg_credentials(self):
         return ("127.0.0.1", "postgres", "postgres")
@@ -177,7 +182,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.run = mock.Mock(return_value=object())
         infrastructure.run_silent = mock.Mock(
             side_effect=lambda command, *_args, **_kwargs: None
-            if command == "minikube addons enable ingress"
+            if command == "minikube -p minikube addons enable ingress"
             else ""
         )
 
@@ -189,6 +194,32 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "Warning: minikube reported a transient ingress addon enable failure",
             output.getvalue(),
         )
+
+    def test_setup_cluster_uses_minikube_settings_from_shared_deployer_config(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "MINIKUBE_DRIVER": "docker",
+                "MINIKUBE_CPUS": "4",
+                "MINIKUBE_MEMORY": "8192",
+                "MINIKUBE_PROFILE": "vm-local",
+            }
+        )
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.wait_for_kubernetes_ready = lambda: True
+        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(return_value="")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            infrastructure.setup_cluster()
+
+        infrastructure.run.assert_any_call("minikube delete -p vm-local", check=False)
+        infrastructure.run.assert_any_call(
+            "minikube start -p vm-local --driver=docker --cpus=4 --memory=8192"
+        )
+        infrastructure.run_silent.assert_any_call("minikube -p vm-local addons enable ingress")
 
     def test_setup_cluster_preflight_reports_ready_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
