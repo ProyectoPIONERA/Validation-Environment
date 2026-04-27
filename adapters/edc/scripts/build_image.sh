@@ -134,7 +134,13 @@ if [[ -n "$SYNC_GIT_URL" ]]; then
 fi
 
 if [[ ! -d "$SOURCE_DIR" || ! -x "$SOURCE_DIR/gradlew" ]]; then
-  echo "Connector source not ready in $SOURCE_DIR. Syncing first..."
+  if [[ -z "$SYNC_SOURCE" ]]; then
+    echo "Connector source not ready in $SOURCE_DIR." >&2
+    echo "Refusing to synchronize from the default remote. Provide --source-dir with a prepared local checkout, or pass --sync-source explicitly." >&2
+    exit 1
+  fi
+
+  echo "Connector source not ready in $SOURCE_DIR. Syncing from explicit local source..."
   if [[ "$APPLY" -eq 1 ]]; then
     bash -lc "${sync_cmd[*]} --apply"
   else
@@ -233,7 +239,19 @@ if [[ ! -f "$ABSOLUTE_CONNECTOR_JAR" ]]; then
   exit 1
 fi
 
-run_cmd "cd \"$SOURCE_DIR\" && docker build -f \"$DOCKERFILE\" --build-arg CONNECTOR_JAR=\"$CONNECTOR_JAR\" -t \"$FULL_IMAGE\" ."
+DOCKER_BUILD_CONTEXT="$SOURCE_DIR"
+DOCKER_BUILD_JAR="$CONNECTOR_JAR"
+if [[ "$APPLY" -eq 1 ]]; then
+  DOCKER_BUILD_CONTEXT="$(mktemp -d)"
+  cleanup_build_context() {
+    rm -rf "$DOCKER_BUILD_CONTEXT"
+  }
+  trap cleanup_build_context EXIT
+  cp "$ABSOLUTE_CONNECTOR_JAR" "$DOCKER_BUILD_CONTEXT/connector.jar"
+  DOCKER_BUILD_JAR="connector.jar"
+fi
+
+run_cmd "docker build -f \"$DOCKERFILE\" --build-arg CONNECTOR_JAR=\"$DOCKER_BUILD_JAR\" -t \"$FULL_IMAGE\" \"$DOCKER_BUILD_CONTEXT\""
 
 if [[ "$SKIP_MINIKUBE_LOAD" -eq 0 ]]; then
   remove_minikube_image_if_present "$FULL_IMAGE"

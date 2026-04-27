@@ -39,6 +39,9 @@ def _touch(path, *, contents="", executable=False, mtime=None):
 
 class EdcBuildImageScriptTests(unittest.TestCase):
     def test_local_edc_service_extensions_register_adapter_kafka_bridge(self):
+        if not os.path.isfile(LOCAL_EDC_SERVICE_EXTENSIONS_PATH):
+            self.skipTest("local EDC connector source checkout is not materialized")
+
         with open(LOCAL_EDC_SERVICE_EXTENSIONS_PATH, "r", encoding="utf-8") as handle:
             entries = [line.strip() for line in handle.readlines() if line.strip()]
 
@@ -159,6 +162,29 @@ class EdcBuildImageScriptTests(unittest.TestCase):
         self.assertIn("Connector jar is outdated and will be rebuilt", completed.stdout)
         self.assertIn("source changed: transfer/transfer-00-prerequisites/connector/build.gradle.kts", completed.stdout)
         self.assertIn("GradleWrapperMain", completed.stdout)
+
+    def test_build_image_refuses_default_remote_sync_when_source_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_source = os.path.join(tmpdir, "missing-connector")
+
+            completed = subprocess.run(
+                [
+                    "bash",
+                    SCRIPT_PATH,
+                    "--source-dir",
+                    missing_source,
+                    "--skip-minikube-load",
+                ],
+                text=True,
+                capture_output=True,
+                cwd=PROJECT_ROOT,
+                check=False,
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("Refusing to synchronize from the default remote", completed.stderr)
+        self.assertNotIn("sync_sources.sh", completed.stdout + completed.stderr)
+        self.assertNotIn("git clone", completed.stdout + completed.stderr)
 
     def test_build_image_refreshes_minikube_image_before_loading_stable_tag(self):
         with tempfile.TemporaryDirectory() as tmpdir:

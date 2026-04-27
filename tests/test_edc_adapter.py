@@ -299,8 +299,75 @@ class EdcConnectorTopologyTests(unittest.TestCase):
         ):
             self.assertTrue(adapter._maybe_prepare_level4_local_edc_images())
 
-        connector_mock.assert_called_once_with("auto")
+        connector_mock.assert_called_once_with("required")
         dashboard_mock.assert_called_once_with("auto")
+
+    def test_edc_level4_local_images_can_be_disabled_explicitly_in_vm_single(self):
+        adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+        adapter.topology = "vm-single"
+        adapter.config_adapter = type(
+            "ConfigAdapter",
+            (),
+            {
+                "topology": "vm-single",
+                "load_deployer_config": staticmethod(
+                    lambda: {
+                        "EDC_CONNECTOR_IMAGE_NAME": "registry.example/edc",
+                        "EDC_CONNECTOR_IMAGE_TAG": "stable",
+                    }
+                ),
+            },
+        )()
+
+        with (
+            mock.patch.object(adapter, "_level4_edc_local_images_mode", return_value="disabled"),
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_connector_image") as connector_mock,
+            mock.patch.object(adapter, "_maybe_prepare_level4_local_edc_dashboard_images") as dashboard_mock,
+        ):
+            self.assertTrue(adapter._maybe_prepare_level4_local_edc_images())
+
+        connector_mock.assert_not_called()
+        dashboard_mock.assert_not_called()
+
+    def test_edc_local_connector_image_required_ignores_explicit_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = os.path.join(tmpdir, "adapters", "edc", "scripts", "build_image.sh")
+            os.makedirs(os.path.dirname(script_path), exist_ok=True)
+            with open(script_path, "w", encoding="utf-8") as handle:
+                handle.write("#!/usr/bin/env bash\n")
+
+            source_dir = os.path.join(tmpdir, "adapters", "edc", "sources", "connector")
+            calls = []
+            adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)
+            adapter.config = type("Config", (), {"script_dir": staticmethod(lambda: tmpdir)})()
+            adapter.config_adapter = type(
+                "ConfigAdapter",
+                (),
+                {
+                    "load_deployer_config": staticmethod(
+                        lambda: {
+                            "EDC_CONNECTOR_IMAGE_NAME": "registry.example/edc",
+                            "EDC_CONNECTOR_IMAGE_TAG": "stable",
+                        }
+                    ),
+                    "edc_connector_source_dir": staticmethod(lambda: source_dir),
+                },
+            )()
+            adapter._run_level4_edc_image_script = lambda script, args=None: (
+                calls.append((script, args)) or True
+            )
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertTrue(adapter._maybe_prepare_level4_local_edc_connector_image("required"))
+                self.assertEqual(
+                    os.environ.get("PIONERA_EDC_CONNECTOR_IMAGE_NAME"),
+                    "validation-environment/edc-connector",
+                )
+                self.assertEqual(os.environ.get("PIONERA_EDC_CONNECTOR_IMAGE_TAG"), "local")
+
+        self.assertEqual(calls[0][0], script_path)
+        self.assertIn("--source-dir", calls[0][1])
+        self.assertIn(source_dir, calls[0][1])
 
     def test_edc_level4_local_images_fail_when_required_outside_supported_topology(self):
         adapter = EDCConnectorsAdapter.__new__(EDCConnectorsAdapter)

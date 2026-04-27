@@ -104,6 +104,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
     def _edc_connector_dir(self):
         return self.config_adapter.edc_connector_dir()
 
+    def _edc_connector_source_dir(self):
+        resolver = getattr(self.config_adapter, "edc_connector_source_dir", None)
+        if callable(resolver):
+            return resolver()
+        return os.path.join(self._framework_root_dir(), "adapters", "edc", "sources", "connector")
+
     def _edc_runtime_dir(self, ds_name=None):
         return self.config_adapter.edc_dataspace_runtime_dir(ds_name=ds_name)
 
@@ -258,6 +264,8 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         if not self._run_level4_edc_image_script(
             script_path,
             args=[
+                "--source-dir",
+                self._edc_connector_source_dir(),
                 "--image",
                 image["name"],
                 "--tag",
@@ -332,6 +340,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         mode = self._level4_edc_local_images_mode()
         normalized_mode = str(mode or "auto").strip().lower() or "auto"
         topology = self._normalized_topology()
+        connector_mode = mode
         if topology in self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES:
             policy = {
                 "topology": topology,
@@ -341,6 +350,8 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 "message": "",
                 "error": "",
             }
+            if normalized_mode != "disabled":
+                connector_mode = "required"
         else:
             policy = self._resolve_level4_local_image_policy(
                 mode=mode,
@@ -362,7 +373,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 return False
             print("Level 4 local EDC images disabled by configuration.")
             return True
-        if not self._maybe_prepare_level4_local_edc_connector_image(mode):
+        if not self._maybe_prepare_level4_local_edc_connector_image(connector_mode):
             return False
         if not self._maybe_prepare_level4_local_edc_dashboard_images(mode):
             return False
