@@ -69,6 +69,20 @@ PIONERA_VM_EXTERNAL_IP=192.0.2.10 \
 python3 main.py edc hosts --topology vm-single --dry-run
 ```
 
+Cómo obtener la IP correcta:
+
+```bash
+hostname -I
+minikube ip
+kubectl get ingress -A
+```
+
+Regla práctica:
+
+- usa la IP de `hostname -I` si el tráfico público entra por la IP principal de la VM;
+- usa la IP de `minikube ip` si el ingress publicado realmente responde por la IP del perfil Minikube;
+- después de `Level 1`, si `minikube ip` no coincide con la IP configurada, actualiza `PIONERA_VM_EXTERNAL_IP` o `VM_EXTERNAL_IP` antes de `Levels 3-6`.
+
 ## VM Distributed
 
 `vm-distributed` representa una topología distribuida de validación. La primera interpretación recomendada es un único cluster Kubernetes lógico respaldado por tres nodos/VM:

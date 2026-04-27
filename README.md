@@ -166,6 +166,29 @@ Notas prácticas:
   `192.0.2.10` solo como ejemplo documental;
 - si tu VM tiene mas recursos dedicados al framework, puedes subir Minikube a
   `4 CPU` y `12288 MB`;
+- antes de arrancar `Level 1`, obtén la IP principal de la VM con:
+
+```bash
+hostname -I
+```
+
+- después de `Level 1`, obtén la IP real del cluster con:
+
+```bash
+minikube ip
+```
+
+- comprueba los hostnames públicos ya publicados por ingress con:
+
+```bash
+kubectl get ingress -A
+```
+
+- regla práctica:
+  - si los hostnames públicos del framework entran por la IP de la VM, usa esa
+    IP en `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP`;
+  - si los hostnames públicos entran por la IP real de Minikube, usa
+    `minikube ip`;
 - si despues de `Level 1` el valor real de `minikube ip` es distinto de la IP
   configurada, actualiza `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP` con la IP
   efectiva del cluster;
