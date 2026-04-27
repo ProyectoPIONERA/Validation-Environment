@@ -1051,12 +1051,19 @@ class INESDataComponentsAdapter:
             print("No components selected for deployment")
             return {"deployed": [], "urls": {}}
 
+        topology = str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower() or "local"
+        requires_local_runtime_access = topology == "local"
         repo_dir = self.config.repo_dir()
         if not os.path.exists(repo_dir):
             self._fail("Repository not found. Run Level 2 first")
 
-        if not self.infrastructure.ensure_local_infra_access():
-            self._fail("Local access to PostgreSQL/Vault is not available")
+        if requires_local_runtime_access:
+            if not self.infrastructure.ensure_local_infra_access():
+                self._fail("Local access to PostgreSQL/Vault is not available")
+        else:
+            print(
+                f"Skipping local PostgreSQL/Vault/MinIO port-forward checks for topology '{topology}'."
+            )
 
         if not self.infrastructure.ensure_vault_unsealed():
             self._fail("Vault is not initialized or unsealed")
@@ -1137,12 +1144,15 @@ class INESDataComponentsAdapter:
             for host in sorted(set(inferred_hosts.values())):
                 print(f"- {host}")
 
-            desired_entries = [f"127.0.0.1 {h}" for h in sorted(set(inferred_hosts.values()))]
-            self.infrastructure.manage_hosts_entries(
-                desired_entries,
-                header_comment="# Components",
-                auto_confirm=True,
-            )
+            if requires_local_runtime_access:
+                desired_entries = [f"127.0.0.1 {h}" for h in sorted(set(inferred_hosts.values()))]
+                self.infrastructure.manage_hosts_entries(
+                    desired_entries,
+                    header_comment="# Components",
+                    auto_confirm=True,
+                )
+            else:
+                print(f"Skipping component hosts synchronization for topology '{topology}'.")
 
         deployed = []
         for component in components:
