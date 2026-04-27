@@ -15,6 +15,8 @@ from adapters.edc.adapter import EdcAdapter
 from adapters.edc.connectors import EDCConnectorsAdapter
 from adapters.edc.deployment import EDCDeploymentAdapter, EdcSharedDataspaceConfig
 from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
+from adapters.shared.infrastructure import SharedFoundationInfrastructureAdapter
+from adapters.inesdata.adapter import InesdataAdapter
 
 
 class SharedInfrastructureStub:
@@ -228,6 +230,14 @@ class EdcConnectorConfigAdapter:
 
 
 class EdcAdapterTests(unittest.TestCase):
+    def test_inesdata_adapter_uses_shared_foundation_infrastructure_adapter(self):
+        adapter = InesdataAdapter(dry_run=True)
+        self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
+
+    def test_edc_adapter_uses_shared_foundation_infrastructure_adapter(self):
+        adapter = EdcAdapter(dry_run=True)
+        self.assertIsInstance(adapter.infrastructure, SharedFoundationInfrastructureAdapter)
+
     def test_edc_adapter_reuses_common_services_when_ready(self):
         adapter = EdcAdapter.__new__(EdcAdapter)
         adapter.infrastructure = SharedInfrastructureStub()

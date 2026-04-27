@@ -10,7 +10,7 @@ from .config import INESDataConfigAdapter, InesdataConfig
 from .components import INESDataComponentsAdapter
 from .connectors import INESDataConnectorsAdapter
 from .deployment import INESDataDeploymentAdapter
-from .infrastructure import INESDataInfrastructureAdapter
+from adapters.shared import SharedFoundationInfrastructureAdapter
 
 
 class InesdataAdapter:
@@ -56,7 +56,7 @@ class InesdataAdapter:
         self.dry_run = dry_run
         self.config = config_cls or InesdataConfig
         self.config_adapter = INESDataConfigAdapter(self.config)
-        self.infrastructure = INESDataInfrastructureAdapter(
+        self.infrastructure = SharedFoundationInfrastructureAdapter(
             run=run,
             run_silent=run_silent,
             auto_mode_getter=auto_mode_getter,

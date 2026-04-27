@@ -155,6 +155,32 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Dataspace: fake-ds", output)
         self.assertIn("Next step: Run Level 6 to validate the recreated dataspace and connectors.", output)
 
+    def test_action_result_prints_shared_foundation_scope_without_adapter_label(self):
+        payload = {
+            "status": "completed",
+            "scope": "shared foundation",
+            "adapter": "inesdata",
+            "topology": "local",
+            "levels": [
+                {
+                    "level": 1,
+                    "name": "Setup Cluster",
+                    "status": "completed",
+                    "result": None,
+                }
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Result: Succeeded", output)
+        self.assertIn("Scope: shared foundation", output)
+        self.assertNotIn("Adapter: inesdata", output)
+        self.assertIn("Level 1 - Setup Cluster: Succeeded", output)
+
     def test_action_result_prints_level5_component_urls(self):
         payload = {
             "status": "completed",

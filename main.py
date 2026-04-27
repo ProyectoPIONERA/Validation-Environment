@@ -4706,7 +4706,10 @@ def _print_action_result(result):
             return [str(payload)]
 
         lines = [f"Result: {_console_result_label(payload.get('status'))}"]
-        _append_if_value(lines, "Adapter", payload.get("adapter") or payload.get("deployer_name"))
+        scope = payload.get("scope")
+        _append_if_value(lines, "Scope", scope)
+        if str(scope or "").strip().lower() != "shared foundation":
+            _append_if_value(lines, "Adapter", payload.get("adapter") or payload.get("deployer_name"))
         _append_if_value(lines, "Topology", payload.get("topology"))
         _append_if_value(lines, "Dataspace", payload.get("dataspace"))
 
@@ -5137,6 +5140,7 @@ def run_interactive_menu(
                     _print_action_result(
                         {
                             "status": "completed",
+                            "scope": "shared foundation",
                             "adapter": level_adapter,
                             "topology": topology,
                             "levels": [
@@ -5168,6 +5172,7 @@ def run_interactive_menu(
                         _print_action_result(
                             {
                                 "status": "completed",
+                                "scope": "shared foundation",
                                 "adapter": level_adapter,
                                 "topology": topology,
                                 "levels": [result],

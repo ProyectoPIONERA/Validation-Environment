@@ -5,7 +5,7 @@ import os
 import sys
 
 from adapters.inesdata.adapter import InesdataAdapter
-from adapters.inesdata.infrastructure import INESDataInfrastructureAdapter
+from adapters.shared import SharedFoundationInfrastructureAdapter
 
 from .config import EDCConfigAdapter, EdcConfig
 from .connectors import EDCConnectorsAdapter
@@ -28,7 +28,7 @@ class EdcAdapter(InesdataAdapter):
         self.topology = topology or resolved_config.DEFAULT_TOPOLOGY
         self.config = resolved_config
         self.config_adapter = EDCConfigAdapter(self.config, topology=self.topology)
-        self.infrastructure = INESDataInfrastructureAdapter(
+        self.infrastructure = SharedFoundationInfrastructureAdapter(
             run=self.run,
             run_silent=self.run_silent,
             auto_mode_getter=self.auto_mode_getter,
