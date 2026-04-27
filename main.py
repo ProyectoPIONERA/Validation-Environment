@@ -4271,7 +4271,7 @@ def run_level(
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
     if normalized_topology != "local" and not (
-        normalized_topology == "vm-single" and level_id in {1, 2}
+        normalized_topology == "vm-single" and level_id in {1, 2, 3}
     ) and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
@@ -4313,10 +4313,22 @@ def run_level(
                 )
             result = deploy_infrastructure()
     elif level_id == 3:
-        deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
-        if not callable(deploy_dataspace):
-            raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 3 deploy_dataspace()")
-        result = deploy_dataspace()
+        if normalized_topology == "vm-single":
+            deploy_dataspace = _resolve_adapter_callable(
+                adapter,
+                "deployment.deploy_dataspace_for_topology",
+            )
+            if not callable(deploy_dataspace):
+                raise RuntimeError(
+                    f"Adapter '{resolved_deployer_name}' does not expose Level 3 "
+                    f"deploy_dataspace_for_topology() for topology '{normalized_topology}'"
+                )
+            result = deploy_dataspace(topology=topology)
+        else:
+            deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
+            if not callable(deploy_dataspace):
+                raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 3 deploy_dataspace()")
+            result = deploy_dataspace()
     elif level_id == 4:
         if resolved_deployer_name == "edc":
             _ensure_safe_edc_deployer_execution(

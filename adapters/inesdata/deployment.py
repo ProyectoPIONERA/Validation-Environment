@@ -40,5 +40,9 @@ class INESDataDeploymentAdapter(SharedDataspaceDeploymentAdapter):
         self._sync_shared_bindings()
         return super().deploy_dataspace()
 
+    def deploy_dataspace_for_topology(self, topology="local"):
+        self._sync_shared_bindings()
+        return super().deploy_dataspace_for_topology(topology=topology)
+
     def describe(self) -> str:
         return "INESDataDeploymentAdapter contains deployment logic for INESData."
