@@ -2091,6 +2091,106 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["result"]["mode"], "preflight")
         adapter.infrastructure.setup_cluster_preflight.assert_called_once_with(topology="vm-single")
 
+    def test_run_level_one_vm_single_auto_syncs_minikube_ip_after_preflight(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.setup_cluster_preflight = mock.Mock(
+            return_value={
+                "status": "ready",
+                "mode": "preflight",
+                "topology": "vm-single",
+                "cluster_creation": "skipped",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "deployer.config")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\n".join(
+                        [
+                            "VM_EXTERNAL_IP=198.51.100.20",
+                            "VM_COMMON_IP=198.51.100.20",
+                            "VM_DATASPACE_IP=198.51.100.20",
+                            "VM_CONNECTORS_IP=198.51.100.20",
+                            "VM_COMPONENTS_IP=198.51.100.20",
+                            "INGRESS_EXTERNAL_IP=198.51.100.20",
+                            "",
+                        ]
+                    )
+                )
+
+            with mock.patch.object(main, "_infrastructure_deployer_config_path", return_value=config_path), \
+                mock.patch.object(
+                    main,
+                    "_detect_vm_single_address_candidates",
+                    return_value={
+                        "vm_ip": "198.51.100.20",
+                        "minikube_ip": "192.0.2.10",
+                        "recommended_address": "192.0.2.10",
+                        "recommended_source": "minikube",
+                    },
+                ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+                result = main.run_level(adapter, 1, deployer_name="fake", topology="vm-single")
+
+            with open(config_path, "r", encoding="utf-8") as handle:
+                config_text = handle.read()
+
+        self.assertEqual(result["level"], 1)
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("VM_EXTERNAL_IP=192.0.2.10\n", config_text)
+        self.assertIn("VM_COMMON_IP=192.0.2.10\n", config_text)
+        self.assertIn("VM_DATASPACE_IP=192.0.2.10\n", config_text)
+        self.assertIn("VM_CONNECTORS_IP=192.0.2.10\n", config_text)
+        self.assertIn("VM_COMPONENTS_IP=192.0.2.10\n", config_text)
+        self.assertIn("INGRESS_EXTERNAL_IP=192.0.2.10\n", config_text)
+
+    def test_run_level_one_vm_single_preserves_explicit_custom_address_after_preflight(self):
+        adapter = FakeAdapterWithInfrastructure()
+        adapter.infrastructure = mock.Mock()
+        adapter.infrastructure.setup_cluster_preflight = mock.Mock(
+            return_value={
+                "status": "ready",
+                "mode": "preflight",
+                "topology": "vm-single",
+                "cluster_creation": "skipped",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "deployer.config")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "\n".join(
+                        [
+                            "VM_EXTERNAL_IP=203.0.113.44",
+                            "INGRESS_EXTERNAL_IP=203.0.113.44",
+                            "",
+                        ]
+                    )
+                )
+
+            with mock.patch.object(main, "_infrastructure_deployer_config_path", return_value=config_path), \
+                mock.patch.object(
+                    main,
+                    "_detect_vm_single_address_candidates",
+                    return_value={
+                        "vm_ip": "198.51.100.20",
+                        "minikube_ip": "192.0.2.10",
+                        "recommended_address": "192.0.2.10",
+                        "recommended_source": "minikube",
+                    },
+                ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+                result = main.run_level(adapter, 1, deployer_name="fake", topology="vm-single")
+
+            with open(config_path, "r", encoding="utf-8") as handle:
+                config_text = handle.read()
+
+        self.assertEqual(result["level"], 1)
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("VM_EXTERNAL_IP=203.0.113.44\n", config_text)
+        self.assertIn("INGRESS_EXTERNAL_IP=203.0.113.44\n", config_text)
+
     def test_run_level_two_uses_vm_single_topology_deploy_infrastructure(self):
         adapter = FakeAdapterWithInfrastructure()
         adapter.infrastructure = mock.Mock()

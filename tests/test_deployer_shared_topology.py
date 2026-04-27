@@ -37,6 +37,12 @@ class SharedTopologyTests(unittest.TestCase):
         self.assertEqual(profile.address_for(ROLE_CONNECTORS), "192.0.2.10")
         self.assertEqual(profile.address_for(ROLE_COMPONENTS), "192.0.2.10")
 
+    def test_vm_single_treats_placeholder_address_as_unconfigured(self):
+        with self.assertRaises(ValueError) as error:
+            build_topology_profile("vm-single", {"VM_EXTERNAL_IP": "X", "INGRESS_EXTERNAL_IP": "X"})
+
+        self.assertIn("VM_EXTERNAL_IP", str(error.exception))
+
     def test_vm_distributed_supports_role_specific_addresses(self):
         profile = build_topology_profile(
             "vm-distributed",

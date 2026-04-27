@@ -2589,6 +2589,15 @@ def _load_effective_infrastructure_deployer_config():
     return apply_pionera_environment_overrides(dict(config))
 
 
+def _normalized_topology_address(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.upper() in {"X", "AUTO", "REPLACE_ME"}:
+        return ""
+    return text
+
+
 def _configured_vm_single_address():
     config = _load_effective_infrastructure_deployer_config()
     for key in (
@@ -2598,7 +2607,7 @@ def _configured_vm_single_address():
         "HOSTS_ADDRESS",
         "INGRESS_EXTERNAL_IP",
     ):
-        value = str(config.get(key) or "").strip()
+        value = _normalized_topology_address(config.get(key))
         if value:
             return value
     return ""
@@ -2617,14 +2626,14 @@ def _command_stdout(args):
 def _detect_vm_single_address_candidates():
     vm_ip = ""
     for token in _command_stdout(["hostname", "-I"]).split():
-        candidate = str(token or "").strip()
+        candidate = _normalized_topology_address(token)
         if candidate and not candidate.startswith("127."):
             vm_ip = candidate
             break
 
     minikube_ip = ""
     for token in _command_stdout(["minikube", "ip"]).split():
-        candidate = str(token or "").strip()
+        candidate = _normalized_topology_address(token)
         if candidate:
             minikube_ip = candidate
             break
@@ -2637,6 +2646,69 @@ def _detect_vm_single_address_candidates():
         "recommended_address": recommended_address,
         "recommended_source": recommended_source,
     }
+
+
+def _synchronize_vm_single_addresses_after_level1():
+    candidates = _detect_vm_single_address_candidates()
+    minikube_ip = _normalized_topology_address(candidates.get("minikube_ip"))
+    vm_ip = _normalized_topology_address(candidates.get("vm_ip"))
+    if not minikube_ip:
+        return {"status": "skipped", "reason": "minikube-ip-unavailable"}
+
+    config_path = _seed_infrastructure_deployer_config_if_missing()
+    raw_config = load_raw_deployer_config(config_path)
+    current_vm_external = _normalized_topology_address(raw_config.get("VM_EXTERNAL_IP"))
+    current_ingress = _normalized_topology_address(raw_config.get("INGRESS_EXTERNAL_IP"))
+    baseline_shared = current_vm_external or current_ingress or vm_ip
+
+    updates = {}
+
+    def _should_sync_shared(current_value):
+        if not current_value:
+            return True
+        if current_value == minikube_ip:
+            return False
+        return bool(vm_ip) and current_value == vm_ip
+
+    if _should_sync_shared(current_vm_external):
+        updates["VM_EXTERNAL_IP"] = minikube_ip
+    if _should_sync_shared(current_ingress):
+        updates["INGRESS_EXTERNAL_IP"] = minikube_ip
+
+    syncing_from_provisional_shared = bool(vm_ip) and baseline_shared == vm_ip
+    shared_updated = bool({"VM_EXTERNAL_IP", "INGRESS_EXTERNAL_IP"} & set(updates))
+
+    for key in ("VM_COMMON_IP", "VM_DATASPACE_IP", "VM_CONNECTORS_IP", "VM_COMPONENTS_IP"):
+        current_value = _normalized_topology_address(raw_config.get(key))
+        if current_value == minikube_ip:
+            continue
+        if not current_value:
+            if shared_updated or syncing_from_provisional_shared:
+                updates[key] = minikube_ip
+            continue
+        if vm_ip and current_value == vm_ip:
+            updates[key] = minikube_ip
+            continue
+        if syncing_from_provisional_shared and current_value == baseline_shared:
+            updates[key] = minikube_ip
+
+    if not updates:
+        return {"status": "skipped", "reason": "already-configured"}
+
+    _write_key_value_updates(
+        config_path,
+        updates,
+        (
+            "VM_EXTERNAL_IP",
+            "VM_COMMON_IP",
+            "VM_DATASPACE_IP",
+            "VM_CONNECTORS_IP",
+            "VM_COMPONENTS_IP",
+            "INGRESS_EXTERNAL_IP",
+        ),
+    )
+    print("Updated vm-single topology address values from detected minikube ip.")
+    return {"status": "updated", "source": "minikube"}
 
 
 def _write_key_value_updates(path, updates, preferred_order):
@@ -4552,6 +4624,9 @@ def run_level(
             experiment_storage=experiment_storage,
             baseline=baseline,
         )
+
+    if level_id == 1 and normalized_topology == "vm-single":
+        _synchronize_vm_single_addresses_after_level1()
 
     level_urls = _resolve_level_access_urls(
         adapter,
