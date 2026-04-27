@@ -221,6 +221,67 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
         infrastructure.run_silent.assert_any_call("minikube -p vm-local addons enable ingress")
 
+    def test_sync_common_values_uses_layered_config_without_local_adapter_config_file(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "PG_PASSWORD": "pg-secret",
+                "KC_USER": "admin",
+                "KC_PASSWORD": "kc-secret",
+                "MINIO_USER": "minio-user",
+                "MINIO_PASSWORD": "minio-secret",
+                "DOMAIN_BASE": "dev.ed.dataspaceunit.upm",
+            }
+        )
+        with open(self.config.values_path(), "w", encoding="utf-8") as handle:
+            handle.write(
+                """
+postgresql:
+  auth:
+    postgresPassword: old-pg
+    password: old-pg
+keycloak:
+  externalDatabase:
+    password: old-pg
+  auth:
+    adminUser: old-admin
+    adminPassword: old-kc
+  ingress:
+    hostname: keycloak.dev.ed.dataspaceunit.upm
+  adminIngress:
+    hostname: keycloak-admin.dev.ed.dataspaceunit.upm
+  keycloakConfigCli:
+    extraEnv:
+      - name: KEYCLOAK_USER
+        value: old-admin
+      - name: KEYCLOAK_PASSWORD
+        value: old-kc
+    configuration:
+      master.json: |
+        {"realm": "master", "attributes": {"frontendUrl": "http://keycloak-admin.dev.ed.dataspaceunit.upm"}}
+minio:
+  rootUser: old-minio
+  rootPassword: old-minio
+  ingress:
+    hosts:
+      - minio.dev.ed.dataspaceunit.upm
+  consoleIngress:
+    hosts:
+      - console.minio-s3.dev.ed.dataspaceunit.upm
+"""
+            )
+        self.assertFalse(os.path.exists(self.config.deployer_config_path()))
+        infrastructure = self._make_infrastructure()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            infrastructure.sync_common_values()
+
+        with open(self.config.values_path(), encoding="utf-8") as handle:
+            values_text = handle.read()
+
+        self.assertIn("hostname: auth.dev.ed.dataspaceunit.upm", values_text)
+        self.assertIn("hostname: admin.auth.dev.ed.dataspaceunit.upm", values_text)
+        self.assertIn("adminPassword: kc-secret", values_text)
+
     def test_setup_cluster_preflight_reports_ready_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
             run=self._run,

@@ -1703,11 +1703,10 @@ class INESDataInfrastructureAdapter:
             print("File not found: common/values.yaml")
             return
 
-        if not os.path.exists(config_path):
+        config = self.config_adapter.load_deployer_config()
+        if not config:
             print("File not found: deployer.config")
             return
-
-        config = self.config_adapter.load_deployer_config()
         with open(values_path) as f:
             values = yaml_ruamel.load(f)
 
