@@ -494,7 +494,14 @@ class SharedDataspaceDeploymentAdapter:
         kc_password = deployer_config.get("KC_PASSWORD")
 
         if not kc_runtime_url:
-            self._fail("KC_INTERNAL_URL/KC_URL not defined in deployer.config")
+            self._fail(
+                "KC_INTERNAL_URL/KC_URL not defined in deployer.config",
+                root_cause=(
+                    "refresh deployers/infrastructure/deployer.config from "
+                    "deployers/infrastructure/deployer.config.example or rerun Level 2 "
+                    "from an updated checkout so shared Keycloak hostnames are synchronized"
+                ),
+            )
         if not kc_user or not kc_password:
             self._fail("KC_USER/KC_PASSWORD not defined in deployer.config")
 

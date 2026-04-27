@@ -1,8 +1,8 @@
 ENVIRONMENT=DEV
-KC_URL=http://keycloak-admin.dev.ed.dataspaceunit.upm
-KC_INTERNAL_URL=http://keycloak.dev.ed.dataspaceunit.upm
-KEYCLOAK_HOSTNAME=keycloak.dev.ed.dataspaceunit.upm
-KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.dev.ed.dataspaceunit.upm
+KC_URL=http://admin.auth.dev.ed.dataspaceunit.upm
+KC_INTERNAL_URL=http://auth.dev.ed.dataspaceunit.upm
+KEYCLOAK_HOSTNAME=auth.dev.ed.dataspaceunit.upm
+KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm
 KC_USER=admin
 KC_PASSWORD=change-me
 PG_HOST=localhost
@@ -26,6 +26,7 @@ MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=4
 MINIKUBE_MEMORY=12288
 MINIKUBE_PROFILE=minikube
+# For vm-single/vm-distributed, set these to the real VM or ingress IP before Levels 3-6.
 VM_EXTERNAL_IP=
 VM_COMMON_IP=
 VM_DATASPACE_IP=

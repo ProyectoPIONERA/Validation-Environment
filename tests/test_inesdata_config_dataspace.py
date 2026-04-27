@@ -39,6 +39,22 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
                 os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
             )
 
+    def test_infrastructure_deployer_config_example_uses_shared_auth_hostnames(self):
+        example_path = os.path.join(
+            InesdataConfig.script_dir(),
+            "deployers",
+            "infrastructure",
+            "deployer.config.example",
+        )
+
+        with open(example_path, "r", encoding="utf-8") as handle:
+            config_text = handle.read()
+
+        self.assertIn("KC_URL=http://admin.auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KC_INTERNAL_URL=http://auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KEYCLOAK_HOSTNAME=auth.dev.ed.dataspaceunit.upm\n", config_text)
+        self.assertIn("KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm\n", config_text)
+
     def test_load_deployer_config_uses_infrastructure_base_and_adapter_overlay(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)

@@ -860,6 +860,33 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "secret",
         )
 
+    def test_deploy_dataspace_reports_guidance_when_keycloak_urls_are_missing(self):
+        infrastructure = self._make_infrastructure()
+        deployment = INESDataDeploymentAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = FakeConnectorsAdapter()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=False)
+        deployment.config_adapter.load_deployer_config = lambda: {
+            "KC_USER": "admin",
+            "KC_PASSWORD": "secret",
+        }
+
+        with self.assertRaises(RuntimeError) as exc:
+            deployment.deploy_dataspace()
+
+        message = str(exc.exception)
+        self.assertIn("KC_INTERNAL_URL/KC_URL not defined in deployer.config", message)
+        self.assertIn("deployers/infrastructure/deployer.config.example", message)
+
     def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_minikube_host_aliases(self):
         infrastructure = self._make_infrastructure()
         run = mock.Mock(return_value=object())
