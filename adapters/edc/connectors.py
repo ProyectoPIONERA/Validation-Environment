@@ -9,6 +9,11 @@ import sys
 import requests
 import yaml
 
+from deployers.shared.lib.topology import (
+    LOCAL_TOPOLOGY,
+    VM_SINGLE_TOPOLOGY,
+    build_topology_profile,
+)
 from adapters.inesdata.connectors import INESDataConnectorsAdapter
 from runtime_dependencies import ensure_python_requirements
 
@@ -20,6 +25,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
     MANAGED_LABEL_KEY = "validation-environment-adapter"
     DASHBOARD_PROXY_PREFIX = "/edc-dashboard-api"
+    LEVEL4_LOCAL_IMAGE_TOPOLOGIES = {LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY}
 
     def __init__(self, run, run_silent, auto_mode_getter, infrastructure_adapter, config_adapter=None, config_cls=None, topology="local"):
         self.topology = topology or EdcConfig.DEFAULT_TOPOLOGY
@@ -324,10 +330,22 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
     def _maybe_prepare_level4_local_edc_images(self):
         mode = self._level4_edc_local_images_mode()
-        policy = self._resolve_level4_local_image_policy(
-            mode=mode,
-            label="EDC",
-        )
+        normalized_mode = str(mode or "auto").strip().lower() or "auto"
+        topology = self._normalized_topology()
+        if topology in self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES:
+            policy = {
+                "topology": topology,
+                "mode": normalized_mode,
+                "prepare_local_images": True,
+                "allow_local_image_overrides": True,
+                "message": "",
+                "error": "",
+            }
+        else:
+            policy = self._resolve_level4_local_image_policy(
+                mode=mode,
+                label="EDC",
+            )
         if policy["error"]:
             print(policy["error"])
             return False
@@ -551,11 +569,30 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return None
         return f"{base_url}/protocol"
 
+    def _host_alias_target_address(self):
+        topology = self._normalized_topology()
+        if topology == LOCAL_TOPOLOGY:
+            return self.run_silent("minikube ip") or self.config.MINIKUBE_IP
+        if topology != VM_SINGLE_TOPOLOGY:
+            return ""
+
+        config_loader = getattr(self.config_adapter, "load_deployer_config", None)
+        deployer_config = dict(config_loader() or {}) if callable(config_loader) else {}
+        try:
+            profile = build_topology_profile(topology, deployer_config)
+        except Exception:
+            return ""
+        return str(
+            getattr(profile, "ingress_external_ip", "")
+            or getattr(profile, "default_address", "")
+            or ""
+        ).strip()
+
     def _host_aliases(self, connector_hostnames, ds_name=None, ds_namespace=None, connector_name=None):
-        if not self._is_local_topology():
+        target_ip = self._host_alias_target_address()
+        if not target_ip:
             return []
 
-        minikube_ip = self.run_silent("minikube ip") or self.config.MINIKUBE_IP
         hostnames = self._host_alias_domains_for_dataspace(
             ds_name=ds_name,
             ds_namespace=ds_namespace,
@@ -567,7 +604,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 hostname = f"{connector}.{ds_domain}"
                 if hostname not in hostnames:
                     hostnames.append(hostname)
-        return [{"ip": minikube_ip, "hostnames": hostnames}]
+        return [{"ip": target_ip, "hostnames": hostnames}]
 
     def _ensure_dashboard_runtime_dir(self, connector_name, ds_name=None):
         runtime_dir = self.config_adapter.edc_dashboard_runtime_dir(connector_name, ds_name=ds_name)

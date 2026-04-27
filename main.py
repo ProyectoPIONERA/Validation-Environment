@@ -3099,6 +3099,10 @@ def _prepare_edc_local_dashboard_images(adapter, config):
     }
 
 
+def _edc_topology_supports_local_image_preparation(topology):
+    return normalize_topology(topology or LOCAL_TOPOLOGY) in {LOCAL_TOPOLOGY, "vm-single"}
+
+
 def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="local"):
     normalized_deployer = str(deployer_name or _infer_deployer_name_from_adapter(adapter)).strip().lower()
     if normalized_deployer != "edc":
@@ -3152,7 +3156,11 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="l
     ).strip()
 
     if not explicit_image_name or not explicit_image_tag:
-        if normalized_topology == "local" and not explicit_image_name and not explicit_image_tag:
+        if (
+            _edc_topology_supports_local_image_preparation(normalized_topology)
+            and not explicit_image_name
+            and not explicit_image_tag
+        ):
             prepared = _prepare_edc_local_connector_image_override(adapter)
             explicit_image_name = prepared["image_name"]
             explicit_image_tag = prepared["image_tag"]
@@ -3174,7 +3182,7 @@ def _ensure_safe_edc_deployer_execution(adapter, deployer_name=None, topology="l
             f"'{default_image_name}:{default_image_tag}'. Provide an explicit working image override."
         )
 
-    if normalized_topology == "local":
+    if _edc_topology_supports_local_image_preparation(normalized_topology):
         _prepare_edc_local_dashboard_images(adapter, config)
 
 
