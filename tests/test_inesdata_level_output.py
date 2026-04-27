@@ -368,14 +368,15 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.sync_vault_token_to_deployer_config = lambda: True
         infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(return_value=True)
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             infrastructure.deploy_infrastructure()
 
         rendered = output.getvalue()
-        self.assertIn("Helm reported a post-install failure", rendered)
         self.assertIn("LEVEL 2 COMPLETE", rendered)
+        infrastructure._common_services_release_recoverable_after_helm_failure.assert_called_once_with()
 
     def test_deploy_infrastructure_repairs_failed_helm_release_after_runtime_readiness(self):
         infrastructure = self._make_infrastructure()
@@ -391,6 +392,9 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
         infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
         infrastructure._common_services_release_status = mock.Mock(side_effect=["failed", "deployed"])
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(
+            side_effect=[True, False]
+        )
         infrastructure.deploy_helm_release = mock.Mock(side_effect=[False, True])
 
         output = io.StringIO()
@@ -405,6 +409,35 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertIn("Helm release status recovered to deployed", rendered)
         self.assertIn("LEVEL 2 COMPLETE", rendered)
 
+    def test_deploy_infrastructure_skips_failed_helm_repair_for_recoverable_hook_issue(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: True
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+        infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(return_value=True)
+        infrastructure.deploy_helm_release = mock.Mock(return_value=False)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            infrastructure.deploy_infrastructure()
+
+        self.assertEqual(infrastructure.deploy_helm_release.call_count, 1)
+        self.assertGreaterEqual(
+            infrastructure._common_services_release_recoverable_after_helm_failure.call_count,
+            2,
+        )
+        self.assertIn("Skipping Helm release repair", output.getvalue())
+        self.assertIn("LEVEL 2 COMPLETE", output.getvalue())
+
     def test_common_services_release_status_parses_helm_json(self):
         infrastructure = self._make_infrastructure()
         infrastructure.run_silent = mock.Mock(return_value='{"info":{"status":"deployed"}}')
@@ -412,9 +445,48 @@ class InesdataLevelOutputTests(unittest.TestCase):
         self.assertEqual(infrastructure.common_services_release_status(), "deployed")
         infrastructure.run_silent.assert_called_once_with("helm status common-srvs -n common -o json")
 
+    def test_common_services_release_recoverable_after_helm_failure_allows_only_ignored_hook_issue(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure.run_silent = mock.Mock(
+            return_value="\n".join(
+                [
+                    "common-srvs-keycloak-0 1/1 Running 0 1m",
+                    "common-srvs-minio-0 1/1 Running 0 1m",
+                    "common-srvs-minio-post-job-xyz 0/1 Error 1 10s",
+                    "common-srvs-postgresql-0 1/1 Running 0 1m",
+                    "common-srvs-vault-0 1/1 Running 0 1m",
+                ]
+            )
+        )
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure._common_services_release_recoverable_after_helm_failure()
+
+        self.assertTrue(result)
+        self.assertIn("only ignored hook pods remain outside the ready set", output.getvalue())
+
+    def test_common_services_release_recoverable_after_helm_failure_rejects_non_hook_error_pod(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure.run_silent = mock.Mock(
+            return_value="\n".join(
+                [
+                    "common-srvs-keycloak-0 1/1 Running 0 1m",
+                    "common-srvs-minio-0 0/1 Error 1 10s",
+                    "common-srvs-postgresql-0 1/1 Running 0 1m",
+                    "common-srvs-vault-0 1/1 Running 0 1m",
+                ]
+            )
+        )
+
+        self.assertFalse(infrastructure._common_services_release_recoverable_after_helm_failure())
+
     def test_verify_common_services_ready_for_level3_fails_when_helm_release_failed(self):
         infrastructure = self._make_infrastructure()
         infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(return_value=False)
         infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
         infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
         infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)
@@ -426,6 +498,32 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.wait_for_level2_service_pods.assert_not_called()
         infrastructure.wait_for_namespace_stability.assert_not_called()
         infrastructure.ensure_vault_unsealed.assert_not_called()
+
+    def test_verify_common_services_ready_for_level3_allows_recoverable_failed_release(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure._common_services_release_status = lambda: "failed"
+        infrastructure._common_services_release_recoverable_after_helm_failure = mock.Mock(return_value=True)
+        infrastructure.wait_for_level2_service_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_common_services_ready_for_level3()
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        infrastructure._common_services_release_recoverable_after_helm_failure.assert_called_once_with()
+        infrastructure.wait_for_level2_service_pods.assert_called_once_with(
+            "common",
+            timeout=300,
+            require_vault_ready=True,
+        )
+        infrastructure.wait_for_namespace_stability.assert_called_once_with(
+            "common",
+            duration=12,
+            poll_interval=3,
+            timeout=180,
+        )
+        infrastructure.ensure_vault_unsealed.assert_called_once_with()
 
     def test_verify_common_services_ready_for_level3_fails_fast_when_helm_release_missing(self):
         infrastructure = self._make_infrastructure()

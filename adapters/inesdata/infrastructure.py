@@ -1763,19 +1763,83 @@ class INESDataInfrastructureAdapter:
     def _common_services_release_exists(self):
         return self._common_services_release_status() is not None
 
+    def _common_services_has_only_ignored_hook_issues(self):
+        namespace = str(getattr(self.config, "NS_COMMON", "") or "").strip()
+        if not namespace:
+            return False
+
+        result = self.run_silent(f"kubectl get pods -n {shlex.quote(namespace)} --no-headers")
+        if not result:
+            return False
+
+        observed_relevant_pod = False
+        observed_ignored_hook = False
+
+        for line in result.splitlines():
+            columns = line.split()
+            if len(columns) < 3:
+                continue
+
+            name = columns[0]
+            ready = columns[1] if len(columns) > 1 else ""
+            status = columns[2]
+
+            if self._is_ignored_transient_hook_pod(namespace, name):
+                observed_ignored_hook = True
+                continue
+
+            if status in ["CrashLoopBackOff", "Error", "ImagePullBackOff"]:
+                return False
+
+            if status == "Completed":
+                continue
+
+            observed_relevant_pod = True
+
+            if status != "Running":
+                return False
+
+            if "/" in ready:
+                ready_current, ready_total = ready.split("/", 1)
+                if ready_current != ready_total:
+                    return False
+            elif not ready:
+                return False
+
+        return observed_relevant_pod and observed_ignored_hook
+
     def _common_services_release_recoverable_after_helm_failure(self):
-        if not self._common_services_release_exists():
+        status = self._common_services_release_status()
+        if status is None:
+            return False
+
+        if status != "failed":
             return False
 
         print(
-            "Helm reported a post-install failure, but the common services release exists. "
-            "Continuing with framework-level checks."
+            "Helm reported a common services failure. Checking whether only ignored hook "
+            "pods remain outside the ready set..."
+        )
+
+        if not self._common_services_has_only_ignored_hook_issues():
+            return False
+
+        print(
+            "Helm reported a failed common services release, but only ignored hook pods "
+            "remain outside the ready set. Continuing with framework-level checks."
         )
         return True
 
     def _repair_failed_common_services_helm_release(self, values_path, common_dir):
         status = self._common_services_release_status()
         if status != "failed":
+            return True
+
+        if self._common_services_release_recoverable_after_helm_failure():
+            print(
+                "Skipping Helm release repair because runtime services are healthy and "
+                "only ignored hook pods remain outside the ready set."
+            )
             return True
 
         print(
@@ -2223,7 +2287,16 @@ class INESDataInfrastructureAdapter:
         if release_status is None:
             return False, "common services Helm release not found"
         if release_status and release_status != "deployed":
-            return False, f"common services Helm release is {release_status}"
+            if (
+                release_status == "failed"
+                and self._common_services_release_recoverable_after_helm_failure()
+            ):
+                print(
+                    "Common services Helm release is failed, but the remaining issue is "
+                    "limited to ignored hook pods. Continuing with readiness checks."
+                )
+            else:
+                return False, f"common services Helm release is {release_status}"
 
         if not self.wait_for_level2_service_pods(
             self.config.NS_COMMON,
