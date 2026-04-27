@@ -8,6 +8,7 @@ import requests
 import yaml
 
 from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
+from deployers.shared.lib.topology import LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY, normalize_topology
 from runtime_dependencies import ensure_python_requirements
 
 
@@ -423,9 +424,7 @@ class SharedDataspaceDeploymentAdapter:
             self._fail("registration-service deployment did not finish rolling out")
         self._print_unique_lines(rollout_output)
 
-    def deploy_dataspace(self):
-        self.infrastructure.announce_level(3, "DATASPACE")
-
+    def _show_minikube_tunnel_prompt(self):
         print("-------------------------------------------------")
         print("MINIKUBE TUNNEL REQUIRED")
         print()
@@ -444,6 +443,24 @@ class SharedDataspaceDeploymentAdapter:
             input()
         else:
             print("[AUTO_MODE] Skipping tunnel confirmation\n")
+
+    def _deploy_dataspace_runtime(
+        self,
+        *,
+        topology=LOCAL_TOPOLOGY,
+        require_tunnel_prompt=True,
+        update_minikube_host_aliases=True,
+    ):
+        self.infrastructure.announce_level(3, "DATASPACE")
+        normalized_topology = normalize_topology(topology)
+
+        if require_tunnel_prompt:
+            self._show_minikube_tunnel_prompt()
+        else:
+            print(
+                f"Topology '{normalized_topology}' uses an existing cluster ingress. "
+                "Skipping Minikube tunnel prompt.\n"
+            )
 
         bootstrap_runtime = resolve_shared_level3_bootstrap_runtime(self.config) or {}
         repo_dir = bootstrap_runtime.get("repo_dir") or self.config.repo_dir()
@@ -543,9 +560,10 @@ class SharedDataspaceDeploymentAdapter:
         if not os.path.exists(values_file):
             self._fail("Registration service values file not found")
 
-        minikube_ip = self.run("minikube ip", capture=True)
-        if minikube_ip:
-            self.update_helm_values_with_host_aliases(values_file, minikube_ip)
+        if update_minikube_host_aliases:
+            minikube_ip = self.run("minikube ip", capture=True)
+            if minikube_ip:
+                self.update_helm_values_with_host_aliases(values_file, minikube_ip)
 
         print("\nDeploying registration-service...")
         if not self.infrastructure.deploy_helm_release(
@@ -570,3 +588,21 @@ class SharedDataspaceDeploymentAdapter:
 
         self.infrastructure.complete_level(3)
         print("Next step: run Level 4 to deploy or update the connectors for this dataspace.")
+
+    def deploy_dataspace(self):
+        return self._deploy_dataspace_runtime()
+
+    def deploy_dataspace_for_topology(self, topology=LOCAL_TOPOLOGY):
+        normalized_topology = normalize_topology(topology)
+        if normalized_topology == LOCAL_TOPOLOGY:
+            return self.deploy_dataspace()
+        if normalized_topology != VM_SINGLE_TOPOLOGY:
+            raise RuntimeError(
+                f"Level 3 deploy_dataspace_for_topology() is not implemented for topology "
+                f"'{normalized_topology}' yet."
+            )
+        return self._deploy_dataspace_runtime(
+            topology=normalized_topology,
+            require_tunnel_prompt=False,
+            update_minikube_host_aliases=False,
+        )

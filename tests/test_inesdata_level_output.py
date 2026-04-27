@@ -829,6 +829,50 @@ class InesdataLevelOutputTests(unittest.TestCase):
             "secret",
         )
 
+    def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_minikube_host_aliases(self):
+        infrastructure = self._make_infrastructure()
+        run = mock.Mock(return_value=object())
+        deployment = INESDataDeploymentAdapter(
+            run=run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=infrastructure,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        deployment.connectors_adapter = FakeConnectorsAdapter()
+        infrastructure.ensure_local_infra_access = mock.Mock(return_value=True)
+        infrastructure.ensure_vault_unsealed = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = mock.Mock(return_value=True)
+        infrastructure.sync_common_credentials_from_kubernetes = mock.Mock(return_value=True)
+        infrastructure.deploy_helm_release = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_dataspace_level3_pods = lambda *_args, **_kwargs: True
+        infrastructure.verify_dataspace_ready_for_level4 = lambda: (True, None)
+        deployment.wait_for_keycloak_admin_ready = lambda *_args, **_kwargs: True
+        deployment.restart_registration_service = lambda: None
+        deployment.update_helm_values_with_host_aliases = mock.Mock()
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch(
+            "adapters.inesdata.deployment.ensure_python_requirements",
+            lambda *_args, **_kwargs: None,
+        ), mock.patch(
+            "adapters.inesdata.deployment.requests.get",
+            return_value=mock.Mock(status_code=200),
+        ), mock.patch(
+            "adapters.shared.deployment.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+        ):
+            deployment.deploy_dataspace_for_topology("vm-single")
+
+        rendered = output.getvalue()
+        self.assertIn("Topology 'vm-single' uses an existing cluster ingress.", rendered)
+        self.assertNotIn("MINIKUBE TUNNEL REQUIRED", rendered)
+        self.assertIn("Next step: run Level 4", rendered)
+        infrastructure.ensure_local_infra_access.assert_called_once()
+        deployment.update_helm_values_with_host_aliases.assert_not_called()
+        self.assertFalse(any(call.args and call.args[0] == "minikube ip" for call in run.call_args_list))
+
     def test_level3_postgres_cleanup_reconciles_residual_role_directly(self):
         deployment = INESDataDeploymentAdapter(
             run=self._run,
