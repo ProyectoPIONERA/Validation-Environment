@@ -47,10 +47,10 @@ def ontology_hub_functional_reset_mode():
     mode = (
         os.environ.get("ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE")
         or os.environ.get("ONTOLOGY_HUB_APP_FLOWS_RESET_MODE")
-        or "hard"
+        or "soft"
     ).strip().lower()
     if mode not in {"soft", "hard", "off"}:
-        return "hard"
+        return "soft"
     return mode
 
 
@@ -143,26 +143,30 @@ def ontology_hub_response_looks_broken(response):
     return any(marker in body for marker in markers)
 
 
-def _ontology_hub_session_login(runtime, timeout=20):
+def _ontology_hub_session_login(runtime, timeout=20, quiet=False):
     base_url = (runtime.get("baseUrl") or "").rstrip("/")
     if not base_url:
-        print("Ontology Hub cleanup failed: base URL is empty.")
+        if not quiet:
+            print("Ontology Hub cleanup failed: base URL is empty.")
         return None
 
     session = requests.Session()
     try:
         login_response = session.get(f"{base_url}/edition/login", timeout=timeout, allow_redirects=True)
     except requests.RequestException as exc:
-        print(f"Ontology Hub cleanup failed while loading login page: {exc}")
+        if not quiet:
+            print(f"Ontology Hub cleanup failed while loading login page: {exc}")
         return None
 
     if login_response.status_code >= 400:
-        print(f"Ontology Hub cleanup failed: login page returned {login_response.status_code}")
+        if not quiet:
+            print(f"Ontology Hub cleanup failed: login page returned {login_response.status_code}")
         return None
 
     csrf_token = _extract_csrf_token(login_response.text)
     if not csrf_token:
-        print("Ontology Hub cleanup failed: could not extract CSRF token from login page.")
+        if not quiet:
+            print("Ontology Hub cleanup failed: could not extract CSRF token from login page.")
         return None
 
     payload = {
@@ -179,14 +183,17 @@ def _ontology_hub_session_login(runtime, timeout=20):
         )
         edition_response = session.get(f"{base_url}/edition", timeout=timeout, allow_redirects=True)
     except requests.RequestException as exc:
-        print(f"Ontology Hub cleanup failed during login: {exc}")
+        if not quiet:
+            print(f"Ontology Hub cleanup failed during login: {exc}")
         return None
 
     if edition_response.status_code >= 400 or "/edition/login" in edition_response.url:
-        print("Ontology Hub cleanup failed: admin login was not accepted.")
+        if not quiet:
+            print("Ontology Hub cleanup failed: admin login was not accepted.")
         return None
     if ontology_hub_response_looks_broken(edition_response):
-        print("Ontology Hub cleanup failed: authenticated /edition page is broken.")
+        if not quiet:
+            print("Ontology Hub cleanup failed: authenticated /edition page is broken.")
         return None
 
     return session
@@ -423,19 +430,22 @@ def soft_cleanup_ontology_hub_for_functional(runtime):
     return True
 
 
-def wait_for_ontology_hub_preflight(base_url, timeout_seconds=180):
-    """Wait until public and edition areas answer after a runtime reset."""
-    normalized_base_url = (base_url or "").strip().rstrip("/")
+def wait_for_ontology_hub_preflight(runtime, timeout_seconds=180, stable_successes_required=2):
+    """Wait until public and authenticated areas answer consistently after a runtime reset."""
+    normalized_runtime = dict(runtime or {})
+    normalized_base_url = str(normalized_runtime.get("baseUrl") or "").strip().rstrip("/")
     if not normalized_base_url:
         print("Ontology Hub preflight skipped: base URL is empty.")
         return False
 
     targets = [
+        ("home", normalized_base_url),
         ("dataset", f"{normalized_base_url}/dataset"),
         ("edition", f"{normalized_base_url}/edition"),
     ]
     deadline = time.time() + timeout_seconds
     last_statuses = {}
+    stable_successes = 0
 
     print("\nWaiting for Ontology Hub HTTP preflight...\n")
     while time.time() < deadline:
@@ -450,12 +460,35 @@ def wait_for_ontology_hub_preflight(base_url, timeout_seconds=180):
                 last_statuses[label] = str(exc)
                 all_ready = False
 
+        session = None
         if all_ready:
-            print(
-                "Ontology Hub preflight ready: "
-                + ", ".join(f"{label}={status}" for label, status in last_statuses.items())
+            session = _ontology_hub_session_login(
+                normalized_runtime,
+                timeout=10,
+                quiet=True,
             )
-            return True
+            if session is not None:
+                last_statuses["edition-auth"] = "ok"
+                stable_successes += 1
+                if stable_successes >= max(int(stable_successes_required or 0), 1):
+                    print(
+                        "Ontology Hub preflight ready: "
+                        + ", ".join(f"{label}={status}" for label, status in last_statuses.items())
+                    )
+                    close = getattr(session, "close", None)
+                    if callable(close):
+                        close()
+                    return True
+            else:
+                last_statuses["edition-auth"] = "login-unavailable"
+                all_ready = False
+        if session is not None:
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
+
+        if not all_ready:
+            stable_successes = 0
 
         time.sleep(5)
 
@@ -468,30 +501,30 @@ def wait_for_ontology_hub_preflight(base_url, timeout_seconds=180):
 
 def prepare_ontology_hub_for_functional(runtime):
     mode = ontology_hub_functional_reset_mode()
-    base_url = runtime.get("baseUrl", "")
+    preflight_timeout = int(runtime.get("preflightTimeout") or 180)
 
     if mode == "off":
         print("\nOntology Hub Functional cleanup skipped (ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=off).\n")
-        return wait_for_ontology_hub_preflight(base_url, timeout_seconds=60)
+        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=min(preflight_timeout, 60))
 
     if mode == "hard":
         if not reset_ontology_hub_for_functional(runtime):
             return False
-        return wait_for_ontology_hub_preflight(base_url)
+        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
 
     if not soft_cleanup_ontology_hub_for_functional(runtime):
         print("\nOntology Hub soft cleanup failed. Falling back to hard reset...\n")
         if not reset_ontology_hub_for_functional(runtime):
             return False
-        return wait_for_ontology_hub_preflight(base_url)
+        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
 
-    if wait_for_ontology_hub_preflight(base_url, timeout_seconds=60):
+    if wait_for_ontology_hub_preflight(runtime, timeout_seconds=min(preflight_timeout, 60)):
         return True
 
     print("\nOntology Hub soft cleanup left the app unhealthy. Falling back to hard reset...\n")
     if not reset_ontology_hub_for_functional(runtime):
         return False
-    return wait_for_ontology_hub_preflight(base_url)
+    return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
 
 
 _prepare_ontology_hub_for_functional = prepare_ontology_hub_for_functional

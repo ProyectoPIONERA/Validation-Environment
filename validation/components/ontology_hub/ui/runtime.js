@@ -80,9 +80,9 @@ function normalizeRuntime(runtime) {
     uiWorkers: normalizePositiveInteger(runtime.uiWorkers, 1),
     uiExpectTimeoutMs: normalizePositiveInteger(runtime.uiExpectTimeoutMs, 15000),
     uiActionTimeoutMs: normalizePositiveInteger(runtime.uiActionTimeoutMs, 15000),
-    uiNavigationTimeoutMs: normalizePositiveInteger(runtime.uiNavigationTimeoutMs, 15000),
-    uiReadyTimeoutMs: normalizePositiveInteger(runtime.uiReadyTimeoutMs, 15000),
-    preflightTimeout: normalizePositiveInteger(runtime.preflightTimeout, 120),
+    uiNavigationTimeoutMs: normalizePositiveInteger(runtime.uiNavigationTimeoutMs, 30000),
+    uiReadyTimeoutMs: normalizePositiveInteger(runtime.uiReadyTimeoutMs, 30000),
+    preflightTimeout: normalizePositiveInteger(runtime.preflightTimeout, 180),
     strictPreflight: Boolean(runtime.strictPreflight),
   };
 }
@@ -186,16 +186,16 @@ function resolveOntologyHubRuntime() {
     ),
     uiNavigationTimeoutMs: normalizePositiveInteger(
       process.env.ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS,
-      15000,
+      30000,
     ),
     uiReadyTimeoutMs: normalizePositiveInteger(
       process.env.ONTOLOGY_HUB_UI_READY_TIMEOUT_MS,
-      15000,
+      30000,
     ),
     strictPreflight: ["1", "true", "yes", "on"].includes(
       String(process.env.ONTOLOGY_HUB_UI_STRICT_PREFLIGHT || "").toLowerCase(),
     ),
-    preflightTimeout: normalizePositiveInteger(process.env.ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT, 120),
+    preflightTimeout: normalizePositiveInteger(process.env.ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT, 180),
   };
 
   return normalizeRuntime(fileRuntime ? { ...fallbackRuntime, ...fileRuntime } : fallbackRuntime);

@@ -11,8 +11,6 @@ const {
   URI_VOCAB_STATE_KEY,
 } = require("../support/excel-flows");
 
-test.setTimeout(30000);
-
 test("OH-APP-25: terms search returns results for the ontology created in OH-APP-03", async ({
   page,
   ontologyHubRuntime,

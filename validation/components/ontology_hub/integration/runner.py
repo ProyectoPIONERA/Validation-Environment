@@ -274,6 +274,17 @@ def evaluate_html_page_response(
         result["status"] = "failed"
         result["assertions"].append("Expected an HTML response")
 
+    embedded_error_markers = (
+        "500 - oops! something went wrong - 500",
+        "cannot read properties of null",
+        "typeerror:",
+        "edition.jade:",
+        "/app/app/views/edition.jade",
+    )
+    if any(marker in normalized_body for marker in embedded_error_markers):
+        result["status"] = "failed"
+        result["assertions"].append("HTML response renders an embedded server error page")
+
     missing_markers = [marker for marker in required_markers if marker.lower() not in normalized_body]
     if missing_markers:
         result["status"] = "failed"

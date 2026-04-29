@@ -17,6 +17,20 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function textShowsTransientAvailabilityFailure(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\b502\b/.test(normalized) ||
+    /\b503\b/.test(normalized) ||
+    normalized.includes("service temporarily unavailable") ||
+    normalized.includes("bad gateway")
+  );
+}
+
 function normalizeRepositoryUri(value) {
   const candidate = normalizeText(value);
   if (!candidate) {
@@ -51,6 +65,43 @@ function isEditionLoginUrl(url) {
 
 function isEditionUrl(url) {
   return /\/edition(?:\/lov)?\/?$/.test(String(url || ""));
+}
+
+async function readPrimaryHeading(page) {
+  try {
+    const heading = page.locator("h1").first();
+    if ((await heading.count()) === 0) {
+      return "";
+    }
+    return normalizeText(await heading.textContent());
+  } catch (error) {
+    return "";
+  }
+}
+
+async function readPageSignalText(page) {
+  const heading = await readPrimaryHeading(page);
+  if (heading) {
+    return heading;
+  }
+
+  const title = normalizeText(await page.title().catch(() => ""));
+  if (title) {
+    return title;
+  }
+
+  const body = normalizeText(
+    await page
+      .locator("body")
+      .evaluate((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
+      .catch(() => ""),
+  );
+  return body ? body.slice(0, 240) : "";
+}
+
+async function pageShowsTransientAvailabilityFailure(page) {
+  const signalText = await readPageSignalText(page);
+  return textShowsTransientAvailabilityFailure(signalText);
 }
 
 function loginErrorHint(runtime) {
@@ -355,43 +406,55 @@ function isRepositoryAccessError(message) {
 }
 
 async function gotoEdition(page, runtime) {
-  await page.goto(`${runtime.baseUrl}/edition`, { waitUntil: "domcontentloaded" });
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await page.goto(`${runtime.baseUrl}/edition`, { waitUntil: "domcontentloaded" });
 
-  if (isEditionLoginUrl(page.url())) {
-    await fillMarked(page.getByPlaceholder("Email"), runtime.adminEmail);
-    await fillMarked(page.getByPlaceholder("Password"), runtime.adminPassword);
-    await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
-    await page.waitForLoadState("domcontentloaded").catch(() => {});
+      if (isEditionLoginUrl(page.url())) {
+        await fillMarked(page.getByPlaceholder("Email"), runtime.adminEmail);
+        await fillMarked(page.getByPlaceholder("Password"), runtime.adminPassword);
+        await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
+        await page.waitForLoadState("domcontentloaded").catch(() => {});
 
-    const invalidCredentials = page.getByText("Invalid email or password.", { exact: true });
-    const invalidCredentialsVisible = await invalidCredentials
-      .waitFor({ state: "visible", timeout: 1000 })
-      .then(() => true)
-      .catch(() => false);
-    if (invalidCredentialsVisible) {
-      throw new Error(
-        `El login de Ontology Hub fue rechazado por el entorno actual. ${loginErrorHint(runtime)}`,
-      );
+        const invalidCredentials = page.getByText("Invalid email or password.", { exact: true });
+        const invalidCredentialsVisible = await invalidCredentials
+          .waitFor({ state: "visible", timeout: 1000 })
+          .then(() => true)
+          .catch(() => false);
+        if (invalidCredentialsVisible) {
+          throw new Error(
+            `El login de Ontology Hub fue rechazado por el entorno actual. ${loginErrorHint(runtime)}`,
+          );
+        }
+      }
+
+      if (!isEditionUrl(page.url())) {
+        const editionLink = page.getByRole("link", { name: /edition/i }).first();
+        if ((await editionLink.count()) > 0) {
+          await clickMarked(editionLink);
+          await page.waitForLoadState("domcontentloaded");
+        }
+      }
+
+      await page.locator(".createVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
+      return;
+    } catch (error) {
+      lastError = error;
+      const formErrors = await page.locator("#formErrors").textContent().catch(() => "");
+      const pageSignal = await readPageSignalText(page);
+      const transientFailure = await pageShowsTransientAvailabilityFailure(page);
+      if (!transientFailure || attempt >= 3) {
+        throw new Error(
+          `No se pudo acceder al area de edicion de Ontology Hub desde ${page.url()}. ` +
+            `${String(formErrors || "").trim() || pageSignal || "No se detectaron errores visibles."}`,
+        );
+      }
+      await page.waitForTimeout(2000);
     }
   }
 
-  if (!isEditionUrl(page.url())) {
-    const editionLink = page.getByRole("link", { name: /edition/i }).first();
-    if ((await editionLink.count()) > 0) {
-      await clickMarked(editionLink);
-      await page.waitForLoadState("domcontentloaded");
-    }
-  }
-
-  try {
-    await page.locator(".createVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
-  } catch (error) {
-    const formErrors = await page.locator("#formErrors").textContent().catch(() => "");
-    throw new Error(
-      `No se pudo acceder al area de edicion de Ontology Hub desde ${page.url()}. ` +
-        `${String(formErrors || "").trim() || "No se detectaron errores visibles."}`,
-    );
-  }
+  throw lastError || new Error("Ontology Hub edition navigation did not stabilize.");
 }
 
 async function ensurePublicDetail(page, runtime, prefix, title) {
@@ -1035,5 +1098,7 @@ function updateOntologyHubBootstrapState(runtime, patch) {
 module.exports = {
   ensureOntologyHubBootstrap,
   gotoEdition,
+  pageShowsTransientAvailabilityFailure,
+  textShowsTransientAvailabilityFailure,
   updateOntologyHubBootstrapState,
 };

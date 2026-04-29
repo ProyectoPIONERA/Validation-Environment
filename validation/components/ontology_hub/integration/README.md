@@ -145,6 +145,7 @@ Comportamiento API:
 - ejecuta una consulta `ASK` real contra `/dataset/lov/sparql`
 - valida publicacion de `/dataset/lov/patterns`, `/dataset/lov/` y `/dataset/lov/api`
 - marca fallo si el payload contiene errores embebidos como `statusCode >= 400`, `error` o `msg`
+- marca fallo si una pagina HTML responde `200` pero renderiza una pagina rota de servidor, por ejemplo `500 - Oops! something went wrong - 500`
 - exige resultados reales para `PT5-OH-08`, no solo `HTTP 200`
 
 Comportamiento UI:

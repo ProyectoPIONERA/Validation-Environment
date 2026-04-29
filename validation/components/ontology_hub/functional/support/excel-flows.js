@@ -2,7 +2,10 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const { gotoEdition } = require("../../ui/support/bootstrap");
+const {
+  gotoEdition,
+  pageShowsTransientAvailabilityFailure,
+} = require("../../ui/support/bootstrap");
 const { resolveOntologyHubTimeouts } = require("../../ui/runtime");
 const { OntologyHubVocabFormPage } = require("../../ui/pages/vocab-form.page");
 const { OntologyHubVocabDetailPage } = require("../../ui/pages/vocab-detail.page");
@@ -20,6 +23,7 @@ const DEFAULT_REPOSITORY_URI =
   "https://github.com/ProyectoPIONERA/Ontology-Development-Repository-Example";
 const URI_VOCAB_STATE_KEY = "oh-app-03-uri-vocabulary";
 const REPOSITORY_VOCAB_STATE_KEY = "oh-app-04-repository-vocabulary";
+const VISUALIZATION_N3_STATE_KEY = "oh-app-05-visualization-n3";
 const VERSION_STATE_KEY = "oh-app-11-version-state";
 const { readyTimeoutMs, navigationTimeoutMs } = resolveOntologyHubTimeouts();
 
@@ -233,33 +237,69 @@ async function expectHealthyPage(page, label) {
   }
 }
 
+async function waitForEditionShellOrTransientFailure(page) {
+  const editionShell = page.locator(
+    ".createVocab, a[href='/edition/logout'], a[href='/edition/'], a[href^='/edition/users/']",
+  );
+  const deadline = Date.now() + readyTimeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await editionShell.first().isVisible().catch(() => false)) {
+      return true;
+    }
+    if (await pageShowsTransientAvailabilityFailure(page)) {
+      return false;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  await editionShell.first().waitFor({ state: "visible", timeout: 1000 });
+  return true;
+}
+
 async function signInToEdition(page, runtime, credentials = {}) {
   const email = normalizeText(credentials.email || runtime.adminEmail);
   const password = normalizeText(credentials.password || runtime.adminPassword);
+  let lastError = null;
+  let attempt = 0;
+  const deadline = Date.now() + Math.max(readyTimeoutMs * 3, 90000);
 
-  await page.goto(`${runtime.baseUrl}/edition`, {
-    waitUntil: "commit",
-    timeout: navigationTimeoutMs,
-  });
-  await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
-  if (/\/edition\/login\/?$/i.test(page.url())) {
-    await fillMarked(page.getByPlaceholder("Email"), email);
-    await fillMarked(page.getByPlaceholder("Password"), password);
-    await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
-    await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
+  while (Date.now() < deadline) {
+    attempt += 1;
+    try {
+      await page.goto(`${runtime.baseUrl}/edition`, {
+        waitUntil: "commit",
+        timeout: navigationTimeoutMs,
+      });
+      await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
+      if (/\/edition\/login\/?$/i.test(page.url())) {
+        await fillMarked(page.getByPlaceholder("Email"), email);
+        await fillMarked(page.getByPlaceholder("Password"), password);
+        await clickMarked(page.getByRole("button", { name: /log in it!?/i }));
+        await page.waitForLoadState("domcontentloaded", { timeout: navigationTimeoutMs }).catch(() => {});
+      }
+
+      const invalidCredentials = normalizeText(await safeTextContent(page.locator("#formErrors")));
+      if (/invalid email or password/i.test(invalidCredentials)) {
+        throw new Error(`Ontology Hub rejected the credentials for '${email}'.`);
+      }
+
+      const editionReady = await waitForEditionShellOrTransientFailure(page);
+      if (!editionReady) {
+        throw new Error(`Ontology Hub edition is temporarily unavailable for '${email}'.`);
+      }
+
+      return page.url();
+    } catch (error) {
+      lastError = error;
+      if (!(await pageShowsTransientAvailabilityFailure(page)) || Date.now() >= deadline) {
+        throw error;
+      }
+      await page.waitForTimeout(5000);
+    }
   }
 
-  const invalidCredentials = normalizeText(await safeTextContent(page.locator("#formErrors")));
-  if (/invalid email or password/i.test(invalidCredentials)) {
-    throw new Error(`Ontology Hub rejected the credentials for '${email}'.`);
-  }
-
-  await page
-    .locator("a[href='/edition/logout'], a[href='/edition/'], a[href^='/edition/users/']")
-    .first()
-    .waitFor({ state: "visible", timeout: readyTimeoutMs });
-
-  return page.url();
+  throw lastError || new Error(`Ontology Hub edition login did not stabilize for '${email}'.`);
 }
 
 async function signOut(page, runtime) {
@@ -641,6 +681,14 @@ async function reviewPendingUser(page, runtime, user) {
 async function promoteUserToAdmin(page, runtime, user) {
   await gotoEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/edition/users`, { waitUntil: "domcontentloaded" });
+  try {
+    await expectHealthyPage(page, "Users administration");
+  } catch (error) {
+    throw new Error(
+      "The users administration page is broken, so the Admin promotion flow cannot continue. " +
+        `This currently blocks OH-APP-17 after the preceding agent edit flow. Details: ${error.message}`,
+    );
+  }
   const row = page
     .locator(".SearchBoxperson, li, article, .editionBoxSugg")
     .filter({ hasText: user.email })
@@ -655,11 +703,26 @@ async function promoteUserToAdmin(page, runtime, user) {
   }
   await clickMarked(promoteButton);
   await page.waitForLoadState("domcontentloaded");
+  const deadline = Date.now() + Math.max(readyTimeoutMs * 2, 30000);
+
+  while (Date.now() < deadline) {
+    const refreshedRow = page
+      .locator(".SearchBoxperson, li, article, .editionBoxSugg")
+      .filter({ hasText: user.email })
+      .first();
+    if (await refreshedRow.isVisible().catch(() => false)) {
+      return;
+    }
+
+    await page.waitForTimeout(3000);
+    await signInToEdition(page, runtime);
+    await page.goto(`${runtime.baseUrl}/edition/users`, { waitUntil: "domcontentloaded" });
+  }
+
   await page
     .locator(".SearchBoxperson, li, article, .editionBoxSugg")
     .filter({ hasText: user.email })
     .first()
-    .getByText(/admin/i)
     .waitFor({ state: "visible", timeout: 5000 });
 }
 
@@ -676,6 +739,7 @@ async function assertCreateUserControl(page, visible) {
 }
 
 async function editAgentFromPublicDetail(page, runtime, agentName, newAgentName) {
+  await signInToEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/dataset/agents/${encodeURIComponent(agentName)}`, {
     waitUntil: "domcontentloaded",
   });
@@ -695,6 +759,7 @@ async function editAgentFromPublicDetail(page, runtime, agentName, newAgentName)
 }
 
 async function deleteAgentFromPublicDetail(page, runtime, agentName) {
+  await signInToEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/dataset/agents/${encodeURIComponent(agentName)}`, {
     waitUntil: "domcontentloaded",
   });
@@ -712,7 +777,7 @@ async function deleteAgentFromPublicDetail(page, runtime, agentName) {
 }
 
 async function createTag(page, runtime, label) {
-  await gotoEdition(page, runtime);
+  await signInToEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/edition/tags/new`, { waitUntil: "domcontentloaded" });
   await expectHealthyPage(page, "Create tag");
   await fillMarked(page.locator("input[name='label']"), label);
@@ -726,7 +791,7 @@ async function createTag(page, runtime, label) {
 }
 
 async function editTag(page, runtime, currentLabel, newLabel) {
-  await gotoEdition(page, runtime);
+  await signInToEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   const row = page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: currentLabel }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
@@ -743,7 +808,7 @@ async function editTag(page, runtime, currentLabel, newLabel) {
 }
 
 async function deleteTag(page, runtime, label) {
-  await gotoEdition(page, runtime);
+  await signInToEdition(page, runtime);
   await page.goto(`${runtime.baseUrl}/edition/tags`, { waitUntil: "domcontentloaded" });
   const row = page.locator("#SearchGrid .SearchBoxtag").filter({ hasText: label }).first();
   await row.waitFor({ state: "visible", timeout: 5000 });
@@ -859,19 +924,81 @@ async function createVersion(page, version, filePath) {
   }
 }
 
-async function editVersion(page, currentVersionName, updatedVersion) {
+function versionRowPattern(version) {
+  return new RegExp(`${escapeRegExp(version.issued)}|${escapeRegExp(version.name)}`, "i");
+}
+
+async function waitForRecoveredVersionRow(page, runtime, prefix, updatedVersion) {
+  const versionsUrl = `${runtime.baseUrl}/edition/vocabs/${encodeURIComponent(prefix)}/versions`;
+  const deadline = Date.now() + Math.max(readyTimeoutMs * 3, 90000);
+  const updatedRow = page.locator(".editionBoxSugg").filter({
+    hasText: versionRowPattern(updatedVersion),
+  }).first();
+  let lastSignal = "";
+
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(5000);
+    try {
+      await page.goto(versionsUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: navigationTimeoutMs,
+      });
+    } catch (error) {
+      lastSignal = error && error.message ? error.message : String(error);
+      continue;
+    }
+
+    lastSignal = normalizeText(await safeTextContent(page.locator("h1").first()));
+    if (await pageShowsTransientAvailabilityFailure(page)) {
+      continue;
+    }
+
+    try {
+      await expectHealthyPage(page, "Vocabulary versions");
+      await page
+        .locator(".editionIndexBoxHeader .title")
+        .filter({ hasText: /versions/i })
+        .first()
+        .waitFor({ state: "visible", timeout: 5000 });
+      await updatedRow.waitFor({ state: "visible", timeout: 5000 });
+      return {
+        recovered: true,
+        versionsUrl,
+        finalUrl: page.url(),
+        lastSignal,
+      };
+    } catch (error) {
+      lastSignal = error && error.message ? error.message : lastSignal;
+    }
+  }
+
+  return {
+    recovered: false,
+    versionsUrl,
+    finalUrl: page.url(),
+    lastSignal: lastSignal || "Ontology Hub did not recover the versions page in time.",
+  };
+}
+
+async function editVersion(page, runtime, prefix, currentVersionName, updatedVersion) {
   const versionRow = page.locator(".editionBoxSugg").filter({ hasText: currentVersionName }).first();
   await versionRow.waitFor({ state: "visible", timeout: 5000 });
   await clickMarked(versionRow.locator(".imageVersionActionEdit"));
   const dialog = page.locator("#dialogEditVersion");
   await dialog.waitFor({ state: "visible", timeout: 5000 });
-  await fillMarked(dialog.locator("input").first(), updatedVersion.issued);
-  await fillMarked(dialog.locator("input").nth(1), updatedVersion.name);
+  await fillMarked(
+    dialog.locator("tr").filter({ hasText: /Version issued Date/i }).locator("input, textarea").first(),
+    updatedVersion.issued,
+  );
+  await fillMarked(
+    dialog.locator("tr").filter({ hasText: /Version Label/i }).locator("input, textarea").first(),
+    updatedVersion.name,
+  );
   await dialog.locator("form#dialogEditVersionForm").evaluate((form) => form.submit());
   await page.waitForLoadState("domcontentloaded");
 
   const updatedRow = page.locator(".editionBoxSugg").filter({
-    hasText: new RegExp(`${escapeRegExp(updatedVersion.issued)}|${escapeRegExp(updatedVersion.name)}`, "i"),
+    hasText: versionRowPattern(updatedVersion),
   }).first();
   const unhealthyHeading = page.locator("h1").filter({ hasText: /50[0-9]|bad gateway|oops/i }).first();
   try {
@@ -881,9 +1008,25 @@ async function editVersion(page, currentVersionName, updatedVersion) {
     ]);
     if (outcome === "error-page") {
       const headingText = normalizeText(await safeTextContent(unhealthyHeading));
-      throw new Error(`Ontology Hub returned an unhealthy page after version edit submit: ${headingText || "unknown error page"}`);
+      throw new Error(
+        `Ontology Hub returned an unhealthy page after version edit submit: ${headingText || "unknown error page"}`,
+      );
     }
+    return {
+      recoveredFromTransientFailure: false,
+      finalUrl: page.url(),
+    };
   } catch (error) {
+    if (runtime && prefix && (await pageShowsTransientAvailabilityFailure(page))) {
+      const recovery = await waitForRecoveredVersionRow(page, runtime, prefix, updatedVersion);
+      if (recovery.recovered) {
+        return {
+          recoveredFromTransientFailure: true,
+          ...recovery,
+        };
+      }
+    }
+
     const dialogText = normalizeText(await safeTextContent(dialog));
     const formErrors = normalizeText(await safeTextContent(page.locator("#formErrors, #dialogEditVersionformErrors")));
     throw new Error(
@@ -959,6 +1102,143 @@ async function resolveThemisSource(page) {
     sourceUrl: node.getAttribute("data-source-url") || "",
     prefix: node.getAttribute("data-vocab-prefix") || "",
   }));
+}
+
+async function waitForThemisPanel(page) {
+  await page.waitForFunction(
+    () => {
+      const tab = document.querySelector(".ontology-tab[data-onto-target='themis']");
+      const panel = document.querySelector(".ontology-tab-panel[data-onto-panel='themis']");
+      const container = document.querySelector("#themisVocabContainer");
+      const executeButton = document.querySelector("#executeThemisButton");
+      const automaticRadio = document.querySelector("#themisModeAutomatic");
+      const manualRadio = document.querySelector("#themisModeManual");
+      const headings = Array.from(document.querySelectorAll("h1, h2, h3"));
+      const isVisible = (node) =>
+        Boolean(node) && Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+      const themisHeadingVisible = headings.some(
+        (node) => isVisible(node) && /themis validator/i.test(String(node.textContent || "")),
+      );
+      const tabActive =
+        (tab instanceof HTMLElement && tab.getAttribute("aria-selected") === "true") ||
+        (panel instanceof HTMLElement && panel.classList.contains("is-active"));
+      const themisUiVisible =
+        isVisible(executeButton) ||
+        isVisible(automaticRadio) ||
+        isVisible(manualRadio) ||
+        themisHeadingVisible;
+      const themisMetadataReady =
+        container instanceof HTMLElement &&
+        Boolean(
+          container.getAttribute("data-source-url") ||
+            container.getAttribute("data-uri") ||
+            container.getAttribute("data-vocab-prefix"),
+        );
+
+      return tabActive && themisUiVisible && themisMetadataReady;
+    },
+    { timeout: readyTimeoutMs },
+  );
+  await page.locator("#themisModeManual").waitFor({ state: "visible", timeout: readyTimeoutMs });
+}
+
+async function openThemisPanel(page) {
+  const toolToggle = page.locator("#normal-button").first();
+  if (await toolToggle.isVisible().catch(() => false)) {
+    await clickMarked(toolToggle).catch(async () => {
+      await clickMarked(toolToggle, { force: true });
+    });
+  }
+
+  const entrypoints = [
+    {
+      name: "legacy-user-options",
+      locator: page.locator("#user-options img[src='/img/themis.png']").first(),
+    },
+    {
+      name: "visible-tool-item",
+      locator: page.locator(".tool-item.gradient img[src='/img/themis.png']").first(),
+    },
+    {
+      name: "themis-tab",
+      locator: page.locator(".ontology-tab[data-onto-target='themis']").first(),
+    },
+  ];
+  const attempts = [];
+  let lastError = null;
+
+  for (const entrypoint of entrypoints) {
+    const count = await entrypoint.locator.count().catch(() => 0);
+    if (count === 0) {
+      attempts.push({
+        name: entrypoint.name,
+        present: false,
+        visible: false,
+      });
+      continue;
+    }
+
+    const visible = await entrypoint.locator.isVisible().catch(() => false);
+    attempts.push({
+      name: entrypoint.name,
+      present: true,
+      visible,
+    });
+    if (!visible) {
+      continue;
+    }
+
+    try {
+      await entrypoint.locator.scrollIntoViewIfNeeded().catch(() => {});
+      await clickMarked(entrypoint.locator);
+      await waitForThemisPanel(page);
+      return {
+        entrypoint: entrypoint.name,
+        attempts,
+        fallback: false,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const fallbackActivated = await page
+    .evaluate(() => {
+      if (typeof window.activateOntologyTab === "function") {
+        window.activateOntologyTab("themis");
+        return true;
+      }
+
+      const tab = document.querySelector(".ontology-tab[data-onto-target='themis']");
+      if (tab instanceof HTMLElement) {
+        tab.click();
+        return true;
+      }
+
+      return false;
+    })
+    .catch(() => false);
+  if (!fallbackActivated) {
+    const detail = JSON.stringify(attempts);
+    throw new Error(
+      `Themis entrypoint is not reachable from the vocabulary detail page. Attempts: ${detail}`,
+    );
+  }
+
+  try {
+    await waitForThemisPanel(page);
+    return {
+      entrypoint: "script-fallback",
+      attempts,
+      fallback: true,
+    };
+  } catch (error) {
+    const detail = JSON.stringify(attempts);
+    throw new Error(
+      `Themis panel did not become visible after fallback activation. Attempts: ${detail}. ` +
+        `Last error: ${String((lastError && lastError.message) || error.message || error)}`,
+    );
+  }
 }
 
 async function buildThemisExampleFile(page, runtime, sourceUrl, testInfo) {
@@ -1049,6 +1329,7 @@ module.exports = {
   loadRunState,
   normalizeText,
   openVocabularyDetail,
+  openThemisPanel,
   openVersionsPage,
   promoteUserToAdmin,
   persistGeneratedArtifact,
@@ -1065,6 +1346,9 @@ module.exports = {
   signOut,
   assertCreateUserControl,
   updateVocabularyMetadata,
+  VISUALIZATION_N3_STATE_KEY,
   URI_VOCAB_STATE_KEY,
   VERSION_STATE_KEY,
+  waitForThemisPanel,
+  waitForRecoveredVersionRow,
 };

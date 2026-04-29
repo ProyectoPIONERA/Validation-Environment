@@ -2,8 +2,6 @@
 const { test } = require("../../ui/fixtures");
 const { createTag, deleteTag, editTag, signOut } = require("../support/excel-flows");
 
-test.setTimeout(60000);
-
 function buildTagNames(testInfo) {
   const suffix = `${Date.now().toString(36)}-${String(testInfo.parallelIndex || 0)}`.slice(-10);
   const safeSuffix = suffix.replace(/[^a-z0-9-]/g, "");

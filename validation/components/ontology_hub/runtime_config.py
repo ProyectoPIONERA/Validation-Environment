@@ -11,6 +11,11 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEPLOYER_CONFIG_PATH = PROJECT_ROOT / "deployers" / "inesdata" / "deployer.config"
 CHART_DIR = PROJECT_ROOT / "deployers" / "shared" / "components" / "ontology-hub"
+DEFAULT_UI_EXPECT_TIMEOUT_MS = 15000
+DEFAULT_UI_ACTION_TIMEOUT_MS = 15000
+DEFAULT_UI_NAVIGATION_TIMEOUT_MS = 30000
+DEFAULT_UI_READY_TIMEOUT_MS = 30000
+DEFAULT_UI_PREFLIGHT_TIMEOUT_SECONDS = 180
 
 
 def _parse_key_value_file(file_path: Path) -> Dict[str, str]:
@@ -290,16 +295,32 @@ def resolve_ontology_hub_runtime(
         or _chart_validation_value(chart_values, "validation", "ui", "listingSearchTerm")
         or "s4grid",
         "uiWorkers": _env_int(current_env, "ONTOLOGY_HUB_UI_WORKERS", 1),
-        "uiExpectTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS", 15000),
-        "uiActionTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS", 15000),
+        "uiExpectTimeoutMs": _env_int(
+            current_env,
+            "ONTOLOGY_HUB_UI_EXPECT_TIMEOUT_MS",
+            DEFAULT_UI_EXPECT_TIMEOUT_MS,
+        ),
+        "uiActionTimeoutMs": _env_int(
+            current_env,
+            "ONTOLOGY_HUB_UI_ACTION_TIMEOUT_MS",
+            DEFAULT_UI_ACTION_TIMEOUT_MS,
+        ),
         "uiNavigationTimeoutMs": _env_int(
             current_env,
             "ONTOLOGY_HUB_UI_NAVIGATION_TIMEOUT_MS",
-            15000,
+            DEFAULT_UI_NAVIGATION_TIMEOUT_MS,
         ),
-        "uiReadyTimeoutMs": _env_int(current_env, "ONTOLOGY_HUB_UI_READY_TIMEOUT_MS", 15000),
+        "uiReadyTimeoutMs": _env_int(
+            current_env,
+            "ONTOLOGY_HUB_UI_READY_TIMEOUT_MS",
+            DEFAULT_UI_READY_TIMEOUT_MS,
+        ),
         "strictPreflight": _env_bool(current_env, "ONTOLOGY_HUB_UI_STRICT_PREFLIGHT", False),
-        "preflightTimeout": _env_int(current_env, "ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT", 120),
+        "preflightTimeout": _env_int(
+            current_env,
+            "ONTOLOGY_HUB_UI_PREFLIGHT_TIMEOUT",
+            DEFAULT_UI_PREFLIGHT_TIMEOUT_SECONDS,
+        ),
     }
 
     if (

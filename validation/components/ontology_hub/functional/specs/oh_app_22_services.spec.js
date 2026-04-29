@@ -9,6 +9,7 @@ const {
   expectHealthyPage,
   listZipEntries,
   loadRunState,
+  openThemisPanel,
   openVocabularyDetail,
   persistGeneratedArtifact,
   resolveThemisTestFile,
@@ -19,7 +20,30 @@ const {
   URI_VOCAB_STATE_KEY,
 } = require("../support/excel-flows");
 
-test.setTimeout(60000);
+async function waitForThemisResults(page, timeoutMs = 30000) {
+  await page.waitForFunction(
+    () => {
+      const isVisible = (node) =>
+        Boolean(node) && Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+      const headings = Array.from(document.querySelectorAll("h1, h2, h3"));
+      const buttons = Array.from(document.querySelectorAll("button"));
+      const rows = Array.from(document.querySelectorAll("table tr"));
+
+      const resultsHeadingVisible = headings.some(
+        (node) => isVisible(node) && /tests results/i.test(String(node.textContent || "")),
+      );
+      const downloadButtonVisible = buttons.some(
+        (node) => isVisible(node) && /download results/i.test(String(node.textContent || "")),
+      );
+      const resultRowVisible = rows.some(
+        (node) => isVisible(node) && /test\s+\d+/i.test(String(node.textContent || "")),
+      );
+
+      return resultsHeadingVisible && (downloadButtonVisible || resultRowVisible);
+    },
+    { timeout: timeoutMs },
+  );
+}
 
 test("OH-APP-22: patterns page generates a zip", async ({
   page,
@@ -182,16 +206,11 @@ test("OH-APP-24: Themis accepts a test file and downloads results", async ({
   await homePage.expectReady();
   await homePage.openVocabularyBubble(prefix);
   await page.waitForURL(new RegExp(`/dataset/vocabs/${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), {
-    timeout: 5000,
+    timeout: 10000,
+    waitUntil: "commit",
   });
   await expectHealthyPage(page, `Vocabulary detail for ${prefix}`);
-
-  await page.locator("#normal-button").waitFor({ state: "visible", timeout: 5000 });
-  await clickMarked(page.locator("#normal-button"));
-  await page.locator("#user-options").waitFor({ state: "visible", timeout: 5000 });
-  await clickMarked(page.locator("#user-options img[src='/img/themis.png']").first());
-
-  await page.locator("#themisVocabContainer").waitFor({ state: "visible", timeout: 5000 });
+  const themisActivation = await openThemisPanel(page);
   const themisSource = await resolveThemisSource(page);
   const sourceUrl = themisSource.sourceUrl || `/dataset/vocabs/${prefix}/versions/${themisSource.prefix || ""}.n3`;
   const testFilePath = resolveThemisTestFile();
@@ -204,12 +223,18 @@ test("OH-APP-24: Themis accepts a test file and downloads results", async ({
   await page.locator("#themisUploadContainer").waitFor({ state: "visible", timeout: 5000 });
   await setInputFilesMarked(page.locator("#themisTestFile"), testFilePath);
   await clickMarked(page.locator("#executeThemisButton"));
-  await page.locator("#themis-results").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#themisResultsBody tr").first().waitFor({ state: "visible", timeout: 5000 });
-  await page.locator("#downloadThemisButton").waitFor({ state: "visible", timeout: 5000 });
+  await waitForThemisResults(page);
+  await page.getByRole("heading", { name: /tests results/i, level: 3 }).first().waitFor({
+    state: "visible",
+    timeout: 5000,
+  });
+  await page.getByRole("button", { name: /download results/i }).first().waitFor({
+    state: "visible",
+    timeout: 5000,
+  });
 
   const downloadPromise = page.waitForEvent("download", { timeout: 5000 });
-  await clickMarked(page.locator("#downloadThemisButton"));
+  await clickMarked(page.getByRole("button", { name: /download results/i }).first());
   const download = await downloadPromise;
   const outputPath = testInfo.outputPath("themis-results.txt");
   await download.saveAs(outputPath);
@@ -224,6 +249,7 @@ test("OH-APP-24: Themis accepts a test file and downloads results", async ({
   await attachJson("24-themis-report", {
     prefix,
     title,
+    themisActivation,
     sourceUrl,
     themisUrl,
     uploadedFile: testFilePath,

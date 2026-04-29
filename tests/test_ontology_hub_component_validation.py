@@ -106,6 +106,21 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
 
+    def test_evaluate_html_page_response_fails_on_embedded_server_error_page(self):
+        body = "<!doctype html><html><body><h1>500 - Oops! something went wrong - 500</h1></body></html>"
+
+        result = evaluate_html_page_response(
+            200,
+            "text/html; charset=utf-8",
+            body,
+            required_markers=["Patterns"],
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(
+            any("embedded server error page" in item for item in result["assertions"]),
+        )
+
     def test_evaluate_sparql_response_passes_on_boolean_true(self):
         body = json.dumps({"head": {}, "boolean": True})
 

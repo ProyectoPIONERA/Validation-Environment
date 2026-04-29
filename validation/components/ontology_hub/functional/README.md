@@ -49,17 +49,18 @@ La suite `integration/` se conserva intacta para validaciones tecnicas de
 integracion y comprobaciones PT5 historicas del framework, pero ya no es la que
 se lanza automaticamente desde `Level 6`.
 
-Al ejecutarse desde el menu, `Ontology Hub Functional` usa por defecto un
-`hard reset` del runtime antes de lanzar la suite. Esto reinicia
-los deployments del release `<dataspace>-ontology-hub` dentro de
-`components_namespace` (por ejemplo `demo-ontology-hub-mongodb`,
-`demo-ontology-hub-elasticsearch` y `demo-ontology-hub` en `components`), y
-despues espera una comprobacion HTTP basica sobre `/dataset` y `/edition`.
+Al ejecutarse desde el menu, `Ontology Hub Functional` usa por defecto una
+limpieza `soft` de los datos generados por el framework antes de lanzar la
+suite. Esa limpieza intenta borrar usuarios, agentes, vocabularios y tags de
+prueba sin reiniciar pods, y despues exige un preflight HTTP sano sobre
+`/dataset` y `/edition`.
 
-El modo `soft` sigue existiendo como opcion manual para intentos de limpieza
-funcional sin reiniciar pods, pero ya no es el comportamiento por defecto
-porque no ha demostrado ser suficientemente reproducible para la validacion
-de Ontology Hub.
+Si la limpieza selectiva falla o deja la aplicacion en mal estado, el framework
+cae automaticamente a `hard reset`. En ese caso reinicia los deployments del
+release `<dataspace>-ontology-hub` dentro de `components_namespace`
+(por ejemplo `demo-ontology-hub-mongodb`,
+`demo-ontology-hub-elasticsearch` y `demo-ontology-hub` en `components`) y
+repite la comprobacion HTTP antes de continuar.
 
 Si hace falta cambiar el comportamiento, se puede forzar con:
 - `ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=soft`: intenta limpiar usuarios, agentes, vocabularios y tags sin reiniciar pods.
@@ -89,7 +90,8 @@ PWDEBUG=1 npx playwright test --config ../components/ontology_hub/functional/pla
 - El despliegue permite llegar a las rutas publicas y de edicion.
 - La limpieza por defecto asume que los datos generados por la suite se pueden
   identificar por sus nombres y borrarse a traves de la propia UI de edicion.
-- El modo `hard` sigue disponible si el estado del entorno queda inconsistente.
+- El modo `hard` sigue disponible como fallback si el estado del entorno queda
+  inconsistente o si el cleanup selectivo no es suficiente.
 - Cuando un flujo depende de FOOPS, Themis o Patterns, un error en esos servicios se considera fallo de la aplicacion o de su integracion, no un skip del test.
 
 ## Variables clave
@@ -114,8 +116,11 @@ PWDEBUG=1 npx playwright test --config ../components/ontology_hub/functional/pla
 ## Normalizaciones Importantes
 - Caso `3` y caso `4`: los pasos manuales `docker ps`, `docker exec`, `cd setup` y `bash lovInitialization.sh` no se consideran parte del test. La app debe completar internamente la publicacion.
 - Caso `15`: los pasos `15` y `23-26` del Excel no se consideran parte del test. Si la activacion del usuario o la propagacion de permisos requieren Atlas/Docker manual, el test falla y eso se atribuye a la app.
-- Caso `24`: la automatizacion sigue el flujo corregido del Excel desde `/dataset`: abre un circulo del grafico, usa el boton de herramientas del panel derecho para lanzar `Themis`, cambia a `User Tests`, sube `test_cases.txt` y descarga el resultado. El fichero se puede indicar con `ONTOLOGY_HUB_THEMIS_TEST_FILE` o dejarlo en `validation/components/ontology_hub/functional/fixtures/themis/test_cases.txt`.
+- Caso `24`: la automatizacion sigue el flujo corregido del Excel desde `/dataset`: abre un circulo del grafico, intenta lanzar `Themis` desde el panel derecho visible y, si ese acceso queda oculto, cae al tab `Themis` sin cambiar el resto del flujo. Luego cambia a `User Tests`, sube `test_cases.txt` y descarga el resultado. El fichero se puede indicar con `ONTOLOGY_HUB_THEMIS_TEST_FILE` o dejarlo en `validation/components/ontology_hub/functional/fixtures/themis/test_cases.txt`.
+- Casos `12` a `14`: si Ontology Hub devuelve un `502/503` transitorio tras editar o borrar versiones, la automatizacion espera la recuperacion del area `edition`, verifica el estado final de la version y solo entonces continua con los siguientes casos. Si la recuperacion no llega o el estado final no coincide, el test sigue fallando.
 
 ## Pendientes Reales
 - La suite ya modela los 27 casos del Excel, pero no se han verificado en bloque todos los caminos destructivos sobre este despliegue concreto.
 - Algunos casos pueden fallar por comportamiento real de la aplicacion o por diferencias del entorno de demo respecto al Excel historico. Esa trazabilidad queda reflejada en `docs/11_ontology_hub_validation.md`.
+- Tras `OH-APP-16`, la vista `/edition/users` puede quedar rota con una pagina `500 - Oops! something went wrong - 500`. Cuando pasa, `OH-APP-17` no puede promover al usuario a admin porque la propia pantalla de usuarios deja de ser operativa.
+- `OH-APP-08` y `OH-APP-09` pueden seguir fallando aunque el vocabulario mantenga `tags = Services` e idiomas `en/es` en la vista de edicion. En el despliegue actual, el catalogo publico sigue publicando las facetas `Tag` y `Language` como `N/A`, por lo que la incidencia apunta al indexado o a la agregacion del catalogo, no al selector del test.

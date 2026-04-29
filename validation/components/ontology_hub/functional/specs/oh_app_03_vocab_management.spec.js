@@ -17,8 +17,6 @@ const {
   VERSION_STATE_KEY,
 } = require("../support/excel-flows");
 
-test.setTimeout(120000);
-
 async function expectVocabularyVisibleInCatalog(page, runtime, created) {
   const catalogPage = new OntologyHubVocabCatalogPage(page);
   const query = created.catalogLabel || created.title || created.prefix;
@@ -47,6 +45,7 @@ test("OH-APP-03: register ontology by URI", async ({
     title: runtime.creationTitle,
     description: runtime.creationDescription,
   });
+  await runIndexAllFromEdition(page, runtime);
   await captureStep(page, "03-uri-detail");
 
   await expectVocabularyVisibleInCatalog(page, runtime, created);
@@ -75,6 +74,7 @@ test("OH-APP-04: register ontology from repository", async ({
   };
   await runIndexAllFromEdition(page, runtime);
   await reopenVocabularyEditionAndSave(page, runtime, created.prefix);
+  await runIndexAllFromEdition(page, runtime);
   await captureStep(page, "04-repository-detail");
 
   await expectVocabularyVisibleInCatalog(page, runtime, created);

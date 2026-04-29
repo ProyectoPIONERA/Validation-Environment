@@ -18,8 +18,6 @@ const {
   signOut,
 } = require("../support/excel-flows");
 
-test.setTimeout(120000);
-
 const AGENT_USER_STATE_KEY = "oh-app-15-agent-user";
 
 function buildIdentity() {

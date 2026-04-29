@@ -92,8 +92,9 @@ class OntologyHubComponentUIValidationTests(unittest.TestCase):
         self.assertEqual(runtime["creationSecondaryLanguage"], "es")
         self.assertEqual(runtime["uiExpectTimeoutMs"], 15000)
         self.assertEqual(runtime["uiActionTimeoutMs"], 15000)
-        self.assertEqual(runtime["uiNavigationTimeoutMs"], 15000)
-        self.assertEqual(runtime["uiReadyTimeoutMs"], 15000)
+        self.assertEqual(runtime["uiNavigationTimeoutMs"], 30000)
+        self.assertEqual(runtime["uiReadyTimeoutMs"], 30000)
+        self.assertEqual(runtime["preflightTimeout"], 180)
 
     def test_resolve_ontology_hub_runtime_reads_admin_credentials_from_secret_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:

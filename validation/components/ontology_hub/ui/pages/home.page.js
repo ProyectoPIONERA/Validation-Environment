@@ -3,6 +3,12 @@ const { resolveOntologyHubTimeouts } = require("../runtime");
 
 const { readyTimeoutMs } = resolveOntologyHubTimeouts();
 
+function isPointerInterceptionError(error) {
+  return /intercepts pointer events|element is not receiving pointer events/i.test(
+    String((error && error.message) || error || ""),
+  );
+}
+
 class OntologyHubHomePage {
   constructor(page) {
     this.page = page;
@@ -33,11 +39,30 @@ class OntologyHubHomePage {
     const bubble = this.vocabularyBubble(prefix);
     await bubble.waitFor({ state: "visible", timeout: readyTimeoutMs });
     const circle = bubble.locator("circle").first();
+    const clickAttempts = [];
+
     if ((await circle.count()) > 0) {
-      await clickMarked(circle);
-      return;
+      clickAttempts.push(() => clickMarked(circle));
+      clickAttempts.push(() => clickMarked(circle, { force: true }));
     }
-    await clickMarked(bubble);
+
+    clickAttempts.push(() => clickMarked(bubble));
+    clickAttempts.push(() => clickMarked(bubble, { force: true }));
+
+    let lastError = null;
+    for (const attempt of clickAttempts) {
+      try {
+        await attempt();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isPointerInterceptionError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   navLink(label) {

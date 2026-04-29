@@ -15,8 +15,6 @@ const {
   URI_VOCAB_STATE_KEY,
 } = require("../support/excel-flows");
 
-test.setTimeout(30000);
-
 async function applyFacetLink(page, termsPage, groupLabel, valueLabel) {
   const facetLink = termsPage.facetLink(groupLabel, valueLabel);
   if ((await facetLink.count()) === 0) {
