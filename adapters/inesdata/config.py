@@ -374,6 +374,10 @@ class INESDataConfigAdapter:
                 config.get("MINIKUBE_PROFILE"),
                 getattr(self.config, "MINIKUBE_PROFILE", "minikube"),
             ),
+            "local_resource_profile": self._normalized_string(
+                config.get("LOCAL_RESOURCE_PROFILE"),
+                "",
+            ),
         }
 
     @staticmethod

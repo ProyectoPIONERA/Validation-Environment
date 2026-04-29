@@ -244,6 +244,7 @@ PG_HOST=localhost
 VT_URL=http://localhost:8200
 LOCAL_HOSTS_ADDRESS=
 LOCAL_INGRESS_EXTERNAL_IP=
+LOCAL_RESOURCE_PROFILE=single-adapter
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=10
 MINIKUBE_MEMORY=14336
@@ -257,7 +258,21 @@ Regla práctica:
 - no configures `MINIKUBE_MEMORY` por encima de la memoria disponible en Docker
   Desktop;
 - para mantener `inesdata` y `edc` coexistiendo en local, usa el baseline
-  documentado de `10 CPU / 18432 MB` si Docker Desktop tiene margen suficiente;
+  documentado de `10 CPU / 18432 MB` y
+  `LOCAL_RESOURCE_PROFILE=coexistence` si Docker Desktop tiene margen
+  suficiente;
+- si Docker Desktop no alcanza ese baseline, `Level 1` avisa que el entorno
+  queda en modo de un adapter local y `Level 3/4/5` bloquean la instalación del
+  segundo adapter mientras el primero siga activo; si la ejecución es
+  interactiva, el framework muestra un plan de cambio y puede eliminar, tras
+  confirmación exacta, solo los recursos locales del adapter anterior;
+- en ejecución no interactiva, el cambio de adapter debe autorizarse de forma
+  explícita con `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM="SWITCH TO EDC"` o
+  `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM="SWITCH TO INESDATA"`, según el adapter
+  destino;
+- si `Level 6` detecta ambos adapters en local con memoria efectiva inferior a
+  ese baseline, bloquea la validación antes de contaminar resultados con
+  `NodeNotReady`;
 - errores como `401`, `500` o crashes internos de una aplicación siguen
   apuntando primero a bugs funcionales o de integración, no a falta de CPU.
 

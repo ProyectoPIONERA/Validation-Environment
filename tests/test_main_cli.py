@@ -304,6 +304,55 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Local stability: Warning", output)
         self.assertIn("Local stability warnings: 1", output)
 
+    def test_action_result_prints_local_capacity_summary(self):
+        payload = {
+            "status": "completed",
+            "adapter": "edc",
+            "topology": "local",
+            "local_capacity": {
+                "preflight": {
+                    "status": "failed",
+                    "coexistence_detected": True,
+                    "effective_memory_mb": 14336,
+                    "required_memory_mb": 18432,
+                }
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Local coexistence capacity: Failed", output)
+        self.assertIn("Local coexistence memory: 14336/18432 MiB", output)
+
+    def test_action_result_prints_local_adapter_switch_summary(self):
+        payload = {
+            "status": "completed",
+            "adapter": "edc",
+            "topology": "local",
+            "local_capacity": {
+                "install_preflight": {
+                    "status": "passed",
+                    "coexistence_detected": False,
+                    "switch": {
+                        "status": "completed",
+                        "adapters_to_remove": ["inesdata"],
+                        "deleted_namespaces": ["demo", "components"],
+                    },
+                }
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Local adapter switch: removed inesdata", output)
+        self.assertIn("Local adapter switch namespaces: demo, components", output)
+
     def test_action_result_prints_shared_foundation_scope_without_adapter_label(self):
         payload = {
             "status": "completed",
@@ -1498,7 +1547,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("A - Use when AI Model Hub UI changed", stdout.getvalue())
         self.assertIn("shortcuts are available directly", stdout.getvalue())
 
-    def test_menu_level3_adapter_prompt_can_print_hosts_hint_for_edc(self):
+    def test_menu_level3_adapter_prompt_does_not_print_generic_hosts_hint(self):
         registry = {
             "edc": "fake_adapter_module:FakeAdapter",
             "inesdata": "fake_adapter_module:FakeAdapter",
@@ -1529,7 +1578,7 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["adapter"], "edc")
         self.assertIn("EDC adapter selected", stdout.getvalue())
-        self.assertIn("use H to plan/apply host entries", stdout.getvalue())
+        self.assertNotIn("use H to plan/apply host entries", stdout.getvalue())
 
     def test_menu_with_multiple_adapters_defers_selection_until_level3(self):
         registry = {
@@ -1926,7 +1975,7 @@ class MainCliTests(unittest.TestCase):
         self.assertNotIn("registration-service-fake-ds.example.local", hosts_content)
         self.assertIn("Level execution cancelled", stdout.getvalue())
 
-    def test_interactive_hosts_preflight_warns_about_legacy_aliases_without_blocking_when_canonical_hosts_exist(self):
+    def test_interactive_hosts_preflight_hides_legacy_aliases_when_canonical_hosts_exist(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
             os.environ,
             {"PIONERA_HOSTS_FILE": hosts_file.name},
@@ -1956,8 +2005,8 @@ class MainCliTests(unittest.TestCase):
 
         self.assertTrue(result)
         rendered = stdout.getvalue()
-        self.assertIn("Legacy hostnames are still present outside framework-managed blocks", rendered)
-        self.assertIn("keycloak.dev.ed.dataspaceunit.upm -> auth.dev.ed.dataspaceunit.upm", rendered)
+        self.assertNotIn("Old hostname aliases were found in your hosts file", rendered)
+        self.assertNotIn("keycloak.dev.ed.dataspaceunit.upm -> auth.dev.ed.dataspaceunit.upm", rendered)
 
     def test_developer_shortcuts_delegate_setup_and_developer_actions(self):
         with mock.patch("builtins.input", side_effect=["B", "L", "Q"]), mock.patch.object(
@@ -3724,6 +3773,261 @@ class MainCliTests(unittest.TestCase):
             )
         )
 
+    def test_level6_local_capacity_preflight_blocks_low_memory_coexistence(self):
+        validation_mode = main._resolve_level6_validation_mode(topology="local")
+        context = types.SimpleNamespace(
+            namespace_roles={"registration_service_namespace": "demoedc"},
+        )
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+        pods_payload = {
+            "items": [
+                {"metadata": {"namespace": "demo"}, "status": {"phase": "Running"}},
+                {"metadata": {"namespace": "demoedc"}, "status": {"phase": "Running"}},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_payload],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Local EDC/INESData coexistence"):
+                main._run_level6_local_capacity_preflight(
+                    validation_mode,
+                    "edc",
+                    context,
+                    tmpdir,
+                    validation_profile=types.SimpleNamespace(adapter="edc"),
+                )
+
+    def test_level6_local_capacity_preflight_can_warn_instead_of_blocking(self):
+        validation_mode = main._resolve_level6_validation_mode(topology="local")
+        context = types.SimpleNamespace(
+            namespace_roles={"registration_service_namespace": "demoedc"},
+        )
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+        pods_payload = {
+            "items": [
+                {"metadata": {"namespace": "demo"}, "status": {"phase": "Running"}},
+                {"metadata": {"namespace": "demoedc"}, "status": {"phase": "Running"}},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(
+            os.environ,
+            {"PIONERA_LOCAL_COEXISTENCE_GUARD": "warn"},
+            clear=False,
+        ), mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_payload],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ):
+            result = main._run_level6_local_capacity_preflight(
+                validation_mode,
+                "edc",
+                context,
+                tmpdir,
+                validation_profile=types.SimpleNamespace(adapter="edc"),
+            )
+            self.assertTrue(os.path.isfile(result["artifact"]))
+
+        self.assertEqual(result["status"], "warning")
+        self.assertTrue(result["coexistence_detected"])
+
+    def test_local_adapter_install_capacity_preflight_blocks_second_adapter(self):
+        pods_payload = {
+            "items": [
+                {"metadata": {"namespace": "demo"}, "status": {"phase": "Running"}},
+            ]
+        }
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+
+        with mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_payload],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "only supports one adapter at a time"):
+                main._run_local_adapter_install_capacity_preflight(
+                    "edc",
+                    "local",
+                    3,
+                )
+
+    def test_local_adapter_switch_plan_removes_old_adapter_and_components_for_edc(self):
+        payload = {
+            "workloads": {
+                "active_adapters": ["inesdata"],
+                "active_component_namespaces": ["components"],
+                "adapter_namespaces": {"inesdata": "demo", "edc": "demoedc"},
+            }
+        }
+
+        plan = main._build_local_adapter_switch_plan(payload, "edc")
+
+        self.assertEqual(plan["target_adapter"], "edc")
+        self.assertEqual(plan["adapters_to_remove"], ["inesdata"])
+        self.assertEqual(plan["namespaces_to_delete"], ["demo", "components"])
+        self.assertEqual(plan["confirmation_token"], "SWITCH TO EDC")
+        self.assertEqual(plan["preserved_namespaces"], ["common-srvs"])
+
+    def test_local_adapter_install_capacity_preflight_switches_when_explicitly_confirmed(self):
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+        pods_before = {
+            "items": [
+                {"metadata": {"namespace": "demo"}, "status": {"phase": "Running"}},
+            ]
+        }
+        pods_after = {
+            "items": [
+                {"metadata": {"namespace": "demoedc"}, "status": {"phase": "Running"}},
+            ]
+        }
+        switch_result = {
+            "status": "completed",
+            "target_adapter": "edc",
+            "adapters_to_remove": ["inesdata"],
+            "deleted_namespaces": ["demo", "components"],
+        }
+
+        with mock.patch.dict(
+            os.environ,
+            {"PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM": "SWITCH TO EDC"},
+            clear=False,
+        ), mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_before, nodes_payload, pods_after],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ), mock.patch.object(
+            main,
+            "_execute_local_adapter_switch_plan",
+            return_value=switch_result,
+        ) as switch_mock:
+            result = main._run_local_adapter_install_capacity_preflight(
+                "edc",
+                "local",
+                3,
+            )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["switch"], switch_result)
+        self.assertFalse(result["coexistence_detected"])
+        switch_mock.assert_called_once()
+
+    def test_local_adapter_install_capacity_preflight_allows_first_adapter(self):
+        pods_payload = {
+            "items": [
+                {"metadata": {"namespace": "common-srvs"}, "status": {"phase": "Running"}},
+            ]
+        }
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+
+        with mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_payload],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ):
+            result = main._run_local_adapter_install_capacity_preflight(
+                "edc",
+                "local",
+                3,
+            )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertFalse(result["coexistence_detected"])
+
+    def test_local_adapter_install_capacity_preflight_blocks_edc_when_components_remain(self):
+        pods_payload = {
+            "items": [
+                {"metadata": {"namespace": "components"}, "status": {"phase": "Running"}},
+            ]
+        }
+        nodes_payload = {
+            "items": [
+                {"status": {"allocatable": {"memory": "15996068Ki"}}},
+            ]
+        }
+
+        with mock.patch.object(
+            main,
+            "_run_json_command",
+            side_effect=[nodes_payload, pods_payload],
+        ), mock.patch.object(
+            main,
+            "_docker_memory_total_mb",
+            return_value=15621,
+        ), mock.patch.object(
+            main,
+            "load_layered_deployer_config",
+            return_value={"MINIKUBE_MEMORY": "14336"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "only supports one adapter at a time"):
+                main._run_local_adapter_install_capacity_preflight(
+                    "edc",
+                    "local",
+                    3,
+                )
+
     def test_run_validate_records_local_stability_for_local_stable_real_deployer(self):
         class InesdataValidationDeployer(FakeDeployer):
             def get_validation_profile(self, context):
@@ -3745,6 +4049,10 @@ class MainCliTests(unittest.TestCase):
             return_value=mock.Mock(collect_experiment_newman_metrics=lambda experiment_dir: []),
         ), mock.patch.object(
             main,
+            "_run_level6_local_capacity_preflight",
+            return_value={"status": "passed"},
+        ) as capacity_mock, mock.patch.object(
+            main,
             "_run_level6_local_stability_preflight",
             return_value=preflight,
         ) as preflight_mock, mock.patch.object(
@@ -3764,8 +4072,10 @@ class MainCliTests(unittest.TestCase):
                 topology="local",
             )
 
+        capacity_mock.assert_called_once()
         preflight_mock.assert_called_once()
         postflight_mock.assert_called_once()
+        self.assertIs(result["local_capacity"]["preflight"], capacity_mock.return_value)
         self.assertIs(result["local_stability"]["preflight"], preflight)
         self.assertIs(result["local_stability"]["postflight"], postflight)
 

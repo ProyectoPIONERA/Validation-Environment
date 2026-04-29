@@ -54,6 +54,28 @@ La suite `integration/` conserva pruebas tecnicas y casos PT5 normalizados. Es
 util para comprobar endpoints, estado interno y compatibilidad tecnica del
 componente.
 
+## Estado Funcional Reproducido
+
+La ejecucion local validada el `2026-04-29` reproduce `21` casos funcionales
+correctos y `6` fallos de `Ontology Hub`. Estos fallos no se tratan como
+inestabilidad del framework: Newman, Playwright core y la validacion EDC+Kafka
+pueden completar correctamente mientras la validacion del componente queda en
+warning por errores propios de la aplicacion.
+
+| Caso | Sintoma observado | Lectura tecnica |
+| --- | --- | --- |
+| `OH-APP-08` | El facet `Tag` muestra `N/A (2)` aunque la metadata del vocabulario contiene `Services`. | Posible problema de indexacion o normalizacion de facets del catalogo. |
+| `OH-APP-09` | El facet `Language` muestra `N/A (2)` aunque la metadata del vocabulario contiene `en` y `es`. | Posible problema de indexacion o normalizacion de idioma en el catalogo. |
+| `OH-APP-12` | La edicion de una version devuelve `502 Bad Gateway`. | Error server-side durante el flujo de edicion de version. |
+| `OH-APP-13` | La zona de edicion queda temporalmente no disponible al borrar una version. | Puede ser efecto cascada del fallo previo de edicion. |
+| `OH-APP-17` | La pagina de administracion de usuarios devuelve `500`. | Error server-side que bloquea la promocion de usuario a admin. |
+| `OH-APP-22` | La pagina de patrones devuelve `500`. | Error server-side que bloquea la generacion del zip. |
+
+`Level 6` puede terminar como `Succeeded` porque el nivel se ejecuto de forma
+controlada y genero los artefactos esperados. Eso no significa que todos los
+casos funcionales del componente hayan pasado; el detalle vive en
+`experiments/.../components/ontology-hub/functional/`.
+
 ## Trazabilidad PT5
 
 La trazabilidad se lee en tres capas:

@@ -51,11 +51,25 @@ PG_HOST=localhost
 VT_URL=http://localhost:8200
 LOCAL_HOSTS_ADDRESS=
 LOCAL_INGRESS_EXTERNAL_IP=
+LOCAL_RESOURCE_PROFILE=single-adapter
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=10
 MINIKUBE_MEMORY=14336
 MINIKUBE_PROFILE=minikube
 ```
+
+Para coexistencia local limpia de `inesdata` y `edc`, cambia el perfil a
+`LOCAL_RESOURCE_PROFILE=coexistence`, sube `MINIKUBE_MEMORY` a `18432` y recrea
+el cluster desde `Level 1`. Si Docker Desktop no puede asignar esa memoria,
+mantén la ejecución local en un adapter cada vez o usa `vm-single`. En ese caso,
+el framework avisará en `Level 1` y bloqueará `Level 3/4/5` cuando detecte que
+se intenta instalar un segundo adapter sobre una capacidad local insuficiente.
+Si el usuario confirma el cambio en una terminal interactiva, el framework puede
+eliminar solo el adapter local anterior: borra sus namespaces gestionados y sus
+artefactos runtime bajo `deployers/<adapter>/deployments`, preservando
+`common-srvs`. En ejecución no interactiva, la limpieza requiere
+`PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM` con el valor exacto que muestra el
+framework, por ejemplo `SWITCH TO EDC`.
 
 ## Namespaces Locales
 

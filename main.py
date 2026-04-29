@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import urllib.parse
 
 from runtime_dependencies import ensure_runtime_dependencies
@@ -35,6 +36,13 @@ from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
 from framework.kafka_edc_validation import KafkaEdcValidationSuite
 from framework.kafka_manager import KafkaManager
+from framework.local_capacity import (
+    LOCAL_COEXISTENCE_MEMORY_MB,
+    evaluate_local_coexistence_capacity,
+    node_capacity_memory_mb,
+    parse_memory_quantity_mb,
+    summarize_local_workloads,
+)
 from framework.local_stability import LocalStabilityMonitor, compare_local_stability
 from framework.metrics_collector import MetricsCollector
 from framework.reporting.experiment_loader import ExperimentLoader
@@ -215,6 +223,498 @@ def _print_level6_local_stability(label, payload):
         print(f"Local stability {label}: warning ({len(warnings)} warning(s)).")
     elif status == "failed":
         print(f"Local stability {label}: failed ({len(blocking)} blocking issue(s)).")
+
+
+def _run_json_command(command):
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+
+
+def _docker_memory_total_mb():
+    try:
+        result = subprocess.run(
+            ["docker", "info", "--format", "{{.MemTotal}}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return parse_memory_quantity_mb((result.stdout or "").strip())
+
+
+def _adapter_default_namespace(adapter_name):
+    defaults = {"inesdata": "demo", "edc": "demoedc"}
+    return defaults.get(str(adapter_name or "").strip().lower(), "")
+
+
+def _adapter_config_namespace(adapter_name):
+    normalized = str(adapter_name or "").strip().lower()
+    if not normalized:
+        return ""
+    root_dir = os.path.dirname(__file__)
+    config = {}
+    for filename in ("deployer.config.example", "deployer.config"):
+        config_path = os.path.join(root_dir, "deployers", normalized, filename)
+        config.update(load_raw_deployer_config(config_path))
+    return (
+        str(
+            config.get("DS_1_NAMESPACE")
+            or config.get("NAMESPACE")
+            or config.get("DS_1_NAME")
+            or config.get("DS_NAME")
+            or _adapter_default_namespace(normalized)
+        ).strip()
+    )
+
+
+def _local_capacity_guard_mode(env=None):
+    env = env if env is not None else os.environ
+    return str(env.get("PIONERA_LOCAL_COEXISTENCE_GUARD") or "fail").strip().lower() or "fail"
+
+
+def _level6_local_capacity_failure_message(payload):
+    issues = list(payload.get("blocking_issues") or []) if isinstance(payload, dict) else []
+    details = []
+    for issue in issues[:5]:
+        detail = str(issue.get("detail") or issue.get("name") or "insufficient local capacity").strip()
+        details.append(detail)
+    suffix = f" Details: {'; '.join(details)}" if details else ""
+    recommendations = list(payload.get("recommendations") or []) if isinstance(payload, dict) else []
+    recommendation_suffix = f" Recommended action: {recommendations[0]}" if recommendations else ""
+    artifact = payload.get("artifact") if isinstance(payload, dict) else None
+    artifact_suffix = f" Artifact: {artifact}" if artifact else ""
+    return (
+        "Local EDC/INESData coexistence is not clean enough to run Level 6 safely."
+        f"{suffix}{recommendation_suffix}{artifact_suffix}"
+    )
+
+
+def _print_level6_local_capacity(payload):
+    if not isinstance(payload, dict):
+        return
+    status = str(payload.get("status") or "").strip().lower()
+    if not status or status == "skipped":
+        return
+    if status == "passed":
+        print("Local coexistence capacity preflight: ready.")
+    elif status == "warning":
+        print("Local coexistence capacity preflight: warning.")
+    elif status == "failed":
+        print("Local coexistence capacity preflight: failed.")
+
+
+def _local_capacity_probe(adapter_namespaces):
+    nodes_payload = _run_json_command(["kubectl", "get", "nodes", "-o", "json"])
+    pods_payload = _run_json_command(["kubectl", "get", "pods", "-A", "-o", "json"])
+    node_memory_mb = node_capacity_memory_mb(nodes_payload)
+    docker_memory_mb = _docker_memory_total_mb()
+    configured_memory_mb = None
+    try:
+        infrastructure_config = load_layered_deployer_config(
+            [_infrastructure_deployer_config_path()],
+            topology=LOCAL_TOPOLOGY,
+        )
+        configured_memory_mb = parse_memory_quantity_mb(infrastructure_config.get("MINIKUBE_MEMORY"))
+    except Exception:
+        configured_memory_mb = None
+
+    summary = summarize_local_workloads(
+        pods_payload,
+        adapter_namespaces=adapter_namespaces,
+        component_namespaces=["components"],
+    )
+    return summary, node_memory_mb, docker_memory_mb, configured_memory_mb
+
+
+def _local_capacity_adapter_namespaces(deployer_name=None, deployer_context=None):
+    adapter_namespaces = {
+        "inesdata": _adapter_config_namespace("inesdata"),
+        "edc": _adapter_config_namespace("edc"),
+    }
+    current_roles = _context_namespace_roles_dict(deployer_context)
+    current_namespace = str(current_roles.get("registration_service_namespace") or "").strip()
+    current_adapter = str(deployer_name or "").strip().lower()
+    if current_adapter in adapter_namespaces and current_namespace:
+        adapter_namespaces[current_adapter] = current_namespace
+    return adapter_namespaces
+
+
+def _local_adapter_switch_confirmation_token(target_adapter):
+    normalized = str(target_adapter or "").strip().upper()
+    return f"SWITCH TO {normalized}" if normalized else "SWITCH LOCAL ADAPTER"
+
+
+def _unique_non_empty(values):
+    unique = []
+    for value in values or []:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in unique:
+            unique.append(normalized)
+    return unique
+
+
+def _local_switch_protected_namespaces():
+    return {
+        "default",
+        "kube-system",
+        "kube-public",
+        "kube-node-lease",
+        "common-srvs",
+        "ingress-nginx",
+    }
+
+
+def _local_adapter_runtime_cleanup_entries(adapters_to_remove):
+    root_dir = os.path.dirname(__file__)
+    entries = []
+    for adapter_name in _unique_non_empty(adapters_to_remove):
+        normalized = adapter_name.lower()
+        if normalized not in {"inesdata", "edc"}:
+            continue
+        config = {}
+        for filename in ("deployer.config.example", "deployer.config"):
+            config_path = os.path.join(root_dir, "deployers", normalized, filename)
+            config.update(load_raw_deployer_config(config_path))
+
+        environment = str(config.get("ENVIRONMENT") or "DEV").strip().upper() or "DEV"
+        dataspace = str(
+            config.get("DS_1_NAME")
+            or config.get("DS_NAME")
+            or _adapter_default_namespace(normalized)
+        ).strip()
+        if not dataspace:
+            continue
+
+        deployments_root = os.path.abspath(os.path.join(root_dir, "deployers", normalized, "deployments"))
+        runtime_dir = os.path.abspath(os.path.join(deployments_root, environment, dataspace))
+        if runtime_dir == deployments_root or not runtime_dir.startswith(deployments_root + os.sep):
+            continue
+        entries.append(
+            {
+                "adapter": normalized,
+                "path": runtime_dir,
+                "managed_root": deployments_root,
+            }
+        )
+    return entries
+
+
+def _build_local_adapter_switch_plan(payload, target_adapter):
+    workloads = payload.get("workloads", {}) if isinstance(payload, dict) else {}
+    target = str(target_adapter or "").strip().lower()
+    active_adapters = set(workloads.get("active_adapters") or [])
+    adapter_namespaces = dict(workloads.get("adapter_namespaces") or {})
+    active_component_namespaces = _unique_non_empty(workloads.get("active_component_namespaces") or [])
+
+    adapters_to_remove = set(active_adapters - {target})
+    if target == "edc" and active_component_namespaces:
+        adapters_to_remove.add("inesdata")
+    adapters_to_remove = sorted(adapter for adapter in adapters_to_remove if adapter in {"inesdata", "edc"})
+
+    namespace_actions = []
+    for adapter_name in adapters_to_remove:
+        namespace = str(adapter_namespaces.get(adapter_name) or _adapter_config_namespace(adapter_name) or "").strip()
+        if namespace:
+            namespace_actions.append(
+                {
+                    "namespace": namespace,
+                    "reason": f"{adapter_name}-adapter",
+                    "adapter": adapter_name,
+                    "allow_components_namespace": False,
+                }
+            )
+
+    if "inesdata" in adapters_to_remove or target == "edc":
+        for namespace in active_component_namespaces:
+            namespace_actions.append(
+                {
+                    "namespace": namespace,
+                    "reason": "components",
+                    "adapter": "inesdata",
+                    "allow_components_namespace": True,
+                }
+            )
+
+    deduped_actions = []
+    seen_namespaces = set()
+    blocked_namespaces = []
+    protected = _local_switch_protected_namespaces()
+    for action in namespace_actions:
+        namespace = str(action.get("namespace") or "").strip()
+        if not namespace or namespace in seen_namespaces:
+            continue
+        seen_namespaces.add(namespace)
+        is_components_namespace = namespace == "components"
+        if namespace in protected or (is_components_namespace and not action.get("allow_components_namespace")):
+            blocked_namespaces.append(namespace)
+            continue
+        deduped_actions.append({**action, "namespace": namespace})
+
+    return {
+        "status": "planned",
+        "target_adapter": target,
+        "confirmation_token": _local_adapter_switch_confirmation_token(target),
+        "adapters_to_remove": adapters_to_remove,
+        "namespace_actions": deduped_actions,
+        "namespaces_to_delete": [action["namespace"] for action in deduped_actions],
+        "blocked_namespaces": sorted(blocked_namespaces),
+        "runtime_dirs": _local_adapter_runtime_cleanup_entries(adapters_to_remove),
+        "preserved_namespaces": ["common-srvs"],
+    }
+
+
+def _print_local_adapter_switch_plan(plan):
+    print()
+    print("LOCAL ADAPTER SWITCH REQUIRED")
+    print(f"Target adapter: {plan.get('target_adapter')}")
+    adapters = ", ".join(plan.get("adapters_to_remove") or []) or "none"
+    namespaces = ", ".join(plan.get("namespaces_to_delete") or []) or "none"
+    print(f"Adapters to remove: {adapters}")
+    print(f"Namespaces to delete: {namespaces}")
+    print("Preserved namespaces: common-srvs")
+    runtime_dirs = [entry.get("path") for entry in plan.get("runtime_dirs") or [] if entry.get("path")]
+    if runtime_dirs:
+        print("Managed runtime directories to remove:")
+        for runtime_dir in runtime_dirs:
+            print(f"- {runtime_dir}")
+
+
+def _local_adapter_switch_approved(plan, env=None):
+    env = env if env is not None else os.environ
+    mode = str(env.get("PIONERA_LOCAL_ADAPTER_SWITCH") or "prompt").strip().lower()
+    if mode in {"0", "false", "no", "off", "disabled"}:
+        return False
+
+    token = str(plan.get("confirmation_token") or "").strip()
+    provided = str(env.get("PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM") or "").strip()
+    if token and provided == token:
+        return True
+
+    if not bool(getattr(sys.stdin, "isatty", lambda: False)()):
+        return False
+
+    _print_local_adapter_switch_plan(plan)
+    print()
+    print("This will remove the previous local adapter installation.")
+    print("(common services are not removed)")
+    answer = _interactive_read(f"Type {token} to continue: ")
+    return bool(token and answer == token)
+
+
+def _run_switch_command(args):
+    try:
+        return subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        return types.SimpleNamespace(returncode=127, stdout="", stderr=str(exc))
+
+
+def _wait_for_local_switch_namespace_deleted(namespace, timeout=120, poll_interval=3):
+    deadline = time.time() + timeout
+    while time.time() <= deadline:
+        result = _run_switch_command(["kubectl", "get", "namespace", namespace])
+        if result.returncode != 0:
+            return True
+        time.sleep(poll_interval)
+    return False
+
+
+def _safe_remove_local_switch_runtime_dir(entry):
+    runtime_dir = os.path.abspath(str(entry.get("path") or ""))
+    managed_root = os.path.abspath(str(entry.get("managed_root") or ""))
+    if not runtime_dir or not managed_root:
+        return {"status": "skipped", "reason": "missing-path", "path": runtime_dir}
+    if runtime_dir == managed_root or not runtime_dir.startswith(managed_root + os.sep):
+        return {"status": "skipped", "reason": "outside-managed-root", "path": runtime_dir}
+    if not os.path.exists(runtime_dir):
+        return {"status": "skipped", "reason": "not-found", "path": runtime_dir}
+    shutil.rmtree(runtime_dir)
+    return {"status": "removed", "path": runtime_dir}
+
+
+def _execute_local_adapter_switch_plan(plan):
+    if not plan.get("namespace_actions") and not plan.get("runtime_dirs"):
+        return {**plan, "status": "skipped", "reason": "no-managed-resources"}
+    if plan.get("blocked_namespaces"):
+        blocked = ", ".join(plan.get("blocked_namespaces") or [])
+        raise RuntimeError(f"Local adapter switch refused protected namespaces: {blocked}")
+
+    print()
+    print("Switching local adapter resources...")
+    namespace_results = []
+    for action in plan.get("namespace_actions") or []:
+        namespace = action["namespace"]
+        print(f"- Deleting namespace {namespace}")
+        result = _run_switch_command(
+            ["kubectl", "delete", "namespace", namespace, "--ignore-not-found=true"]
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip() or f"kubectl exited with {result.returncode}"
+            raise RuntimeError(f"Could not delete namespace '{namespace}'. Root cause: {detail}")
+        if not _wait_for_local_switch_namespace_deleted(namespace):
+            raise RuntimeError(f"Timed out waiting for namespace '{namespace}' to be deleted")
+        namespace_results.append({"namespace": namespace, "status": "deleted", "reason": action.get("reason")})
+
+    runtime_results = []
+    for entry in plan.get("runtime_dirs") or []:
+        result = _safe_remove_local_switch_runtime_dir(entry)
+        runtime_results.append(result)
+        if result.get("status") == "removed":
+            print(f"- Removed runtime artifacts {result['path']}")
+
+    return {
+        **plan,
+        "status": "completed",
+        "deleted_namespaces": [result["namespace"] for result in namespace_results],
+        "namespace_results": namespace_results,
+        "runtime_results": runtime_results,
+    }
+
+
+def _try_local_adapter_switch(payload, target_adapter):
+    plan = _build_local_adapter_switch_plan(payload, target_adapter)
+    if not plan.get("namespace_actions") and not plan.get("runtime_dirs"):
+        return {**plan, "status": "skipped", "reason": "no-switch-plan"}
+    if not _local_adapter_switch_approved(plan):
+        return {**plan, "status": "declined"}
+    return _execute_local_adapter_switch_plan(plan)
+
+
+def _local_capacity_install_failure_message(payload, deployer_name, level_id):
+    issues = list(payload.get("blocking_issues") or []) if isinstance(payload, dict) else []
+    details = []
+    for issue in issues[:5]:
+        detail = str(issue.get("detail") or issue.get("name") or "insufficient local capacity").strip()
+        details.append(detail)
+    suffix = f" Details: {'; '.join(details)}" if details else ""
+    workloads = payload.get("workloads", {}) if isinstance(payload, dict) else {}
+    active = ", ".join(workloads.get("active_adapters") or [])
+    components = ", ".join(workloads.get("active_component_namespaces") or [])
+    active_suffix = f" Active adapters detected: {active}." if active else ""
+    component_suffix = f" Active component namespaces detected: {components}." if components else ""
+    token = _local_adapter_switch_confirmation_token(deployer_name)
+    return (
+        f"Cannot continue Level {level_id} for adapter '{deployer_name}' because local capacity "
+        f"only supports one adapter at a time.{active_suffix}{component_suffix}{suffix} "
+        "Recreate the local cluster from Level 1 before switching adapters, or increase Docker "
+        f"Desktop memory and set LOCAL_RESOURCE_PROFILE=coexistence with MINIKUBE_MEMORY={LOCAL_COEXISTENCE_MEMORY_MB}. "
+        f"To let the framework switch adapters, confirm the prompt or set PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM='{token}'."
+    )
+
+
+def _run_local_adapter_install_capacity_preflight(
+    deployer_name,
+    topology,
+    level_id,
+    *,
+    deployer_context=None,
+):
+    normalized_topology = normalize_topology(topology or LOCAL_TOPOLOGY)
+    current_adapter = str(deployer_name or "").strip().lower()
+    if normalized_topology != LOCAL_TOPOLOGY or current_adapter not in {"inesdata", "edc"}:
+        return {"status": "skipped", "reason": "not-local-adapter-install"}
+
+    adapter_namespaces = _local_capacity_adapter_namespaces(
+        deployer_name=current_adapter,
+        deployer_context=deployer_context,
+    )
+    summary, node_memory_mb, docker_memory_mb, configured_memory_mb = _local_capacity_probe(adapter_namespaces)
+    active_adapters = set(summary.get("active_adapters") or [])
+    other_active_adapters = sorted(active_adapters - {current_adapter})
+    component_namespaces_active = bool(summary.get("active_component_namespaces"))
+    will_create_or_extend_coexistence = bool(other_active_adapters) or bool(summary.get("coexistence_detected"))
+    if current_adapter == "edc" and component_namespaces_active:
+        will_create_or_extend_coexistence = True
+    summary["installing_adapter"] = current_adapter
+    summary["other_active_adapters"] = other_active_adapters
+    summary["coexistence_detected"] = bool(will_create_or_extend_coexistence)
+
+    payload = evaluate_local_coexistence_capacity(
+        summary,
+        node_memory_mb=node_memory_mb,
+        docker_memory_mb=docker_memory_mb,
+        configured_minikube_memory_mb=configured_memory_mb,
+        required_memory_mb=LOCAL_COEXISTENCE_MEMORY_MB,
+        guard_mode=_local_capacity_guard_mode(),
+    )
+    if payload.get("status") == "failed":
+        switch_result = _try_local_adapter_switch(payload, current_adapter)
+        if switch_result.get("status") == "completed":
+            summary, node_memory_mb, docker_memory_mb, configured_memory_mb = _local_capacity_probe(adapter_namespaces)
+            summary["installing_adapter"] = current_adapter
+            summary["other_active_adapters"] = sorted(set(summary.get("active_adapters") or []) - {current_adapter})
+            payload = evaluate_local_coexistence_capacity(
+                summary,
+                node_memory_mb=node_memory_mb,
+                docker_memory_mb=docker_memory_mb,
+                configured_minikube_memory_mb=configured_memory_mb,
+                required_memory_mb=LOCAL_COEXISTENCE_MEMORY_MB,
+                guard_mode=_local_capacity_guard_mode(),
+            )
+            payload["switch"] = switch_result
+            if payload.get("status") != "failed":
+                print("Local adapter install capacity preflight: ready after switching local adapter.")
+                return payload
+        print("Local adapter install capacity preflight: failed.")
+        payload["switch"] = switch_result
+        raise RuntimeError(_local_capacity_install_failure_message(payload, current_adapter, level_id))
+    if payload.get("status") == "warning":
+        print("Local adapter install capacity preflight: warning.")
+    return payload
+
+
+def _run_level6_local_capacity_preflight(
+    validation_mode_info,
+    deployer_name,
+    deployer_context,
+    experiment_dir,
+    *,
+    validation_profile=None,
+):
+    if not _should_run_level6_local_stability_checks(
+        validation_mode_info,
+        deployer_name=deployer_name,
+        validation_profile=validation_profile,
+    ):
+        return {"status": "skipped", "reason": "not-local-stable-runtime"}
+
+    adapter_namespaces = _local_capacity_adapter_namespaces(
+        deployer_name=deployer_name,
+        deployer_context=deployer_context,
+    )
+    summary, node_memory_mb, docker_memory_mb, configured_memory_mb = _local_capacity_probe(adapter_namespaces)
+    payload = evaluate_local_coexistence_capacity(
+        summary,
+        node_memory_mb=node_memory_mb,
+        docker_memory_mb=docker_memory_mb,
+        configured_minikube_memory_mb=configured_memory_mb,
+        required_memory_mb=LOCAL_COEXISTENCE_MEMORY_MB,
+        guard_mode=_local_capacity_guard_mode(),
+    )
+    payload["artifact"] = _write_level6_local_stability_artifact(
+        experiment_dir,
+        "local_capacity_preflight.json",
+        payload,
+    )
+    _print_level6_local_capacity(payload)
+    if payload.get("status") == "failed":
+        raise RuntimeError(_level6_local_capacity_failure_message(payload))
+    return payload
 
 
 def _run_level6_local_stability_preflight(
@@ -4680,6 +5180,13 @@ def run_validate(
             baseline=baseline,
         )
     experiment_storage.newman_reports_dir(experiment_dir)
+    local_capacity_preflight = _run_level6_local_capacity_preflight(
+        validation_mode_info,
+        resolved_deployer_name,
+        deployer_context,
+        experiment_dir,
+        validation_profile=validation_profile,
+    )
     local_stability_preflight = _run_level6_local_stability_preflight(
         validation_mode_info,
         resolved_deployer_name,
@@ -4956,6 +5463,9 @@ def run_validate(
         "test_data_cleanup": test_data_cleanup,
         "public_endpoint_preflight": public_endpoint_preflight,
         "hosts_sync": hosts_sync,
+        "local_capacity": {
+            "preflight": local_capacity_preflight,
+        },
         "local_stability": {
             "preflight": local_stability_preflight,
             "postflight": local_stability_postflight,
@@ -5292,6 +5802,7 @@ def run_level(
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
     level_context = None
+    level_local_capacity = None
     if normalized_topology != "local" and not (
         normalized_topology == "vm-single" and level_id in {1, 2, 3, 4, 5}
     ) and level_id in {1, 2, 3, 4, 5}:
@@ -5347,11 +5858,21 @@ def run_level(
                 )
             result = deploy_dataspace(topology=topology)
         else:
+            level_local_capacity = _run_local_adapter_install_capacity_preflight(
+                resolved_deployer_name,
+                topology,
+                level_id,
+            )
             deploy_dataspace = _resolve_adapter_callable(adapter, "deploy_dataspace")
             if not callable(deploy_dataspace):
                 raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 3 deploy_dataspace()")
             result = deploy_dataspace()
     elif level_id == 4:
+        level_local_capacity = _run_local_adapter_install_capacity_preflight(
+            resolved_deployer_name,
+            topology,
+            level_id,
+        )
         if resolved_deployer_name == "edc":
             _ensure_safe_edc_deployer_execution(
                 adapter,
@@ -5373,6 +5894,12 @@ def run_level(
         )
         context = orchestrator.resolve_context(topology=topology)
         level_context = context
+        level_local_capacity = _run_local_adapter_install_capacity_preflight(
+            resolved_deployer_name,
+            topology,
+            level_id,
+            deployer_context=context,
+        )
         deploy_components = getattr(orchestrator.deployer, "deploy_components", None)
         if not callable(deploy_components):
             raise RuntimeError(f"Deployer '{resolved_deployer_name}' does not expose Level 5 deploy_components()")
@@ -5408,6 +5935,8 @@ def run_level(
     }
     if level_urls:
         payload["urls"] = level_urls
+    if isinstance(level_local_capacity, dict):
+        payload["local_capacity"] = {"install_preflight": level_local_capacity}
     payload.update(
         _safe_level_hosts_followup(
             adapter,
@@ -5922,7 +6451,6 @@ def _print_adapter_selection_hint(adapter_name):
         return
     print()
     print(f"{str(adapter_name).strip().upper()} adapter selected.")
-    print("Before Levels 3-6, use H to plan/apply host entries if this machine does not resolve public dataspace hostnames.")
 
 
 def _interactive_ensure_hosts_ready_for_levels(
@@ -5951,12 +6479,6 @@ def _interactive_ensure_hosts_ready_for_levels(
     missing_hostnames = list(readiness.get("missing_hostnames") or [])
     legacy_external_hostnames = list(readiness.get("legacy_external_hostnames") or [])
     if not missing_hostnames:
-        if legacy_external_hostnames:
-            print()
-            print("Legacy hostnames are still present outside framework-managed blocks:")
-            for item in legacy_external_hostnames:
-                print(f"- {item.get('legacy')} -> {item.get('canonical')}")
-            print("They do not block this level now, but the framework will keep using the canonical names.")
         return True
 
     hosts_file = readiness.get("hosts_file") or "(not detected)"
@@ -5968,10 +6490,10 @@ def _interactive_ensure_hosts_ready_for_levels(
     print()
     print("The framework will reconcile its managed hosts blocks and will not duplicate hostnames already defined outside those blocks.")
     if legacy_external_hostnames:
-        print("Legacy hostnames were detected outside framework-managed blocks:")
+        print("Old hostname aliases were found in your hosts file:")
         for item in legacy_external_hostnames:
             print(f"- {item.get('legacy')} -> {item.get('canonical')}")
-        print("They will be reported but not removed automatically because they are outside the managed blocks.")
+        print("They are outside the framework-managed hosts blocks, so they are reported but not removed automatically.")
 
     if not _interactive_confirm("Apply host reconciliation now?", default=False):
         print("Level execution cancelled. Run H first, then retry the selected level.")
@@ -6325,6 +6847,29 @@ def _print_action_result(result):
                 lines.append(f"Public endpoints checked: {len(checked)}")
             if failures:
                 lines.append(f"Public endpoints failures: {len(failures)}")
+
+        local_capacity = payload.get("local_capacity")
+        if isinstance(local_capacity, dict):
+            capacity_result = local_capacity.get("preflight") or local_capacity.get("install_preflight")
+            if isinstance(capacity_result, dict):
+                capacity_status = capacity_result.get("status")
+                if capacity_status not in (None, "", "skipped"):
+                    lines.append(f"Local coexistence capacity: {_console_result_label(capacity_status)}")
+                if capacity_result.get("coexistence_detected"):
+                    required_memory = capacity_result.get("required_memory_mb")
+                    effective_memory = capacity_result.get("effective_memory_mb")
+                    if required_memory and effective_memory:
+                        lines.append(
+                            f"Local coexistence memory: {effective_memory}/{required_memory} MiB"
+                        )
+                switch_result = capacity_result.get("switch")
+                if isinstance(switch_result, dict) and switch_result.get("status") == "completed":
+                    removed = ", ".join(switch_result.get("adapters_to_remove") or [])
+                    deleted = ", ".join(switch_result.get("deleted_namespaces") or [])
+                    if removed:
+                        lines.append(f"Local adapter switch: removed {removed}")
+                    if deleted:
+                        lines.append(f"Local adapter switch namespaces: {deleted}")
 
         local_stability = payload.get("local_stability")
         if isinstance(local_stability, dict):

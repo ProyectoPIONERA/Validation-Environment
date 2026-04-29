@@ -106,6 +106,7 @@ PG_HOST=localhost
 VT_URL=http://localhost:8200
 LOCAL_HOSTS_ADDRESS=
 LOCAL_INGRESS_EXTERNAL_IP=
+LOCAL_RESOURCE_PROFILE=single-adapter
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=10
 MINIKUBE_MEMORY=14336
@@ -116,8 +117,18 @@ Antes de ejecutar `Level 1`, asegúrate de que Docker Desktop puede asignar al
 menos esa memoria. Si tu Docker Desktop tiene menos margen, reduce
 `MINIKUBE_MEMORY` o usa un override temporal, por ejemplo
 `PIONERA_MINIKUBE_MEMORY=12288`. Para validar `inesdata` y `edc` coexistiendo en
-la misma topología local, el baseline recomendado sigue siendo `10 CPU / 18432
-MB`; si Docker no puede asignarlo, valida un adapter cada vez o usa `vm-single`.
+la misma topología local, cambia a `LOCAL_RESOURCE_PROFILE=coexistence` y el
+baseline recomendado sigue siendo `10 CPU / 18432 MB`; si Docker no puede
+asignarlo, valida un adapter cada vez o usa `vm-single`. En modo estable,
+`Level 1` avisa si Docker solo soporta un adapter local, y `Level 3/4/5`
+bloquean la instalación del segundo adapter si ya hay otro activo con memoria
+efectiva inferior a ese baseline. En terminal interactiva, ese bloqueo puede
+convertirse en un cambio controlado de adapter: el framework muestra los
+namespaces y artefactos runtime gestionados que va a eliminar, preserva
+`common-srvs`, y solo continúa si confirmas el texto exacto que muestra. En
+ejecución no interactiva, usa la variable `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM`
+con el valor `SWITCH TO EDC` o `SWITCH TO INESDATA`, según el adapter destino.
+`Level 6` mantiene la misma guarda para no contaminar resultados.
 
 ## Coexistencia de Adapters
 

@@ -16,6 +16,7 @@ from deployers.infrastructure.lib.public_hostnames import (
     canonical_common_service_config_values,
     canonical_common_service_hostnames,
 )
+from framework.local_capacity import LOCAL_COEXISTENCE_MEMORY_MB, parse_memory_quantity_mb
 from .config import INESDataConfigAdapter, InesdataConfig
 
 
@@ -102,6 +103,7 @@ class INESDataInfrastructureAdapter:
                     "cpus": deployer_config.get("MINIKUBE_CPUS"),
                     "memory": deployer_config.get("MINIKUBE_MEMORY"),
                     "profile": deployer_config.get("MINIKUBE_PROFILE"),
+                    "local_resource_profile": deployer_config.get("LOCAL_RESOURCE_PROFILE"),
                 }
 
         def _default(attr_name, fallback):
@@ -124,6 +126,7 @@ class INESDataInfrastructureAdapter:
             "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", 4)),
             "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", 12288)),
             "profile": str(runtime.get("profile") or _default("MINIKUBE_PROFILE", "minikube")).strip() or "minikube",
+            "local_resource_profile": str(runtime.get("local_resource_profile") or "").strip().lower(),
         }
 
     def _registration_service_namespace(self):
@@ -2576,6 +2579,57 @@ class INESDataInfrastructureAdapter:
 
         return True, None
 
+    def verify_minikube_runtime_capacity(self, runtime):
+        """Fail early when the requested local profile cannot be backed by Docker."""
+        requested_memory = parse_memory_quantity_mb((runtime or {}).get("memory"))
+        docker_memory = parse_memory_quantity_mb(
+            self.run_silent("docker info --format '{{.MemTotal}}'")
+        )
+        resource_profile = str((runtime or {}).get("local_resource_profile") or "").strip().lower()
+
+        if resource_profile == "coexistence" and (
+            requested_memory is None or requested_memory < LOCAL_COEXISTENCE_MEMORY_MB
+        ):
+            self._fail(
+                "Local coexistence profile requires more Minikube memory",
+                root_cause=(
+                    f"Set MINIKUBE_MEMORY={LOCAL_COEXISTENCE_MEMORY_MB} in "
+                    "deployers/infrastructure/topologies/local.config and rerun Level 1"
+                ),
+            )
+
+        if docker_memory and requested_memory and requested_memory > docker_memory:
+            self._fail(
+                "Docker Desktop does not expose enough memory for the requested Minikube profile",
+                root_cause=(
+                    f"requested={requested_memory} MiB, docker={docker_memory} MiB. "
+                    "Increase Docker Desktop resources or lower MINIKUBE_MEMORY before rerunning Level 1"
+                ),
+            )
+
+        if resource_profile == "coexistence" and docker_memory and docker_memory < LOCAL_COEXISTENCE_MEMORY_MB:
+            self._fail(
+                "Docker Desktop memory is too low for clean local EDC/INESData coexistence",
+                root_cause=(
+                    f"coexistence requires at least {LOCAL_COEXISTENCE_MEMORY_MB} MiB, "
+                    f"docker exposes {docker_memory} MiB"
+                ),
+            )
+
+        if resource_profile == "coexistence":
+            print(
+                "Local coexistence resource profile enabled "
+                f"({requested_memory or 'unknown'} MiB requested for Minikube)."
+            )
+        elif docker_memory and docker_memory < LOCAL_COEXISTENCE_MEMORY_MB:
+            print(
+                "Local Docker capacity supports the single-adapter profile. "
+                f"Docker exposes {docker_memory} MiB; clean EDC/INESData coexistence requires "
+                f"{LOCAL_COEXISTENCE_MEMORY_MB} MiB. The framework will block installing a second "
+                "local adapter until resources are increased or the cluster is recreated for the other adapter."
+            )
+        return True
+
     def setup_cluster(self):
         self.announce_level(1, "CLUSTER SETUP")
         self.ensure_unix_environment()
@@ -2604,6 +2658,7 @@ class INESDataInfrastructureAdapter:
             self._fail("Docker is not running. Start Docker and retry")
 
         print("Docker is running")
+        self.verify_minikube_runtime_capacity(runtime)
         print("\nDeleting existing Minikube cluster (clean state)...\n")
         self.run(f"minikube delete -p {profile}", check=False)
 

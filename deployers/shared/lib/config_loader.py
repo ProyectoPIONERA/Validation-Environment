@@ -35,6 +35,7 @@ TOPOLOGY_OVERLAY_KEYS = {
             "MINIO_ENDPOINT",
             "LOCAL_HOSTS_ADDRESS",
             "LOCAL_INGRESS_EXTERNAL_IP",
+            "LOCAL_RESOURCE_PROFILE",
             "MINIKUBE_DRIVER",
             "MINIKUBE_CPUS",
             "MINIKUBE_MEMORY",

@@ -221,6 +221,39 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
         infrastructure.run_silent.assert_any_call("minikube -p vm-local addons enable ingress")
 
+    def test_minikube_runtime_capacity_fails_when_requested_memory_exceeds_docker_memory(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(return_value=str(16 * 1024 * 1024 * 1024))
+
+        with self.assertRaisesRegex(RuntimeError, "Docker Desktop does not expose enough memory"):
+            infrastructure.verify_minikube_runtime_capacity(
+                {"memory": "18432", "local_resource_profile": ""}
+            )
+
+    def test_minikube_runtime_capacity_requires_coexistence_baseline_for_coexistence_profile(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(return_value=str(20 * 1024 * 1024 * 1024))
+
+        with self.assertRaisesRegex(RuntimeError, "Local coexistence profile requires more Minikube memory"):
+            infrastructure.verify_minikube_runtime_capacity(
+                {"memory": "14336", "local_resource_profile": "coexistence"}
+            )
+
+    def test_minikube_runtime_capacity_warns_when_docker_only_supports_single_adapter(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(return_value=str(16 * 1024 * 1024 * 1024))
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertTrue(
+                infrastructure.verify_minikube_runtime_capacity(
+                    {"memory": "14336", "local_resource_profile": "single-adapter"}
+                )
+            )
+
+        self.assertIn("single-adapter profile", output.getvalue())
+        self.assertIn("block installing a second", output.getvalue())
+
     def test_sync_common_values_uses_layered_config_without_local_adapter_config_file(self):
         self.config_adapter = LevelOutputConfigAdapter(
             {

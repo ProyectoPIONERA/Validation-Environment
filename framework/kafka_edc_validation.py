@@ -34,6 +34,7 @@ class KafkaEdcValidationSuite:
     DEFAULT_REQUEST_RETRY_SECONDS = 2
     DEFAULT_PAIR_ATTEMPTS = 2
     DEFAULT_PAIR_RETRY_SECONDS = 5
+    DEFAULT_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS = 30
     DEFAULT_STABILIZATION_GROUP_WAIT_SECONDS = 10
     DEFAULT_STABILIZATION_PROBE_TIMEOUT_SECONDS = 30
     DEFAULT_STABILIZATION_REQUEST_TIMEOUT_MS = 5000
@@ -113,6 +114,7 @@ class KafkaEdcValidationSuite:
             "cluster_bootstrap_servers": "KAFKA_CLUSTER_BOOTSTRAP_SERVERS",
             "startup_grace_seconds": "KAFKA_EDC_STARTUP_GRACE_SECONDS",
             "pre_run_settle_seconds": "KAFKA_EDC_PRE_RUN_SETTLE_SECONDS",
+            "agreement_visibility_timeout_seconds": "KAFKA_EDC_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS",
             "message_sample_limit": "KAFKA_EDC_MESSAGE_SAMPLE_LIMIT",
         }
         for key, config_key in optional_mapping.items():
@@ -129,6 +131,10 @@ class KafkaEdcValidationSuite:
         runtime.setdefault("consumer_group_prefix", "framework-edc-kafka")
         runtime.setdefault("startup_grace_seconds", self.DEFAULT_STARTUP_GRACE_SECONDS)
         runtime.setdefault("pre_run_settle_seconds", self.DEFAULT_PRE_RUN_SETTLE_SECONDS)
+        runtime.setdefault(
+            "agreement_visibility_timeout_seconds",
+            self.DEFAULT_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS,
+        )
 
         for integer_key in (
             "message_count",
@@ -139,6 +145,7 @@ class KafkaEdcValidationSuite:
             "consumer_poll_timeout_seconds",
             "startup_grace_seconds",
             "pre_run_settle_seconds",
+            "agreement_visibility_timeout_seconds",
             "request_timeout_ms",
             "api_timeout_ms",
             "max_block_ms",
@@ -468,6 +475,28 @@ class KafkaEdcValidationSuite:
         )
         self._assert_status(response, accepted_statuses, label)
         if response.status_code == 204:
+            return None, response.status_code
+        try:
+            return response.json(), response.status_code
+        except ValueError as exc:
+            raise RuntimeError(f"{label} did not return valid JSON") from exc
+
+    def _get_optional_json(self, url, token, label, accepted_statuses=None):
+        accepted_statuses = set(accepted_statuses or {200, 404})
+        response = self._request_with_retry(
+            "get",
+            url,
+            label=label,
+            accepted_statuses=accepted_statuses,
+            headers={
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        self._assert_status(response, accepted_statuses, label)
+        if response.status_code in {204, 404}:
+            return None, response.status_code
+        text = getattr(response, "text", "") or ""
+        if not text.strip():
             return None, response.status_code
         try:
             return response.json(), response.status_code
@@ -1123,6 +1152,91 @@ class KafkaEdcValidationSuite:
         raise RuntimeError(
             f"Negotiation {negotiation_id} did not produce contractAgreementId in time"
             + (f" (last_state={last_state}, detail={last_detail})" if last_state or last_detail else "")
+        )
+
+    def _query_contract_agreement(self, connector, token, agreement_id):
+        body, status_code = self._get_optional_json(
+            self._management_url(connector, f"/management/v3/contractagreements/{agreement_id}"),
+            token,
+            "contract agreement lookup",
+            accepted_statuses={200, 404},
+        )
+        if status_code == 200 and isinstance(body, dict):
+            return body
+
+        body, _ = self._post_json(
+            self._management_url(connector, "/management/v3/contractagreements/request"),
+            token,
+            {
+                "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+                "offset": 0,
+                "limit": 100,
+            },
+            "contract agreement status query",
+        )
+        if isinstance(body, list):
+            return next(
+                (
+                    item for item in body
+                    if isinstance(item, dict) and self._extract_identifier(item) == agreement_id
+                ),
+                None,
+            )
+        if isinstance(body, dict) and self._extract_identifier(body) == agreement_id:
+            return body
+        return None
+
+    def _wait_for_contract_agreement_visibility(
+        self,
+        provider,
+        consumer,
+        provider_jwt,
+        consumer_jwt,
+        agreement_id,
+        runtime,
+    ):
+        timeout_seconds = max(int(runtime.get("agreement_visibility_timeout_seconds", 0)), 0)
+        if timeout_seconds <= 0:
+            return {
+                "status": "skipped",
+                "reason": "disabled",
+                "seconds_waited": 0,
+            }
+
+        deadline = time.time() + timeout_seconds
+        poll_seconds = max(1, int(runtime.get("poll_interval_seconds", self.DEFAULT_POLL_INTERVAL_SECONDS)))
+        visible = set()
+        last_errors = {}
+        checks = (
+            ("provider", provider, provider_jwt),
+            ("consumer", consumer, consumer_jwt),
+        )
+
+        while time.time() <= deadline:
+            for role, connector, token in checks:
+                if role in visible:
+                    continue
+                try:
+                    if self._query_contract_agreement(connector, token, agreement_id):
+                        visible.add(role)
+                        last_errors.pop(role, None)
+                except Exception as exc:
+                    last_errors[role] = str(exc)
+            if len(visible) == len(checks):
+                return {
+                    "status": "visible",
+                    "agreement_id": agreement_id,
+                    "provider_visible": True,
+                    "consumer_visible": True,
+                }
+            time.sleep(poll_seconds)
+
+        missing = [role for role, _, _ in checks if role not in visible]
+        detail = ", ".join(f"{role}: {last_errors[role]}" for role in missing if role in last_errors)
+        raise RuntimeError(
+            f"Contract agreement {agreement_id} was not visible before starting Kafka transfer "
+            f"(missing={','.join(missing)})"
+            + (f"; last_errors={detail}" if detail else "")
         )
 
     def _start_transfer(self, provider, consumer, consumer_jwt, asset_id, agreement_id, runtime, destination_topic):
@@ -1798,6 +1912,25 @@ class KafkaEdcValidationSuite:
                 state=negotiation_result["state"],
                 agreement_id=negotiation_result["agreement_id"],
             )
+
+            agreement_visibility = self._wait_for_contract_agreement_visibility(
+                provider,
+                consumer,
+                provider_jwt,
+                consumer_jwt,
+                negotiation_result["agreement_id"],
+                runtime,
+            )
+            if agreement_visibility.get("status") != "skipped":
+                visibility_step = {
+                    key: value for key, value in agreement_visibility.items()
+                    if key != "status"
+                }
+                record_step(
+                    "wait_for_contract_agreement_visibility",
+                    "passed",
+                    **visibility_step,
+                )
 
             transfer_id, transfer_status = self._start_transfer(
                 provider,

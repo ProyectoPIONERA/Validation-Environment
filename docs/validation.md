@@ -33,12 +33,19 @@ Ese preflight público forma parte del comportamiento esperado del framework en
 `local`. `Level 6` completo debe ejecutarse contra la ruta pública del entorno,
 no contra `port-forward` como camino principal.
 
-En modo estable local, `Level 6` ejecuta además una guarda de estabilidad de
-Kubernetes antes de arrancar las suites. La guarda espera a que el nodo y los
+En modo estable local, el framework ejecuta además guardas de capacidad y
+estabilidad. `Level 1` avisa si Docker Desktop solo soporta un adapter local.
+`Level 3/4/5` bloquean la instalación del segundo adapter cuando ya hay otro
+activo y la capacidad efectiva está por debajo de `18432 MB`. En ese punto,
+pueden ofrecer un cambio controlado de adapter: con confirmación exacta eliminan
+solo los recursos locales gestionados del adapter anterior y preservan
+`common-srvs`. `Level 6` repite la comprobación antes de las suites para evitar
+falsos resultados por presión de Minikube. Después espera a que el nodo y los
 pods relevantes estén listos, registra reinicios y eventos `NodeNotReady`, y
 deja evidencia en:
 
 ```text
+local_capacity_preflight.json
 local_stability_preflight.json
 local_stability_postflight.json
 ```
@@ -46,9 +53,15 @@ local_stability_postflight.json
 Si el runtime local no queda listo tras la ventana de espera, el framework falla
 pronto con un mensaje accionable en lugar de ejecutar suites sobre un clúster
 claramente inestable. Para diagnóstico excepcional puede desactivarse con
-`PIONERA_LOCAL_STABILITY_CHECKS=false`. La ventana puede ajustarse con
-`PIONERA_LOCAL_STABILITY_TIMEOUT_SECONDS` y
+`PIONERA_LOCAL_STABILITY_CHECKS=false`. La guarda de capacidad de coexistencia
+puede degradarse a warning con `PIONERA_LOCAL_COEXISTENCE_GUARD=warn` o
+desactivarse con `PIONERA_LOCAL_COEXISTENCE_GUARD=off`. La ventana puede
+ajustarse con `PIONERA_LOCAL_STABILITY_TIMEOUT_SECONDS` y
 `PIONERA_LOCAL_STABILITY_POLL_SECONDS`.
+
+Para automatizar un cambio de adapter en ejecución no interactiva, establece
+`PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM` con el valor exacto mostrado por el
+framework, por ejemplo `SWITCH TO EDC` o `SWITCH TO INESDATA`.
 
 Después de ese check general, `Level 6` hace preflights específicos del adapter
 antes de abrir Playwright:
@@ -114,6 +127,13 @@ En modo `fast`, la preparación del broker Kafka puede empezar al inicio de
 `Level 6` mientras Newman sigue ejecutándose en primer plano. En modo `stable`
 local, que es el predeterminado para `local`, esa preparación se difiere hasta
 la fase Kafka para reducir solapamiento operativo y mejorar reproducibilidad.
+
+Después de finalizar la negociación de contrato, la suite espera a que el
+acuerdo sea visible en proveedor y consumidor antes de iniciar `Kafka-PUSH`.
+Esta guarda evita carreras transitorias donde el transfer se lanza justo después
+de `FINALIZED`, pero el runtime EDC todavía no puede resolver el acuerdo por
+protocolo y responde `404 Not found`. El timeout por defecto es de 30 segundos y
+puede ajustarse con `KAFKA_EDC_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS`.
 
 El flujo completo de `Level 6` sigue requiriendo que Keycloak, MinIO,
 `registration-service` y los conectores sean accesibles por hostname público. La

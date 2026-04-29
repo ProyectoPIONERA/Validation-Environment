@@ -112,6 +112,7 @@ Para una máquina local con Docker Desktop y una pila completa de validación,
 declara también los recursos de Minikube en el overlay local:
 
 ```text
+LOCAL_RESOURCE_PROFILE=coexistence
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=10
 MINIKUBE_MEMORY=18432
@@ -169,6 +170,21 @@ Reglas prácticas:
   exigente si Docker Desktop dispone de al menos `20 GB`;
 - `10 CPU / 18432 MB` es el baseline recomendado cuando se pretende validar
   localmente la coexistencia de `inesdata` y `edc`;
+- `Level 1` consulta la memoria real expuesta por Docker Desktop y avisa si el
+  entorno queda en perfil de un solo adapter;
+- `Level 3/4/5` bloquean la instalación o ampliación del segundo adapter local
+  cuando ya existe otro adapter activo y la capacidad efectiva es inferior al
+  baseline de coexistencia; en modo interactivo ofrecen un cambio controlado de
+  adapter que borra únicamente los namespaces y artefactos runtime gestionados
+  del adapter anterior, preservando `common-srvs`, y exige confirmación exacta
+  antes de ejecutar la limpieza;
+- en ejecución no interactiva, el cambio local de adapter se considera
+  destructivo y requiere `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM` con el valor
+  `SWITCH TO EDC` o `SWITCH TO INESDATA`;
+- `Level 6` en modo estable evalúa la capacidad local antes de ejecutar las
+  suites; si detecta `inesdata` y `edc` conviviendo con menos de `18432 MB`
+  efectivos, bloquea la validación para evitar resultados contaminados por
+  `NodeNotReady`;
 - no conviene interpretar `401`, `500` o crashes funcionales de la aplicación
   como un problema de CPU por defecto, pero sí deben considerarse contaminados
   si el postflight de `Level 6` registra OOM, `NodeNotReady` o reinicios nuevos.

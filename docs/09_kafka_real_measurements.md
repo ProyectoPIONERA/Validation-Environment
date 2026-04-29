@@ -129,6 +129,7 @@ El broker Kafka puede configurarse con:
 - `container_env`
 - `KAFKA_EDC_STARTUP_GRACE_SECONDS` cuando la transferencia Kafka necesita unos segundos extra para estabilizar el dataplane antes de empezar a producir mensajes de medida. El valor por defecto actual es `60` segundos y la suite usa mensajes sonda antes de empezar a medir latencias reales.
 - `KAFKA_EDC_PRE_RUN_SETTLE_SECONDS` cuando interesa dejar una pequeña ventana de asentamiento tras limpiar transferencias y recursos Kafka EDC anteriores. El valor por defecto actual es `10` segundos y ayuda a reducir flakes cuando el dataplane todavía está cerrando consumidores o productores viejos.
+- `KAFKA_EDC_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS` cuando el runtime EDC necesita unos segundos para que el acuerdo contractual ya finalizado sea visible en proveedor y consumidor antes de iniciar `Kafka-PUSH`. El valor por defecto actual es `30` segundos y evita carreras transitorias con errores `404 Not found` al arrancar la transferencia.
 - `KAFKA_EDC_MESSAGE_SAMPLE_LIMIT`, por defecto `5`, para limitar cuántos IDs de mensajes quedan como muestra en los artefactos y pueden imprimirse en consola cuando se habilita el modo verbose.
 
 El modo `docker` sigue disponible para desarrollo avanzado mediante

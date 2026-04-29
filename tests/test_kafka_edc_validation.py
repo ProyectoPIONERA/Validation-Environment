@@ -32,6 +32,7 @@ class _FakeSession:
         self.assets = {}
         self.policies = {}
         self.contracts = {}
+        self.agreements = {}
         self.transfers = {}
         self.terminated_transfers = []
         self.deprovisioned_transfers = []
@@ -85,6 +86,7 @@ class _FakeSession:
             )
 
         if url.endswith("/management/v3/contractnegotiations"):
+            self.agreements["agreement-1"] = {"@id": "agreement-1"}
             return _FakeResponse(200, {"@id": "neg-1"})
 
         if url.endswith("/management/v3/transferprocesses"):
@@ -101,6 +103,9 @@ class _FakeSession:
 
         if url.endswith("/management/v3/contractnegotiations/request"):
             return _FakeResponse(200, [{"@id": "neg-1", "state": "FINALIZED", "contractAgreementId": "agreement-1"}])
+
+        if url.endswith("/management/v3/contractagreements/request"):
+            return _FakeResponse(200, list(self.agreements.values()))
 
         if url.endswith("/management/v3/transferprocesses/request"):
             return _FakeResponse(200, list(self.transfers.values()))
@@ -122,6 +127,9 @@ class _FakeSession:
     def get(self, url, headers=None, timeout=None):
         if url.endswith("/management/v3/contractnegotiations/neg-1"):
             return _FakeResponse(200, {"@id": "neg-1", "state": "FINALIZED", "contractAgreementId": "agreement-1"})
+
+        if url.endswith("/management/v3/contractagreements/agreement-1"):
+            return _FakeResponse(200, self.agreements.get("agreement-1", {"@id": "agreement-1"}))
 
         if url.endswith("/management/v3/transferprocesses/transfer-1"):
             return _FakeResponse(200, self.transfers.get("transfer-1", {"@id": "transfer-1", "state": "STARTED"}))
@@ -396,6 +404,29 @@ class _RetryGatewaySession(_FakeSession):
         return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
 
 
+class _DelayedAgreementSession(_FakeSession):
+    def __init__(self):
+        super().__init__()
+        self.agreement_query_calls = 0
+        self.agreement_visible = False
+        self.transfer_started_after_visibility = False
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if url.endswith("/management/v3/contractagreements/request"):
+            self.agreement_query_calls += 1
+            if self.agreement_query_calls < 3:
+                return _FakeResponse(200, [])
+            self.agreement_visible = True
+        if url.endswith("/management/v3/transferprocesses"):
+            self.transfer_started_after_visibility = self.agreement_visible
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+    def get(self, url, headers=None, timeout=None):
+        if url.endswith("/management/v3/contractagreements/agreement-1"):
+            return _FakeResponse(404, None)
+        return super().get(url, headers=headers, timeout=timeout)
+
+
 class KafkaEdcValidationSuiteTests(unittest.TestCase):
     def setUp(self):
         _FakeBrokerState.reset()
@@ -485,6 +516,54 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
             self.assertEqual(session.destination_bootstrap_servers, "broker-cluster:29092")
             self.assertIn("transfer-1", session.terminated_transfers)
             self.assertIn("transfer-1", session.deprovisioned_transfers)
+
+    def test_run_pair_waits_for_contract_agreement_visibility_before_transfer(self):
+        session = _DelayedAgreementSession()
+        credentials = {
+            "conn-provider": {"connector_user": {"user": "provider-user", "passwd": "provider-pass"}},
+            "conn-consumer": {"connector_user": {"user": "consumer-user", "passwd": "consumer-pass"}},
+        }
+
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: credentials[connector],
+            load_deployer_config=lambda: {
+                "KC_URL": "http://keycloak.local",
+                "KAFKA_CLUSTER_BOOTSTRAP_SERVERS": "broker-cluster:29092",
+            },
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "localhost:9092",
+                "topic_name": "edc-kafka-suite",
+                "message_count": 1,
+                "security_protocol": "PLAINTEXT",
+                "consumer_poll_timeout_seconds": 5,
+                "startup_grace_seconds": 0,
+                "agreement_visibility_timeout_seconds": 10,
+                "poll_interval_seconds": 1,
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            admin_client_class=_FakeAdminClient,
+            new_topic_class=_FakeNewTopic,
+            producer_class=_FakeProducer,
+            consumer_class=_FakeConsumer,
+            session=session,
+            time_provider=lambda: 1000.0,
+            uuid_factory=iter(["visibility", "id1", "id2", "id3", "id4", "id5"]).__next__,
+        )
+
+        with patch("framework.kafka_edc_validation.time.sleep", return_value=None) as sleep_mock:
+            result = suite.run_pair("conn-provider", "conn-consumer")
+
+        step_names = [step["name"] for step in result["steps"]]
+        self.assertEqual(result["status"], "passed")
+        self.assertIn("wait_for_contract_agreement_visibility", step_names)
+        self.assertLess(
+            step_names.index("wait_for_contract_agreement_visibility"),
+            step_names.index("start_transfer"),
+        )
+        self.assertTrue(session.transfer_started_after_visibility)
+        self.assertGreaterEqual(session.agreement_query_calls, 3)
+        sleep_mock.assert_any_call(1)
 
     def test_create_asset_retries_with_expanded_json_ld_kafka_dataaddress(self):
         session = _KafkaTypeFallbackSession()
