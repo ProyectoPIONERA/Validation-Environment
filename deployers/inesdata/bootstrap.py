@@ -26,31 +26,26 @@ from keycloak.exceptions import KeycloakGetError,KeycloakPostError
 import json
 import os
 import requests
+import sys
 import urllib3
 import warnings
-from urllib.parse import urlparse
+
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from deployers.infrastructure.lib.config_loader import (
+    INFRASTRUCTURE_MANAGED_KEYS,
+    load_layered_deployer_config,
+)
+from deployers.infrastructure.lib.public_hostnames import (
+    clean_public_hostname,
+    resolved_common_service_hostnames,
+)
+from deployers.infrastructure.lib.topology import normalize_topology
 
 URL_PRO = '.dataspaceunit-project.eu'
 URL_DEV = '.dev.ds.dataspaceunit.upm'
-
-
-INFRASTRUCTURE_MANAGED_KEYS = {
-    "KC_URL",
-    "KC_INTERNAL_URL",
-    "KC_USER",
-    "KC_PASSWORD",
-    "PG_HOST",
-    "PG_PORT",
-    "PG_USER",
-    "PG_PASSWORD",
-    "VT_URL",
-    "VT_TOKEN",
-    "MINIO_ENDPOINT",
-    "MINIO_USER",
-    "MINIO_PASSWORD",
-    "MINIO_ADMIN_USER",
-    "MINIO_ADMIN_PASS",
-}
 
 
 def _vault_capabilities_allow_management(capabilities):
@@ -151,25 +146,26 @@ def _read_deployer_config_file(path):
     return config
 
 
-def load_effective_deployer_config():
+def _bootstrap_root_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _active_bootstrap_topology():
+    return normalize_topology(os.getenv("PIONERA_TOPOLOGY") or "local")
+
+
+def load_effective_deployer_config(topology=None):
     """Load shared infrastructure first, then adapter overlay and env overrides."""
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    infrastructure_config = _read_deployer_config_file(
-        os.path.abspath(os.path.join(root_dir, "..", "infrastructure", "deployer.config"))
+    root_dir = _bootstrap_root_dir()
+    resolved_topology = normalize_topology(topology or _active_bootstrap_topology())
+    return load_layered_deployer_config(
+        [
+            os.path.abspath(os.path.join(root_dir, "..", "infrastructure", "deployer.config")),
+            os.path.join(root_dir, "deployer.config"),
+        ],
+        protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
+        topology=resolved_topology,
     )
-    adapter_config = _read_deployer_config_file(os.path.join(root_dir, "deployer.config"))
-    config = dict(infrastructure_config)
-
-    for key, value in adapter_config.items():
-        if key in INFRASTRUCTURE_MANAGED_KEYS and key in config:
-            continue
-        config[key] = value
-
-    for env_key, env_value in os.environ.items():
-        if not env_key.startswith("PIONERA_") or env_value in (None, ""):
-            continue
-        config[env_key[len("PIONERA_"):]] = env_value
-    return config
 
 
 @click.group()
@@ -710,20 +706,12 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
 
 def common_access_urls(dataspace, environment, config):
     protocol = access_protocol(environment)
-    domain_base = str(config.get("DOMAIN_BASE", "dev.ed.dataspaceunit.upm")).strip() or "dev.ed.dataspaceunit.upm"
-    keycloak_hostname = (
-        clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
-        or clean_hostname(config.get("KC_INTERNAL_URL"))
-        or f"keycloak.{domain_base}"
-    )
-    keycloak_admin_hostname = (
-        clean_hostname(config.get("KEYCLOAK_ADMIN_HOSTNAME"))
-        or clean_hostname(config.get("KC_URL"))
-        or f"keycloak-admin.{domain_base}"
-    )
+    resolved_hostnames = resolved_common_service_hostnames(config)
+    keycloak_hostname = resolved_hostnames["keycloak_hostname"]
+    keycloak_admin_hostname = resolved_hostnames["keycloak_admin_hostname"]
     minio_console_hostname = (
         clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
-        or f"console.minio-s3.{domain_base}"
+        or resolved_hostnames["minio_console_hostname"]
     )
     return {
         "keycloak_realm": f"{protocol}://{keycloak_hostname}/realms/{dataspace}",
@@ -807,15 +795,7 @@ def registration_service_internal_hostname(
 
 
 def clean_hostname(value):
-    raw_value = str(value or "").strip()
-    if not raw_value:
-        return ""
-    parsed = urlparse(raw_value)
-    if parsed.netloc:
-        return parsed.netloc
-    if "://" not in raw_value:
-        return raw_value.split("/", 1)[0]
-    return ""
+    return clean_public_hostname(value)
 
 
 def normalize_base_href(value):

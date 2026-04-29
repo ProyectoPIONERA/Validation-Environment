@@ -6,7 +6,7 @@ import { CatalogPage } from "../components/consumer/catalog.page";
 import { ContractOffersPage } from "../components/consumer/contract-offers.page";
 import {
   bootstrapProviderNegotiationArtifacts,
-  waitForConsumerCatalogDatasetReadiness,
+  probeConsumerCatalogDatasetReadiness,
 } from "../shared/utils/provider-bootstrap";
 import { collectBrowserDiagnostics } from "../shared/utils/browser-diagnostics";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
@@ -82,7 +82,7 @@ test("05 consumer negotiation: visible negotiation from catalog", async ({
     await attachJson("consumer-negotiation-bootstrap", report.providerBootstrap);
     await attachJson(
       "consumer-negotiation-catalog-api-readiness",
-      await waitForConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
+      await probeConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
     );
 
     await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);

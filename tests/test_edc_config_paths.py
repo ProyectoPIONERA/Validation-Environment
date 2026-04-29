@@ -231,6 +231,46 @@ class EdcConfigPathTests(unittest.TestCase):
         self.assertEqual(config["DS_1_CONNECTORS"], "alpha,beta")
         self.assertFalse(dashboard_enabled)
 
+    def test_edc_load_deployer_config_includes_topology_overlays_when_present(self):
+        previous = self._clear_pionera_overrides()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure", "topologies"), exist_ok=True)
+                os.makedirs(os.path.join(tmpdir, "deployers", "edc", "topologies"), exist_ok=True)
+                with open(
+                    os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write("KC_URL=http://shared-keycloak\n")
+                with open(
+                    os.path.join(tmpdir, "deployers", "infrastructure", "topologies", "vm-single.config"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write("VM_EXTERNAL_IP=192.0.2.10\n")
+                with open(
+                    os.path.join(tmpdir, "deployers", "edc", "topologies", "vm-single.config"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write("EDC_DASHBOARD_ENABLED=false\n")
+
+                class TempEdcConfig(EdcConfig):
+                    @classmethod
+                    def script_dir(cls):
+                        return tmpdir
+
+                adapter = EDCConfigAdapter(TempEdcConfig, topology="vm-single")
+                config = adapter.load_deployer_config()
+        finally:
+            self._restore_environment(previous)
+
+        self.assertEqual(config["KC_URL"], "http://shared-keycloak")
+        self.assertEqual(config["VM_EXTERNAL_IP"], "192.0.2.10")
+        self.assertEqual(config["DS_1_NAME"], "demoedc")
+        self.assertEqual(config["EDC_DASHBOARD_ENABLED"], "false")
+
     def test_edc_infrastructure_config_overrides_legacy_shared_config(self):
         previous = self._clear_pionera_overrides()
         try:

@@ -12,7 +12,7 @@ import { ContractsPage } from "../components/consumer/contracts.page";
 import { TransferHistoryPage } from "../components/consumer/transfer-history.page";
 import {
   bootstrapProviderContractArtifacts,
-  waitForConsumerCatalogDatasetReadiness,
+  probeConsumerCatalogDatasetReadiness,
 } from "../shared/utils/provider-bootstrap";
 import { resolveDataspacePortalRuntime } from "../shared/utils/dataspace-runtime";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
@@ -220,7 +220,7 @@ test("05 e2e transfer flow: provider UI bootstrap + consumer negotiation and tra
     await attachJson(
       testInfo,
       "consumer-catalog-api-readiness",
-      await waitForConsumerCatalogDatasetReadiness(request, runtime, assetId),
+      await probeConsumerCatalogDatasetReadiness(request, runtime, assetId),
     );
 
     consumerSession = await createRecordedSession(browser, testInfo, "consumer-session");

@@ -72,8 +72,8 @@ class DeployerAccessUrlsTests(unittest.TestCase):
         self.assertEqual(urls["public_portal_login"], "http://demo.dev.ds.dataspaceunit.upm")
         self.assertEqual(urls["public_portal_backend_admin"], "http://backend-demo.dev.ds.dataspaceunit.upm/admin")
         self.assertEqual(urls["registration_service"], "http://registration-service-demo.dev.ds.dataspaceunit.upm")
-        self.assertEqual(urls["keycloak_realm"], "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo")
-        self.assertEqual(urls["keycloak_admin_console"], "http://keycloak-admin.dev.ed.dataspaceunit.upm/admin/demo/console/")
+        self.assertEqual(urls["keycloak_realm"], "http://auth.dev.ed.dataspaceunit.upm/realms/demo")
+        self.assertEqual(urls["keycloak_admin_console"], "http://admin.auth.dev.ed.dataspaceunit.upm/admin/demo/console/")
         self.assertEqual(urls["minio_api"], "http://minio.dev.ed.dataspaceunit.upm")
 
     def test_inesdata_connector_access_urls_include_connector_interface_login(self):

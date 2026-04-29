@@ -11,6 +11,18 @@ Los artefactos asociados son:
 - `Validation-Environment/validation/core/collections/postman/03_e2e_compact.json`
 - `Validation-Environment/validation/core/collections/postman/00_environment.json`
 
+Antes de lanzar estas colecciones desde `Level 6`, el framework ejecuta un
+preflight ligero sobre Management API para el par `provider/consumer`. Esa
+comprobación valida login de ambos conectores y prueba, con sus propios tokens,
+estos endpoints:
+
+- `POST /management/v3/assets/request` en el proveedor
+- `POST /management/v3/contractnegotiations/request` en el consumidor
+- `POST /management/v3/catalog/request` en el consumidor contra el protocolo del proveedor
+
+Si alguno falla, el framework aborta antes de Newman y persiste el diagnóstico
+en `00_management_api_preflight.json` dentro del directorio de reportes del par.
+
 ## Colecciones disponibles
 
 Esta carpeta contiene tres variantes importables en Postman:

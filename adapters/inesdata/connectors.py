@@ -41,6 +41,9 @@ class INESDataConnectorsAdapter:
     def _is_local_topology(self):
         return self._normalized_topology() == LOCAL_TOPOLOGY
 
+    def _bootstrap_environment_prefix(self):
+        return f"PIONERA_TOPOLOGY={shlex.quote(self._normalized_topology())} "
+
     def _resolve_level4_local_image_policy(self, *, mode, label):
         normalized_mode = str(mode or "auto").strip().lower() or "auto"
         topology = self._normalized_topology()
@@ -639,10 +642,16 @@ class INESDataConnectorsAdapter:
         return False
 
     def _bootstrap_connector_create_command(self, python_exec, connector_name, ds_name):
-        return f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
+        return (
+            f"{self._bootstrap_environment_prefix()}{python_exec} "
+            f"bootstrap.py connector create {connector_name} {ds_name}"
+        )
 
     def _bootstrap_connector_delete_command(self, python_exec, connector_name, ds_name):
-        return f"{python_exec} bootstrap.py connector delete {connector_name} {ds_name}"
+        return (
+            f"{self._bootstrap_environment_prefix()}{python_exec} "
+            f"bootstrap.py connector delete {connector_name} {ds_name}"
+        )
 
     def validate_connector_name(self, name):
         if not isinstance(name, str) or not name:

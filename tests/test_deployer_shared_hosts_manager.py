@@ -10,6 +10,7 @@ from deployers.shared.lib.hosts_manager import (
     apply_managed_blocks,
     blocks_as_dict,
     build_context_host_blocks,
+    detect_legacy_external_hostnames,
     hostnames_by_level,
     merge_missing_managed_blocks,
     parse_hostnames,
@@ -56,12 +57,12 @@ class SharedHostsManagerTests(unittest.TestCase):
         updated = upsert_managed_block(
             existing,
             "shared",
-            [HostEntry("127.0.0.1", "keycloak.dev.ed.dataspaceunit.upm")],
+            [HostEntry("127.0.0.1", "auth.dev.ed.dataspaceunit.upm")],
         )
 
         self.assertIn("127.0.0.1 localhost", updated)
         self.assertIn("# BEGIN Validation-Environment shared", updated)
-        self.assertIn("127.0.0.1 keycloak.dev.ed.dataspaceunit.upm", updated)
+        self.assertIn("127.0.0.1 auth.dev.ed.dataspaceunit.upm", updated)
 
     def test_build_context_host_blocks_groups_entries_by_level(self):
         context = DeploymentContext(
@@ -91,7 +92,8 @@ class SharedHostsManagerTests(unittest.TestCase):
         blocks = build_context_host_blocks(context)
         levels = hostnames_by_level(blocks)
 
-        self.assertIn("keycloak.dev.ed.dataspaceunit.upm", levels["level_1_2"])
+        self.assertIn("auth.dev.ed.dataspaceunit.upm", levels["level_1_2"])
+        self.assertIn("admin.auth.dev.ed.dataspaceunit.upm", levels["level_1_2"])
         self.assertIn("console.minio-s3.dev.ed.dataspaceunit.upm", levels["level_1_2"])
         self.assertEqual(
             levels["level_3"],
@@ -138,7 +140,7 @@ class SharedHostsManagerTests(unittest.TestCase):
 
         rendered = blocks_as_dict(build_context_host_blocks(context))
 
-        self.assertIn("192.0.2.10 keycloak.dev.ed.dataspaceunit.upm", rendered["shared common"])
+        self.assertIn("192.0.2.10 auth.dev.ed.dataspaceunit.upm", rendered["shared common"])
         self.assertEqual(
             rendered["dataspace demoedc"],
             ["192.0.2.11 registration-service-demoedc.dev.ds.dataspaceunit.upm"],
@@ -180,6 +182,42 @@ class SharedHostsManagerTests(unittest.TestCase):
         self.assertIn("# BEGIN Validation-Environment dataspace demoedc", content)
         self.assertIn("conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm", content)
 
+    def test_apply_managed_blocks_rewrites_managed_common_block_with_canonical_hostnames(self):
+        context = DeploymentContext(
+            deployer="edc",
+            topology="local",
+            environment="DEV",
+            dataspace_name="",
+            ds_domain_base="",
+            config={"DOMAIN_BASE": "dev.ed.dataspaceunit.upm"},
+        )
+        blocks = build_context_host_blocks(context)
+        existing = (
+            "127.0.0.1 localhost\n"
+            "# BEGIN Validation-Environment shared common\n"
+            "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+            "127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm\n"
+            "127.0.0.1 minio.dev.ed.dataspaceunit.upm\n"
+            "# END Validation-Environment shared common\n"
+        )
+
+        with self.subTest("managed block rewritten"):
+            import tempfile
+
+            with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as handle:
+                handle.write(existing)
+                handle.flush()
+
+                result = apply_managed_blocks(handle.name, blocks, config=context.config)
+                handle.seek(0)
+                content = handle.read()
+
+        self.assertTrue(result["changed"])
+        self.assertIn("127.0.0.1 auth.dev.ed.dataspaceunit.upm", content)
+        self.assertIn("127.0.0.1 admin.auth.dev.ed.dataspaceunit.upm", content)
+        self.assertNotIn("127.0.0.1 keycloak.dev.ed.dataspaceunit.upm", content)
+        self.assertNotIn("127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm", content)
+
     def test_apply_managed_blocks_skips_entries_already_present_outside_managed_blocks(self):
         context = DeploymentContext(
             deployer="edc",
@@ -196,7 +234,7 @@ class SharedHostsManagerTests(unittest.TestCase):
         blocks = build_context_host_blocks(context)
         existing = (
             "127.0.0.1 localhost\n"
-            "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+            "127.0.0.1 auth.dev.ed.dataspaceunit.upm\n"
             "127.0.0.1 registration-service-demoedc.dev.ds.dataspaceunit.upm\n"
             "127.0.0.1 conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm\n"
             "# BEGIN Validation-Environment dataspace demoedc\n"
@@ -226,6 +264,33 @@ class SharedHostsManagerTests(unittest.TestCase):
         self.assertIn("connectors edc demoedc", {block.name for block in missing_blocks})
         self.assertIn("dataspace demoedc", skipped)
         self.assertIn("connectors edc demoedc", skipped)
+
+    def test_detect_legacy_external_hostnames_reports_common_service_aliases(self):
+        existing = (
+            "127.0.0.1 localhost\n"
+            "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+            "127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm\n"
+        )
+
+        warnings = detect_legacy_external_hostnames(
+            existing,
+            block_names=["shared common"],
+            config={"DOMAIN_BASE": "dev.ed.dataspaceunit.upm"},
+        )
+
+        self.assertEqual(
+            warnings,
+            [
+                {
+                    "legacy": "keycloak.dev.ed.dataspaceunit.upm",
+                    "canonical": "auth.dev.ed.dataspaceunit.upm",
+                },
+                {
+                    "legacy": "keycloak-admin.dev.ed.dataspaceunit.upm",
+                    "canonical": "admin.auth.dev.ed.dataspaceunit.upm",
+                },
+            ],
+        )
 
     def test_parse_hostnames_supports_aliases_and_comments(self):
         hostnames = parse_hostnames(

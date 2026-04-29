@@ -5,22 +5,26 @@ can be reused by the menu, previews and tests without requiring optional
 packages such as ``click``.
 """
 
+import sys
+from pathlib import Path
 from urllib.parse import urlparse
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from deployers.infrastructure.lib.public_hostnames import (  # noqa: E402
+    clean_public_hostname,
+    resolved_common_service_hostnames,
+)
 
 
 URL_DEV = ".dev.ds.dataspaceunit.upm"
 
 
 def clean_hostname(value):
-    raw_value = str(value or "").strip()
-    if not raw_value:
-        return ""
-    parsed = urlparse(raw_value)
-    if parsed.netloc:
-        return parsed.netloc
-    if "://" not in raw_value:
-        return raw_value.split("/", 1)[0]
-    return ""
+    return clean_public_hostname(value)
 
 
 def normalize_base_href(value):
@@ -81,26 +85,11 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
 
 def common_access_urls(dataspace, environment, config):
     protocol = access_protocol(environment)
-    domain_base = str(config.get("DOMAIN_BASE", "dev.ed.dataspaceunit.upm")).strip() or "dev.ed.dataspaceunit.upm"
-    keycloak_hostname = (
-        clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
-        or clean_hostname(config.get("KC_INTERNAL_URL"))
-        or f"keycloak.{domain_base}"
-    )
-    keycloak_admin_hostname = (
-        clean_hostname(config.get("KEYCLOAK_ADMIN_HOSTNAME"))
-        or clean_hostname(config.get("KC_URL"))
-        or f"keycloak-admin.{domain_base}"
-    )
-    minio_api_hostname = (
-        clean_hostname(config.get("MINIO_HOSTNAME"))
-        or clean_hostname(config.get("MINIO_ENDPOINT"))
-        or f"minio.{domain_base}"
-    )
-    minio_console_hostname = (
-        clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
-        or f"console.minio-s3.{domain_base}"
-    )
+    resolved_hostnames = resolved_common_service_hostnames(config)
+    keycloak_hostname = resolved_hostnames["keycloak_hostname"]
+    keycloak_admin_hostname = resolved_hostnames["keycloak_admin_hostname"]
+    minio_api_hostname = resolved_hostnames["minio_hostname"]
+    minio_console_hostname = resolved_hostnames["minio_console_hostname"]
     return {
         "keycloak_realm": f"{protocol}://{keycloak_hostname}/realms/{dataspace}",
         "keycloak_account": f"{protocol}://{keycloak_hostname}/realms/{dataspace}/account",

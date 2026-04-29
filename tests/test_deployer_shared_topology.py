@@ -21,6 +21,19 @@ class SharedTopologyTests(unittest.TestCase):
         self.assertEqual(profile.default_address, "127.0.0.1")
         self.assertEqual(profile.address_for(ROLE_COMMON), "127.0.0.1")
 
+    def test_local_topology_uses_local_specific_addresses_when_configured(self):
+        profile = build_topology_profile(
+            "local",
+            {
+                "LOCAL_HOSTS_ADDRESS": "192.168.49.2",
+                "LOCAL_INGRESS_EXTERNAL_IP": "192.168.49.2",
+            },
+        )
+
+        self.assertEqual(profile.default_address, "192.168.49.2")
+        self.assertEqual(profile.ingress_external_ip, "192.168.49.2")
+        self.assertEqual(profile.address_for(ROLE_COMMON), "192.168.49.2")
+
     def test_vm_single_requires_an_external_address(self):
         with self.assertRaises(ValueError) as error:
             build_topology_profile("vm-single", {})

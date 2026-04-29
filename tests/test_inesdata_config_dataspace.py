@@ -83,6 +83,47 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
         self.assertEqual(config["DS_DOMAIN_BASE"], "dev.ds.dataspaceunit.upm")
         self.assertEqual(config["DS_1_NAME"], "demo")
 
+    def test_load_deployer_config_includes_topology_overlays_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure", "topologies"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata", "topologies"), exist_ok=True)
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("KC_URL=http://shared-keycloak\n")
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "topologies", "vm-single.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("VM_EXTERNAL_IP=192.0.2.10\n")
+            with open(
+                os.path.join(tmpdir, "deployers", "inesdata", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("DS_1_NAME=demo\nDS_1_NAMESPACE=demo\n")
+            with open(
+                os.path.join(tmpdir, "deployers", "inesdata", "topologies", "vm-single.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("COMPONENTS=ontology-hub\n")
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            config = INESDataConfigAdapter(TempConfig, topology="vm-single").load_deployer_config()
+
+        self.assertEqual(config["KC_URL"], "http://shared-keycloak")
+        self.assertEqual(config["VM_EXTERNAL_IP"], "192.0.2.10")
+        self.assertEqual(config["DS_1_NAME"], "demo")
+        self.assertEqual(config["COMPONENTS"], "ontology-hub")
+
     def test_load_deployer_config_keeps_infrastructure_credentials_over_adapter_placeholders(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)
@@ -352,6 +393,31 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
                     "KEYCLOAK_ADMIN_HOSTNAME=admin.auth.dev.ed.dataspaceunit.upm\n"
                     "MINIO_HOSTNAME=minio.dev.ed.dataspaceunit.upm\n"
                     "MINIO_CONSOLE_HOSTNAME=console.minio-s3.dev.ed.dataspaceunit.upm\n"
+                )
+
+            adapter = INESDataConfigAdapter(config)
+
+            self.assertEqual(
+                adapter.generate_hosts(ds_name="pilot"),
+                [
+                    "127.0.0.1 auth.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 admin.auth.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 minio.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 console.minio-s3.dev.ed.dataspaceunit.upm",
+                    "127.0.0.1 registration-service-pilot.dev.ds.dataspaceunit.upm",
+                ],
+            )
+
+    def test_generate_hosts_promote_legacy_keycloak_hostnames_to_canonical_names(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = DataspaceAwareConfig(tmpdir)
+            with open(config.deployer_config_path(), "w", encoding="utf-8") as handle:
+                handle.write(
+                    "DS_1_NAME=pilot\n"
+                    "DS_DOMAIN_BASE=dev.ds.dataspaceunit.upm\n"
+                    "DOMAIN_BASE=dev.ed.dataspaceunit.upm\n"
+                    "KEYCLOAK_HOSTNAME=keycloak.dev.ed.dataspaceunit.upm\n"
+                    "KEYCLOAK_ADMIN_HOSTNAME=keycloak-admin.dev.ed.dataspaceunit.upm\n"
                 )
 
             adapter = INESDataConfigAdapter(config)

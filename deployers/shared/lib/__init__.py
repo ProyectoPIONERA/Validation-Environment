@@ -18,9 +18,12 @@ from .components import (
 )
 from .config_loader import (
     apply_pionera_environment_overrides,
+    detect_topology_key_migration_warnings,
     iter_dataspace_slots,
     load_deployer_config,
     load_layered_deployer_config,
+    resolve_deployer_config_layer_paths,
+    topology_overlay_config_path,
 )
 from .contracts import DeploymentContext, NamespaceRoles, TopologyProfile, ValidationProfile
 from .hosts_manager import (
@@ -29,6 +32,7 @@ from .hosts_manager import (
     apply_managed_blocks,
     blocks_as_dict,
     build_context_host_blocks,
+    detect_legacy_external_hostnames,
     hostnames_by_level,
     merge_missing_managed_blocks,
     parse_hostnames,
@@ -71,6 +75,8 @@ __all__ = [
     "components_for_adapter",
     "configured_component_host",
     "configured_optional_components",
+    "detect_topology_key_migration_warnings",
+    "detect_legacy_external_hostnames",
     "get_component_contract",
     "hostnames_by_level",
     "infer_component_hostname",
@@ -78,6 +84,7 @@ __all__ = [
     "load_deployer_config",
     "apply_pionera_environment_overrides",
     "load_layered_deployer_config",
+    "resolve_deployer_config_layer_paths",
     "merge_missing_managed_blocks",
     "normalize_namespace_profile",
     "normalize_component_key",
@@ -89,6 +96,7 @@ __all__ = [
     "resolve_component_release_name",
     "strip_url_scheme",
     "summarize_components_for_adapter",
+    "topology_overlay_config_path",
     "upsert_managed_block",
     "upsert_managed_blocks",
 ]

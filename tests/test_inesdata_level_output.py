@@ -1573,6 +1573,56 @@ minio:
         self.assertTrue(result)
         self.assertIn("Core services detected", output.getvalue())
 
+    def test_wait_for_level2_service_pods_tolerates_transient_expected_service_error(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 2
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 0/1 Error 1 45s",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 1 55s",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=2, require_vault_ready=False)
+
+        self.assertTrue(result)
+        self.assertIn("Observed transient service pod error", output.getvalue())
+        self.assertIn("Core services detected", output.getvalue())
+
+    def test_wait_for_level2_service_pods_still_fails_on_unexpected_error_pod(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.NS_COMMON = "common"
+        infrastructure.config.TIMEOUT_POD_WAIT = 1
+        snapshots = iter([
+            "\n".join([
+                "common-srvs-keycloak-0 1/1 Running 0 1m",
+                "common-srvs-minio-0 1/1 Running 0 1m",
+                "common-srvs-postgresql-0 1/1 Running 0 1m",
+                "common-srvs-vault-0 0/1 Running 0 1m",
+                "unexpected-helper-abcde 0/1 Error 1 10s",
+            ]),
+        ])
+        infrastructure.run_silent = lambda *_args, **_kwargs: next(snapshots, "")
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = infrastructure.wait_for_level2_service_pods("common", timeout=1, require_vault_ready=False)
+
+        self.assertFalse(result)
+        self.assertIn("Pod in error state: unexpected-helper-abcde (Error)", output.getvalue())
+
     def test_deploy_infrastructure_uses_startup_budget_timeout_for_first_common_services_install(self):
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_wsl_docker_config = lambda: True

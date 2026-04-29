@@ -11,6 +11,7 @@ from unittest import mock
 
 import main
 from adapters.inesdata.adapter import InesdataAdapter
+from deployers.shared.lib.contracts import DeploymentContext
 
 
 class FakeConfig:
@@ -137,6 +138,56 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Level 4 - Deploy Connectors: Succeeded (2 items)", output)
         self.assertNotIn("{", output)
 
+    def test_action_result_prints_nested_level_hosts_summary(self):
+        payload = {
+            "status": "completed",
+            "adapter": "inesdata",
+            "topology": "local",
+            "levels": [
+                {
+                    "level": 2,
+                    "name": "Deploy Infrastructure",
+                    "status": "completed",
+                    "result": {},
+                    "hosts_plan": {
+                        "level_1_2": [
+                            "auth.dev.ed.dataspaceunit.upm",
+                            "admin.auth.dev.ed.dataspaceunit.upm",
+                        ],
+                    },
+                    "hosts_sync": {
+                        "status": "skipped",
+                        "reason": "disabled",
+                    },
+                },
+                {
+                    "level": 3,
+                    "name": "Deploy Dataspace",
+                    "status": "completed",
+                    "result": {},
+                    "hosts_plan": {
+                        "level_3": ["registration-service-demo.dev.ds.dataspaceunit.upm"],
+                    },
+                    "hosts_sync": {
+                        "status": "updated",
+                    },
+                },
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Level 2 Hosts Level 1-2: 2", output)
+        self.assertIn("- auth.dev.ed.dataspaceunit.upm", output)
+        self.assertIn("- admin.auth.dev.ed.dataspaceunit.upm", output)
+        self.assertIn("Level 3 Hosts Level 3: 1", output)
+        self.assertIn("- registration-service-demo.dev.ds.dataspaceunit.upm", output)
+        self.assertIn("Level 3 hosts sync: Succeeded", output)
+        self.assertNotIn("Level 2 hosts sync: Skipped", output)
+
     def test_action_result_prints_compact_next_step_summary(self):
         payload = {
             "status": "completed",
@@ -154,6 +205,104 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("Result: Succeeded", output)
         self.assertIn("Dataspace: fake-ds", output)
         self.assertIn("Next step: Run Level 6 to validate the recreated dataspace and connectors.", output)
+
+    def test_action_result_prints_local_repair_summary(self):
+        payload = {
+            "status": "warning",
+            "scope": "local repair",
+            "adapter": "inesdata",
+            "topology": "local",
+            "doctor": {
+                "status": "ready_with_warnings",
+                "checks": [
+                    {"name": "kubectl", "status": "ok"},
+                    {"name": "minikube tunnel", "status": "warning"},
+                ],
+            },
+            "hosts_plan": {
+                "level_1_2": ["auth.dev.ed.dataspaceunit.upm"],
+            },
+            "missing_hostnames": ["registration-service-demo.dev.ds.dataspaceunit.upm"],
+            "hosts_sync": {
+                "status": "failed",
+                "reason": "repair-error",
+            },
+            "connector_recovery": {
+                "status": "skipped",
+                "reason": "not-requested",
+            },
+            "public_endpoint_preflight": {
+                "status": "failed",
+                "failures": [{"label": "Registration service"}],
+            },
+            "next_step": "Start minikube tunnel and rerun local-repair.",
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Scope: local repair", output)
+        self.assertIn("Doctor: Warning", output)
+        self.assertIn("Doctor warnings: 1", output)
+        self.assertIn("Hosts Level 1-2: 1", output)
+        self.assertIn("Missing hostnames: 1", output)
+        self.assertIn("Hosts sync: Failed (repair error)", output)
+        self.assertIn("Connector recovery: Skipped (not requested)", output)
+        self.assertIn("Public endpoints: Failed", output)
+        self.assertIn("Public endpoints failures: 1", output)
+        self.assertIn("Next step: Start minikube tunnel and rerun local-repair.", output)
+
+    def test_action_result_prints_configuration_migration_warnings(self):
+        payload = {
+            "status": "completed",
+            "adapter": "inesdata",
+            "topology": "vm-single",
+            "config_migration_warnings": [
+                {
+                    "key": "VM_EXTERNAL_IP",
+                    "recommended_overlay_paths": [
+                        "deployers/infrastructure/topologies/vm-single.config",
+                        "deployers/infrastructure/topologies/vm-distributed.config",
+                    ],
+                }
+            ],
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Configuration migration warnings: 1", output)
+        self.assertIn(
+            "- VM_EXTERNAL_IP -> deployers/infrastructure/topologies/vm-single.config, "
+            "deployers/infrastructure/topologies/vm-distributed.config",
+            output,
+        )
+
+    def test_action_result_prints_local_stability_summary(self):
+        payload = {
+            "status": "completed",
+            "adapter": "inesdata",
+            "topology": "local",
+            "local_stability": {
+                "postflight": {
+                    "status": "warning",
+                    "warnings": [{"name": "node_not_ready_delta"}],
+                    "blocking_issues": [],
+                }
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Local stability: Warning", output)
+        self.assertIn("Local stability warnings: 1", output)
 
     def test_action_result_prints_shared_foundation_scope_without_adapter_label(self):
         payload = {
@@ -507,7 +656,7 @@ class EdcDashboardReadinessTests(unittest.TestCase):
         keycloak_gate = next(gate for gate in readiness["gates"] if gate["gate"] == "keycloak-metadata")
         self.assertEqual(
             keycloak_gate["url"],
-            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demoedc/.well-known/openid-configuration",
+            "http://auth.dev.ed.dataspaceunit.upm/realms/demoedc/.well-known/openid-configuration",
         )
 
     def test_probe_edc_dashboard_readiness_uses_planned_role_namespaces_in_role_aligned(self):
@@ -676,7 +825,7 @@ class InesdataPortalReadinessTests(unittest.TestCase):
         keycloak_gate = next(gate for gate in readiness["gates"] if gate["gate"] == "keycloak-metadata")
         self.assertEqual(
             keycloak_gate["url"],
-            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/.well-known/openid-configuration",
+            "http://auth.dev.ed.dataspaceunit.upm/realms/demo/.well-known/openid-configuration",
         )
         token_gate = next(
             gate for gate in readiness["gates"]
@@ -685,7 +834,7 @@ class InesdataPortalReadinessTests(unittest.TestCase):
         self.assertTrue(token_gate["ready"])
         self.assertEqual(
             token_gate["url"],
-            "http://keycloak.dev.ed.dataspaceunit.upm/realms/demo/protocol/openid-connect/token",
+            "http://auth.dev.ed.dataspaceunit.upm/realms/demo/protocol/openid-connect/token",
         )
 
     def test_probe_inesdata_portal_readiness_uses_planned_role_namespaces_in_role_aligned(self):
@@ -1492,6 +1641,7 @@ class MainCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "deployer.config")
             example_path = os.path.join(tmpdir, "deployer.config.example")
+            overlay_path = os.path.join(tmpdir, "topologies", "vm-single.config")
             with open(example_path, "w", encoding="utf-8") as handle:
                 handle.write("ENVIRONMENT=DEV\n")
 
@@ -1520,13 +1670,13 @@ class MainCliTests(unittest.TestCase):
             ), contextlib.redirect_stdout(stdout):
                 result = main._interactive_offer_vm_single_address_configuration(required=True)
 
-            with open(config_path, "r", encoding="utf-8") as handle:
+            with open(overlay_path, "r", encoding="utf-8") as handle:
                 config_text = handle.read()
 
         self.assertTrue(result)
         self.assertIn("VM_EXTERNAL_IP=192.0.2.10\n", config_text)
         self.assertIn("INGRESS_EXTERNAL_IP=192.0.2.10\n", config_text)
-        self.assertIn("Updated deployers/infrastructure/deployer.config", stdout.getvalue())
+        self.assertIn("Updated deployers/infrastructure/topologies/vm-single.config", stdout.getvalue())
 
     def test_menu_level3_vm_single_requires_address_configuration_before_running(self):
         stdout = io.StringIO()
@@ -1666,6 +1816,34 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(adapter.infrastructure.reset_reasons, ["Interactive Level 2 recreate requested"])
         run_level.assert_called_once()
 
+    def test_interactive_hosts_preflight_applies_only_missing_entries_for_inesdata(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write("127.0.0.1 localhost\n127.0.0.1 conn-a.example.local\n")
+            hosts_file.flush()
+
+            stdout = io.StringIO()
+            with mock.patch("builtins.input", side_effect=["Y"]), contextlib.redirect_stdout(stdout):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "inesdata",
+                    levels=[4],
+                    adapter_registry={"inesdata": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"inesdata": "fake_deployer_module:FakeDeployer"},
+                    topology="local",
+                )
+
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertTrue(result)
+        self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
+        self.assertIn("registration-service-fake-ds.example.local", hosts_content)
+        self.assertIn("conn-b.example.local", hosts_content)
+        self.assertIn("Host entries are missing for adapter 'inesdata'", stdout.getvalue())
+
     def test_edc_interactive_hosts_preflight_applies_only_missing_entries(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
             os.environ,
@@ -1692,7 +1870,7 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
         self.assertIn("registration-service-fake-ds.example.local", hosts_content)
         self.assertIn("conn-b.example.local", hosts_content)
-        self.assertIn("EDC host entries are missing", stdout.getvalue())
+        self.assertIn("Host entries are missing for adapter 'edc'", stdout.getvalue())
 
     def test_edc_interactive_hosts_preflight_applies_only_missing_entries_for_vm_single(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
@@ -1720,7 +1898,7 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
         self.assertIn("192.0.2.10 registration-service-fake-ds.example.local", hosts_content)
         self.assertIn("192.0.2.10 conn-b.example.local", hosts_content)
-        self.assertIn("EDC host entries are missing", stdout.getvalue())
+        self.assertIn("Host entries are missing for adapter 'edc'", stdout.getvalue())
 
     def test_edc_interactive_hosts_preflight_can_cancel_level(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
@@ -1747,6 +1925,39 @@ class MainCliTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertNotIn("registration-service-fake-ds.example.local", hosts_content)
         self.assertIn("Level execution cancelled", stdout.getvalue())
+
+    def test_interactive_hosts_preflight_warns_about_legacy_aliases_without_blocking_when_canonical_hosts_exist(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write(
+                "127.0.0.1 localhost\n"
+                "127.0.0.1 auth.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 admin.auth.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 minio.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 console.minio-s3.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 registration-service-fake-ds.example.local\n"
+                "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm\n"
+            )
+            hosts_file.flush()
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "inesdata",
+                    levels=[3],
+                    adapter_registry={"inesdata": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"inesdata": "fake_deployer_module:FakeDeployer"},
+                    topology="local",
+                )
+
+        self.assertTrue(result)
+        rendered = stdout.getvalue()
+        self.assertIn("Legacy hostnames are still present outside framework-managed blocks", rendered)
+        self.assertIn("keycloak.dev.ed.dataspaceunit.upm -> auth.dev.ed.dataspaceunit.upm", rendered)
 
     def test_developer_shortcuts_delegate_setup_and_developer_actions(self):
         with mock.patch("builtins.input", side_effect=["B", "L", "Q"]), mock.patch.object(
@@ -1935,6 +2146,31 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result, "recover-ok")
         migrated_action.assert_called_once_with()
 
+    def test_menu_repair_shortcut_dispatches_local_repair(self):
+        with mock.patch("builtins.input", side_effect=["R", "Y", "N", "Q"]), mock.patch.object(
+            main,
+            "run_local_repair",
+            return_value={
+                "status": "completed",
+                "scope": "local repair",
+                "adapter": "fake",
+                "topology": "local",
+            },
+        ) as local_repair:
+            result = main.main(
+                ["menu"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        local_repair.assert_called_once()
+        self.assertTrue(local_repair.call_args.kwargs["apply_hosts"])
+        self.assertFalse(local_repair.call_args.kwargs["recover_connectors"])
+
     def test_migrated_inesdata_ui_action_does_not_import_inesdata_py(self):
         with mock.patch.dict(sys.modules, {"inesdata": None}), mock.patch.object(
             main.ui_interactive_menu,
@@ -2034,12 +2270,195 @@ class MainCliTests(unittest.TestCase):
             "_resolve_level_access_urls",
             return_value={"keycloak": "http://keycloak.example.local"},
         ):
-            result = main.run_level(adapter, 2, deployer_name="fake")
+            result = main.run_level(
+                adapter,
+                2,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+            )
 
         self.assertEqual(result["level"], 2)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["urls"], {"keycloak": "http://keycloak.example.local"})
+        self.assertEqual(result["hosts_plan"]["level_1_2"], [
+            "auth.dev.ed.dataspaceunit.upm",
+            "minio.dev.ed.dataspaceunit.upm",
+            "admin.auth.dev.ed.dataspaceunit.upm",
+            "console.minio-s3.dev.ed.dataspaceunit.upm",
+        ])
+        self.assertEqual(result["hosts_plan"]["level_3"], [])
+        self.assertEqual(result["hosts_sync"]["status"], "skipped")
         self.assertEqual(adapter.calls, ["deploy_infrastructure"])
+
+    def test_run_local_repair_applies_hosts_reconciliation(self):
+        adapter = FakeAdapter()
+        doctor_report = {
+            "status": "ready",
+            "checks": [
+                {"name": "kubectl", "status": "ok"},
+                {"name": "minikube", "status": "ok"},
+                {"name": "hosts file", "status": "ok"},
+                {"name": "minikube tunnel", "status": "ok"},
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ), mock.patch.object(
+            main.local_menu_tools,
+            "collect_framework_doctor_report",
+            return_value=doctor_report,
+        ), mock.patch.object(
+            main,
+            "_run_local_repair_public_endpoint_preflight",
+            return_value={"status": "passed", "checked": []},
+        ):
+            hosts_file.write("127.0.0.1 localhost\n")
+            hosts_file.flush()
+            result = main.run_local_repair(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["doctor"]["status"], "ready")
+        self.assertEqual(result["missing_hostnames"], [])
+        self.assertIn(result["hosts_sync"]["status"], {"updated", "unchanged"})
+        self.assertEqual(result["public_endpoint_preflight"]["status"], "passed")
+        self.assertIn("auth.dev.ed.dataspaceunit.upm", hosts_content)
+        self.assertIn("registration-service-fake-ds.example.local", hosts_content)
+
+    def test_run_local_repair_can_trigger_connector_recovery(self):
+        adapter = FakeAdapter()
+        doctor_report = {
+            "status": "ready",
+            "checks": [
+                {"name": "kubectl", "status": "ok"},
+                {"name": "minikube", "status": "ok"},
+                {"name": "hosts file", "status": "ok"},
+                {"name": "minikube tunnel", "status": "ok"},
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ), mock.patch.object(
+            main.local_menu_tools,
+            "collect_framework_doctor_report",
+            return_value=doctor_report,
+        ), mock.patch.object(
+            main,
+            "_run_local_repair_public_endpoint_preflight",
+            return_value={"status": "passed", "checked": []},
+        ), mock.patch.object(
+            main.local_menu_tools,
+            "run_connector_recovery_after_wsl_restart",
+            return_value=True,
+        ) as recover:
+            result = main.run_local_repair(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+                recover_connectors=True,
+            )
+
+        self.assertEqual(result["connector_recovery"]["status"], "completed")
+        recover.assert_called_once_with(adapter=adapter)
+
+    def test_run_local_repair_records_public_endpoint_preflight_failure(self):
+        adapter = FakeAdapter()
+        doctor_report = {
+            "status": "ready",
+            "checks": [
+                {"name": "kubectl", "status": "ok"},
+                {"name": "minikube", "status": "ok"},
+                {"name": "hosts file", "status": "ok"},
+                {"name": "minikube tunnel", "status": "ok"},
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ), mock.patch.object(
+            main.local_menu_tools,
+            "collect_framework_doctor_report",
+            return_value=doctor_report,
+        ), mock.patch.object(
+            main,
+            "_run_local_repair_public_endpoint_preflight",
+            side_effect=RuntimeError("public ingress endpoints are not reachable"),
+        ):
+            hosts_file.write("127.0.0.1 localhost\n")
+            hosts_file.flush()
+            result = main.run_local_repair(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["public_endpoint_preflight"]["status"], "failed")
+        self.assertIn("not reachable", result["public_endpoint_preflight"]["error"])
+
+    def test_interactive_full_levels_defers_hosts_reconciliation_until_level_three(self):
+        events = []
+
+        def fake_run_level(adapter, level, **kwargs):
+            events.append(("level", int(level)))
+            return {
+                "level": int(level),
+                "name": main.LEVEL_DESCRIPTIONS[int(level)],
+                "status": "completed",
+                "result": {},
+            }
+
+        def fake_hosts_ready(adapter_name, levels=None, **kwargs):
+            events.append(("hosts", int((levels or [0])[0])))
+            return True
+
+        with mock.patch.object(main, "run_level", side_effect=fake_run_level), mock.patch.object(
+            main,
+            "_interactive_ensure_hosts_ready_for_levels",
+            side_effect=fake_hosts_ready,
+        ):
+            result = main._run_interactive_full_levels(
+                "fake",
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                topology="local",
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            events,
+            [
+                ("level", 1),
+                ("level", 2),
+                ("hosts", 3),
+                ("level", 3),
+                ("hosts", 4),
+                ("level", 4),
+                ("hosts", 5),
+                ("level", 5),
+                ("hosts", 6),
+                ("level", 6),
+            ],
+        )
 
     def test_run_level_five_uses_vm_single_component_deployment(self):
         adapter = FakeAdapter()
@@ -2105,6 +2524,7 @@ class MainCliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "deployer.config")
+            overlay_path = os.path.join(tmpdir, "topologies", "vm-single.config")
             with open(config_path, "w", encoding="utf-8") as handle:
                 handle.write(
                     "\n".join(
@@ -2133,7 +2553,7 @@ class MainCliTests(unittest.TestCase):
                 ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
                 result = main.run_level(adapter, 1, deployer_name="fake", topology="vm-single")
 
-            with open(config_path, "r", encoding="utf-8") as handle:
+            with open(overlay_path, "r", encoding="utf-8") as handle:
                 config_text = handle.read()
 
         self.assertEqual(result["level"], 1)
@@ -2741,6 +3161,54 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["hosts_plan"]["level_3"], ["registration-service-fake-ds.example.local"])
         self.assertEqual(result["hosts_plan"]["level_4"], ["conn-a.example.local", "conn-b.example.local"])
 
+    def test_hosts_command_dry_run_reports_legacy_external_hostnames_when_hosts_file_is_known(self):
+        adapter = FakeAdapter()
+        context = DeploymentContext(
+            deployer="fake",
+            topology="local",
+            environment="DEV",
+            dataspace_name="fake-ds",
+            ds_domain_base="example.local",
+            connectors=["conn-a", "conn-b"],
+            config={"DOMAIN_BASE": "dev.ed.dataspaceunit.upm"},
+        )
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ), mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("fake", context),
+        ):
+            hosts_file.write(
+                "127.0.0.1 localhost\n"
+                "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm\n"
+            )
+            hosts_file.flush()
+            result = main.run_hosts(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+
+        self.assertEqual(
+            result["hosts_plan"]["legacy_external_hostnames"],
+            [
+                {
+                    "legacy": "keycloak.dev.ed.dataspaceunit.upm",
+                    "canonical": "auth.dev.ed.dataspaceunit.upm",
+                },
+                {
+                    "legacy": "keycloak-admin.dev.ed.dataspaceunit.upm",
+                    "canonical": "admin.auth.dev.ed.dataspaceunit.upm",
+                },
+            ],
+        )
+
     def test_action_result_prints_hosts_plan_when_sync_is_disabled(self):
         payload = {
             "status": "planned",
@@ -2751,6 +3219,12 @@ class MainCliTests(unittest.TestCase):
                 "level_3": ["registration-service-demo.example.local"],
                 "level_4": ["conn-a.example.local", "conn-b.example.local"],
                 "address": "127.0.0.1",
+                "legacy_external_hostnames": [
+                    {
+                        "legacy": "keycloak.dev.ed.dataspaceunit.upm",
+                        "canonical": "auth.dev.ed.dataspaceunit.upm",
+                    }
+                ],
             },
             "hosts_sync": {
                 "status": "skipped",
@@ -2770,6 +3244,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("- conn-a.example.local", output)
         self.assertIn("- conn-b.example.local", output)
         self.assertIn("Hosts address: 127.0.0.1", output)
+        self.assertIn("Hosts legacy aliases detected: 1", output)
         self.assertIn("Hosts sync: Skipped (disabled by configuration)", output)
 
     def test_menu_hosts_can_offer_to_apply_plan_when_sync_is_disabled(self):
@@ -2881,6 +3356,57 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("127.0.0.1 conn-a.example.local", result["hosts_sync"]["skipped_existing"]["connectors fake fake-ds"])
         self.assertIn("127.0.0.1 conn-b.example.local", hosts_content)
         self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
+
+    def test_hosts_command_reports_legacy_external_hostnames(self):
+        adapter = FakeAdapter()
+        context = DeploymentContext(
+            deployer="fake",
+            topology="local",
+            environment="DEV",
+            dataspace_name="fake-ds",
+            ds_domain_base="example.local",
+            connectors=["conn-a", "conn-b"],
+            config={"DOMAIN_BASE": "dev.ed.dataspaceunit.upm"},
+        )
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {
+                "PIONERA_SYNC_HOSTS": "true",
+                "PIONERA_HOSTS_FILE": hosts_file.name,
+            },
+            clear=False,
+        ), mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("fake", context),
+        ):
+            hosts_file.write(
+                "127.0.0.1 localhost\n"
+                "127.0.0.1 keycloak.dev.ed.dataspaceunit.upm\n"
+                "127.0.0.1 keycloak-admin.dev.ed.dataspaceunit.upm\n"
+            )
+            hosts_file.flush()
+            result = main.run_hosts(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+
+        self.assertEqual(
+            result["hosts_sync"]["legacy_external_hostnames"],
+            [
+                {
+                    "legacy": "keycloak.dev.ed.dataspaceunit.upm",
+                    "canonical": "auth.dev.ed.dataspaceunit.upm",
+                },
+                {
+                    "legacy": "keycloak-admin.dev.ed.dataspaceunit.upm",
+                    "canonical": "admin.auth.dev.ed.dataspaceunit.upm",
+                },
+            ],
+        )
 
     def test_deploy_command_prepares_local_edc_image_when_missing_override(self):
         adapter = FakeAdapter()
@@ -3163,6 +3689,132 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(events, ["validation", "newman_metrics", "kafka_edc"])
         self.assertEqual(result["kafka_edc_results"][0]["status"], "passed")
 
+    def test_level6_validation_mode_defaults_to_stable_only_for_local(self):
+        local_mode = main._resolve_level6_validation_mode(topology="local")
+        vm_mode = main._resolve_level6_validation_mode(topology="vm-single")
+        explicit_fast = main._resolve_level6_validation_mode("fast", topology="local")
+
+        self.assertEqual(local_mode["effective"], "stable")
+        self.assertTrue(local_mode["local_stable"])
+        self.assertEqual(vm_mode["effective"], "fast")
+        self.assertFalse(vm_mode["local_stable"])
+        self.assertEqual(explicit_fast["effective"], "fast")
+        self.assertFalse(explicit_fast["local_stable"])
+
+    def test_level6_local_stability_checks_are_limited_to_real_local_stable_deployers(self):
+        local_mode = main._resolve_level6_validation_mode(topology="local")
+        vm_mode = main._resolve_level6_validation_mode(topology="vm-single")
+
+        self.assertTrue(main._should_run_level6_local_stability_checks(local_mode, deployer_name="inesdata"))
+        self.assertTrue(main._should_run_level6_local_stability_checks(local_mode, deployer_name="edc"))
+        self.assertFalse(main._should_run_level6_local_stability_checks(local_mode, deployer_name="fake"))
+        self.assertFalse(main._should_run_level6_local_stability_checks(vm_mode, deployer_name="inesdata"))
+        self.assertFalse(
+            main._should_run_level6_local_stability_checks(
+                local_mode,
+                deployer_name="edc",
+                validation_profile=types.SimpleNamespace(adapter="fake"),
+            )
+        )
+        self.assertFalse(
+            main._should_run_level6_local_stability_checks(
+                local_mode,
+                deployer_name="inesdata",
+                env={"PIONERA_LOCAL_STABILITY_CHECKS": "false"},
+            )
+        )
+
+    def test_run_validate_records_local_stability_for_local_stable_real_deployer(self):
+        class InesdataValidationDeployer(FakeDeployer):
+            def get_validation_profile(self, context):
+                return {
+                    "adapter": "inesdata",
+                    "newman_enabled": True,
+                    "test_data_cleanup_enabled": False,
+                    "playwright_enabled": False,
+                }
+
+        adapter = FakeAdapter()
+        self.fake_deployer_module.InesdataValidationDeployer = InesdataValidationDeployer
+        preflight = {"status": "passed", "restart_index": {}, "node_not_ready_event_count": 0}
+        postflight = {"status": "warning", "warnings": [{"name": "node_not_ready_delta"}]}
+
+        with mock.patch.object(
+            main,
+            "build_metrics_collector",
+            return_value=mock.Mock(collect_experiment_newman_metrics=lambda experiment_dir: []),
+        ), mock.patch.object(
+            main,
+            "_run_level6_local_stability_preflight",
+            return_value=preflight,
+        ) as preflight_mock, mock.patch.object(
+            main,
+            "_run_level6_local_stability_postflight",
+            return_value=postflight,
+        ) as postflight_mock:
+            result = main.run_validate(
+                adapter,
+                deployer_name="inesdata",
+                deployer_registry={
+                    **self.deployer_registry,
+                    "inesdata": "fake_deployer_module:InesdataValidationDeployer",
+                },
+                validation_engine_cls=FakeValidationEngine,
+                experiment_storage=FakeStorage,
+                topology="local",
+            )
+
+        preflight_mock.assert_called_once()
+        postflight_mock.assert_called_once()
+        self.assertIs(result["local_stability"]["preflight"], preflight)
+        self.assertIs(result["local_stability"]["postflight"], postflight)
+
+    def test_run_validate_local_stable_defers_background_kafka_preparation(self):
+        class KafkaReadyAdapter(FakeAdapter):
+            def get_kafka_config(self):
+                return {"bootstrap_servers": "localhost:9092"}
+
+        class InesdataValidationDeployer(FakeDeployer):
+            def get_validation_profile(self, context):
+                return {
+                    "adapter": "inesdata",
+                    "newman_enabled": True,
+                    "test_data_cleanup_enabled": False,
+                    "playwright_enabled": False,
+                }
+
+        adapter = KafkaReadyAdapter()
+        self.fake_deployer_module.InesdataValidationDeployer = InesdataValidationDeployer
+
+        with mock.patch.object(
+            main,
+            "build_metrics_collector",
+            return_value=mock.Mock(collect_experiment_newman_metrics=lambda experiment_dir: []),
+        ), mock.patch.object(
+            main,
+            "_start_level6_kafka_preparation",
+            return_value=None,
+        ) as start_preparation, mock.patch.object(
+            main,
+            "run_level6_kafka_edc_after_newman",
+            return_value=[],
+        ):
+            result = main.run_validate(
+                adapter,
+                deployer_name="fake",
+                deployer_registry={
+                    **self.deployer_registry,
+                    "fake": "fake_deployer_module:InesdataValidationDeployer",
+                },
+                validation_engine_cls=FakeValidationEngine,
+                experiment_storage=FakeStorage,
+                topology="local",
+            )
+
+        self.assertEqual(result["validation_mode"]["effective"], "stable")
+        self.assertTrue(result["validation_mode"]["local_stable"])
+        self.assertFalse(start_preparation.call_args.kwargs["background"])
+
     def test_run_validate_prepares_kafka_in_background_without_blocking_newman(self):
         events = []
         validation_started = threading.Event()
@@ -3247,6 +3899,7 @@ class MainCliTests(unittest.TestCase):
                 validation_engine_cls=RecordingValidationEngine,
                 experiment_storage=FakeStorage,
                 kafka_manager_cls=BlockingKafkaManager,
+                validation_mode="fast",
             )
 
         self.assertEqual(result["kafka_edc_results"][0]["status"], "passed")
@@ -4388,16 +5041,30 @@ class MainCliTests(unittest.TestCase):
         )
 
     def test_hosts_command_dry_run_includes_hosts_plan(self):
-        result = main.main(
-            ["fake", "hosts", "--dry-run", "--topology", "local"],
-            adapter_registry=self.registry,
-            deployer_registry=self.deployer_registry,
-            experiment_storage=FakeStorage,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            infrastructure_dir = os.path.join(tmpdir, "deployers", "infrastructure")
+            os.makedirs(infrastructure_dir, exist_ok=True)
+            config_path = os.path.join(infrastructure_dir, "deployer.config")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                handle.write("PG_HOST=localhost\n")
+
+            with mock.patch.object(main, "_infrastructure_deployer_config_path", return_value=config_path):
+                result = main.main(
+                    ["fake", "hosts", "--dry-run", "--topology", "local"],
+                    adapter_registry=self.registry,
+                    deployer_registry=self.deployer_registry,
+                    experiment_storage=FakeStorage,
+                )
 
         self.assertEqual(result["status"], "dry-run")
         self.assertEqual(result["command"], "hosts")
         self.assertIn("plan_hosts_entries", result["actions"])
+        self.assertEqual(result["config_migration_warnings"][0]["key"], "PG_HOST")
+        self.assertTrue(
+            result["config_migration_warnings"][0]["recommended_overlay_paths"][0].endswith(
+                "deployers/infrastructure/topologies/local.config"
+            )
+        )
         self.assertEqual(result["namespace_profile"], "compact")
         self.assertEqual(result["hosts_plan"]["namespace_profile"], "compact")
         self.assertEqual(result["hosts_plan"]["namespace_plan_summary"]["status"], "active")
@@ -4406,6 +5073,59 @@ class MainCliTests(unittest.TestCase):
             result["hosts_plan"]["planned_namespace_roles"]["registration_service_namespace"],
             "fake-ds",
         )
+
+    def test_local_repair_command_dry_run_includes_doctor_and_hosts_plan(self):
+        doctor_report = {
+            "status": "ready",
+            "checks": [
+                {"name": "kubectl", "status": "ok"},
+                {"name": "minikube", "status": "ok"},
+                {"name": "hosts file", "status": "ok"},
+                {"name": "minikube tunnel", "status": "ok"},
+            ],
+        }
+
+        with mock.patch.object(
+            main.local_menu_tools,
+            "collect_framework_doctor_report",
+            return_value=doctor_report,
+        ):
+            result = main.main(
+                ["fake", "local-repair", "--dry-run"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "dry-run")
+        self.assertEqual(result["command"], "local-repair")
+        self.assertIn("doctor", result)
+        self.assertIn("hosts_plan", result)
+        self.assertIn("missing_hostnames", result)
+        self.assertIn("verify_public_ingress_endpoints", result["actions"])
+        self.assertEqual(result["public_endpoint_preflight"]["status"], "planned")
+
+    def test_local_repair_command_dispatches_to_run_local_repair(self):
+        with mock.patch.object(
+            main,
+            "run_local_repair",
+            return_value={"status": "completed", "scope": "local repair"},
+        ) as local_repair:
+            result = main.main(
+                ["fake", "local-repair"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "completed")
+        local_repair.assert_called_once()
+        self.assertTrue(local_repair.call_args.kwargs["apply_hosts"])
+        self.assertFalse(local_repair.call_args.kwargs["recover_connectors"])
 
     def test_recreate_dataspace_dry_run_includes_protected_plan(self):
         result = main.main(

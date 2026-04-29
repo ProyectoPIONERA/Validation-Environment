@@ -123,6 +123,113 @@ class NewmanMetricsTests(unittest.TestCase):
         mock_wait.assert_called_once()
         self.assertTrue(mock_wait.call_args.args[0].endswith("environment.json"))
 
+    @mock.patch("framework.newman_executor.requests.post")
+    def test_management_api_preflight_checks_provider_consumer_and_catalog(self, mock_post):
+        executor = NewmanExecutor()
+        login_response = mock.Mock(status_code=200)
+        login_response.json.return_value = {"access_token": "token-123"}
+        assets_response = mock.Mock(status_code=200)
+        assets_response.json.return_value = []
+        negotiations_response = mock.Mock(status_code=200)
+        negotiations_response.json.return_value = []
+        catalog_response = mock.Mock(status_code=200)
+        catalog_response.json.return_value = {"dcat:dataset": []}
+        mock_post.side_effect = [
+            login_response,
+            login_response,
+            assets_response,
+            negotiations_response,
+            catalog_response,
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            diagnostics = executor.run_management_api_preflight(
+                {
+                    "provider": "conn-a",
+                    "consumer": "conn-b",
+                    "provider_user": "provider-user",
+                    "provider_password": "provider-pass",
+                    "consumer_user": "consumer-user",
+                    "consumer_password": "consumer-pass",
+                    "dsDomain": "example.local",
+                    "dataspace": "demo",
+                    "keycloakUrl": "http://auth.example.local",
+                    "keycloakClientId": "dataspace-users",
+                    "providerParticipantId": "conn-a",
+                    "providerProtocolAddress": "http://conn-a:19194/protocol",
+                },
+                report_dir=tmpdir,
+            )
+
+            report_path = os.path.join(tmpdir, "00_management_api_preflight.json")
+            with open(report_path, "r", encoding="utf-8") as f:
+                persisted = json.load(f)
+
+        self.assertEqual(len(diagnostics["checks"]), 5)
+        self.assertTrue(all(check["ok"] for check in diagnostics["checks"]))
+        self.assertEqual(persisted["provider"], "conn-a")
+        self.assertEqual(mock_post.call_count, 5)
+        self.assertIn(
+            "auth.example.local/realms/demo/protocol/openid-connect/token",
+            mock_post.call_args_list[0].args[0],
+        )
+        self.assertIn(
+            "conn-a.example.local/management/v3/assets/request",
+            mock_post.call_args_list[2].args[0],
+        )
+        self.assertIn(
+            "conn-b.example.local/management/v3/catalog/request",
+            mock_post.call_args_list[4].args[0],
+        )
+
+    @mock.patch("framework.newman_executor.requests.post")
+    def test_management_api_preflight_raises_with_diagnostic_when_management_auth_fails(self, mock_post):
+        executor = NewmanExecutor()
+        login_response = mock.Mock(status_code=200)
+        login_response.json.return_value = {"access_token": "token-123"}
+        unauthorized_response = mock.Mock(status_code=401)
+        unauthorized_response.text = '[{"message":"Request could not be authenticated","type":"AuthenticationFailed"}]'
+        negotiations_response = mock.Mock(status_code=200)
+        negotiations_response.json.return_value = []
+        catalog_response = mock.Mock(status_code=200)
+        catalog_response.json.return_value = {"dcat:dataset": []}
+        mock_post.side_effect = [
+            login_response,
+            login_response,
+            unauthorized_response,
+            negotiations_response,
+            catalog_response,
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(RuntimeError, "provider-assets-request: provider assets preflight returned HTTP 401"):
+                executor.run_management_api_preflight(
+                    {
+                        "provider": "conn-a",
+                        "consumer": "conn-b",
+                        "provider_user": "provider-user",
+                        "provider_password": "provider-pass",
+                        "consumer_user": "consumer-user",
+                        "consumer_password": "consumer-pass",
+                        "dsDomain": "example.local",
+                        "dataspace": "demo",
+                        "keycloakUrl": "http://auth.example.local",
+                        "keycloakClientId": "dataspace-users",
+                        "providerParticipantId": "conn-a",
+                        "providerProtocolAddress": "http://conn-a:19194/protocol",
+                    },
+                    report_dir=tmpdir,
+                )
+
+            report_path = os.path.join(tmpdir, "00_management_api_preflight.json")
+            with open(report_path, "r", encoding="utf-8") as f:
+                persisted = json.load(f)
+
+        failed_checks = [check for check in persisted["checks"] if not check["ok"]]
+        self.assertEqual(len(failed_checks), 1)
+        self.assertEqual(failed_checks[0]["name"], "provider-assets-request")
+        self.assertIn("HTTP 401", failed_checks[0]["detail"])
+
     def test_environment_health_collection_loads_health_script(self):
         executor = NewmanExecutor()
 
@@ -786,11 +893,49 @@ class NewmanMetricsTests(unittest.TestCase):
         env_vars = fake_executor.run_validation_collections.call_args.args[0]
         self.assertEqual(env_vars["keycloakUrl"], "http://keycloak.local")
         self.assertEqual(env_vars["keycloakClientId"], "dataspace-users")
-        self.assertIn(os.path.basename(tmpdir).lower(), env_vars["e2e_run_scope"])
+        self.assertIn(engine._safe_scope_part(os.path.basename(tmpdir)), env_vars["e2e_run_scope"])
         self.assertIn("conn-b", env_vars["e2e_run_scope"])
         self.assertIn("conn-a", env_vars["e2e_run_scope"])
         report_dir = fake_executor.run_validation_collections.call_args.kwargs["report_dir"]
         self.assertIn("newman_reports", report_dir)
+
+    def test_validation_engine_runs_management_preflight_before_collections(self):
+        executor = NewmanExecutor()
+        with mock.patch.object(
+            executor,
+            "run_management_api_preflight",
+            return_value={"checks": []},
+        ) as preflight_mock, mock.patch.object(
+            executor,
+            "run_validation_collections",
+            return_value=["report.json"],
+        ) as run_mock:
+            engine = ValidationEngine(
+                newman_executor=executor,
+                load_connector_credentials=lambda name: {"connector_user": {"user": name, "passwd": "secret"}},
+                load_deployer_config=lambda: {
+                    "KC_URL": "http://keycloak-admin.local",
+                    "KC_INTERNAL_URL": "http://keycloak.local",
+                },
+                cleanup_test_entities=lambda connector: None,
+                validation_test_entities_absent=lambda connector: (True, []),
+                ds_domain_resolver=lambda: "example.local",
+                ds_name="demo",
+            )
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                reports = engine.run_dataspace_validation(
+                    "conn-a",
+                    "conn-b",
+                    experiment_dir=tmpdir,
+                    run_index=1,
+                )
+
+        self.assertEqual(reports, ["report.json"])
+        preflight_mock.assert_called_once()
+        run_mock.assert_called_once()
+        self.assertEqual(preflight_mock.call_args.args[0]["provider"], "conn-a")
+        self.assertEqual(preflight_mock.call_args.args[0]["consumer"], "conn-b")
 
     def test_provider_setup_collection_uses_dynamic_transfer_object_name(self):
         with open("validation/core/collections/03_provider_setup.json", "r", encoding="utf-8") as handle:

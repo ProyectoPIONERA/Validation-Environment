@@ -35,6 +35,7 @@ from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
 from framework.kafka_edc_validation import KafkaEdcValidationSuite
 from framework.kafka_manager import KafkaManager
+from framework.local_stability import LocalStabilityMonitor, compare_local_stability
 from framework.metrics_collector import MetricsCollector
 from framework.reporting.experiment_loader import ExperimentLoader
 from framework.reporting.report_generator import ExperimentReportGenerator
@@ -45,12 +46,20 @@ from deployers.infrastructure.lib.hosts_manager import (
     apply_managed_blocks,
     blocks_as_dict,
     build_context_host_blocks,
+    detect_legacy_external_hostnames,
     hostnames_by_level,
     parse_hostnames,
 )
 from deployers.infrastructure.lib.config_loader import (
     apply_pionera_environment_overrides,
+    detect_topology_key_migration_warnings,
     load_deployer_config as load_raw_deployer_config,
+    load_layered_deployer_config,
+    topology_overlay_config_path,
+)
+from deployers.infrastructure.lib.public_hostnames import (
+    resolved_common_service_hostnames,
+    resolved_common_service_urls,
 )
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
@@ -83,8 +92,9 @@ DEPLOYER_REGISTRY = {
     "edc": "deployers.edc.deployer:EdcDeployer",
 }
 
-SUPPORTED_COMMANDS = ("deploy", "validate", "metrics", "run", "hosts", "recreate-dataspace")
+SUPPORTED_COMMANDS = ("deploy", "validate", "metrics", "run", "hosts", "local-repair", "recreate-dataspace")
 SUPPORTED_TOPOLOGIES = DEPLOYER_SUPPORTED_TOPOLOGIES
+SUPPORTED_VALIDATION_MODES = ("auto", "stable", "fast")
 LEVEL_DESCRIPTIONS = {
     1: "Setup Cluster",
     2: "Deploy Common Services",
@@ -100,6 +110,187 @@ def _env_flag(name, default=False):
     if raw_value is None:
         return default
     return str(raw_value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_level6_validation_mode(mode=None, topology="local", env=None):
+    env = env if env is not None else os.environ
+    requested = str(
+        mode
+        or env.get("PIONERA_VALIDATION_MODE")
+        or env.get("LEVEL6_VALIDATION_MODE")
+        or "auto"
+    ).strip().lower()
+    if requested == "local-stable":
+        requested = "stable"
+    if requested not in SUPPORTED_VALIDATION_MODES:
+        raise ValueError(
+            "Unsupported validation mode "
+            f"'{requested}'. Choose from {', '.join(SUPPORTED_VALIDATION_MODES)}."
+        )
+
+    normalized_topology = normalize_topology(topology or LOCAL_TOPOLOGY)
+    effective = "stable" if requested == "auto" and normalized_topology == LOCAL_TOPOLOGY else requested
+    if effective == "auto":
+        effective = "fast"
+
+    return {
+        "requested": requested,
+        "effective": effective,
+        "topology": normalized_topology,
+        "local_stable": normalized_topology == LOCAL_TOPOLOGY and effective == "stable",
+    }
+
+
+def _should_run_level6_local_stability_checks(validation_mode_info, deployer_name=None, validation_profile=None, env=None):
+    env = env if env is not None else os.environ
+    if str(env.get("PIONERA_LOCAL_STABILITY_CHECKS", "true")).strip().lower() in ("0", "false", "no", "off"):
+        return False
+    if not isinstance(validation_mode_info, dict) or not validation_mode_info.get("local_stable"):
+        return False
+    supported = {"inesdata", "edc"}
+    if str(deployer_name or "").strip().lower() not in supported:
+        return False
+    if validation_profile is None:
+        return True
+    return str(getattr(validation_profile, "adapter", "") or "").strip().lower() in supported
+
+
+def _level6_local_stability_namespaces(deployer_context):
+    namespaces = []
+    roles = _context_namespace_roles_dict(deployer_context) if deployer_context is not None else {}
+    for value in roles.values():
+        namespace = str(value or "").strip()
+        if namespace and namespace not in namespaces:
+            namespaces.append(namespace)
+
+    config = getattr(deployer_context, "config", {}) if deployer_context is not None else {}
+    if isinstance(config, dict):
+        for key in ("NS_COMMON", "COMMON_SERVICES_NAMESPACE", "COMPONENTS_NAMESPACE"):
+            namespace = str(config.get(key) or "").strip()
+            if namespace and namespace not in namespaces:
+                namespaces.append(namespace)
+
+    for namespace in ("common-srvs", "components", "ingress-nginx", "kube-system"):
+        if namespace not in namespaces:
+            namespaces.append(namespace)
+    return namespaces
+
+
+def _write_level6_local_stability_artifact(experiment_dir, name, payload):
+    if not experiment_dir:
+        return None
+    path = os.path.join(experiment_dir, name)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+    return path
+
+
+def _level6_local_stability_failure_message(snapshot):
+    issues = list(snapshot.get("blocking_issues") or []) if isinstance(snapshot, dict) else []
+    details = []
+    for issue in issues[:5]:
+        name = str(issue.get("name") or "check").strip()
+        detail = str(issue.get("detail") or issue.get("reason") or "not ready").strip()
+        details.append(f"{name}: {detail}")
+    suffix = f" Details: {'; '.join(details)}" if details else ""
+    artifact = snapshot.get("artifact") if isinstance(snapshot, dict) else None
+    artifact_suffix = f" Artifact: {artifact}" if artifact else ""
+    return (
+        "Local stable validation cannot start because the local Kubernetes runtime "
+        f"is not ready after the stability wait window.{suffix}{artifact_suffix}"
+    )
+
+
+def _print_level6_local_stability(label, payload):
+    if not isinstance(payload, dict):
+        return
+    status = str(payload.get("status") or "").strip().lower()
+    if not status or status == "skipped":
+        return
+    warnings = list(payload.get("warnings") or [])
+    blocking = list(payload.get("blocking_issues") or [])
+    if status == "passed":
+        print(f"Local stability {label}: ready.")
+    elif status == "warning":
+        print(f"Local stability {label}: warning ({len(warnings)} warning(s)).")
+    elif status == "failed":
+        print(f"Local stability {label}: failed ({len(blocking)} blocking issue(s)).")
+
+
+def _run_level6_local_stability_preflight(
+    validation_mode_info,
+    deployer_name,
+    deployer_context,
+    experiment_dir,
+    *,
+    validation_profile=None,
+    monitor_cls=LocalStabilityMonitor,
+):
+    if not _should_run_level6_local_stability_checks(
+        validation_mode_info,
+        deployer_name=deployer_name,
+        validation_profile=validation_profile,
+    ):
+        return {"status": "skipped", "reason": "not-local-stable-runtime"}
+
+    namespaces = _level6_local_stability_namespaces(deployer_context)
+    timeout = _positive_int_env("PIONERA_LOCAL_STABILITY_TIMEOUT_SECONDS", 120)
+    poll_interval = max(1, _positive_int_env("PIONERA_LOCAL_STABILITY_POLL_SECONDS", 5))
+    print("\nChecking local Kubernetes stability before Level 6...")
+    monitor = monitor_cls(namespaces)
+    snapshot = monitor.wait_until_ready(
+        timeout_seconds=timeout,
+        poll_interval_seconds=poll_interval,
+    )
+    snapshot["artifact"] = _write_level6_local_stability_artifact(
+        experiment_dir,
+        "local_stability_preflight.json",
+        snapshot,
+    )
+    _print_level6_local_stability("preflight", snapshot)
+
+    if snapshot.get("status") == "failed" and _env_flag("PIONERA_LOCAL_STABILITY_STRICT", default=True):
+        raise RuntimeError(_level6_local_stability_failure_message(snapshot))
+    return snapshot
+
+
+def _run_level6_local_stability_postflight(
+    validation_mode_info,
+    deployer_name,
+    deployer_context,
+    experiment_dir,
+    preflight_snapshot,
+    *,
+    validation_profile=None,
+    monitor_cls=LocalStabilityMonitor,
+):
+    if not _should_run_level6_local_stability_checks(
+        validation_mode_info,
+        deployer_name=deployer_name,
+        validation_profile=validation_profile,
+    ):
+        return {"status": "skipped", "reason": "not-local-stable-runtime"}
+    if not isinstance(preflight_snapshot, dict) or preflight_snapshot.get("status") == "skipped":
+        return {"status": "skipped", "reason": "missing-preflight"}
+
+    namespaces = _level6_local_stability_namespaces(deployer_context)
+    monitor = monitor_cls(namespaces)
+    snapshot = monitor.snapshot()
+    comparison = compare_local_stability(preflight_snapshot, snapshot)
+    result = {
+        "status": comparison.get("status"),
+        "snapshot": snapshot,
+        "comparison": comparison,
+        "warnings": list(comparison.get("warnings") or []) + list(snapshot.get("warnings") or []),
+        "blocking_issues": list(snapshot.get("blocking_issues") or []),
+    }
+    result["artifact"] = _write_level6_local_stability_artifact(
+        experiment_dir,
+        "local_stability_postflight.json",
+        result,
+    )
+    _print_level6_local_stability("postflight", result)
+    return result
 
 
 @contextlib.contextmanager
@@ -483,10 +674,15 @@ def _edc_dashboard_public_base_url(connector_name, deployer_context):
 
 def _public_keycloak_base_url(deployer_context):
     config = dict(getattr(deployer_context, "config", {}) or {})
-    for key in ("KC_INTERNAL_URL", "KC_URL", "KEYCLOAK_HOSTNAME"):
-        normalized = normalize_public_endpoint_url(_mapping_value(config, key))
+    resolved_urls = resolved_common_service_urls(config)
+    for key in ("KC_INTERNAL_URL", "KC_URL"):
+        normalized = normalize_public_endpoint_url(_mapping_value(resolved_urls, key))
         if normalized:
             return normalized
+    resolved_hostnames = resolved_common_service_hostnames(config)
+    normalized = normalize_public_endpoint_url(f"http://{resolved_hostnames['keycloak_hostname']}")
+    if normalized:
+        return normalized
     return None
 
 
@@ -1545,6 +1741,7 @@ def _start_level6_kafka_preparation(
     validation_profile=None,
     deployer_name=None,
     kafka_manager_cls=KafkaManager,
+    background=True,
 ):
     if len(list(connectors or [])) < 2:
         return None
@@ -1556,6 +1753,9 @@ def _start_level6_kafka_preparation(
         return None
 
     kafka_manager = build_kafka_manager(adapter, manager_cls=kafka_manager_cls)
+    if not background:
+        print("\nKafka runtime preparation deferred until Kafka validation (stable local mode).")
+        return None
     print("\nPreparing Kafka runtime in background while Newman validation runs...")
     return _Level6KafkaPreparationHandle(kafka_manager).start()
 
@@ -2050,6 +2250,8 @@ def build_dry_run_preview(
     deployer_registry=None,
     include_deployer_dry_run=None,
     with_connectors=False,
+    recover_connectors=False,
+    validation_mode=None,
 ):
     """Build a safe preview of what a command would execute."""
     adapter = build_adapter(
@@ -2068,6 +2270,8 @@ def build_dry_run_preview(
         "iterations": iterations,
         "kafka_enabled": kafka_enabled,
         "baseline": baseline,
+        "validation_mode": _resolve_level6_validation_mode(validation_mode, topology=topology),
+        "config_migration_warnings": _infrastructure_config_migration_warnings(),
         "actions": [],
     }
 
@@ -2097,7 +2301,14 @@ def build_dry_run_preview(
 
     if command == "validate":
         validation_engine = build_validation_engine(adapter, engine_cls=validation_engine_cls)
-        preview["actions"] = ["resolve_connectors", "run_pre_validation_cleanup_if_enabled", "run_validation"]
+        preview["actions"] = [
+            "resolve_connectors",
+            "run_pre_validation_cleanup_if_enabled",
+            "run_validation",
+            "run_kafka_validation",
+            "run_playwright_validation",
+            "run_component_validation",
+        ]
         preview["validation_engine"] = type(validation_engine).__name__
         preview["cleanup_available"] = callable(
             _resolve_adapter_callable(
@@ -2142,6 +2353,45 @@ def build_dry_run_preview(
             preview["namespace_roles"] = _context_namespace_roles_dict(context)
             preview["planned_namespace_roles"] = _context_planned_namespace_roles_dict(context)
             preview["hosts_plan"] = _build_shadow_host_sync_plan(context)
+        except Exception as exc:
+            preview["hosts_plan"] = {
+                "status": "unavailable",
+                "reason": str(exc),
+            }
+        return preview
+
+    if command == "local-repair":
+        preview["actions"] = [
+            "collect_local_access_doctor_report",
+            "resolve_deployer_context",
+            "plan_hosts_reconciliation",
+            "apply_hosts_reconciliation",
+            "verify_public_ingress_endpoints",
+        ]
+        if recover_connectors:
+            preview["actions"].append("recover_connector_runtimes")
+        preview["recover_connectors"] = bool(recover_connectors)
+        preview["doctor"] = _collect_local_repair_doctor_report()
+        try:
+            _resolved_name, context = _resolve_deployer_context(
+                adapter,
+                deployer_name=adapter_name,
+                deployer_registry=deployer_registry,
+                topology=topology,
+            )
+            readiness = _build_hosts_readiness_plan(
+                context,
+                levels=_local_repair_levels(),
+            )
+            preview["namespace_profile"] = _context_namespace_profile(context)
+            preview["namespace_roles"] = _context_namespace_roles_dict(context)
+            preview["planned_namespace_roles"] = _context_planned_namespace_roles_dict(context)
+            preview["hosts_plan"] = readiness.get("hosts_plan")
+            preview["missing_hostnames"] = readiness.get("missing_hostnames", [])
+            preview["public_endpoint_preflight"] = {
+                "status": "planned",
+                "connector_endpoints_included": bool(recover_connectors),
+            }
         except Exception as exc:
             preview["hosts_plan"] = {
                 "status": "unavailable",
@@ -2226,6 +2476,7 @@ def _build_deployer_dry_run_preview(
         "deployer": getattr(deployer, "name", lambda: type(deployer).__name__.lower())(),
         "deployer_class": type(deployer).__name__,
         "topology": topology,
+        "config_migration_warnings": _infrastructure_config_migration_warnings(),
         "namespace_profile": _context_namespace_profile(context),
         "namespace_roles": _context_namespace_roles_dict(context),
         "planned_namespace_roles": _context_planned_namespace_roles_dict(context),
@@ -2269,6 +2520,16 @@ def _build_deployer_dry_run_preview(
             "resolve_context",
             "plan_hosts_entries",
             "apply_hosts_entries_if_explicitly_enabled",
+        ]
+        preview["hosts_plan"] = _build_shadow_host_sync_plan(context)
+        return preview
+
+    if command == "local-repair":
+        preview["actions"] = [
+            "resolve_context",
+            "plan_hosts_entries",
+            "apply_hosts_entries_via_main_when_requested",
+            "verify_public_ingress_endpoints",
         ]
         preview["hosts_plan"] = _build_shadow_host_sync_plan(context)
         return preview
@@ -2379,13 +2640,25 @@ def _level6_public_endpoint_candidates(adapter, connectors, deployer_context):
     endpoints = []
     seen = set()
     config = dict(getattr(deployer_context, "config", {}) or {})
+    resolved_urls = resolved_common_service_urls(config)
+    resolved_hostnames = resolved_common_service_hostnames(config)
     ds_domain = str(getattr(deployer_context, "ds_domain_base", "") or "").strip()
     dataspace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
 
-    _append_public_endpoint(endpoints, seen, "Keycloak admin", config.get("KC_URL"))
-    _append_public_endpoint(endpoints, seen, "Keycloak public", config.get("KC_INTERNAL_URL"))
-    _append_public_endpoint(endpoints, seen, "Keycloak hostname", config.get("KEYCLOAK_HOSTNAME"))
-    _append_public_endpoint(endpoints, seen, "MinIO API", config.get("MINIO_HOSTNAME"))
+    _append_public_endpoint(endpoints, seen, "Keycloak admin", resolved_urls.get("KC_URL"))
+    _append_public_endpoint(endpoints, seen, "Keycloak public", resolved_urls.get("KC_INTERNAL_URL"))
+    _append_public_endpoint(
+        endpoints,
+        seen,
+        "Keycloak hostname",
+        resolved_hostnames.get("keycloak_hostname"),
+    )
+    _append_public_endpoint(
+        endpoints,
+        seen,
+        "MinIO API",
+        resolved_hostnames.get("minio_hostname"),
+    )
 
     if dataspace and ds_domain:
         _append_public_endpoint(
@@ -2415,8 +2688,15 @@ def _level6_public_endpoint_candidates(adapter, connectors, deployer_context):
     return endpoints
 
 
-def _ensure_level6_public_endpoint_access(adapter, connectors, deployer_context):
-    if not _env_flag("PIONERA_LEVEL6_PUBLIC_ENDPOINT_PREFLIGHT", default=True):
+def _run_public_endpoint_preflight(
+    adapter,
+    connectors,
+    deployer_context,
+    *,
+    enabled=True,
+    announce=True,
+):
+    if not enabled:
         return {"status": "skipped", "reason": "disabled"}
     if deployer_context is None:
         return {"status": "skipped", "reason": "missing-deployer-context"}
@@ -2428,10 +2708,32 @@ def _ensure_level6_public_endpoint_access(adapter, connectors, deployer_context)
     if not endpoints:
         return {"status": "skipped", "reason": "no-public-endpoints"}
 
-    print("\nVerifying public ingress hostnames...")
+    if announce:
+        print("\nVerifying public ingress hostnames...")
     result = ensure_public_endpoints_accessible(endpoints, topology=topology)
-    print("Public ingress hostnames OK\n")
+    if announce:
+        print("Public ingress hostnames OK\n")
     return result
+
+
+def _ensure_level6_public_endpoint_access(adapter, connectors, deployer_context):
+    return _run_public_endpoint_preflight(
+        adapter,
+        connectors,
+        deployer_context,
+        enabled=_env_flag("PIONERA_LEVEL6_PUBLIC_ENDPOINT_PREFLIGHT", default=True),
+        announce=True,
+    )
+
+
+def _run_local_repair_public_endpoint_preflight(adapter, deployer_context, *, connectors=None):
+    return _run_public_endpoint_preflight(
+        adapter,
+        list(connectors or []),
+        deployer_context,
+        enabled=_env_flag("PIONERA_LOCAL_REPAIR_PUBLIC_ENDPOINT_PREFLIGHT", default=True),
+        announce=True,
+    )
 
 
 def _cleanup_failure_messages(cleanup_result):
@@ -2584,9 +2886,65 @@ def _infrastructure_deployer_config_example_path():
     return os.path.join(os.path.dirname(__file__), "deployers", "infrastructure", "deployer.config.example")
 
 
-def _load_effective_infrastructure_deployer_config():
-    config = load_raw_deployer_config(_infrastructure_deployer_config_path())
-    return apply_pionera_environment_overrides(dict(config))
+def _infrastructure_topology_config_path(topology):
+    return topology_overlay_config_path(_infrastructure_deployer_config_path(), topology)
+
+
+def _infrastructure_topology_config_example_path(topology):
+    normalized_topology = str(topology or "").strip().lower()
+    if not normalized_topology:
+        return ""
+    return os.path.join(
+        os.path.dirname(__file__),
+        "deployers",
+        "infrastructure",
+        "topologies",
+        f"{normalized_topology}.config.example",
+    )
+
+
+def _framework_relative_path(path):
+    if not path:
+        return ""
+    root_dir = os.path.dirname(__file__)
+    try:
+        common_path = os.path.commonpath([os.path.abspath(path), root_dir])
+    except ValueError:
+        return path
+    if common_path != os.path.abspath(root_dir):
+        return path
+    return os.path.relpath(path, root_dir)
+
+
+def _infrastructure_config_migration_warnings():
+    warnings = []
+    for item in detect_topology_key_migration_warnings(_infrastructure_deployer_config_path()):
+        normalized = dict(item)
+        normalized["base_path"] = _framework_relative_path(item.get("base_path"))
+        normalized["recommended_overlay_paths"] = [
+            _framework_relative_path(path)
+            for path in list(item.get("recommended_overlay_paths") or [])
+            if path
+        ]
+        overlay_targets = list(normalized.get("recommended_overlay_paths") or [])
+        if len(overlay_targets) == 1:
+            destination = overlay_targets[0]
+        else:
+            destination = ", ".join(overlay_targets)
+        normalized["message"] = (
+            f"{normalized.get('key')} still lives in {normalized.get('base_path')}. "
+            f"Move it to {destination}."
+        )
+        warnings.append(normalized)
+    return warnings
+
+
+def _load_effective_infrastructure_deployer_config(topology=None):
+    return load_layered_deployer_config(
+        [_infrastructure_deployer_config_path()],
+        topology=topology,
+        apply_environment=True,
+    )
 
 
 def _normalized_topology_address(value):
@@ -2599,7 +2957,7 @@ def _normalized_topology_address(value):
 
 
 def _configured_vm_single_address():
-    config = _load_effective_infrastructure_deployer_config()
+    config = _load_effective_infrastructure_deployer_config(topology="vm-single")
     for key in (
         "VM_SINGLE_ADDRESS",
         "VM_SINGLE_IP",
@@ -2655,8 +3013,9 @@ def _synchronize_vm_single_addresses_after_level1():
     if not minikube_ip:
         return {"status": "skipped", "reason": "minikube-ip-unavailable"}
 
-    config_path = _seed_infrastructure_deployer_config_if_missing()
-    raw_config = load_raw_deployer_config(config_path)
+    _seed_infrastructure_deployer_config_if_missing()
+    config_path = _seed_infrastructure_topology_config_if_missing("vm-single")
+    raw_config = _load_effective_infrastructure_deployer_config(topology="vm-single")
     current_vm_external = _normalized_topology_address(raw_config.get("VM_EXTERNAL_IP"))
     current_ingress = _normalized_topology_address(raw_config.get("INGRESS_EXTERNAL_IP"))
     baseline_shared = current_vm_external or current_ingress or vm_ip
@@ -2753,6 +3112,23 @@ def _seed_infrastructure_deployer_config_if_missing():
     return config_path
 
 
+def _seed_infrastructure_topology_config_if_missing(topology):
+    config_path = _infrastructure_topology_config_path(topology)
+    if not config_path:
+        return ""
+    if os.path.isfile(config_path):
+        return config_path
+
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    example_path = _infrastructure_topology_config_example_path(topology)
+    if example_path and os.path.isfile(example_path):
+        shutil.copy2(example_path, config_path)
+    else:
+        with open(config_path, "w", encoding="utf-8") as handle:
+            handle.write("")
+    return config_path
+
+
 def _interactive_offer_vm_single_address_configuration(required=False):
     if _configured_vm_single_address():
         return True
@@ -2770,7 +3146,7 @@ def _interactive_offer_vm_single_address_configuration(required=False):
 
     if not recommended_address:
         print("Could not detect a vm-single address automatically.")
-        print("Set VM_EXTERNAL_IP or INGRESS_EXTERNAL_IP in deployers/infrastructure/deployer.config.")
+        print("Set VM_EXTERNAL_IP or INGRESS_EXTERNAL_IP in deployers/infrastructure/topologies/vm-single.config.")
         return not required
 
     source_label = "minikube ip" if recommended_source == "minikube" else "hostname -I"
@@ -2784,7 +3160,8 @@ def _interactive_offer_vm_single_address_configuration(required=False):
             return False
         return True
 
-    config_path = _seed_infrastructure_deployer_config_if_missing()
+    _seed_infrastructure_deployer_config_if_missing()
+    config_path = _seed_infrastructure_topology_config_if_missing("vm-single")
     _write_key_value_updates(
         config_path,
         {
@@ -2793,7 +3170,7 @@ def _interactive_offer_vm_single_address_configuration(required=False):
         },
         ("VM_EXTERNAL_IP", "INGRESS_EXTERNAL_IP"),
     )
-    print("Updated deployers/infrastructure/deployer.config with vm-single address values.")
+    print("Updated deployers/infrastructure/topologies/vm-single.config with vm-single address values.")
     return True
 
 
@@ -2929,14 +3306,23 @@ def _resolve_deployer_context(adapter, deployer_name=None, deployer_registry=Non
     return resolved_deployer_name, orchestrator.resolve_context(topology=topology)
 
 
-def _build_shadow_host_sync_plan(context):
+def _build_shadow_host_sync_plan(context, levels=None):
     address_override = _deployer_hosts_address_override()
-    blocks = build_context_host_blocks(context, address=address_override)
-    levels = hostnames_by_level(blocks)
+    all_blocks = build_context_host_blocks(context, address=address_override)
+    blocks = _filter_host_blocks_for_levels(all_blocks, levels) if levels else list(all_blocks)
+    levels_by_block = hostnames_by_level(blocks)
     topology_profile = getattr(context, "topology_profile", None)
+    hosts_file = _deployer_hosts_file() or None
+    legacy_external_hostnames = []
+    if hosts_file:
+        legacy_external_hostnames = detect_legacy_external_hostnames(
+            _read_hosts_file_content(hosts_file),
+            block_names=[block.name for block in all_blocks],
+            config=dict(getattr(context, "config", {}) or {}),
+        )
     return {
         "status": "planned",
-        "hosts_file": _deployer_hosts_file() or None,
+        "hosts_file": hosts_file,
         "address": _deployer_hosts_default_address(context),
         "address_override": address_override,
         "namespace_profile": _context_namespace_profile(context),
@@ -2949,10 +3335,11 @@ def _build_shadow_host_sync_plan(context):
             else None
         ),
         "blocks": blocks_as_dict(blocks),
-        "level_1_2": levels["level_1_2"],
-        "level_3": levels["level_3"],
-        "level_4": levels["level_4"],
-        "level_5": levels["level_5"],
+        "level_1_2": levels_by_block["level_1_2"],
+        "level_3": levels_by_block["level_3"],
+        "level_4": levels_by_block["level_4"],
+        "level_5": levels_by_block["level_5"],
+        "legacy_external_hostnames": legacy_external_hostnames,
     }
 
 
@@ -2968,6 +3355,16 @@ def _read_hosts_file_hostnames(hosts_file):
             return parse_hostnames(handle.read())
     except OSError:
         return set()
+
+
+def _read_hosts_file_content(hosts_file):
+    if not hosts_file:
+        return ""
+    try:
+        with open(hosts_file, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return ""
 
 
 def _dedupe_ordered(values):
@@ -2989,8 +3386,10 @@ def _host_plan_levels_required_for_levels(levels):
         selected_levels = {3, 4, 5, 6}
 
     required = []
+    if selected_levels.intersection({2, 3, 4, 5, 6}):
+        required.append("level_1_2")
     if selected_levels.intersection({3, 4, 5, 6}):
-        required.extend(["level_1_2", "level_3"])
+        required.append("level_3")
     if selected_levels.intersection({4, 6}):
         required.append("level_4")
     if selected_levels.intersection({5, 6}):
@@ -2998,10 +3397,37 @@ def _host_plan_levels_required_for_levels(levels):
     return _dedupe_ordered(required)
 
 
+def _host_block_level_key(block):
+    if not hasattr(block, "name"):
+        return None
+    name = str(getattr(block, "name", "") or "").strip()
+    if name == "shared common":
+        return "level_1_2"
+    if name.startswith("dataspace "):
+        return "level_3"
+    if name.startswith("connectors "):
+        return "level_4"
+    if name.startswith("components "):
+        return "level_5"
+    return None
+
+
+def _filter_host_blocks_for_levels(blocks, levels=None):
+    required_keys = set(_host_plan_levels_required_for_levels(levels))
+    if not required_keys:
+        return []
+    filtered = []
+    for block in list(blocks or []):
+        if _host_block_level_key(block) in required_keys:
+            filtered.append(block)
+    return filtered
+
+
 def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
     plan = _build_shadow_host_sync_plan(context)
     resolved_hosts_file = hosts_file or _interactive_hosts_file_path()
-    existing_hostnames = _read_hosts_file_hostnames(resolved_hosts_file)
+    existing_content = _read_hosts_file_content(resolved_hosts_file)
+    existing_hostnames = parse_hostnames(existing_content)
     required_keys = _host_plan_levels_required_for_levels(levels)
     required_hostnames = _dedupe_ordered(
         hostname
@@ -3013,6 +3439,12 @@ def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
         for hostname in required_hostnames
         if hostname.lower() not in existing_hostnames
     ]
+    blocks = build_context_host_blocks(context, address=_deployer_hosts_address_override())
+    legacy_external_hostnames = detect_legacy_external_hostnames(
+        existing_content,
+        block_names=[block.name for block in blocks],
+        config=dict(getattr(context, "config", {}) or {}),
+    )
 
     return {
         "status": "missing" if missing_hostnames else "ready",
@@ -3020,12 +3452,13 @@ def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
         "required_levels": required_keys,
         "required_hostnames": required_hostnames,
         "missing_hostnames": missing_hostnames,
+        "legacy_external_hostnames": legacy_external_hostnames,
         "hosts_plan": plan,
     }
 
 
-def _sync_deployer_hosts_if_enabled(context):
-    plan = _build_shadow_host_sync_plan(context)
+def _sync_deployer_hosts_if_enabled(context, levels=None):
+    plan = _build_shadow_host_sync_plan(context, levels=levels)
     if not _should_sync_deployer_hosts():
         return {
             "status": "skipped",
@@ -3040,14 +3473,22 @@ def _sync_deployer_hosts_if_enabled(context):
             "For Windows from WSL this is usually /mnt/c/Windows/System32/drivers/etc/hosts."
         )
 
-    blocks = build_context_host_blocks(context, address=_deployer_hosts_address_override())
-    result = apply_managed_blocks(hosts_file, blocks)
+    blocks = _filter_host_blocks_for_levels(
+        build_context_host_blocks(context, address=_deployer_hosts_address_override()),
+        levels,
+    ) if levels else build_context_host_blocks(context, address=_deployer_hosts_address_override())
+    result = apply_managed_blocks(
+        hosts_file,
+        blocks,
+        config=dict(getattr(context, "config", {}) or {}),
+    )
     return {
         "status": "updated" if result["changed"] else "unchanged",
         "hosts_file": result["hosts_file"],
         "changed": result["changed"],
         "blocks": result["blocks"],
         "skipped_existing": result.get("skipped_existing", {}),
+        "legacy_external_hostnames": result.get("legacy_external_hostnames", []),
     }
 
 
@@ -3505,8 +3946,254 @@ def run_hosts(adapter, deployer_name=None, deployer_registry=None, topology="loc
         "deployer_name": resolved_deployer_name,
         "topology": topology,
         "dataspace": getattr(context, "dataspace_name", None),
+        "config_migration_warnings": _infrastructure_config_migration_warnings(),
         "hosts_plan": plan,
         "hosts_sync": sync,
+    }
+
+
+def _local_repair_levels(levels=None):
+    selected = []
+    for level in levels or (3, 4, 5, 6):
+        try:
+            normalized = int(level)
+        except (TypeError, ValueError):
+            continue
+        if normalized in {3, 4, 5, 6} and normalized not in selected:
+            selected.append(normalized)
+    return selected or [3, 4, 5, 6]
+
+
+def _filter_doctor_report(report, allowed_names=None):
+    allowed = {str(name or "").strip().lower() for name in (allowed_names or []) if str(name or "").strip()}
+    checks = []
+    for item in list((report or {}).get("checks") or []):
+        if not isinstance(item, dict):
+            continue
+        if allowed and str(item.get("name") or "").strip().lower() not in allowed:
+            continue
+        checks.append(dict(item))
+
+    if any(item.get("status") == "missing" for item in checks):
+        status = "not_ready"
+    elif any(item.get("status") == "warning" for item in checks):
+        status = "ready_with_warnings"
+    else:
+        status = "ready"
+
+    return {
+        "status": status,
+        "checks": checks,
+    }
+
+
+def _collect_local_repair_doctor_report():
+    report = local_menu_tools.collect_framework_doctor_report()
+    return _filter_doctor_report(
+        report,
+        allowed_names=("kubectl", "minikube", "hosts file", "minikube tunnel"),
+    )
+
+
+def _doctor_check(report, name):
+    normalized_name = str(name or "").strip().lower()
+    for item in list((report or {}).get("checks") or []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("name") or "").strip().lower() == normalized_name:
+            return item
+    return None
+
+
+def _build_local_repair_next_step(
+    *,
+    topology="local",
+    missing_hostnames=None,
+    hosts_sync=None,
+    doctor_report=None,
+    connector_recovery=None,
+    public_endpoint_preflight=None,
+    apply_hosts=True,
+    recover_connectors=False,
+):
+    missing = [str(hostname or "").strip() for hostname in (missing_hostnames or []) if str(hostname or "").strip()]
+    sync = hosts_sync if isinstance(hosts_sync, dict) else {}
+    connector = connector_recovery if isinstance(connector_recovery, dict) else {}
+    endpoint_preflight = (
+        public_endpoint_preflight
+        if isinstance(public_endpoint_preflight, dict)
+        else {}
+    )
+
+    if missing:
+        if not apply_hosts:
+            return "Run local-repair again with hosts reconciliation enabled, or use H before retrying the next level."
+        if sync.get("reason") == "hosts-file-unavailable":
+            return "Set PIONERA_HOSTS_FILE to a writable hosts file path and rerun local-repair."
+        if sync.get("status") == "failed":
+            return "Rerun local-repair with permissions to update the hosts file, or apply H manually and retry."
+        return "Review the reported hostnames, reconcile the hosts file, and rerun local-repair."
+
+    tunnel_check = _doctor_check(doctor_report, "minikube tunnel")
+    if (
+        normalize_topology(topology) == LOCAL_TOPOLOGY
+        and isinstance(tunnel_check, dict)
+        and str(tunnel_check.get("status") or "").strip().lower() != "ok"
+    ):
+        return "Start minikube tunnel in another terminal and rerun local-repair or the next validation level."
+
+    if str(connector.get("status") or "").strip().lower() == "failed":
+        return "Inspect connector rollout status and rerun local-repair with connector recovery enabled."
+
+    if str(endpoint_preflight.get("status") or "").strip().lower() == "failed":
+        if not recover_connectors:
+            return (
+                "Public ingress endpoints are still unreachable. "
+                "If connector runtimes remained deployed after a local or WSL restart, rerun local-repair with connector recovery enabled."
+            )
+        return (
+            "Public ingress endpoints are still unreachable. "
+            "Review the affected services, then rerun local-repair after they are healthy."
+        )
+
+    if str(connector.get("status") or "").strip().lower() == "skipped":
+        return "Run the next pending level. If connector runtimes stayed deployed after a WSL restart, rerun local-repair with connector recovery enabled."
+
+    return "Run the next pending level, or go straight to Level 6 if deployment levels 1-5 are already complete."
+
+
+def run_local_repair(
+    adapter,
+    deployer_name=None,
+    deployer_registry=None,
+    topology="local",
+    levels=None,
+    apply_hosts=True,
+    recover_connectors=False,
+):
+    """Diagnose and repair local access prerequisites before validation levels."""
+    normalized_topology = normalize_topology(topology)
+    if normalized_topology not in {LOCAL_TOPOLOGY, "vm-single"}:
+        return {
+            "status": "skipped",
+            "scope": "local repair",
+            "adapter": deployer_name or _infer_deployer_name_from_adapter(adapter),
+            "topology": topology,
+            "next_step": "local-repair only applies to local and vm-single topologies.",
+        }
+
+    selected_levels = _local_repair_levels(levels)
+    resolved_deployer_name, context = _resolve_deployer_context(
+        adapter,
+        deployer_name=deployer_name,
+        deployer_registry=deployer_registry,
+        topology=topology,
+    )
+    doctor_report = _collect_local_repair_doctor_report()
+    readiness = _build_hosts_readiness_plan(context, levels=selected_levels)
+    hosts_sync = {
+        "status": "skipped",
+        "reason": "not-requested" if not apply_hosts else "already-ready",
+    }
+
+    if apply_hosts:
+        hosts_file = readiness.get("hosts_file")
+        if not hosts_file:
+            hosts_sync = {
+                "status": "failed",
+                "reason": "hosts-file-unavailable",
+            }
+        else:
+            try:
+                with _temporary_environment(
+                    {
+                        "PIONERA_SYNC_HOSTS": "true",
+                        "PIONERA_HOSTS_FILE": hosts_file,
+                    }
+                ):
+                    hosts_result = run_hosts(
+                        adapter,
+                        deployer_name=resolved_deployer_name,
+                        deployer_registry=deployer_registry,
+                        topology=topology,
+                    )
+                hosts_sync = dict(hosts_result.get("hosts_sync") or {})
+            except Exception as exc:
+                hosts_sync = {
+                    "status": "failed",
+                    "reason": "repair-error",
+                    "error": str(exc),
+                }
+
+    refreshed = _build_hosts_readiness_plan(
+        context,
+        levels=selected_levels,
+        hosts_file=readiness.get("hosts_file"),
+    )
+    connector_recovery = {
+        "status": "skipped",
+        "reason": "not-requested",
+    }
+    if recover_connectors:
+        recovered = bool(local_menu_tools.run_connector_recovery_after_wsl_restart(adapter=adapter))
+        connector_recovery = {
+            "status": "completed" if recovered else "failed",
+        }
+
+    missing_hostnames = list(refreshed.get("missing_hostnames") or [])
+    public_endpoint_preflight = {
+        "status": "skipped",
+        "reason": "missing-hostnames" if missing_hostnames else "connector-recovery-failed",
+    }
+    if not missing_hostnames and str(connector_recovery.get("status") or "").strip().lower() != "failed":
+        connector_names = list(getattr(context, "connectors", []) or []) if recover_connectors else []
+        try:
+            public_endpoint_preflight = _run_local_repair_public_endpoint_preflight(
+                adapter,
+                context,
+                connectors=connector_names,
+            )
+        except Exception as exc:
+            public_endpoint_preflight = {
+                "status": "failed",
+                "error": str(exc),
+            }
+
+    status = "completed"
+    if missing_hostnames or str(hosts_sync.get("status") or "").strip().lower() == "failed":
+        status = "failed"
+    elif str(public_endpoint_preflight.get("status") or "").strip().lower() == "failed":
+        status = "failed"
+    elif str(connector_recovery.get("status") or "").strip().lower() == "failed":
+        status = "warning"
+    elif str((doctor_report or {}).get("status") or "").strip().lower() != "ready":
+        status = "warning"
+
+    next_step = _build_local_repair_next_step(
+        topology=topology,
+        missing_hostnames=missing_hostnames,
+        hosts_sync=hosts_sync,
+        doctor_report=doctor_report,
+        connector_recovery=connector_recovery,
+        public_endpoint_preflight=public_endpoint_preflight,
+        apply_hosts=apply_hosts,
+        recover_connectors=recover_connectors,
+    )
+
+    return {
+        "status": status,
+        "scope": "local repair",
+        "adapter": resolved_deployer_name,
+        "topology": topology,
+        "dataspace": getattr(context, "dataspace_name", None),
+        "config_migration_warnings": _infrastructure_config_migration_warnings(),
+        "doctor": doctor_report,
+        "hosts_plan": refreshed.get("hosts_plan") or _build_shadow_host_sync_plan(context),
+        "hosts_sync": hosts_sync,
+        "missing_hostnames": missing_hostnames,
+        "connector_recovery": connector_recovery,
+        "public_endpoint_preflight": public_endpoint_preflight,
+        "next_step": next_step,
     }
 
 
@@ -3578,8 +4265,37 @@ def _humanize_hosts_sync_reason(reason):
         return ""
 
     labels = {
+        "already-ready": "already ready",
         "disabled": "disabled by configuration",
         "missing-deployer-context": "missing deployer context",
+        "not-requested": "not requested",
+        "repair-error": "repair error",
+    }
+    return labels.get(normalized, normalized.replace("-", " "))
+
+
+def _doctor_result_label(status):
+    normalized = str(status or "").strip().lower()
+    if normalized in {"ready", "completed", "updated", "unchanged"}:
+        return "Succeeded"
+    if normalized == "ready_with_warnings":
+        return "Warning"
+    if normalized == "not_ready":
+        return "Failed"
+    return str(status or "Unknown").strip().title() or "Unknown"
+
+
+def _humanize_public_endpoint_reason(reason):
+    normalized = str(reason or "").strip().lower()
+    if not normalized:
+        return ""
+
+    labels = {
+        "missing-hostnames": "waiting for hosts reconciliation",
+        "connector-recovery-failed": "connector recovery failed",
+        "disabled": "disabled",
+        "missing-deployer-context": "missing deployer context",
+        "no-public-endpoints": "no public endpoints",
     }
     return labels.get(normalized, normalized.replace("-", " "))
 
@@ -3881,6 +4597,7 @@ def run_recreate_dataspace(
         "deployer_name": resolved_deployer_name,
         "topology": topology,
         "dataspace": dataspace_name,
+        "config_migration_warnings": _infrastructure_config_migration_warnings(),
         "plan": plan,
         "result": result,
         "with_connectors": bool(with_connectors),
@@ -3934,8 +4651,10 @@ def run_validate(
     force_playwright=False,
     kafka_edc_validation_suite_cls=KafkaEdcValidationSuite,
     kafka_manager_cls=KafkaManager,
+    validation_mode=None,
 ):
     """Run validation collections with the selected adapter."""
+    validation_mode_info = _resolve_level6_validation_mode(validation_mode, topology=topology)
     validation_runtime = _resolve_validation_runtime(
         adapter,
         deployer_name=deployer_name,
@@ -3945,6 +4664,7 @@ def run_validate(
     connectors = validation_runtime["connectors"]
     validation_profile = validation_runtime["validation_profile"]
     deployer_context = validation_runtime["deployer_context"]
+    resolved_deployer_name = validation_runtime.get("deployer_name") or deployer_name
     hosts_sync = (
         _sync_deployer_hosts_if_enabled(deployer_context)
         if deployer_context is not None
@@ -3960,12 +4680,21 @@ def run_validate(
             baseline=baseline,
         )
     experiment_storage.newman_reports_dir(experiment_dir)
+    local_stability_preflight = _run_level6_local_stability_preflight(
+        validation_mode_info,
+        resolved_deployer_name,
+        deployer_context,
+        experiment_dir,
+        validation_profile=validation_profile,
+    )
+    local_stability_postflight = None
     kafka_preparation = _start_level6_kafka_preparation(
         adapter,
         connectors,
         validation_profile=validation_profile,
-        deployer_name=validation_runtime.get("deployer_name") or deployer_name,
+        deployer_name=resolved_deployer_name,
         kafka_manager_cls=kafka_manager_cls,
+        background=not validation_mode_info["local_stable"],
     )
     public_endpoint_preflight = _ensure_level6_public_endpoint_access(
         adapter,
@@ -4026,6 +4755,14 @@ def run_validate(
             experiment_dir,
             cleanup=True,
         )
+        local_stability_postflight = _run_level6_local_stability_postflight(
+            validation_mode_info,
+            resolved_deployer_name,
+            deployer_context,
+            experiment_dir,
+            local_stability_preflight,
+            validation_profile=validation_profile,
+        )
         raise validation_error
 
     kafka_edc_results = run_level6_kafka_edc_after_newman(
@@ -4033,7 +4770,7 @@ def run_validate(
         connectors,
         experiment_dir,
         validation_profile=validation_profile,
-        deployer_name=validation_runtime.get("deployer_name") or deployer_name,
+        deployer_name=resolved_deployer_name,
         experiment_storage=experiment_storage,
         suite_cls=kafka_edc_validation_suite_cls,
         kafka_manager_cls=kafka_manager_cls,
@@ -4186,9 +4923,26 @@ def run_validate(
             if component_results:
                 component_validation_summary = summarize_component_results(component_results)
             if playwright_failure is not None:
+                local_stability_postflight = _run_level6_local_stability_postflight(
+                    validation_mode_info,
+                    resolved_deployer_name,
+                    deployer_context,
+                    experiment_dir,
+                    local_stability_preflight,
+                    validation_profile=validation_profile,
+                )
                 raise RuntimeError(
                     f"Playwright validation failed with status '{playwright_failure}'"
                 )
+
+    local_stability_postflight = _run_level6_local_stability_postflight(
+        validation_mode_info,
+        resolved_deployer_name,
+        deployer_context,
+        experiment_dir,
+        local_stability_preflight,
+        validation_profile=validation_profile,
+    )
 
     return {
         "experiment_dir": experiment_dir,
@@ -4202,6 +4956,11 @@ def run_validate(
         "test_data_cleanup": test_data_cleanup,
         "public_endpoint_preflight": public_endpoint_preflight,
         "hosts_sync": hosts_sync,
+        "local_stability": {
+            "preflight": local_stability_preflight,
+            "postflight": local_stability_postflight,
+        },
+        "validation_mode": validation_mode_info,
         "validation_profile": (
             validation_profile.as_dict()
             if validation_profile is not None
@@ -4424,6 +5183,7 @@ def run_run(
     kafka_runtime_config=None,
     kafka_manager_cls=KafkaManager,
     baseline=False,
+    validation_mode=None,
 ):
     """Run the experimental deployer-backed deploy+validate+metrics chain."""
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
@@ -4462,6 +5222,7 @@ def run_run(
                 experiment_dir=shared_experiment_dir,
                 save_metadata=False,
                 baseline=baseline,
+                validation_mode=validation_mode,
             )
             metrics = run_metrics(
                 adapter,
@@ -4530,6 +5291,7 @@ def run_level(
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
+    level_context = None
     if normalized_topology != "local" and not (
         normalized_topology == "vm-single" and level_id in {1, 2, 3, 4, 5}
     ) and level_id in {1, 2, 3, 4, 5}:
@@ -4610,6 +5372,7 @@ def run_level(
             topology=topology,
         )
         context = orchestrator.resolve_context(topology=topology)
+        level_context = context
         deploy_components = getattr(orchestrator.deployer, "deploy_components", None)
         if not callable(deploy_components):
             raise RuntimeError(f"Deployer '{resolved_deployer_name}' does not expose Level 5 deploy_components()")
@@ -4625,8 +5388,9 @@ def run_level(
             baseline=baseline,
         )
 
-    if level_id == 1 and normalized_topology == "vm-single":
-        _synchronize_vm_single_addresses_after_level1()
+    if level_id == 1:
+        if normalized_topology == "vm-single":
+            _synchronize_vm_single_addresses_after_level1()
 
     level_urls = _resolve_level_access_urls(
         adapter,
@@ -4644,6 +5408,16 @@ def run_level(
     }
     if level_urls:
         payload["urls"] = level_urls
+    payload.update(
+        _safe_level_hosts_followup(
+            adapter,
+            level_id,
+            deployer_name=resolved_deployer_name,
+            deployer_registry=deployer_registry,
+            topology=topology,
+            context=level_context,
+        )
+    )
     return payload
 
 
@@ -4767,7 +5541,7 @@ def _run_interactive_level2_with_shared_foundation(
                 completer = getattr(infrastructure, "complete_level", None)
                 if callable(completer):
                     completer(2)
-                return {
+                payload = {
                     "level": 2,
                     "name": LEVEL_DESCRIPTIONS[2],
                     "status": "completed",
@@ -4776,6 +5550,16 @@ def _run_interactive_level2_with_shared_foundation(
                         "shared_adapter": shared_adapter_name,
                     },
                 }
+                payload.update(
+                    _safe_level_hosts_followup(
+                        adapter,
+                        2,
+                        deployer_name=shared_adapter_name,
+                        deployer_registry=deployer_registry,
+                        topology=topology,
+                    )
+                )
+                return payload
 
             if not _interactive_confirm(
                 "Recreate shared common services now? This resets common-srvs for all local adapters.",
@@ -4804,6 +5588,90 @@ def _run_interactive_level2_with_shared_foundation(
         metrics_collector_cls=metrics_collector_cls,
         experiment_storage=experiment_storage,
         baseline=baseline,
+    )
+
+
+def _level_supports_hosts_followup(level_id):
+    return int(level_id or 0) in {2, 3, 4, 5}
+
+
+def _safe_level_hosts_followup(
+    adapter,
+    level_id,
+    *,
+    deployer_name=None,
+    deployer_registry=None,
+    topology="local",
+    context=None,
+):
+    if not _level_supports_hosts_followup(level_id):
+        return {}
+    resolved_deployer_name = deployer_name
+    if context is None:
+        try:
+            resolved_deployer_name, context = _resolve_deployer_context(
+                adapter,
+                deployer_name=deployer_name,
+                deployer_registry=deployer_registry,
+                topology=topology,
+            )
+        except Exception:
+            return {}
+
+    followup = {
+        "hosts_plan": _build_shadow_host_sync_plan(context, levels=[level_id]),
+    }
+
+    try:
+        followup["hosts_sync"] = _sync_deployer_hosts_if_enabled(context, levels=[level_id])
+    except Exception as exc:
+        followup["hosts_sync"] = {
+            "status": "failed",
+            "reason": "followup-error",
+            "error": str(exc),
+        }
+
+    if not followup["hosts_plan"].get("hosts_file") and "hosts_file" in followup["hosts_sync"]:
+        followup["hosts_plan"]["hosts_file"] = followup["hosts_sync"].get("hosts_file")
+    if resolved_deployer_name:
+        followup["deployer_name"] = resolved_deployer_name
+    return followup
+
+
+def _run_local_repair_interactive(
+    current_adapter,
+    *,
+    adapter_registry=None,
+    deployer_registry=None,
+    topology="local",
+):
+    selected_adapter = _interactive_require_adapter_selection(
+        current_adapter,
+        adapter_registry=adapter_registry,
+    )
+    if not selected_adapter:
+        return None
+
+    apply_hosts = _interactive_confirm(
+        "Reconcile framework-managed hosts entries now?",
+        default=True,
+    )
+    recover_connectors = _interactive_confirm(
+        "Also restart connector runtimes after local access repair?",
+        default=False,
+    )
+    adapter = build_adapter(
+        selected_adapter,
+        adapter_registry=adapter_registry,
+        topology=topology,
+    )
+    return run_local_repair(
+        adapter,
+        deployer_name=selected_adapter,
+        deployer_registry=deployer_registry,
+        topology=topology,
+        apply_hosts=apply_hosts,
+        recover_connectors=recover_connectors,
     )
 
 
@@ -4867,6 +5735,14 @@ def _run_interactive_full_levels(
         )
 
     for level_id in (3, 4, 5, 6):
+        if not _interactive_ensure_hosts_ready_for_levels(
+            selected_adapter,
+            levels=[level_id],
+            adapter_registry=adapter_registry,
+            deployer_registry=deployer_registry,
+            topology=topology,
+        ):
+            return None
         completed.append(
             run_level(
                 target_adapter,
@@ -4918,7 +5794,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print("[Developer]")
     print("B - Bootstrap Framework Dependencies")
     print("D - Run Framework Doctor")
-    print("R - Recover Connectors After WSL Restart")
+    print("R - Repair Local Access / Connectors")
     print("C - Cleanup Workspace")
     print("L - Build and Deploy Local Images")
     print()
@@ -4968,7 +5844,8 @@ def _print_interactive_help():
     print("[Developer]")
     print("B - Use on a clean machine or after dependency issues to install/repair framework dependencies.")
     print("D - Use when diagnosing local readiness issues before deploying or validating.")
-    print("R - Use after a WSL restart when connectors are still deployed but local access needs recovery.")
+    print("R - Use when local hostnames, hosts entries or connector runtimes need recovery after a WSL/local restart.")
+    print("    It can reconcile framework-managed hosts blocks first, then optionally restart connector runtimes.")
     print("C - Use when generated files, caches or previous results make the workspace hard to reason about.")
     print("L - Use during development after changing local images that must be rebuilt and loaded.")
     print("    In the image submenu, options 1-3 keep the INESData developer redeploy shortcuts.")
@@ -5041,11 +5918,11 @@ def _select_topology_interactive(current_topology="local", available_topologies=
 
 
 def _print_adapter_selection_hint(adapter_name):
-    if str(adapter_name or "").strip().lower() != "edc":
+    if str(adapter_name or "").strip().lower() not in {"edc", "inesdata"}:
         return
     print()
-    print("EDC adapter selected.")
-    print("Before Levels 3-6, use H to plan/apply host entries if this machine does not resolve EDC public hostnames.")
+    print(f"{str(adapter_name).strip().upper()} adapter selected.")
+    print("Before Levels 3-6, use H to plan/apply host entries if this machine does not resolve public dataspace hostnames.")
 
 
 def _interactive_ensure_hosts_ready_for_levels(
@@ -5055,9 +5932,8 @@ def _interactive_ensure_hosts_ready_for_levels(
     deployer_registry=None,
     topology="local",
 ):
-    normalized_adapter = str(current_adapter or "").strip().lower()
     normalized_topology = str(topology or "local").strip().lower()
-    if normalized_adapter != "edc" or normalized_topology not in {LOCAL_TOPOLOGY, "vm-single"}:
+    if not current_adapter or normalized_topology not in {LOCAL_TOPOLOGY, "vm-single"}:
         return True
 
     selected_levels = {int(level) for level in (levels or [])}
@@ -5073,19 +5949,31 @@ def _interactive_ensure_hosts_ready_for_levels(
     )
     readiness = _build_hosts_readiness_plan(context, levels=selected_levels)
     missing_hostnames = list(readiness.get("missing_hostnames") or [])
+    legacy_external_hostnames = list(readiness.get("legacy_external_hostnames") or [])
     if not missing_hostnames:
+        if legacy_external_hostnames:
+            print()
+            print("Legacy hostnames are still present outside framework-managed blocks:")
+            for item in legacy_external_hostnames:
+                print(f"- {item.get('legacy')} -> {item.get('canonical')}")
+            print("They do not block this level now, but the framework will keep using the canonical names.")
         return True
 
     hosts_file = readiness.get("hosts_file") or "(not detected)"
     print()
-    print("EDC host entries are missing for this execution.")
+    print(f"Host entries are missing for adapter '{current_adapter}' in this execution.")
     print(f"Hosts file: {hosts_file}")
     for hostname in missing_hostnames:
         print(f"- {hostname}")
     print()
-    print("The framework will only add missing entries and will not duplicate existing hostnames.")
+    print("The framework will reconcile its managed hosts blocks and will not duplicate hostnames already defined outside those blocks.")
+    if legacy_external_hostnames:
+        print("Legacy hostnames were detected outside framework-managed blocks:")
+        for item in legacy_external_hostnames:
+            print(f"- {item.get('legacy')} -> {item.get('canonical')}")
+        print("They will be reported but not removed automatically because they are outside the managed blocks.")
 
-    if not _interactive_confirm("Apply missing host entries now?", default=False):
+    if not _interactive_confirm("Apply host reconciliation now?", default=False):
         print("Level execution cancelled. Run H first, then retry the selected level.")
         return False
 
@@ -5093,13 +5981,13 @@ def _interactive_ensure_hosts_ready_for_levels(
         print("Cannot detect a hosts file automatically. Set PIONERA_HOSTS_FILE and run H.")
         return False
 
+    environment_overrides = {
+        "PIONERA_SYNC_HOSTS": "true",
+        "PIONERA_HOSTS_FILE": readiness["hosts_file"],
+    }
+
     try:
-        with _temporary_environment(
-            {
-                "PIONERA_SYNC_HOSTS": "true",
-                "PIONERA_HOSTS_FILE": readiness["hosts_file"],
-            }
-        ):
+        with _temporary_environment(environment_overrides):
             result = run_hosts(
                 adapter,
                 deployer_name=resolved_deployer_name,
@@ -5114,7 +6002,7 @@ def _interactive_ensure_hosts_ready_for_levels(
 
     refreshed = _build_hosts_readiness_plan(context, levels=selected_levels, hosts_file=readiness["hosts_file"])
     if refreshed.get("missing_hostnames"):
-        print("Some EDC hostnames are still missing after applying hosts:")
+        print(f"Some hostnames for adapter '{current_adapter}' are still missing after applying hosts:")
         for hostname in refreshed["missing_hostnames"]:
             print(f"- {hostname}")
         print("Run H with the required permissions, then retry the selected level.")
@@ -5211,6 +6099,23 @@ def _print_action_result(result):
             return
         lines.append(f"{label}: {value}")
 
+    def _append_config_migration_warning_lines(lines, warnings):
+        items = [item for item in list(warnings or []) if isinstance(item, dict)]
+        if not items:
+            return
+        lines.append(f"Configuration migration warnings: {len(items)}")
+        for item in items:
+            key = str(item.get("key") or "").strip()
+            overlay_paths = [
+                str(value or "").strip()
+                for value in list(item.get("recommended_overlay_paths") or [])
+                if str(value or "").strip()
+            ]
+            if key and overlay_paths:
+                lines.append(f"- {key} -> {', '.join(overlay_paths)}")
+            elif key:
+                lines.append(f"- {key}")
+
     def _summarize_level_result(level_result):
         if not isinstance(level_result, dict):
             return None
@@ -5239,6 +6144,9 @@ def _print_action_result(result):
         if str(scope or "").strip().lower() != "shared foundation":
             _append_if_value(lines, "Adapter", payload.get("adapter") or payload.get("deployer_name"))
         _append_if_value(lines, "Topology", payload.get("topology"))
+        validation_mode = payload.get("validation_mode")
+        if isinstance(validation_mode, dict):
+            _append_if_value(lines, "Validation mode", validation_mode.get("effective"))
         _append_if_value(lines, "Dataspace", payload.get("dataspace"))
 
         levels = payload.get("levels")
@@ -5248,12 +6156,13 @@ def _print_action_result(result):
                 if summary:
                     lines.append(summary)
                 if isinstance(level_payload, dict):
+                    level_id = level_payload.get("level")
                     level_urls = level_payload.get("urls")
                     if not level_urls:
                         level_result = level_payload.get("result")
                         if isinstance(level_result, dict):
                             level_urls = level_result.get("urls")
-                            if int(level_payload.get("level") or 0) == 5:
+                            if int(level_id or 0) == 5:
                                 _append_component_list_lines(
                                     lines,
                                     "Level 5 configured components",
@@ -5279,8 +6188,39 @@ def _print_action_result(result):
                                     "Level 5 unknown components",
                                     level_result.get("unknown"),
                                 )
+                    level_hosts_plan = level_payload.get("hosts_plan")
+                    if isinstance(level_hosts_plan, dict):
+                        level_prefix = f"Level {level_id} " if level_id is not None else ""
+                        for key, label in (
+                            ("level_1_2", "Hosts Level 1-2"),
+                            ("level_3", "Hosts Level 3"),
+                            ("level_4", "Hosts Level 4"),
+                            ("level_5", "Hosts Level 5"),
+                        ):
+                            _append_hosts_level_lines(lines, f"{level_prefix}{label}", level_hosts_plan.get(key))
+                        level_legacy_hostnames = list(level_hosts_plan.get("legacy_external_hostnames") or [])
+                        if level_legacy_hostnames:
+                            lines.append(
+                                f"{level_prefix}Hosts legacy aliases detected: {len(level_legacy_hostnames)}"
+                            )
+                    level_hosts_sync = level_payload.get("hosts_sync")
+                    if isinstance(level_hosts_sync, dict):
+                        sync_status = str(level_hosts_sync.get("status") or "").strip().lower()
+                        sync_reason = str(level_hosts_sync.get("reason") or "").strip().lower()
+                        if sync_status and not (sync_status == "skipped" and sync_reason == "disabled"):
+                            label = f"Level {level_id} hosts sync" if level_id is not None else "Hosts sync"
+                            line = f"{label}: {_console_result_label(sync_status)}"
+                            if sync_reason:
+                                line += f" ({_humanize_hosts_sync_reason(sync_reason)})"
+                            lines.append(line)
+                        level_legacy_hostnames = list(level_hosts_sync.get("legacy_external_hostnames") or [])
+                        if level_legacy_hostnames:
+                            prefix = f"Level {level_id} " if level_id is not None else ""
+                            lines.append(
+                                f"{prefix}Hosts legacy aliases outside managed blocks: {len(level_legacy_hostnames)}"
+                            )
                     if level_urls:
-                        heading = f"Level {level_payload.get('level')} URLs"
+                        heading = f"Level {level_id} URLs"
                         _append_url_lines(lines, level_urls, heading=heading)
         elif payload.get("level") is not None and payload.get("name"):
             summary = _summarize_level_result(payload)
@@ -5314,6 +6254,19 @@ def _print_action_result(result):
         if isinstance(cleanup, dict) and cleanup.get("status") not in (None, "skipped"):
             lines.append(f"Cleanup: {_console_result_label(cleanup.get('status'))}")
 
+        doctor = payload.get("doctor")
+        if isinstance(doctor, dict):
+            doctor_status = doctor.get("status")
+            if doctor_status not in (None, ""):
+                lines.append(f"Doctor: {_doctor_result_label(doctor_status)}")
+            doctor_checks = [item for item in list(doctor.get("checks") or []) if isinstance(item, dict)]
+            doctor_warning_count = sum(1 for item in doctor_checks if item.get("status") == "warning")
+            doctor_missing_count = sum(1 for item in doctor_checks if item.get("status") == "missing")
+            if doctor_warning_count:
+                lines.append(f"Doctor warnings: {doctor_warning_count}")
+            if doctor_missing_count:
+                lines.append(f"Doctor missing prerequisites: {doctor_missing_count}")
+
         hosts_plan = payload.get("hosts_plan")
         if isinstance(hosts_plan, dict):
             for key, label in (
@@ -5324,6 +6277,15 @@ def _print_action_result(result):
             ):
                 _append_hosts_level_lines(lines, label, hosts_plan.get(key))
             _append_if_value(lines, "Hosts address", hosts_plan.get("address"))
+            legacy_external_hostnames = list(hosts_plan.get("legacy_external_hostnames") or [])
+            if legacy_external_hostnames:
+                lines.append(f"Hosts legacy aliases detected: {len(legacy_external_hostnames)}")
+
+        missing_hostnames = [str(value or "").strip() for value in (payload.get("missing_hostnames") or []) if str(value or "").strip()]
+        if missing_hostnames:
+            lines.append(f"Missing hostnames: {len(missing_hostnames)}")
+            for value in missing_hostnames:
+                lines.append(f"- {value}")
 
         hosts_sync = payload.get("hosts_sync")
         if isinstance(hosts_sync, dict):
@@ -5334,12 +6296,56 @@ def _print_action_result(result):
                 if sync_reason not in (None, ""):
                     line += f" ({_humanize_hosts_sync_reason(sync_reason)})"
                 lines.append(line)
+            legacy_external_hostnames = list(hosts_sync.get("legacy_external_hostnames") or [])
+            if legacy_external_hostnames:
+                lines.append(f"Hosts legacy aliases outside managed blocks: {len(legacy_external_hostnames)}")
+
+        connector_recovery = payload.get("connector_recovery")
+        if isinstance(connector_recovery, dict):
+            connector_status = connector_recovery.get("status")
+            if connector_status not in (None, ""):
+                line = f"Connector recovery: {_console_result_label(connector_status)}"
+                connector_reason = connector_recovery.get("reason")
+                if connector_reason not in (None, ""):
+                    line += f" ({str(connector_reason).replace('-', ' ')})"
+                lines.append(line)
+
+        public_endpoint_preflight = payload.get("public_endpoint_preflight")
+        if isinstance(public_endpoint_preflight, dict):
+            preflight_status = public_endpoint_preflight.get("status")
+            if preflight_status not in (None, ""):
+                line = f"Public endpoints: {_console_result_label(preflight_status)}"
+                preflight_reason = _humanize_public_endpoint_reason(public_endpoint_preflight.get("reason"))
+                if preflight_reason:
+                    line += f" ({preflight_reason})"
+                lines.append(line)
+            checked = list(public_endpoint_preflight.get("checked") or [])
+            failures = list(public_endpoint_preflight.get("failures") or [])
+            if checked:
+                lines.append(f"Public endpoints checked: {len(checked)}")
+            if failures:
+                lines.append(f"Public endpoints failures: {len(failures)}")
+
+        local_stability = payload.get("local_stability")
+        if isinstance(local_stability, dict):
+            stability_result = local_stability.get("postflight") or local_stability.get("preflight")
+            if isinstance(stability_result, dict):
+                stability_status = stability_result.get("status")
+                if stability_status not in (None, "", "skipped"):
+                    lines.append(f"Local stability: {_console_result_label(stability_status)}")
+                stability_warnings = list(stability_result.get("warnings") or [])
+                stability_blocking = list(stability_result.get("blocking_issues") or [])
+                if stability_warnings:
+                    lines.append(f"Local stability warnings: {len(stability_warnings)}")
+                if stability_blocking:
+                    lines.append(f"Local stability blocking issues: {len(stability_blocking)}")
 
         _append_url_lines(
             lines,
             payload.get("urls"),
             multiline=bool(payload.get("access_urls_view")),
         )
+        _append_config_migration_warning_lines(lines, payload.get("config_migration_warnings"))
         _append_if_value(lines, "Next step", payload.get("next_step"))
         return lines
 
@@ -5486,7 +6492,15 @@ def run_interactive_menu(
                 continue
 
             if choice == "R":
-                _run_legacy_menu_action("recover")
+                result = _run_local_repair_interactive(
+                    current_adapter,
+                    adapter_registry=registry,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                )
+                if result is not None:
+                    current_adapter = result.get("adapter") or current_adapter
+                    _print_action_result(result)
                 continue
 
             if choice == "C":
@@ -5647,14 +6661,6 @@ def run_interactive_menu(
                 ):
                     print("Full level execution cancelled.")
                     continue
-                if not _interactive_ensure_hosts_ready_for_levels(
-                    current_adapter,
-                    levels=sorted(LEVEL_DESCRIPTIONS),
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                ):
-                    continue
                 result = _run_interactive_full_levels(
                     current_adapter,
                     adapter_registry=registry,
@@ -5791,6 +6797,8 @@ def create_parser(adapter_registry=None):
             "  python main.py menu\n"
             "  python main.py inesdata deploy --topology local\n"
             "  PIONERA_VM_EXTERNAL_IP=192.0.2.10 python main.py edc hosts --topology vm-single\n"
+            "  python main.py inesdata local-repair --topology local\n"
+            "  python main.py inesdata local-repair --topology local --recover-connectors\n"
             "  python main.py edc validate --topology local\n"
             "  python main.py edc hosts --topology local\n"
             "  python main.py edc recreate-dataspace --topology local --confirm-dataspace demoedc\n"
@@ -5846,6 +6854,12 @@ def create_parser(adapter_registry=None):
         help="Mark the generated experiment as a baseline run.",
     )
     parser.add_argument(
+        "--validation-mode",
+        choices=SUPPORTED_VALIDATION_MODES,
+        default=None,
+        help="Level 6 orchestration mode. Defaults to stable for local topology and fast elsewhere.",
+    )
+    parser.add_argument(
         "--confirm-dataspace",
         default=None,
         help="Exact dataspace name required by destructive operations such as recreate-dataspace.",
@@ -5854,6 +6868,11 @@ def create_parser(adapter_registry=None):
         "--with-connectors",
         action="store_true",
         help="After recreate-dataspace, run Level 4 connectors for the same adapter.",
+    )
+    parser.add_argument(
+        "--recover-connectors",
+        action="store_true",
+        help="With local-repair, restart connector runtimes after repairing local access.",
     )
     return parser
 
@@ -5876,6 +6895,9 @@ def main(
 
     if args.iterations < 1:
         parser.error("--iterations must be greater than or equal to 1")
+
+    if args.recover_connectors and (args.command or "run") != "local-repair":
+        parser.error("--recover-connectors can only be used with the local-repair command")
 
     if not args.adapter:
         if argv is None and sys.stdin.isatty():
@@ -5956,6 +6978,8 @@ def main(
                 baseline=args.baseline,
                 topology=args.topology,
                 with_connectors=args.with_connectors,
+                recover_connectors=args.recover_connectors,
+                validation_mode=args.validation_mode,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -5996,6 +7020,7 @@ def main(
                 validation_engine_cls=validation_engine_cls,
                 experiment_storage=experiment_storage,
                 baseline=args.baseline,
+                validation_mode=args.validation_mode,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -6029,6 +7054,21 @@ def main(
         print(json.dumps(result, indent=2, default=str))
         return result
 
+    if command == "local-repair":
+        try:
+            result = run_local_repair(
+                adapter,
+                deployer_name=args.adapter,
+                deployer_registry=deployer_registry,
+                topology=args.topology,
+                apply_hosts=True,
+                recover_connectors=args.recover_connectors,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2, default=str))
+        return result
+
     if command == "recreate-dataspace":
         result = run_recreate_dataspace(
             adapter,
@@ -6053,6 +7093,7 @@ def main(
             kafka_enabled=args.kafka,
             kafka_manager_cls=kafka_manager_cls,
             baseline=args.baseline,
+            validation_mode=args.validation_mode,
         )
         if isinstance(result, dict) and result.get("mode") in {"shadow", "execute"}:
             print(json.dumps(result, indent=2, default=str))

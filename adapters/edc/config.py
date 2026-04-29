@@ -4,7 +4,10 @@ import os
 import sys
 
 from adapters.inesdata.config import INESDataConfigAdapter, InesdataConfig
-from deployers.infrastructure.lib.config_loader import load_deployer_config
+from deployers.infrastructure.lib.config_loader import (
+    load_deployer_config,
+    resolve_deployer_config_layer_paths,
+)
 
 
 class EdcConfig(InesdataConfig):
@@ -155,10 +158,22 @@ class EDCConfigAdapter(INESDataConfigAdapter):
         values = {}
         # Transitional fallback: keep old local environments working until
         # deployers/infrastructure/deployer.config becomes the common source.
-        values.update(load_deployer_config(self._legacy_shared_deployer_config_path()))
+        for path in resolve_deployer_config_layer_paths(
+            self._legacy_shared_deployer_config_path(),
+            topology=self.topology,
+        ):
+            values.update(load_deployer_config(path))
         values.update(self._edc_default_deployer_values())
-        values.update(load_deployer_config(self._infrastructure_deployer_config_path()))
-        values.update(load_deployer_config(self.config.deployer_config_path()))
+        for path in resolve_deployer_config_layer_paths(
+            self._infrastructure_deployer_config_path(),
+            topology=self.topology,
+        ):
+            values.update(load_deployer_config(path))
+        for path in resolve_deployer_config_layer_paths(
+            self.config.deployer_config_path(),
+            topology=self.topology,
+        ):
+            values.update(load_deployer_config(path))
         return self._apply_environment_overrides(values)
 
     def edc_dashboard_repo_url(self):

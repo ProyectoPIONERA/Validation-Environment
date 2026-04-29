@@ -93,6 +93,7 @@ class RecreateDataspaceTests(unittest.TestCase):
             self.assertFalse(os.path.exists(runtime_dir))
             self.assertEqual(commands[0][0], "helm uninstall demoedc-dataspace-rs -n demoedc")
             self.assertEqual(commands[1][0], "kubectl delete namespace demoedc --ignore-not-found=true")
+            self.assertIn("PIONERA_TOPOLOGY=local", commands[2][0])
             self.assertIn("bootstrap.py dataspace delete demoedc", commands[2][0])
             self.assertEqual(commands[2][1]["cwd"], repo_dir)
 

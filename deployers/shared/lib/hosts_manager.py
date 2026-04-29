@@ -5,6 +5,12 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+from .public_hostnames import (
+    canonical_common_service_hostnames,
+    legacy_common_service_hostnames,
+    normalize_common_domain_base,
+    resolved_common_service_hostnames,
+)
 from .topology import (
     ROLE_COMMON,
     ROLE_COMPONENTS,
@@ -165,12 +171,22 @@ def upsert_managed_blocks(existing_content: str, blocks: list[HostBlock]) -> str
     return updated
 
 
-def apply_managed_blocks(hosts_file: str, blocks: list[HostBlock]) -> dict[str, Any]:
+def apply_managed_blocks(
+    hosts_file: str,
+    blocks: list[HostBlock],
+    *,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     existing_content = ""
     if os.path.exists(hosts_file):
         with open(hosts_file, "r", encoding="utf-8") as handle:
             existing_content = handle.read()
 
+    legacy_external_hostnames = detect_legacy_external_hostnames(
+        existing_content,
+        block_names=[block.name for block in blocks],
+        config=config,
+    )
     updated_content, missing_blocks, skipped_existing = merge_missing_managed_blocks(existing_content, blocks)
     changed = updated_content != existing_content
     if changed:
@@ -182,6 +198,7 @@ def apply_managed_blocks(hosts_file: str, blocks: list[HostBlock]) -> dict[str, 
         "changed": changed,
         "blocks": blocks_as_dict(missing_blocks),
         "skipped_existing": skipped_existing,
+        "legacy_external_hostnames": legacy_external_hostnames,
     }
 
 
@@ -244,6 +261,38 @@ def remove_managed_blocks(existing_content: str, block_names: list[str]) -> str:
     return "\n".join(kept_lines).rstrip() + "\n"
 
 
+def detect_legacy_external_hostnames(
+    existing_content: str,
+    *,
+    block_names: list[str],
+    config: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    values = dict(config or {})
+    domain_base = normalize_common_domain_base(values.get("DOMAIN_BASE"))
+    legacy_hostnames = legacy_common_service_hostnames(domain_base)
+    canonical_hostnames = canonical_common_service_hostnames(domain_base)
+    base_content = remove_managed_blocks(existing_content, block_names)
+    existing_hostnames = parse_hostnames(base_content)
+    warnings: list[dict[str, str]] = []
+
+    for key, legacy_hostname in legacy_hostnames.items():
+        canonical_hostname = canonical_hostnames[key]
+        if (
+            legacy_hostname
+            and canonical_hostname
+            and legacy_hostname.lower() in existing_hostnames
+            and legacy_hostname != canonical_hostname
+        ):
+            warnings.append(
+                {
+                    "legacy": legacy_hostname,
+                    "canonical": canonical_hostname,
+                }
+            )
+
+    return warnings
+
+
 def parse_hostnames(content: str) -> set[str]:
     hostnames: set[str] = set()
     for raw_line in (content or "").splitlines():
@@ -261,23 +310,13 @@ def parse_hostnames(content: str) -> set[str]:
 
 
 def _build_common_entries(config: dict[str, Any], *, address: str) -> list[HostEntry]:
-    domain_base = _clean_token(config.get("DOMAIN_BASE", ""))
+    resolved_hostnames = resolved_common_service_hostnames(config)
     hostnames = [
-        _clean_token(config.get("KEYCLOAK_HOSTNAME", "")),
-        _clean_token(config.get("MINIO_HOSTNAME", "")),
-        _hostname_from_url(config.get("KC_URL")),
-        _clean_token(config.get("MINIO_CONSOLE_HOSTNAME", "")),
+        resolved_hostnames["keycloak_hostname"],
+        resolved_hostnames["minio_hostname"],
+        resolved_hostnames["keycloak_admin_hostname"],
+        resolved_hostnames["minio_console_hostname"],
     ]
-
-    if domain_base:
-        hostnames.extend(
-            [
-                f"keycloak.{domain_base}",
-                f"minio.{domain_base}",
-                f"keycloak-admin.{domain_base}",
-                f"console.minio-s3.{domain_base}",
-            ]
-        )
 
     return _dedupe_entries(
         [HostEntry(address, hostname) for hostname in hostnames if hostname]

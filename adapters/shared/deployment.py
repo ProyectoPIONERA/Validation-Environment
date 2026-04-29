@@ -68,6 +68,14 @@ class SharedDataspaceDeploymentAdapter:
             return bootstrap_runtime["runtime_dir"]
         return os.path.join(self.config.repo_dir(), "deployments", "DEV", self._dataspace_name())
 
+    def _bootstrap_environment_prefix(self):
+        topology = normalize_topology(
+            getattr(self.config_adapter, "topology", None)
+            or getattr(self, "topology", None)
+            or LOCAL_TOPOLOGY
+        )
+        return f"PIONERA_TOPOLOGY={shlex.quote(topology)} "
+
     def _bootstrap_dataspace_command(self, action, dataspace=None):
         runtime = resolve_shared_level3_bootstrap_runtime(self.config) or {}
         command_getter = runtime.get("bootstrap_dataspace_command")
@@ -75,7 +83,7 @@ class SharedDataspaceDeploymentAdapter:
         if callable(command_getter):
             return command_getter(action, dataspace=resolved_dataspace)
         return (
-            f"{shlex.quote(self.config.python_exec())} bootstrap.py "
+            f"{self._bootstrap_environment_prefix()}{shlex.quote(self.config.python_exec())} bootstrap.py "
             f"dataspace {shlex.quote(str(action))} {shlex.quote(str(resolved_dataspace))}"
         )
 

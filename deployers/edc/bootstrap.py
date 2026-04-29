@@ -22,6 +22,20 @@ from urllib.parse import urlparse
 import requests
 import urllib3
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from deployers.infrastructure.lib.public_hostnames import (  # noqa: E402
+    clean_public_hostname,
+    resolved_common_service_hostnames,
+)
+from deployers.infrastructure.lib.config_loader import (  # noqa: E402
+    apply_pionera_environment_overrides,
+    resolve_deployer_config_layer_paths,
+)
+from deployers.infrastructure.lib.topology import normalize_topology  # noqa: E402
+
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -47,9 +61,8 @@ def read_config_file(path: Path) -> dict[str, str]:
     return values
 
 
-def load_config() -> dict[str, str]:
-    root = project_root()
-    values: dict[str, str] = {
+def _default_bootstrap_values() -> dict[str, str]:
+    return {
         "ENVIRONMENT": "DEV",
         "PG_HOST": "localhost",
         "PG_PORT": "5432",
@@ -61,16 +74,40 @@ def load_config() -> dict[str, str]:
         "VT_URL": "http://localhost:8200",
         "VT_TOKEN": "rt.0000000000000",
     }
+
+
+def _active_bootstrap_topology() -> str:
+    return normalize_topology(os.getenv("PIONERA_TOPOLOGY") or "local")
+
+
+def load_config(topology: str | None = None) -> dict[str, str]:
+    root = project_root()
+    resolved_topology = normalize_topology(topology or _active_bootstrap_topology())
+    values: dict[str, str] = {}
     # Transitional fallback keeps existing local environments working until the
     # shared infrastructure config is materialized.
-    values.update(read_config_file(root / "deployers" / "inesdata" / "deployer.config"))
-    values.update(read_config_file(root / "deployers" / "infrastructure" / "deployer.config"))
-    values.update(read_config_file(root / "deployers" / "edc" / "deployer.config"))
-    values.update(read_config_file(deployment_root() / "deployer.config"))
-    for env_key, env_value in os.environ.items():
-        if env_key.startswith("PIONERA_") and env_value:
-            values[env_key[len("PIONERA_"):]] = env_value
-    return values
+    for path in resolve_deployer_config_layer_paths(
+        str(root / "deployers" / "inesdata" / "deployer.config"),
+        topology=resolved_topology,
+    ):
+        values.update(read_config_file(Path(path)))
+    values.update(_default_bootstrap_values())
+    for path in resolve_deployer_config_layer_paths(
+        str(root / "deployers" / "infrastructure" / "deployer.config"),
+        topology=resolved_topology,
+    ):
+        values.update(read_config_file(Path(path)))
+    for path in resolve_deployer_config_layer_paths(
+        str(root / "deployers" / "edc" / "deployer.config"),
+        topology=resolved_topology,
+    ):
+        values.update(read_config_file(Path(path)))
+    for path in resolve_deployer_config_layer_paths(
+        str(deployment_root() / "deployer.config"),
+        topology=resolved_topology,
+    ):
+        values.update(read_config_file(Path(path)))
+    return apply_pionera_environment_overrides(values)
 
 
 def random_token(length: int) -> str:
@@ -130,26 +167,11 @@ def build_connector_access_urls(config: dict[str, str], connector: str, dataspac
 
 def common_access_urls(config: dict[str, str], dataspace: str, environment: str) -> dict[str, str]:
     protocol = access_protocol(environment)
-    domain_base = str(config.get("DOMAIN_BASE", "dev.ed.dataspaceunit.upm")).strip() or "dev.ed.dataspaceunit.upm"
-    keycloak_hostname = (
-        clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
-        or clean_hostname(config.get("KC_INTERNAL_URL"))
-        or f"keycloak.{domain_base}"
-    )
-    keycloak_admin_hostname = (
-        clean_hostname(config.get("KEYCLOAK_ADMIN_HOSTNAME"))
-        or clean_hostname(config.get("KC_URL"))
-        or f"keycloak-admin.{domain_base}"
-    )
-    minio_api_hostname = (
-        clean_hostname(config.get("MINIO_HOSTNAME"))
-        or clean_hostname(config.get("MINIO_ENDPOINT"))
-        or f"minio.{domain_base}"
-    )
-    minio_console_hostname = (
-        clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
-        or f"console.minio-s3.{domain_base}"
-    )
+    resolved_hostnames = resolved_common_service_hostnames(config)
+    keycloak_hostname = resolved_hostnames["keycloak_hostname"]
+    keycloak_admin_hostname = resolved_hostnames["keycloak_admin_hostname"]
+    minio_api_hostname = resolved_hostnames["minio_hostname"]
+    minio_console_hostname = resolved_hostnames["minio_console_hostname"]
     return {
         "keycloak_realm": f"{protocol}://{keycloak_hostname}/realms/{dataspace}",
         "keycloak_account": f"{protocol}://{keycloak_hostname}/realms/{dataspace}/account",
@@ -171,15 +193,7 @@ def dataspace_domain_base(config: dict[str, str], environment: str) -> str:
 
 
 def clean_hostname(value: str | None) -> str:
-    raw_value = str(value or "").strip()
-    if not raw_value:
-        return ""
-    parsed = urlparse(raw_value)
-    if parsed.netloc:
-        return parsed.netloc
-    if "://" not in raw_value:
-        return raw_value.split("/", 1)[0]
-    return ""
+    return clean_public_hostname(value)
 
 
 def normalize_base_href(value: str | None) -> str:

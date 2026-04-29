@@ -6,6 +6,10 @@ from deployers.infrastructure.lib.config_loader import (
     INFRASTRUCTURE_MANAGED_KEYS,
     load_layered_deployer_config,
 )
+from deployers.infrastructure.lib.public_hostnames import (
+    clean_public_hostname,
+    resolved_common_service_hostnames,
+)
 from deployers.infrastructure.lib.namespaces import (
     resolve_namespace_profile_plan,
 )
@@ -329,6 +333,7 @@ class INESDataConfigAdapter:
                 adapter_config_path,
             ],
             protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
+            topology=self.topology,
         )
 
     @staticmethod
@@ -582,28 +587,10 @@ class INESDataConfigAdapter:
 
     @staticmethod
     def _clean_hostname(value):
-        hostname = str(value or "").strip()
-        if not hostname:
-            return ""
-        if "://" in hostname:
-            hostname = hostname.split("://", 1)[1]
-        return hostname.split("/", 1)[0].strip()
+        return clean_public_hostname(value)
 
     def _common_service_host_alias_domains(self, config):
-        domain = str(config.get("DOMAIN_BASE") or "dev.ed.dataspaceunit.upm").strip() or "dev.ed.dataspaceunit.upm"
-        hostnames = [
-            self._clean_hostname(config.get("KEYCLOAK_HOSTNAME"))
-            or self._clean_hostname(config.get("KC_INTERNAL_URL"))
-            or f"keycloak.{domain}",
-            self._clean_hostname(config.get("KEYCLOAK_ADMIN_HOSTNAME"))
-            or self._clean_hostname(config.get("KC_URL"))
-            or f"keycloak-admin.{domain}",
-            self._clean_hostname(config.get("MINIO_HOSTNAME"))
-            or self._clean_hostname(config.get("MINIO_ENDPOINT"))
-            or f"minio.{domain}",
-            self._clean_hostname(config.get("MINIO_CONSOLE_HOSTNAME"))
-            or f"console.minio-s3.{domain}",
-        ]
+        hostnames = list(resolved_common_service_hostnames(config).values())
         deduped = []
         for hostname in hostnames:
             if hostname and hostname not in deduped:

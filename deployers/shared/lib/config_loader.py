@@ -27,6 +27,53 @@ INFRASTRUCTURE_MANAGED_KEYS = frozenset(
     }
 )
 
+TOPOLOGY_OVERLAY_KEYS = {
+    "local": frozenset(
+        {
+            "PG_HOST",
+            "VT_URL",
+            "MINIO_ENDPOINT",
+            "LOCAL_HOSTS_ADDRESS",
+            "LOCAL_INGRESS_EXTERNAL_IP",
+            "MINIKUBE_DRIVER",
+            "MINIKUBE_CPUS",
+            "MINIKUBE_MEMORY",
+            "MINIKUBE_PROFILE",
+        }
+    ),
+    "vm-single": frozenset(
+        {
+            "VM_EXTERNAL_IP",
+            "VM_COMMON_IP",
+            "VM_DATASPACE_IP",
+            "VM_CONNECTORS_IP",
+            "VM_COMPONENTS_IP",
+            "INGRESS_EXTERNAL_IP",
+        }
+    ),
+    "vm-distributed": frozenset(
+        {
+            "VM_EXTERNAL_IP",
+            "VM_COMMON_IP",
+            "VM_DATASPACE_IP",
+            "VM_PROVIDER_IP",
+            "VM_CONSUMER_IP",
+            "VM_CONNECTORS_IP",
+            "VM_COMPONENTS_IP",
+            "VM_OBSERVABILITY_IP",
+            "INGRESS_EXTERNAL_IP",
+        }
+    ),
+}
+
+TOPOLOGY_KEY_TARGETS: dict[str, tuple[str, ...]] = {}
+for _topology_name, _keys in TOPOLOGY_OVERLAY_KEYS.items():
+    for _key_name in _keys:
+        TOPOLOGY_KEY_TARGETS.setdefault(_key_name, tuple())
+        TOPOLOGY_KEY_TARGETS[_key_name] = tuple(
+            sorted(set(TOPOLOGY_KEY_TARGETS[_key_name]).union({_topology_name}))
+        )
+
 
 def load_deployer_config(path: str) -> dict[str, str]:
     """Load a deployer.config file using a simple KEY=VALUE format."""
@@ -59,23 +106,77 @@ def apply_pionera_environment_overrides(config: dict[str, str]) -> dict[str, str
     return config
 
 
+def topology_overlay_config_path(path: str, topology: str | None = None) -> str:
+    """Return the optional topology overlay path that accompanies a deployer.config file."""
+
+    normalized_topology = str(topology or "").strip().lower()
+    if not path or not normalized_topology:
+        return ""
+    return os.path.join(os.path.dirname(path), "topologies", f"{normalized_topology}.config")
+
+
+def resolve_deployer_config_layer_paths(path: str, topology: str | None = None) -> list[str]:
+    """Expand a deployer.config path with its optional topology overlay."""
+
+    if not path:
+        return []
+    resolved_paths = [path]
+    overlay_path = topology_overlay_config_path(path, topology)
+    if overlay_path:
+        resolved_paths.append(overlay_path)
+    return resolved_paths
+
+
+def detect_topology_key_migration_warnings(path: str) -> list[dict[str, object]]:
+    """Report topology-scoped keys that still live in the shared base config."""
+
+    warnings: list[dict[str, object]] = []
+    if not path or not os.path.isfile(path):
+        return warnings
+
+    config = load_deployer_config(path)
+    for key in sorted(config):
+        target_topologies = list(TOPOLOGY_KEY_TARGETS.get(key, ()))
+        if not target_topologies:
+            continue
+        value = str(config.get(key) or "").strip()
+        if value == "":
+            continue
+        overlay_paths = [
+            topology_overlay_config_path(path, topology_name)
+            for topology_name in target_topologies
+        ]
+        warnings.append(
+            {
+                "key": key,
+                "value": value,
+                "base_path": path,
+                "target_topologies": target_topologies,
+                "recommended_overlay_paths": overlay_paths,
+            }
+        )
+    return warnings
+
+
 def load_layered_deployer_config(
     paths: list[str] | tuple[str, ...],
     *,
     defaults: dict[str, str] | None = None,
     apply_environment: bool = True,
     protected_keys: set[str] | frozenset[str] | None = None,
+    topology: str | None = None,
 ) -> dict[str, str]:
     """Load deployer configuration as defaults < files in order < PIONERA_*."""
 
     config: dict[str, str] = dict(defaults or {})
     protected = set(protected_keys or [])
     for path in paths:
-        layer = load_deployer_config(path)
-        for key, value in layer.items():
-            if key in protected and key in config:
-                continue
-            config[key] = value
+        for resolved_path in resolve_deployer_config_layer_paths(path, topology):
+            layer = load_deployer_config(resolved_path)
+            for key, value in layer.items():
+                if key in protected and key in config:
+                    continue
+                config[key] = value
     if apply_environment:
         apply_pionera_environment_overrides(config)
     return config

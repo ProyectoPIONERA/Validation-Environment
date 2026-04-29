@@ -17,6 +17,11 @@ type CatalogDatasetReadiness = {
   datasetCount: number;
 };
 
+type CatalogDatasetReadinessProbe = CatalogDatasetReadiness & {
+  status: "ready" | "timeout";
+  error?: string;
+};
+
 type ConsumerNegotiationArtifacts = {
   negotiationId: string;
   agreementId: string;
@@ -555,6 +560,38 @@ export async function waitForConsumerCatalogDatasetReadiness(
     offerId: String(offer?.["@id"] || ""),
     datasetCount,
   };
+}
+
+export async function probeConsumerCatalogDatasetReadiness(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  assetId: string,
+  counterPartyAddress: string = runtime.provider.protocolBaseUrl,
+  counterPartyId: string = runtime.provider.connectorName,
+): Promise<CatalogDatasetReadinessProbe> {
+  try {
+    return {
+      status: "ready",
+      ...(await waitForConsumerCatalogDatasetReadiness(
+        request,
+        runtime,
+        assetId,
+        counterPartyAddress,
+        counterPartyId,
+      )),
+    };
+  } catch (error) {
+    return {
+      status: "timeout",
+      assetId,
+      counterPartyAddress,
+      counterPartyId,
+      datasetId: "",
+      offerId: "",
+      datasetCount: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function negotiationTimeoutMs(): number {

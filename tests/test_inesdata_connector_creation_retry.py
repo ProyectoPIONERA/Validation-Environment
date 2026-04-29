@@ -93,6 +93,26 @@ class RoleAlignedConnectorRetryConfigAdapter(ConnectorRetryConfigAdapter):
 
 
 class ConnectorCreationRetryTests(unittest.TestCase):
+    def test_bootstrap_connector_commands_include_active_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            adapter = INESDataConnectorsAdapter(
+                run=lambda *_args, **_kwargs: object(),
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=mock.Mock(),
+                config_adapter=ConnectorRetryConfigAdapter(tmpdir),
+                config_cls=ConnectorRetryConfig(tmpdir),
+            )
+            adapter.config_adapter.topology = "vm-single"
+
+            create_cmd = adapter._bootstrap_connector_create_command("python3", "conn-demo", "demo")
+            delete_cmd = adapter._bootstrap_connector_delete_command("python3", "conn-demo", "demo")
+
+        self.assertIn("PIONERA_TOPOLOGY=vm-single", create_cmd)
+        self.assertIn("bootstrap.py connector create conn-demo demo", create_cmd)
+        self.assertIn("PIONERA_TOPOLOGY=vm-single", delete_cmd)
+        self.assertIn("bootstrap.py connector delete conn-demo demo", delete_cmd)
+
     def test_force_clean_postgres_db_retries_until_database_and_role_are_gone(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             infra = mock.Mock()

@@ -1253,7 +1253,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         )
 
         print(f"Bootstrapping connector prerequisites for {connector_name}...")
-        create_cmd = f"{python_exec} bootstrap.py connector create {connector_name} {ds_name}"
+        create_cmd = self._bootstrap_connector_create_command(python_exec, connector_name, ds_name)
         create_result = None
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):

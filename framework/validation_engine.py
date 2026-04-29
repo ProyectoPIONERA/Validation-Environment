@@ -172,6 +172,10 @@ class ValidationEngine:
             experiment_dir=experiment_dir,
             run_index=run_index,
         )
+        preflight_runner = getattr(self.newman_executor, "run_management_api_preflight", None)
+        preflight_runner_on_class = getattr(type(self.newman_executor), "run_management_api_preflight", None)
+        if callable(preflight_runner) and callable(preflight_runner_on_class):
+            preflight_runner(env_vars, report_dir=report_dir)
         baseline_snapshot = None
         baseline_reason = None
         if self.transfer_storage_verifier is not None and experiment_dir:

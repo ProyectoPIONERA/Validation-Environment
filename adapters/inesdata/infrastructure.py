@@ -12,6 +12,10 @@ from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
 from tabulate import tabulate
 
+from deployers.infrastructure.lib.public_hostnames import (
+    canonical_common_service_config_values,
+    canonical_common_service_hostnames,
+)
 from .config import INESDataConfigAdapter, InesdataConfig
 
 
@@ -1095,6 +1099,7 @@ class INESDataInfrastructureAdapter:
             "common-srvs-postgresql-",
             "common-srvs-vault-",
         )
+        observed_expected_error = None
 
         while True:
             result = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
@@ -1125,12 +1130,16 @@ class INESDataInfrastructureAdapter:
                         self.run(f"kubectl get pods -n {namespace}", check=False)
                         return False
 
+                    is_expected_service_pod = any(name.startswith(prefix) for prefix in expected_prefixes)
                     if status == "Error" and not self._is_ignored_transient_hook_pod(namespace, name):
+                        if is_expected_service_pod:
+                            observed_expected_error = f"{name} ({status})"
+                            continue
                         print(f"\nPod in error state: {name} ({status})")
                         self.run(f"kubectl get pods -n {namespace}", check=False)
                         return False
 
-                    if any(name.startswith(prefix) for prefix in expected_prefixes):
+                    if is_expected_service_pod:
                         pods[name] = {"ready": ready, "status": status}
                     elif status == "Error":
                         transient_error = transient_error or f"{name} ({status})"
@@ -1178,9 +1187,16 @@ class INESDataInfrastructureAdapter:
 
                 if transient_error:
                     print(f"Waiting past transient hook state: {transient_error}")
+                if observed_expected_error:
+                    print(
+                        "Observed transient service pod error while the common services cold start "
+                        f"was still converging: {observed_expected_error}"
+                    )
 
             if time.time() - start_time > timeout:
                 print("\nTimeout waiting for core services\n")
+                if observed_expected_error:
+                    print(f"Last transient service pod error observed: {observed_expected_error}")
                 self.run(f"kubectl get pods -n {namespace}", check=False)
                 return False
 
@@ -1621,10 +1637,35 @@ class INESDataInfrastructureAdapter:
         add_row_value("MINIO_PASSWORD", "minio.rootPassword", minio_password, minio_values.get("rootPassword"))
         domain_base = config.get("DOMAIN_BASE")
         if domain_base:
-            add_row_value("DOMAIN_BASE", "keycloak.ingress.hostname", f"auth.{domain_base}", values["keycloak"]["ingress"]["hostname"])
-            add_row_value("DOMAIN_BASE", "keycloak.adminIngress.hostname", f"admin.auth.{domain_base}", values["keycloak"]["adminIngress"]["hostname"])
-            add_row_value("DOMAIN_BASE", "minio.ingress.hosts", f"minio.{domain_base}", values.get("minio", {}).get("ingress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("ingress", {}).get("hosts") else "")
-            add_row_value("DOMAIN_BASE", "minio.consoleIngress.hosts", f"console.minio-s3.{domain_base}", values.get("minio", {}).get("consoleIngress", {}).get("hosts", [""])[0] if values.get("minio", {}).get("consoleIngress", {}).get("hosts") else "")
+            common_hostnames = canonical_common_service_hostnames(domain_base)
+            add_row_value(
+                "DOMAIN_BASE",
+                "keycloak.ingress.hostname",
+                common_hostnames["keycloak_hostname"],
+                values["keycloak"]["ingress"]["hostname"],
+            )
+            add_row_value(
+                "DOMAIN_BASE",
+                "keycloak.adminIngress.hostname",
+                common_hostnames["keycloak_admin_hostname"],
+                values["keycloak"]["adminIngress"]["hostname"],
+            )
+            add_row_value(
+                "DOMAIN_BASE",
+                "minio.ingress.hosts",
+                common_hostnames["minio_hostname"],
+                values.get("minio", {}).get("ingress", {}).get("hosts", [""])[0]
+                if values.get("minio", {}).get("ingress", {}).get("hosts")
+                else "",
+            )
+            add_row_value(
+                "DOMAIN_BASE",
+                "minio.consoleIngress.hosts",
+                common_hostnames["minio_console_hostname"],
+                values.get("minio", {}).get("consoleIngress", {}).get("hosts", [""])[0]
+                if values.get("minio", {}).get("consoleIngress", {}).get("hosts")
+                else "",
+            )
 
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
@@ -1657,8 +1698,9 @@ class INESDataInfrastructureAdapter:
 
         domain_base = config.get("DOMAIN_BASE")
         if domain_base:
-            values["keycloak"]["ingress"]["hostname"] = f"auth.{domain_base}"
-            values["keycloak"]["adminIngress"]["hostname"] = f"admin.auth.{domain_base}"
+            common_hostnames = canonical_common_service_hostnames(domain_base)
+            values["keycloak"]["ingress"]["hostname"] = common_hostnames["keycloak_hostname"]
+            values["keycloak"]["adminIngress"]["hostname"] = common_hostnames["keycloak_admin_hostname"]
             
             master_json_str = values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"]
             try:
@@ -1666,23 +1708,25 @@ class INESDataInfrastructureAdapter:
                 master_json_data = json.loads(master_json_str)
                 if "attributes" not in master_json_data:
                     master_json_data["attributes"] = {}
-                master_json_data["attributes"]["frontendUrl"] = f"http://admin.auth.{domain_base}"
+                master_json_data["attributes"]["frontendUrl"] = (
+                    f"http://{common_hostnames['keycloak_admin_hostname']}"
+                )
                 values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"] = json.dumps(master_json_data, indent=2)
             except Exception as e:
                 print(f"Warning: Could not update frontendUrl in master.json: {e}")
 
             if "minio" in values and "ingress" in values["minio"]:
-                values["minio"]["ingress"]["hosts"] = [f"minio.{domain_base}"]
+                values["minio"]["ingress"]["hosts"] = [common_hostnames["minio_hostname"]]
             if "minio" in values and "consoleIngress" in values["minio"]:
-                values["minio"]["consoleIngress"]["hosts"] = [f"console.minio-s3.{domain_base}"]
+                values["minio"]["consoleIngress"]["hosts"] = [common_hostnames["minio_console_hostname"]]
 
             # Also update TLS hosts if they exist
             if "extraTls" in values["keycloak"]["ingress"]:
                 for tls in values["keycloak"]["ingress"]["extraTls"]:
-                    tls["hosts"] = [f"auth.{domain_base}"]
+                    tls["hosts"] = [common_hostnames["keycloak_hostname"]]
             if "extraTls" in values["keycloak"]["adminIngress"]:
                 for tls in values["keycloak"]["adminIngress"]["extraTls"]:
-                    tls["hosts"] = [f"admin.auth.{domain_base}"]
+                    tls["hosts"] = [common_hostnames["keycloak_admin_hostname"]]
 
 
         for item in values["keycloak"]["keycloakConfigCli"]["extraEnv"]:
@@ -1849,14 +1893,7 @@ class INESDataInfrastructureAdapter:
 
         domain_base = str(current.get("DOMAIN_BASE") or "").strip()
         if domain_base:
-            expected_access = {
-                "KC_INTERNAL_URL": f"http://auth.{domain_base}",
-                "KC_URL": f"http://admin.auth.{domain_base}",
-                "KEYCLOAK_HOSTNAME": f"auth.{domain_base}",
-                "KEYCLOAK_ADMIN_HOSTNAME": f"admin.auth.{domain_base}",
-                "MINIO_HOSTNAME": f"minio.{domain_base}",
-                "MINIO_CONSOLE_HOSTNAME": f"console.minio-s3.{domain_base}",
-            }
+            expected_access = canonical_common_service_config_values(domain_base)
             for key, value in expected_access.items():
                 if current.get(key) != value:
                     updates[key] = value

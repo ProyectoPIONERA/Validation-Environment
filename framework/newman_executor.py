@@ -20,6 +20,8 @@ class NewmanExecutor:
     ASYNC_COLLECTION_DELAY_REQUEST_MS = 2000
     TRANSIENT_AUTH_ATTEMPTS = 3
     TRANSIENT_AUTH_RETRY_DELAY_SECONDS = 5
+    MANAGEMENT_PREFLIGHT_ATTEMPTS = 3
+    MANAGEMENT_PREFLIGHT_RETRY_DELAY_SECONDS = 2
     AUTH_LOGIN_REQUESTS = {"Provider Login", "Consumer Login"}
     AUTH_HEALTH_REQUESTS = {"Provider Management API Health", "Consumer Management API Health"}
     TRANSIENT_AUTH_STATUS_CODES = {502, 503, 504}
@@ -257,6 +259,304 @@ class NewmanExecutor:
     def _should_wait_for_contract_agreement(self, environment_path):
         _, env_vars = self._read_environment_values(environment_path)
         return bool(env_vars.get("e2e_negotiation_id") and not env_vars.get("e2e_agreement_id"))
+
+    @staticmethod
+    def _management_url(connector, ds_domain, path):
+        normalized_path = f"/{str(path or '').lstrip('/')}"
+        return f"http://{connector}.{ds_domain}{normalized_path}"
+
+    @staticmethod
+    def _response_preview(response, limit=300):
+        try:
+            text = str(getattr(response, "text", "") or "").strip()
+        except Exception:
+            text = ""
+        text = " ".join(text.split())
+        return text[:limit]
+
+    def _request_with_transient_retry(self, send_request, label, attempts, retry_delay):
+        for attempt in range(1, attempts + 1):
+            try:
+                response = send_request()
+            except requests.RequestException as exc:
+                if attempt >= attempts:
+                    raise RuntimeError(f"{label} request failed: {exc}") from exc
+                print(
+                    f"[INFO] {label} request failed with a transient network error: {exc}. "
+                    f"Retrying in {retry_delay:g}s ({attempt + 1}/{attempts})"
+                )
+                time.sleep(retry_delay)
+                continue
+
+            if response.status_code in self.TRANSIENT_AUTH_STATUS_CODES and attempt < attempts:
+                print(
+                    f"[INFO] {label} returned transient HTTP {response.status_code}. "
+                    f"Retrying in {retry_delay:g}s ({attempt + 1}/{attempts})"
+                )
+                time.sleep(retry_delay)
+                continue
+
+            return response
+
+        raise RuntimeError(f"{label} request failed unexpectedly")
+
+    def _connector_login(self, env_vars, role, attempts, retry_delay):
+        keycloak_url = str(env_vars.get("keycloakUrl") or "").strip().rstrip("/")
+        dataspace = str(env_vars.get("dataspace") or "").strip()
+        client_id = str(env_vars.get("keycloakClientId") or "dataspace-users").strip()
+        username = str(env_vars.get(f"{role}_user") or "").strip()
+        password = str(env_vars.get(f"{role}_password") or "").strip()
+        missing = [
+            name
+            for name, value in (
+                ("keycloakUrl", keycloak_url),
+                ("dataspace", dataspace),
+                (f"{role}_user", username),
+                (f"{role}_password", password),
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(f"{role} login missing environment values: {', '.join(missing)}")
+
+        login_url = f"{keycloak_url}/realms/{dataspace}/protocol/openid-connect/token"
+        payload = {
+            "grant_type": "password",
+            "client_id": client_id,
+            "username": username,
+            "password": password,
+            "scope": "openid profile email",
+        }
+        response = self._request_with_transient_retry(
+            lambda: requests.post(
+                login_url,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=payload,
+                timeout=15,
+            ),
+            f"{role} login",
+            attempts,
+            retry_delay,
+        )
+        if response.status_code != 200:
+            preview = self._response_preview(response)
+            raise RuntimeError(
+                f"{role} login returned HTTP {response.status_code}"
+                + (f": {preview}" if preview else "")
+            )
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"{role} login returned a non-JSON body") from exc
+
+        token = body.get("access_token")
+        if not token:
+            raise RuntimeError(f"{role} login did not return access_token")
+        return login_url, token
+
+    def _post_management_json(self, url, token, payload, label, attempts, retry_delay):
+        response = self._request_with_transient_retry(
+            lambda: requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=15,
+            ),
+            label,
+            attempts,
+            retry_delay,
+        )
+        if response.status_code != 200:
+            preview = self._response_preview(response)
+            raise RuntimeError(
+                f"{label} returned HTTP {response.status_code}"
+                + (f": {preview}" if preview else "")
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"{label} returned a non-JSON body") from exc
+        return response, body
+
+    @staticmethod
+    def _preflight_body_summary(body):
+        if isinstance(body, list):
+            return f"items={len(body)}"
+        if isinstance(body, dict):
+            datasets = body.get("dcat:dataset")
+            if isinstance(datasets, list):
+                return f"datasets={len(datasets)}"
+            if datasets:
+                return "datasets=1"
+            return f"keys={len(body)}"
+        return type(body).__name__
+
+    def run_management_api_preflight(self, env_vars, report_dir=None):
+        attempts = self._positive_int_from_env(
+            "PIONERA_NEWMAN_PREFLIGHT_ATTEMPTS",
+            self.MANAGEMENT_PREFLIGHT_ATTEMPTS,
+        )
+        retry_delay = self._positive_float_from_env(
+            "PIONERA_NEWMAN_PREFLIGHT_RETRY_DELAY_SECONDS",
+            self.MANAGEMENT_PREFLIGHT_RETRY_DELAY_SECONDS,
+        )
+        provider = str(env_vars.get("provider") or "").strip()
+        consumer = str(env_vars.get("consumer") or "").strip()
+        ds_domain = str(env_vars.get("dsDomain") or "").strip()
+        provider_protocol = str(env_vars.get("providerProtocolAddress") or "").strip()
+        provider_participant_id = str(env_vars.get("providerParticipantId") or provider).strip()
+        diagnostics = {
+            "provider": provider,
+            "consumer": consumer,
+            "dsDomain": ds_domain,
+            "checks": [],
+        }
+        failures = []
+        report_path = None
+
+        def record_check(name, endpoint, ok, detail, status_code=None):
+            diagnostics["checks"].append(
+                {
+                    "name": name,
+                    "endpoint": endpoint,
+                    "ok": bool(ok),
+                    "status_code": status_code,
+                    "detail": str(detail or ""),
+                }
+            )
+            if not ok:
+                failures.append(f"{name}: {detail}")
+
+        provider_token = None
+        consumer_token = None
+
+        try:
+            provider_login_url, provider_token = self._connector_login(
+                env_vars,
+                "provider",
+                attempts,
+                retry_delay,
+            )
+            record_check("provider-login", provider_login_url, True, "access_token acquired", 200)
+        except RuntimeError as exc:
+            provider_login_url = str(env_vars.get("keycloakUrl") or "").strip()
+            record_check("provider-login", provider_login_url, False, str(exc))
+
+        try:
+            consumer_login_url, consumer_token = self._connector_login(
+                env_vars,
+                "consumer",
+                attempts,
+                retry_delay,
+            )
+            record_check("consumer-login", consumer_login_url, True, "access_token acquired", 200)
+        except RuntimeError as exc:
+            consumer_login_url = str(env_vars.get("keycloakUrl") or "").strip()
+            record_check("consumer-login", consumer_login_url, False, str(exc))
+
+        if provider_token and provider and ds_domain:
+            url = self._management_url(provider, ds_domain, "/management/v3/assets/request")
+            try:
+                response, body = self._post_management_json(
+                    url,
+                    provider_token,
+                    {
+                        "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+                        "offset": 0,
+                        "limit": 1,
+                        "filterExpression": [],
+                    },
+                    "provider assets preflight",
+                    attempts,
+                    retry_delay,
+                )
+                record_check(
+                    "provider-assets-request",
+                    url,
+                    True,
+                    self._preflight_body_summary(body),
+                    response.status_code,
+                )
+            except RuntimeError as exc:
+                record_check("provider-assets-request", url, False, str(exc))
+
+        if consumer_token and consumer and ds_domain:
+            url = self._management_url(consumer, ds_domain, "/management/v3/contractnegotiations/request")
+            try:
+                response, body = self._post_management_json(
+                    url,
+                    consumer_token,
+                    {
+                        "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+                        "offset": 0,
+                        "limit": 1,
+                    },
+                    "consumer negotiation preflight",
+                    attempts,
+                    retry_delay,
+                )
+                record_check(
+                    "consumer-contractnegotiations-request",
+                    url,
+                    True,
+                    self._preflight_body_summary(body),
+                    response.status_code,
+                )
+            except RuntimeError as exc:
+                record_check("consumer-contractnegotiations-request", url, False, str(exc))
+
+        if consumer_token and consumer and ds_domain and provider_protocol and provider_participant_id:
+            url = self._management_url(consumer, ds_domain, "/management/v3/catalog/request")
+            try:
+                response, body = self._post_management_json(
+                    url,
+                    consumer_token,
+                    {
+                        "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+                        "@type": "CatalogRequest",
+                        "counterPartyAddress": provider_protocol,
+                        "counterPartyId": provider_participant_id,
+                        "protocol": "dataspace-protocol-http",
+                        "querySpec": {
+                            "offset": 0,
+                            "limit": 1,
+                            "filterExpression": [],
+                        },
+                    },
+                    "consumer catalog preflight",
+                    attempts,
+                    retry_delay,
+                )
+                record_check(
+                    "consumer-catalog-request",
+                    url,
+                    True,
+                    self._preflight_body_summary(body),
+                    response.status_code,
+                )
+            except RuntimeError as exc:
+                record_check("consumer-catalog-request", url, False, str(exc))
+
+        if report_dir:
+            os.makedirs(report_dir, exist_ok=True)
+            report_path = os.path.join(report_dir, "00_management_api_preflight.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(diagnostics, f, indent=2)
+
+        if failures:
+            message = (
+                f"Newman management preflight failed for provider={provider}, consumer={consumer}: "
+                + "; ".join(failures)
+            )
+            if report_path:
+                message += f". See {report_path}"
+            raise RuntimeError(message)
+
+        return diagnostics
 
     @staticmethod
     def _find_negotiation(body, negotiation_id):

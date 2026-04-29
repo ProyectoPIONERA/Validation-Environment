@@ -88,8 +88,8 @@ services:
 hostAliases:
 - ip: "192.168.49.2"
   hostnames:
-  - "keycloak.dev.ed.dataspaceunit.upm"
-  - "keycloak-admin.dev.ed.dataspaceunit.upm"
+  - "auth.dev.ed.dataspaceunit.upm"
+  - "admin.auth.dev.ed.dataspaceunit.upm"
   - "minio.dev.ed.dataspaceunit.upm"
   - "console.minio-s3.dev.ed.dataspaceunit.upm"
   - "registration-service-{{ keys.dataspace_name }}.{{ keys.ds_domain_base }}"

@@ -8,7 +8,7 @@ import { ContractsPage } from "../components/consumer/contracts.page";
 import { TransferHistoryPage } from "../components/consumer/transfer-history.page";
 import {
   bootstrapProviderNegotiationArtifacts,
-  waitForConsumerCatalogDatasetReadiness,
+  probeConsumerCatalogDatasetReadiness,
 } from "../shared/utils/provider-bootstrap";
 import { collectBrowserDiagnostics } from "../shared/utils/browser-diagnostics";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
@@ -97,7 +97,7 @@ test("06 consumer transfer: visible transfer from contracts and history", async 
     await attachJson("consumer-transfer-bootstrap", report.providerBootstrap);
     await attachJson(
       "consumer-transfer-catalog-api-readiness",
-      await waitForConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
+      await probeConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
     );
 
     await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);

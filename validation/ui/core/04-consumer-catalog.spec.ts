@@ -6,7 +6,7 @@ import { CatalogPage } from "../components/consumer/catalog.page";
 import { collectBrowserDiagnostics } from "../shared/utils/browser-diagnostics";
 import {
   bootstrapProviderNegotiationArtifacts,
-  waitForConsumerCatalogDatasetReadiness,
+  probeConsumerCatalogDatasetReadiness,
 } from "../shared/utils/provider-bootstrap";
 import { EVENTUAL_UI_RETRY_INTERVALS } from "../shared/utils/waiting";
 
@@ -57,7 +57,7 @@ test("04 consumer catalog: listing and detail without access errors", async ({
     await attachJson("consumer-catalog-bootstrap", providerBootstrap);
     await attachJson(
       "consumer-catalog-api-readiness",
-      await waitForConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
+      await probeConsumerCatalogDatasetReadiness(request, dataspaceRuntime, assetId),
     );
 
     await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);
