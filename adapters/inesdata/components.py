@@ -263,6 +263,10 @@ class INESDataComponentsAdapter:
             return None
         return f"{repository}:{tag}"
 
+    def _cluster_type(self) -> str:
+        deployer_config = self.config_adapter.load_deployer_config()
+        return str(deployer_config.get("CLUSTER_TYPE") or self.config.CLUSTER_TYPE).strip().lower()
+
     def _minikube_is_available(self, profile: str) -> bool:
         profile_q = shlex.quote(profile)
         return self.run_silent(f"minikube -p {profile_q} status") is not None
@@ -279,6 +283,24 @@ class INESDataComponentsAdapter:
             if candidate.endswith(suffix):
                 return True
         return False
+
+    def _k3s_has_image(self, image_ref: str) -> bool:
+        output = self.run_silent("sudo k3s ctr images list")
+        if not output:
+            return False
+        return image_ref.strip() in output
+
+    def _load_image_into_k3s(self, image_ref: str):
+        image_q = shlex.quote(image_ref)
+        safe_name = image_ref.replace("/", "_").replace(":", "_")
+        tar_path = f"/tmp/{safe_name}.tar"
+        tar_q = shlex.quote(tar_path)
+        print(f"\nLoading image into k3s: {image_ref}")
+        if self.run(f"docker save {image_q} -o {tar_q}", check=False) is None:
+            self._fail("Failed to export image to tar for k3s import", root_cause=image_ref)
+        if self.run(f"sudo k3s ctr images import {tar_q}", check=False) is None:
+            self._fail("Failed to import image into k3s containerd", root_cause=image_ref)
+        self.run(f"rm -f {tar_q}", check=False)
 
     def _resolve_ontology_hub_source_dir(self, deployer_config: dict) -> str:
         sources_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources")
@@ -397,6 +419,22 @@ class INESDataComponentsAdapter:
         if self.run(f"minikube -p {profile_q} image load {image_q}", check=False) is None:
             self._fail("Failed to load image into minikube", root_cause=image_ref)
 
+    def _load_image_into_cluster(self, profile: str, image_ref: str):
+        if self._cluster_type() == "k3s":
+            self._load_image_into_k3s(image_ref)
+        else:
+            self._load_image_into_minikube(profile, image_ref)
+
+    def _cluster_has_image(self, profile: str, image_ref: str) -> bool:
+        if self._cluster_type() == "k3s":
+            return self._k3s_has_image(image_ref)
+        return self._minikube_has_image(profile, image_ref)
+
+    def _cluster_is_available(self, profile: str) -> bool:
+        if self._cluster_type() == "k3s":
+            return self.run_silent("kubectl get nodes") is not None
+        return self._minikube_is_available(profile)
+
     def _build_ontology_hub_image_on_host(self, image_ref: str, deployer_config: dict):
         ontology_hub_dir = self._resolve_ontology_hub_source_dir(deployer_config)
         dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
@@ -488,13 +526,13 @@ class INESDataComponentsAdapter:
                     "Ontology-Hub must use a local image in Level 5/6",
                     root_cause=f"Configured image: {image_ref}",
                 )
-            if not self._minikube_is_available(profile):
+            if not self._cluster_is_available(profile):
                 self._fail(
-                    "Minikube profile is not available for Ontology-Hub local image deployment",
+                    "Cluster is not available for Ontology-Hub local image deployment",
                     root_cause=profile,
                 )
             self._build_ontology_hub_image_on_host(image_ref, deployer_config)
-            self._load_image_into_minikube(profile, image_ref)
+            self._load_image_into_cluster(profile, image_ref)
             return True
 
         auto_build_flag = deployer_config.get("LEVEL5_AUTO_BUILD_LOCAL_IMAGES")
@@ -510,22 +548,22 @@ class INESDataComponentsAdapter:
         if not image_ref.lower().endswith(":local"):
             return False
 
-        if not self._minikube_is_available(profile):
+        if not self._cluster_is_available(profile):
             print(
-                f"Local image '{image_ref}' referenced, but minikube profile '{profile}' is not available. "
+                f"Local image '{image_ref}' referenced, but cluster is not available. "
                 "Skipping auto-build."
             )
             return False
 
         if normalized_component == "ai-model-hub":
             self._build_ai_model_hub_image_on_host(image_ref, deployer_config)
-            self._load_image_into_minikube(profile, image_ref)
+            self._load_image_into_cluster(profile, image_ref)
             return True
 
-        if self._minikube_has_image(profile, image_ref):
+        if self._cluster_has_image(profile, image_ref):
             return False
 
-        print(f"Local image '{image_ref}' is missing in minikube, but no auto-build recipe exists for '{normalized_component}'.")
+        print(f"Local image '{image_ref}' is missing in cluster, but no auto-build recipe exists for '{normalized_component}'.")
         return False
 
     def _infer_component_hostname(self, normalized_component: str, values_file: str, deployer_config: dict):
@@ -819,7 +857,7 @@ class INESDataComponentsAdapter:
             for host in sorted(set(inferred_hosts.values())):
                 print(f"- {host}")
 
-            desired_entries = [f"{self.config.MINIKUBE_IP} {h}" for h in sorted(set(inferred_hosts.values()))]
+            desired_entries = [f"{self.config.get_cluster_ip()} {h}" for h in sorted(set(inferred_hosts.values()))]
             self.infrastructure.manage_hosts_entries(
                 desired_entries,
                 header_comment="# Components",

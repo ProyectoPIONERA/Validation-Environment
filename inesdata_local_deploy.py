@@ -157,16 +157,19 @@ def cleanup_step_1_images(args):
     ).splitlines()
     docker_images = _filter_component_images(docker_rows, repositories)
 
-    minikube_rows = (
-        run(
-            f"minikube -p {shlex.quote(args.minikube_profile)} image ls",
-            capture=True,
-            check=False,
-            silent=True,
-        )
-        or ""
-    ).splitlines()
-    minikube_images = _filter_component_images(minikube_rows, repositories)
+    cluster_type = _load_cluster_type()
+    minikube_images = []
+    if cluster_type != "k3s":
+        minikube_rows = (
+            run(
+                f"minikube -p {shlex.quote(args.minikube_profile)} image ls",
+                capture=True,
+                check=False,
+                silent=True,
+            )
+            or ""
+        ).splitlines()
+        minikube_images = _filter_component_images(minikube_rows, repositories)
 
     if not docker_images and not minikube_images:
         print("No previous Step 1 local images found for INESData components")
@@ -333,12 +336,23 @@ def _candidate_manifests(preselected: str = ""):
     return candidates
 
 
+def _load_cluster_type() -> str:
+    try:
+        from adapters.inesdata.config import InesdataConfig, INESDataConfigAdapter
+        adapter = INESDataConfigAdapter(InesdataConfig)
+        config = adapter.load_deployer_config()
+        return str(config.get("CLUSTER_TYPE") or "minikube").strip().lower()
+    except Exception:
+        return "minikube"
+
+
 def ensure_prerequisites():
     if run("which docker", capture=True, check=False, silent=True) is None:
         raise RuntimeError("Docker is not installed or not found in PATH")
 
-    if run("which minikube", capture=True, check=False, silent=True) is None:
-        raise RuntimeError("Minikube is not installed or not found in PATH")
+    if _load_cluster_type() != "k3s":
+        if run("which minikube", capture=True, check=False, silent=True) is None:
+            raise RuntimeError("Minikube is not installed or not found in PATH")
 
     if run("which helm", capture=True, check=False, silent=True) is None:
         raise RuntimeError("Helm is not installed or not found in PATH")
@@ -351,14 +365,18 @@ def print_manual_actions():
     print("\n" + "=" * 60)
     print("MANUAL ACTION REQUIRED BEFORE STEP 3 (DATASPACE)")
     print("=" * 60)
-    print("1) Open another terminal and run:")
-    print("   minikube tunnel")
-    print("\n2) Open another terminal and run:")
-    print(
-        "   cd /home/edmundo/Validation-Environment && "
-        "kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 8080:80"
-    )
-    print("\nKeep both commands running during dataspace and connectors deployment.")
+    if _load_cluster_type() != "k3s":
+        print("1) Open another terminal and run:")
+        print("   minikube tunnel")
+        print("\n2) Open another terminal and run:")
+        print(
+            "   kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 8080:80"
+        )
+        print("\nKeep both commands running during dataspace and connectors deployment.")
+    else:
+        print("k3s detected — no tunnel required.")
+        print("Ensure nginx-ingress controller is running:")
+        print("   kubectl get pods -n ingress-nginx")
     print("=" * 60)
 
 
@@ -371,6 +389,13 @@ def _is_port_open(host: str, port: int, timeout_seconds: float = 1.0) -> bool:
 
 
 def verify_manual_actions(timeout_seconds: int = 30) -> bool:
+    if _load_cluster_type() == "k3s":
+        nodes = run_silent("kubectl get nodes --no-headers")
+        if not nodes or " Ready " not in f" {nodes} ":
+            print("k3s cluster not ready")
+            return False
+        return True
+
     tunnel_proc = run_silent('pgrep -af "minikube tunnel"')
     if not tunnel_proc:
         print("minikube tunnel process not detected")

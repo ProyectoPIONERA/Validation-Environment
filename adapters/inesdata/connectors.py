@@ -495,7 +495,7 @@ class INESDataConnectorsAdapter:
         return [f"{connector}.{ds_domain}" for connector in connectors]
 
     def update_connector_host_aliases(self, values_file, connectors):
-        minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
+        minikube_ip = self.config.get_cluster_ip()
 
         with open(values_file) as f:
             values = yaml.safe_load(f)
@@ -586,6 +586,9 @@ class INESDataConnectorsAdapter:
             return True
 
         platform_dir = self.config.repo_dir()
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        cluster_type = str(deployer_config.get("CLUSTER_TYPE") or "minikube").strip().lower()
+        minikube_profile = str(deployer_config.get("MINIKUBE_PROFILE") or "minikube").strip()
         command = " ".join(
             shlex.quote(part)
             for part in [
@@ -599,6 +602,10 @@ class INESDataConnectorsAdapter:
                 "--deploy-target",
                 "connectors",
                 "--skip-deploy",
+                "--cluster-type",
+                cluster_type,
+                "--minikube-profile",
+                minikube_profile,
             ]
         )
 
@@ -1760,8 +1767,7 @@ class INESDataConnectorsAdapter:
             print(f"  [nginx-proxy] Script not found: {script_path}")
             return
 
-        minikube_ip = self.run("minikube ip", capture=True) or "192.168.49.2"
-        minikube_ip = minikube_ip.strip()
+        minikube_ip = self.config.get_cluster_ip()
         vm_ip = str(deployer_config.get("VM_COMMON_IP", "192.168.122.64")).strip() or "192.168.122.64"
         internal_domain = str(deployer_config.get("DOMAIN_BASE", "pionera.oeg.fi.upm.es")).strip()
         manual_cmd = f"bash {script_path} {minikube_ip} {vm_ip} {public_hostname} {internal_domain}"

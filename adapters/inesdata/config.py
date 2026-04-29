@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 
 from deployers.infrastructure.lib.config_loader import (
     INFRASTRUCTURE_MANAGED_KEYS,
@@ -33,6 +34,8 @@ class InesdataConfig:
     MINIKUBE_PROFILE = "minikube"
     MINIKUBE_ADDONS = ["ingress"]
     MINIKUBE_IP = "192.168.49.2"
+
+    CLUSTER_TYPE = "minikube"  # minikube | k3s
 
     PORT_POSTGRES = 5432
     PORT_VAULT = 8200
@@ -299,6 +302,57 @@ class InesdataConfig:
         adapter = INESDataConfigAdapter(cls)
         return adapter.ds_domain_base()
 
+    @classmethod
+    def get_cluster_ip(cls):
+        """Return the cluster ingress IP for /etc/hosts and hostAlias entries."""
+        adapter = INESDataConfigAdapter(cls)
+        config = adapter.load_deployer_config()
+        cluster_type = str(config.get("CLUSTER_TYPE") or cls.CLUSTER_TYPE).strip().lower()
+
+        if cluster_type == "k3s":
+            cls._ensure_k3s_kubeconfig(config)
+            vm_ip = str(config.get("VM_COMMON_IP") or "").strip()
+            if vm_ip:
+                return vm_ip
+            try:
+                result = subprocess.run(
+                    ["kubectl", "get", "nodes", "-o",
+                     "jsonpath={.items[0].status.addresses[?(@.type=='InternalIP')].address}"],
+                    capture_output=True, text=True, check=False,
+                )
+                ip = result.stdout.strip()
+                if ip:
+                    return ip
+            except Exception:
+                pass
+            return cls.MINIKUBE_IP
+
+        # minikube
+        try:
+            result = subprocess.run(
+                ["minikube", "ip"], capture_output=True, text=True, check=False
+            )
+            ip = result.stdout.strip()
+            if ip:
+                return ip
+        except Exception:
+            pass
+        return cls.MINIKUBE_IP
+
+    @classmethod
+    def _ensure_k3s_kubeconfig(cls, config=None):
+        """Set KUBECONFIG env var for k3s if not already set."""
+        if os.environ.get("KUBECONFIG"):
+            return
+        if config is None:
+            adapter = INESDataConfigAdapter(cls)
+            config = adapter.load_deployer_config()
+        kubeconfig = str(
+            config.get("K3S_KUBECONFIG") or "/etc/rancher/k3s/k3s.yaml"
+        ).strip()
+        if os.path.exists(kubeconfig):
+            os.environ["KUBECONFIG"] = kubeconfig
+
 
 class INESDataConfigAdapter:
     """Contains INESData configuration access logic."""
@@ -337,13 +391,16 @@ class INESDataConfigAdapter:
 
     def load_deployer_config(self):
         adapter_config_path = self.config.deployer_config_path()
-        return load_layered_deployer_config(
+        config = load_layered_deployer_config(
             [
                 self._infrastructure_deployer_config_path(),
                 adapter_config_path,
             ],
             protected_keys=INFRASTRUCTURE_MANAGED_KEYS,
         )
+        if str(config.get("CLUSTER_TYPE") or "").strip().lower() == "k3s":
+            self.config._ensure_k3s_kubeconfig(config)
+        return config
 
     @staticmethod
     def _resolve_optional_path(base_dir, raw_path):
@@ -430,7 +487,7 @@ class INESDataConfigAdapter:
         return self.primary_dataspace_name()
 
     def generate_hosts(self, ds_name=None, target_ip=None):
-        target_ip = target_ip or self.config.MINIKUBE_IP
+        target_ip = target_ip or self.config.get_cluster_ip()
         config = self.load_deployer_config()
         ds_name = ds_name or self.primary_dataspace_name()
         hosts = []
@@ -461,7 +518,7 @@ class INESDataConfigAdapter:
         return hosts
 
     def generate_connector_hosts(self, connectors, target_ip=None):
-        target_ip = target_ip or self.config.MINIKUBE_IP
+        target_ip = target_ip or self.config.get_cluster_ip()
         config = self.load_deployer_config()
         ds_domain = config.get("DS_DOMAIN_BASE")
         if not ds_domain:

@@ -191,7 +191,7 @@ class INESDataDeploymentAdapter:
 
     def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None):
         if minikube_ip is None:
-            minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
+            minikube_ip = self.config.get_cluster_ip()
 
         with open(values_file) as f:
             values = yaml.safe_load(f)
@@ -244,7 +244,7 @@ class INESDataDeploymentAdapter:
 
         if last_issue:
             print(f"Keycloak admin authentication did not become ready: {last_issue}")
-            print("Check that the Keycloak hostname resolves through the active ingress/minikube tunnel.")
+            print("Check that the Keycloak hostname resolves through the active ingress.")
         else:
             print("Keycloak admin authentication did not become ready")
         return False
@@ -272,24 +272,29 @@ class INESDataDeploymentAdapter:
     def deploy_dataspace(self):
         self.infrastructure.announce_level(3, "DATASPACE")
 
-        print("-------------------------------------------------")
-        print("MINIKUBE TUNNEL REQUIRED")
-        print()
-        print("Open a new terminal and run:")
-        print()
-        print("minikube tunnel")
-        print()
-        print("The tunnel must remain active during the dataspace deployment.")
-        print("When logs start appearing in the tunnel terminal, Linux may require your password")
-        print("even if no explicit prompt is shown. Type your password there and press ENTER.")
-        print()
-        print("Return to this terminal and press ENTER to continue after starting the tunnel.")
-        print("-------------------------------------------------\n")
+        deployer_config_for_tunnel = self.config_adapter.load_deployer_config()
+        cluster_type_for_tunnel = str(
+            deployer_config_for_tunnel.get("CLUSTER_TYPE") or self.config.CLUSTER_TYPE
+        ).strip().lower()
+        if cluster_type_for_tunnel != "k3s":
+            print("-------------------------------------------------")
+            print("MINIKUBE TUNNEL REQUIRED")
+            print()
+            print("Open a new terminal and run:")
+            print()
+            print("minikube tunnel")
+            print()
+            print("The tunnel must remain active during the dataspace deployment.")
+            print("When logs start appearing in the tunnel terminal, Linux may require your password")
+            print("even if no explicit prompt is shown. Type your password there and press ENTER.")
+            print()
+            print("Return to this terminal and press ENTER to continue after starting the tunnel.")
+            print("-------------------------------------------------\n")
 
-        if not self._auto_mode():
-            input()
-        else:
-            print("[AUTO_MODE] Skipping tunnel confirmation\n")
+            if not self._auto_mode():
+                input()
+            else:
+                print("[AUTO_MODE] Skipping tunnel confirmation\n")
 
         repo_dir = self.config.repo_dir()
         ds_name = self._dataspace_name()
@@ -320,7 +325,7 @@ class INESDataDeploymentAdapter:
             if response.status_code not in (200, 302):
                 self._fail("Keycloak not ready", root_cause=f"unexpected HTTP status {response.status_code}")
         except Exception:
-            self._fail("Keycloak not accessible. Verify minikube tunnel")
+            self._fail("Keycloak not accessible. Verify cluster ingress and /etc/hosts entries")
 
         if not self.wait_for_keycloak_admin_ready(kc_url, kc_user, kc_password):
             self._fail("Keycloak admin API not ready", root_cause="admin authentication did not succeed in time")
@@ -369,9 +374,7 @@ class INESDataDeploymentAdapter:
         if not os.path.exists(values_file):
             self._fail("Registration service values file not found")
 
-        minikube_ip = self.run("minikube ip", capture=True)
-        if minikube_ip:
-            self.update_helm_values_with_host_aliases(values_file, minikube_ip)
+        self.update_helm_values_with_host_aliases(values_file)
 
         print("\nDeploying registration-service...")
         if not self.infrastructure.deploy_helm_release(

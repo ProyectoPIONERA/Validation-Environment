@@ -294,7 +294,7 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         return f"{base_url}/protocol"
 
     def _host_aliases(self, connector_hostnames):
-        minikube_ip = self.run_silent("minikube ip") or self.config.MINIKUBE_IP
+        minikube_ip = self.config.get_cluster_ip()
         hostnames = list(self.config.host_alias_domains())
         ds_domain = self.config_adapter.ds_domain_base()
         if ds_domain:

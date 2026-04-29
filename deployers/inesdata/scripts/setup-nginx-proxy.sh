@@ -11,6 +11,11 @@ MINIKUBE_IP="${1:-192.168.49.2}"
 VM_IP="${2:-192.168.122.64}"
 PUBLIC_HOST="${3:-org1.pionera.oeg.fi.upm.es}"
 INTERNAL_DOMAIN="${4:-pionera.oeg.fi.upm.es}"
+
+# Ensure kubectl works when run as root (k3s puts kubeconfig at /etc/rancher/k3s/k3s.yaml)
+if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/k3s/k3s.yaml ]]; then
+  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 

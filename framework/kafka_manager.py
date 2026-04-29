@@ -73,7 +73,7 @@ class KafkaManager:
         config.update(self._load_adapter_config())
         config.update(self.runtime_config)
         config.setdefault("provisioner", config.get("provisioner") or "kubernetes")
-        config.setdefault("cluster_advertised_host", config.get("cluster_advertised_host") or "host.minikube.internal")
+        config.setdefault("cluster_advertised_host", config.get("cluster_advertised_host") or "localhost")
         config.setdefault("k8s_namespace", config.get("k8s_namespace") or "demo")
         config.setdefault("k8s_service_name", config.get("k8s_service_name") or "framework-kafka")
         config.setdefault("k8s_nodeport", config.get("k8s_nodeport") or "32092")
@@ -139,18 +139,31 @@ class KafkaManager:
             raise RuntimeError(combined or f"Command failed: {' '.join(args)}")
         return result
 
-    def _resolve_minikube_ip(self, config):
-        configured_ip = str(config.get("minikube_ip") or "").strip()
+    def _resolve_cluster_ip(self, config):
+        configured_ip = str(config.get("cluster_ip") or config.get("minikube_ip") or "").strip()
         if configured_ip:
             return configured_ip
-        profile = str(config.get("minikube_profile") or "minikube").strip() or "minikube"
-        try:
-            result = self._run_command(["minikube", "-p", profile, "ip"])
-            resolved_ip = (getattr(result, "stdout", "") or "").strip()
-            if resolved_ip:
-                return resolved_ip
-        except Exception:
-            pass
+        cluster_type = str(config.get("cluster_type") or "minikube").strip().lower()
+        if cluster_type == "k3s":
+            try:
+                result = self._run_command(
+                    ["kubectl", "get", "nodes", "-o",
+                     "jsonpath={.items[0].status.addresses[?(@.type=='InternalIP')].address}"]
+                )
+                ip = (getattr(result, "stdout", "") or "").strip()
+                if ip:
+                    return ip
+            except Exception:
+                pass
+        else:
+            profile = str(config.get("minikube_profile") or "minikube").strip() or "minikube"
+            try:
+                result = self._run_command(["minikube", "-p", profile, "ip"])
+                ip = (getattr(result, "stdout", "") or "").strip()
+                if ip:
+                    return ip
+            except Exception:
+                pass
         return "192.168.49.2"
 
     def _kubernetes_identifiers(self, config):

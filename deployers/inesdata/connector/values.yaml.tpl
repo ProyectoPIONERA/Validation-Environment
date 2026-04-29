@@ -54,9 +54,9 @@ services:
     password: {{ keys.database.passwd }}
   keycloak:
     # comsrv prefix comes from the Helm release of the common services
-    hostname: {% if keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
+    hostname: {% if keys.environment == 'PRO' and keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
     external: {{ keys.keycloak_hostname }}
-    protocol: {% if keys.public_hostname or keys.environment == 'PRO' %}https{% else %}http{% endif %}
+    protocol: {% if keys.environment == 'PRO' %}https{% else %}http{% endif %}
   minio:
     # comsrv prefix comes from the Helm release of the common services
     hostname: {{ keys.minio_hostname }}
@@ -71,7 +71,7 @@ services:
     token: {{ keys.vault.token }}
     path: {{ keys.dataspace_name }}/{{ keys.connector_name }}/
 hostAliases:
-- ip: 192.168.49.2
+- ip: {{ keys.vm_common_ip | default(keys.ingress_external_ip) | default('192.168.49.2') }}
   hostnames:
   - {{ keys.keycloak_hostname | default('auth.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
   - {{ keys.keycloak_admin_hostname | default('admin.auth.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}

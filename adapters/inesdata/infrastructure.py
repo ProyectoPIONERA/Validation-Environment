@@ -1648,19 +1648,6 @@ class INESDataInfrastructureAdapter:
         """Ensure Level 1 leaves a cluster stable enough for Level 2."""
         ingress_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
         ingress_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
-        status = self.run_silent("minikube status --output=json")
-        if not status:
-            return False, "minikube status unavailable"
-
-        try:
-            status_data = json.loads(status)
-        except json.JSONDecodeError:
-            return False, "minikube status output is not valid JSON"
-
-        for key in ("Host", "Kubelet", "APIServer"):
-            value = str(status_data.get(key, "")).lower()
-            if value != "running":
-                return False, f"{key} is '{status_data.get(key)}'"
 
         nodes = self.run_silent("kubectl get nodes --no-headers")
         if not nodes or " Ready " not in f" {nodes} ":
@@ -1733,9 +1720,11 @@ class INESDataInfrastructureAdapter:
 
         return True, None
 
-    def setup_cluster(self):
-        self.announce_level(1, "CLUSTER SETUP")
-        self.ensure_unix_environment()
+    def _cluster_type(self):
+        config = self.config_adapter.load_deployer_config()
+        return str(config.get("CLUSTER_TYPE") or self.config.CLUSTER_TYPE).strip().lower()
+
+    def _setup_cluster_minikube(self):
         if not self.ensure_wsl_docker_config():
             self._fail("Could not adjust WSL Docker configuration safely")
 
@@ -1747,11 +1736,6 @@ class INESDataInfrastructureAdapter:
             self.run("rm -f minikube-linux-amd64")
 
         self.run("minikube version")
-
-        print("\nChecking Helm installation...")
-        if self.run("which helm", capture=True) is None:
-            self.run("sudo snap install helm --classic", check=False)
-        self.run("helm version")
 
         print("\nChecking Docker...")
         if self.run("docker info", capture=True, check=False) is None:
@@ -1776,6 +1760,99 @@ class INESDataInfrastructureAdapter:
                 "Warning: minikube reported a transient ingress addon enable failure; "
                 "verifying ingress controller readiness directly."
             )
+
+    def _setup_cluster_k3s(self):
+        if self.run("which minikube", capture=True, check=False) is not None:
+            print("Stopping and removing minikube before k3s setup...")
+            self.run("minikube stop", check=False)
+            self.run("minikube delete", check=False)
+
+        print("Checking k3s installation...")
+        if self.run("which k3s", capture=True) is None:
+            print("Installing k3s (Traefik disabled, nginx-ingress will be installed via Helm)...")
+            self.run("curl -sfL https://get.k3s.io | sh -s - --disable=traefik")
+            # Make kubeconfig accessible to current user
+            self.run("sudo chmod 644 /etc/rancher/k3s/k3s.yaml", check=False)
+            kubeconfig = "/etc/rancher/k3s/k3s.yaml"
+            if os.path.exists(kubeconfig):
+                os.environ.setdefault("KUBECONFIG", kubeconfig)
+        else:
+            print("k3s already installed")
+            self.run("sudo systemctl start k3s", check=False)
+
+        if not self.wait_for_kubernetes_ready():
+            self._fail("k3s cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
+
+        print("\nInstalling nginx-ingress via Helm...\n")
+        self.run("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", check=False)
+        self.run("helm repo update")
+        ingress_installed = self.run_silent("helm status ingress-nginx -n ingress-nginx")
+        if not ingress_installed:
+            self.run(
+                "helm install ingress-nginx ingress-nginx/ingress-nginx "
+                "-n ingress-nginx --create-namespace "
+                "--set controller.watchIngressWithoutClass=true "
+                "--wait --timeout 120s"
+            )
+        else:
+            print("nginx-ingress already installed, skipping")
+
+        self._patch_ingress_nginx_allow_snippets()
+
+    def _patch_ingress_nginx_allow_snippets(self):
+        """Allow nginx-ingress configuration-snippet annotations (required for cookie flag patching)."""
+        print("\nPatching ingress-nginx configmap to allow snippet annotations...")
+        patch = json.dumps({
+            "data": {
+                "allow-snippet-annotations": "true",
+                "annotations-risk-level": "Critical",
+            }
+        })
+        self.run(
+            f"kubectl patch configmap ingress-nginx-controller -n ingress-nginx "
+            f"--type merge -p {shlex.quote(patch)}",
+            check=False,
+        )
+
+    def _patch_keycloak_ingress_http_cookie_fix(self, namespace: str):
+        """Strip Secure flag from Keycloak AUTH_SESSION_ID cookie so Chromium sends it over HTTP.
+
+        Keycloak 24+ sets AUTH_SESSION_ID with Secure;SameSite=None unconditionally.
+        nginx proxy_cookie_flags rewrites it to nosecure;SameSite=Lax before reaching the browser.
+        Only applied in DEV/HTTP environments where the cluster serves HTTP.
+        """
+        snippet = (
+            "proxy_set_header X-Forwarded-Proto http; "
+            "proxy_set_header X-Forwarded-Ssl off; "
+            "proxy_cookie_flags AUTH_SESSION_ID nosecure samesite=lax;"
+        )
+        for ingress_name in ("common-srvs-keycloak", "common-srvs-keycloak-admin"):
+            self.run(
+                f"kubectl annotate ingress {shlex.quote(ingress_name)} -n {shlex.quote(namespace)} "
+                f"--overwrite "
+                f"nginx.ingress.kubernetes.io/configuration-snippet={shlex.quote(snippet)} "
+                f"nginx.ingress.kubernetes.io/ssl-redirect=false",
+                check=False,
+            )
+        print("  Keycloak ingress cookie annotations applied.")
+
+    def setup_cluster(self):
+        self.announce_level(1, "CLUSTER SETUP")
+        self.ensure_unix_environment()
+
+        print("\nChecking Helm installation...")
+        if self.run("which helm", capture=True) is None:
+            self.run("sudo snap install helm --classic", check=False)
+        self.run("helm version")
+
+        cluster_type = self._cluster_type()
+        print(f"\nCluster type: {cluster_type}")
+
+        if cluster_type == "k3s":
+            self._setup_cluster_k3s()
+        else:
+            self._setup_cluster_minikube()
+
         self.run("kubectl get pods -n ingress-nginx", check=False)
         self.patch_ingress_external_ip()
         cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
@@ -1814,7 +1891,7 @@ class INESDataInfrastructureAdapter:
 
         print("\nConfiguring hosts...")
         print("[Networking] Configuring hosts for internal VM access...")
-        print(f"Using internal Minikube IP {self.config.MINIKUBE_IP} for local resolution.")
+        print(f"Using cluster IP {self.config.get_cluster_ip()} for local resolution.")
         hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
         self.manage_hosts_entries(hosts_entries)
 
@@ -1835,6 +1912,13 @@ class INESDataInfrastructureAdapter:
         )
         if not common_services_deployed and not self._common_services_release_recoverable_after_helm_failure():
             self._fail("Error deploying common services")
+
+        # In DEV (HTTP) mode, strip Secure flag from Keycloak AUTH_SESSION_ID cookie so
+        # Chromium-based browsers send it over plain HTTP (Keycloak 24+ sets Secure unconditionally).
+        deployer_config = self.config_adapter.load_deployer_config() or {}
+        environment = str(deployer_config.get("ENVIRONMENT") or "DEV").strip().upper()
+        if environment != "PRO":
+            self._patch_keycloak_ingress_http_cookie_fix(self.config.NS_COMMON)
 
         # Keycloak can take noticeably longer than PostgreSQL/MinIO on fresh
         # installs, so give the pre-Vault readiness check the same minimum

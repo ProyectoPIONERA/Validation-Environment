@@ -817,11 +817,12 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             click.echo(f'  ! Warning: could not update security-admin-console redirectUris: {e}')
             keycloak_admin.change_current_realm(realm_name)
 
-    # Compute the correct audience URL: prefer external HTTPS URL when PUBLIC_HOSTNAME is set.
-    # This value must match edc.oauth.provider.audience in connector values.
+    # Compute the correct audience URL.
+    # Use internal KC URL unless in PRO environment (connectors must reach this URL directly).
     _aud_config = load_effective_deployer_config()
     _pub_host = str(_aud_config.get("PUBLIC_HOSTNAME", "")).strip()
-    if _pub_host:
+    _env = str(_aud_config.get("ENVIRONMENT", "")).strip().upper()
+    if _pub_host and _env == "PRO":
         audience_url = f"https://{_pub_host}/auth/realms/{realm_name}"
     else:
         audience_url = f"{keycloak_url}/realms/{realm_name}"
