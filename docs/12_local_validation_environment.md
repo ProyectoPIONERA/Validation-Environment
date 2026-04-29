@@ -17,6 +17,46 @@ componentes y experimentos.
 | Componentes | `ontology-hub`, `ai-model-hub` cuando estan habilitados |
 | Validacion | Newman, Playwright, validaciones de componentes, metricas |
 
+## Presupuesto de Recursos
+
+El entorno local no debe dimensionarse solo por el consumo en reposo. `Level 6`
+mantiene desplegados servicios comunes, dataspace, conectores, componentes,
+Kafka y runners Newman/Playwright, por lo que los picos de memoria son más
+relevantes que el uso estable mostrado por Docker Desktop.
+
+La estimación canónica para Minikube local está documentada en
+[Deployers y Topologías](./deployers-and-topologies.md#dimensionamiento-local).
+Como baseline reproducible para validar `inesdata` y `edc` en la misma
+topología local, usa `10 CPU / 18432 MB` solo si Docker Desktop dispone de
+margen suficiente. Si Docker Desktop permanece alrededor de `14.9 GB`, el
+entorno local completo no debe considerarse estable para `Level 6` con ambos
+adapters; usa un adapter cada vez o mueve la validación completa a `vm-single`.
+
+El overlay local versionable está en:
+
+```text
+deployers/infrastructure/topologies/local.config
+```
+
+Puede subirse al repositorio siempre que conserve solo valores no sensibles,
+como `localhost`, hostnames de desarrollo y recursos de Minikube. No debe
+contener contraseñas, tokens, rutas personales, IP privadas de una instalación
+real ni credenciales cloud. Los secretos siguen viviendo en los
+`deployer.config` locales o en artefactos runtime ignorados por Git.
+
+La configuración local de referencia para un adapter cada vez es:
+
+```ini
+PG_HOST=localhost
+VT_URL=http://localhost:8200
+LOCAL_HOSTS_ADDRESS=
+LOCAL_INGRESS_EXTERNAL_IP=
+MINIKUBE_DRIVER=docker
+MINIKUBE_CPUS=10
+MINIKUBE_MEMORY=14336
+MINIKUBE_PROFILE=minikube
+```
+
 ## Namespaces Locales
 
 | Rol | Namespace habitual |

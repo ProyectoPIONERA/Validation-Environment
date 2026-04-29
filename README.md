@@ -80,14 +80,19 @@ En Linux/WSL, este comando instala también las dependencias del sistema que
 Playwright necesita para arrancar los navegadores. Si el entorno no permite
 instalar paquetes del sistema, usa `--without-system-deps`.
 
+El bootstrap también crea automáticamente los ficheros locales
+`deployer.config` a partir de sus `.example` cuando aún no existen. No los
+sobrescribe si ya estaban creados.
+
 3. Activa el entorno Python raíz:
 
 ```bash
 source .venv/bin/activate
 ```
 
-4. Revisa la configuración generada si necesitas ajustar credenciales, dominios
-o dataspaces:
+4. Para una ejecución local básica no tienes que crear configuración
+manualmente. Revisa los ficheros generados solo si necesitas ajustar
+credenciales, dominios, dataspaces o componentes:
 
 ```text
 deployers/infrastructure/deployer.config
@@ -147,23 +152,22 @@ python3 main.py inesdata hosts --topology local --dry-run
 ### Inicio Rápido Para `vm-single` En Una VM
 
 Si vas a ejecutar el framework dentro de una VM Ubuntu y tu objetivo es
-`vm-single`, empieza ajustando `deployers/infrastructure/deployer.config` con
-un bloque como este:
+`vm-single`, empieza ajustando la base común y el overlay de topología con una
+separación explícita:
 
 ```bash
 cd ~/Validation-Environment
 cp deployers/infrastructure/deployer.config.example deployers/infrastructure/deployer.config
+cp deployers/infrastructure/topologies/vm-single.config.example \
+  deployers/infrastructure/topologies/vm-single.config
 nano deployers/infrastructure/deployer.config
+nano deployers/infrastructure/topologies/vm-single.config
 ```
 
-Si el fichero local ya existe, omite el `cp` y edítalo directamente.
+Si el fichero local ya existe, omite el `cp` y edítalo directamente. Para el
+overlay `vm-single`, el bloque mínimo esperado es:
 
 ```ini
-MINIKUBE_DRIVER=docker
-MINIKUBE_CPUS=3
-MINIKUBE_MEMORY=6144
-MINIKUBE_PROFILE=minikube
-
 VM_EXTERNAL_IP=192.0.2.10
 INGRESS_EXTERNAL_IP=192.0.2.10
 ```
@@ -172,17 +176,19 @@ Notas prácticas:
 
 - usa una IP real de tu VM o del ingress publicado por tu cluster; aquí se usa
   `192.0.2.10` solo como ejemplo documental;
-- si tu VM tiene mas recursos dedicados al framework, puedes subir Minikube a
-  `4 CPU` y `12288 MB`;
-- si entras por el menú con `--topology vm-single` y faltan
-  `VM_EXTERNAL_IP`/`INGRESS_EXTERNAL_IP`, el framework puede detectar una
-  dirección candidata con `hostname -I` o `minikube ip` y ofrecer escribirla
-  automáticamente en `deployers/infrastructure/deployer.config`;
+- si entras por el menú con `--topology vm-single` y faltan las claves
+  `VM_EXTERNAL_IP`/`INGRESS_EXTERNAL_IP` en
+  `deployers/infrastructure/topologies/vm-single.config`,
+  el framework puede detectar una dirección candidata con `hostname -I` o
+  `minikube ip` y ofrecer escribirla automáticamente;
+- si mantienes claves de topología dentro de
+  `deployers/infrastructure/deployer.config`, el CLI ya avisa con un warning de
+  migración y te indica el overlay correcto;
 - después de guardar el fichero, puedes comprobar los valores activos con:
 
 ```bash
-grep -E '^(MINIKUBE_|VM_EXTERNAL_IP|INGRESS_EXTERNAL_IP)=' \
-  deployers/infrastructure/deployer.config
+grep -E '^(VM_EXTERNAL_IP|INGRESS_EXTERNAL_IP)=' \
+  deployers/infrastructure/topologies/vm-single.config
 ```
 
 - antes de arrancar `Level 1`, obtén la IP principal de la VM con:
@@ -210,8 +216,9 @@ kubectl get ingress -A
     será `minikube ip`;
   - usa la IP de la VM como valor final solo si has publicado el ingress
     explícitamente sobre esa IP o a través de un proxy externo que termina allí;
-  - si `minikube ip` es distinto del valor provisional, actualiza
-    `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP` antes de `Levels 3-6`;
+- si `minikube ip` es distinto del valor provisional, actualiza esas claves en
+    `deployers/infrastructure/topologies/vm-single.config` o exporta los overrides
+    `PIONERA_VM_EXTERNAL_IP` y `PIONERA_INGRESS_EXTERNAL_IP` antes de `Levels 3-6`;
 - para `vm-single`, entra directamente por:
 
 ```bash
@@ -223,11 +230,44 @@ python3 main.py menu --topology vm-single
 El framework puede planificar o aplicar entradas en el fichero `hosts` del
 sistema. Por defecto, la operación solo planifica.
 
+En topología `local`, el camino canónico sigue siendo resolver los hostnames
+públicos hacia `127.0.0.1` y mantener `minikube tunnel` activo. Si un entorno
+necesita una dirección distinta de loopback, puede declararla explícitamente en
+`LOCAL_HOSTS_ADDRESS` y `LOCAL_INGRESS_EXTERNAL_IP` dentro de
+`deployers/infrastructure/topologies/local.config`.
+
+Para despliegues locales completos con WSL + Docker, una configuración
+prudente de Minikube en ese mismo overlay es:
+
+```ini
+PG_HOST=localhost
+VT_URL=http://localhost:8200
+LOCAL_HOSTS_ADDRESS=
+LOCAL_INGRESS_EXTERNAL_IP=
+MINIKUBE_DRIVER=docker
+MINIKUBE_CPUS=10
+MINIKUBE_MEMORY=14336
+MINIKUBE_PROFILE=minikube
+```
+
+Regla práctica:
+
+- `10 CPU / 14336 MB` es el punto de partida recomendado para validar un
+  adapter local cada vez;
+- no configures `MINIKUBE_MEMORY` por encima de la memoria disponible en Docker
+  Desktop;
+- para mantener `inesdata` y `edc` coexistiendo en local, usa el baseline
+  documentado de `10 CPU / 18432 MB` si Docker Desktop tiene margen suficiente;
+- errores como `401`, `500` o crashes internos de una aplicación siguen
+  apuntando primero a bugs funcionales o de integración, no a falta de CPU.
+
 Planificación:
 
 ```bash
 python3 main.py inesdata hosts --topology local --dry-run
 python3 main.py edc hosts --topology local --dry-run
+python3 main.py inesdata local-repair --topology local
+python3 main.py inesdata local-repair --topology local --recover-connectors
 ```
 
 Aplicación explícita:
@@ -247,8 +287,8 @@ En WSL, el fichero `hosts` de Windows suele estar en:
 La sincronización es idempotente: si una entrada ya existe, el framework la
 omite en lugar de duplicarla.
 
-En el menú interactivo, cuando el adapter activo es `edc`, los niveles `3-6`
-hacen una comprobación previa de hostnames en topología `local`. Si faltan
+En el menú interactivo, cuando el adapter activo expone hostnames públicos, los
+niveles `3-6` hacen una comprobación previa en topología `local`. Si faltan
 entradas, el framework muestra cuáles son y pregunta si quieres aplicar solo las
 entradas ausentes antes de continuar.
 
@@ -505,6 +545,26 @@ python3 main.py edc recreate-dataspace --topology local --confirm-dataspace demo
 - métricas;
 - reportes en `experiments/`.
 
+En topología `local`, `Level 6` usa por defecto el modo de orquestación
+`stable`: Newman, Kafka, Playwright y componentes se coordinan con menos
+solapamiento para reducir ruido de Minikube local. En `vm-single` y
+`vm-distributed` el modo efectivo por defecto sigue siendo `fast`.
+
+En ese modo estable local, el framework también comprueba la salud de Kubernetes
+antes y después de la validación. Si el nodo o los pods relevantes no están
+listos, espera una ventana corta y falla temprano si el entorno sigue
+bloqueado. Si durante la ejecución aparecen reinicios o eventos `NodeNotReady`,
+quedan registrados en `local_stability_preflight.json` y
+`local_stability_postflight.json` dentro del experimento.
+
+Para forzar el modo rápido en local:
+
+```bash
+python3 main.py inesdata validate --topology local --validation-mode fast
+```
+
+También puede declararse con `PIONERA_VALIDATION_MODE=fast`.
+
 En el layout `role-aligned`, `Level 5` publica componentes opcionales en
 `components_namespace`. `Level 6` valida esos componentes después de las suites
 del dataspace. Hoy `ontology-hub` se valida por defecto cuando está
@@ -633,7 +693,7 @@ El menú incluye accesos directos de desarrollo:
 | --- | --- |
 | `Bootstrap Framework Dependencies` | Prepara o repara dependencias. |
 | `Run Framework Doctor` | Ejecuta checks del entorno local. |
-| `Recover Connectors After WSL Restart` | Recupera acceso local tras reiniciar WSL. |
+| `Repair Local Access / Connectors` | Reconcila `hosts` y, si hace falta, reinicia conectores tras un reinicio local o de WSL. |
 | `Cleanup Workspace` | Limpia caches y artefactos temporales. |
 | `Build and Deploy Local Images` | Construye imágenes locales y reinicia componentes desplegados cuando aplica. |
 

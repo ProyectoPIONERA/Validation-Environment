@@ -44,14 +44,19 @@ para evitar que las validaciones UI fallen al arrancar el navegador. En
 entornos donde no se puedan instalar paquetes del sistema, usa
 `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
+El bootstrap también crea automáticamente los `deployer.config` locales desde
+sus ficheros `.example` cuando aún no existen. Si ya existen, los reutiliza y no
+los sobrescribe.
+
 Después activa el entorno Python raíz:
 
 ```bash
 source .venv/bin/activate
 ```
 
-Revisa la configuración generada si necesitas ajustar credenciales, dominios o
-dataspaces:
+Para una ejecución local básica no tienes que crear configuración manualmente.
+Revisa la configuración generada solo si necesitas ajustar credenciales,
+dominios, dataspaces o componentes:
 
 ```text
 deployers/infrastructure/deployer.config
@@ -81,6 +86,38 @@ deployers/edc/deployer.config
 ```
 
 Usa los ficheros `.example` como plantilla cuando existan. Los ficheros locales `deployer.config` pueden contener credenciales y no deben subirse al repositorio.
+
+La topología local tiene un overlay propio en:
+
+```text
+deployers/infrastructure/topologies/local.config
+```
+
+Este fichero puede versionarse si solo contiene valores locales no sensibles.
+La configuración local de referencia no incluye credenciales, tokens, rutas de
+usuario ni IP privadas: usa `localhost`, hostnames de desarrollo, driver Docker
+y recursos de Minikube. No confundas este fichero con `deployer.config`: los
+`deployer.config` sí pueden contener secretos y deben permanecer locales.
+
+Valores locales recomendados para un adapter cada vez:
+
+```ini
+PG_HOST=localhost
+VT_URL=http://localhost:8200
+LOCAL_HOSTS_ADDRESS=
+LOCAL_INGRESS_EXTERNAL_IP=
+MINIKUBE_DRIVER=docker
+MINIKUBE_CPUS=10
+MINIKUBE_MEMORY=14336
+MINIKUBE_PROFILE=minikube
+```
+
+Antes de ejecutar `Level 1`, asegúrate de que Docker Desktop puede asignar al
+menos esa memoria. Si tu Docker Desktop tiene menos margen, reduce
+`MINIKUBE_MEMORY` o usa un override temporal, por ejemplo
+`PIONERA_MINIKUBE_MEMORY=12288`. Para validar `inesdata` y `edc` coexistiendo en
+la misma topología local, el baseline recomendado sigue siendo `10 CPU / 18432
+MB`; si Docker no puede asignarlo, valida un adapter cada vez o usa `vm-single`.
 
 ## Coexistencia de Adapters
 

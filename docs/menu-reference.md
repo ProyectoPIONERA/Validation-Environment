@@ -104,11 +104,18 @@ ofrecer aplicar el plan en ese momento cuando detecta un fichero `hosts`
 resoluble. Para aplicar cambios de forma explícita fuera del prompt interactivo,
 usa `PIONERA_SYNC_HOSTS=true` y `PIONERA_HOSTS_FILE`.
 
-En el menú interactivo, si el adapter elegido para la operación es `edc` y vas
-a ejecutar niveles `3-6`, el framework verifica primero si faltan hostnames en
-el fichero `hosts` local. Si faltan, muestra la lista y pregunta si quieres
-aplicar solo las entradas ausentes antes de continuar. Si cancelas o el sistema
-no permite escribir el fichero, el nivel no se ejecuta.
+En el menú interactivo, si el adapter elegido para la operación expone
+hostnames públicos y vas a ejecutar niveles `3-6`, el framework verifica
+primero si faltan hostnames en el fichero `hosts` local. Si faltan, muestra la
+lista y pregunta si quieres reconciliar el bloque gestionado del framework
+antes de continuar. Si cancelas o el sistema no permite escribir el fichero, el
+nivel no se ejecuta.
+
+Fuera del menú, la ruta equivalente y más directa para esta reparación es:
+
+```bash
+python3 main.py <adapter> local-repair --topology local
+```
 
 `U - Show available access URLs`
 
@@ -144,9 +151,20 @@ Instala o repara dependencias del framework. Úsalo en una máquina limpia o tra
 
 Ejecuta checks de preparación local. Úsalo antes de desplegar o para diagnosticar fallos de entorno.
 
-`R - Recover Connectors After WSL Restart`
+`R - Repair Local Access / Connectors`
 
-Recupera acceso local tras reiniciar WSL cuando los recursos del cluster siguen desplegados pero el acceso local queda roto.
+Ejecuta una recuperación guiada del acceso local. Primero puede reconciliar el
+bloque gestionado de `hosts` del framework y, después, opcionalmente reiniciar
+los conectores si el cluster seguía desplegado tras reiniciar WSL o el entorno
+local. Cuando el bloque de `hosts` queda listo, también verifica los endpoints
+públicos mínimos que el framework espera antes de `Level 6`.
+
+La ruta CLI equivalente es:
+
+```bash
+python3 main.py <adapter> local-repair --topology local
+python3 main.py <adapter> local-repair --topology local --recover-connectors
+```
 
 `C - Cleanup Workspace`
 

@@ -38,8 +38,16 @@ Configuración relevante:
 
 ```text
 deployers/infrastructure/deployer.config
+deployers/infrastructure/topologies/<topology>.config
 deployers/inesdata/deployer.config
 ```
+
+En el estado actual del framework, `INESData` no necesita overlays propios de
+topología dentro de `deployers/inesdata/`. Su `deployer.config` sigue siendo la
+capa del adapter y debe mantenerse centrada en identidad de dataspace,
+conectores, componentes y flags funcionales; las diferencias `local`,
+`vm-single` y `vm-distributed` pertenecen a la capa compartida de
+infraestructura.
 
 Deployer relevante:
 
@@ -57,8 +65,16 @@ Configuración relevante:
 
 ```text
 deployers/infrastructure/deployer.config
+deployers/infrastructure/topologies/<topology>.config
 deployers/edc/deployer.config
 ```
+
+En el estado actual del framework, `EDC` tampoco necesita overlays propios de
+topología dentro de `deployers/edc/`. Su `deployer.config` debe seguir siendo
+topología-agnóstico y describir solo el dataspace, sus conectores y flags
+específicas del adapter. Si en el futuro aparece una divergencia real por
+topología, esa necesidad debe justificarse antes de añadir
+`deployers/edc/topologies/`.
 
 Deployer relevante:
 
