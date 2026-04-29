@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Local Node.js tooling for Validation-Environment",
   "devDependencies": {
-    "newman": "6.2.1"
+    "newman": "^6.2.1"
   },
   "scripts": {
     "newman": "newman"

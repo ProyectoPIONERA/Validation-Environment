@@ -145,6 +145,9 @@ def _read_deployer_config_file(path):
             if not line or line.startswith("#") or "=" not in line:
                 continue
             name, value = line.split('=', 1)
+            # Strip inline comments (whitespace followed by #)
+            import re as _re
+            value = _re.sub(r'\s+#.*$', '', value).strip()
             config[name] = value
     return config
 
@@ -781,7 +784,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
     config = load_effective_deployer_config()
     public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
     if public_hostname:
-        for realm_to_patch in [realm_name, "master"]:
+        for realm_to_patch in ["master", realm_name]:
             click.echo(f'  + Setting frontendUrl for realm "{realm_to_patch}" to https://{public_hostname}/auth')
             try:
                 keycloak_admin.change_current_realm("master")
@@ -794,7 +797,8 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
         # Allow security-admin-console to redirect back to the external proxy URL
         try:
             keycloak_admin.change_current_realm("master")
-            clients = keycloak_admin.get_clients(query={"clientId": "security-admin-console"})
+            all_clients = keycloak_admin.get_clients()
+            clients = [c for c in all_clients if c.get("clientId") == "security-admin-console"]
             if clients:
                 client = clients[0]
                 redirect_uris = client.get("redirectUris", [])
@@ -811,6 +815,16 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             keycloak_admin.change_current_realm(realm_name)
         except Exception as e:
             click.echo(f'  ! Warning: could not update security-admin-console redirectUris: {e}')
+            keycloak_admin.change_current_realm(realm_name)
+
+    # Compute the correct audience URL: prefer external HTTPS URL when PUBLIC_HOSTNAME is set.
+    # This value must match edc.oauth.provider.audience in connector values.
+    _aud_config = load_effective_deployer_config()
+    _pub_host = str(_aud_config.get("PUBLIC_HOSTNAME", "")).strip()
+    if _pub_host:
+        audience_url = f"https://{_pub_host}/auth/realms/{realm_name}"
+    else:
+        audience_url = f"{keycloak_url}/realms/{realm_name}"
 
     # Check if the client scope exists and create it if it doesn't
     click.echo(f'  + Checking scope "dataspaceunit-dataspace-audience"' )
@@ -835,7 +849,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
                         "id.token.claim": "false",
                         "token.introspection.claim": "true",
                         "access.token.claim": "true",
-                        "included.custom.audience": f"{keycloak_url}/realms/{realm_name}",
+                        "included.custom.audience": audience_url,
                         "userinfo.token.claim": "false"
                     }
                 }
@@ -844,14 +858,19 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
         keycloak_admin.create_client_scope(payload=dataspace_audience_payload)
         click.echo(f'  + Created scope "dataspaceunit-dataspace-audience"' )
     else:
-        # Update existing scope to ensure domain changes are propagated
+        # Update existing mapper if audience URL has drifted (e.g. PUBLIC_HOSTNAME changed).
+        # Must update the mapper resource directly — update_client_scope does not persist mappers.
         mapper = next((m for m in scope.get('protocolMappers', []) if m['name'] == 'add-namespace-audience'), None)
-        if mapper:
-            if mapper['config'].get('included.custom.audience') != f"{keycloak_url}/realms/{realm_name}":
-                mapper['config']['included.custom.audience'] = f"{keycloak_url}/realms/{realm_name}"
-                # Use positional arguments for update_client_scope
-                keycloak_admin.update_client_scope(scope['id'], scope)
-                click.echo(f'  + Updated scope "dataspaceunit-dataspace-audience" with new domain' )
+        if mapper and mapper['config'].get('included.custom.audience') != audience_url:
+            mapper['config']['included.custom.audience'] = audience_url
+            try:
+                keycloak_admin.connection.raw_put(
+                    f"client-scopes/{scope['id']}/protocol-mappers/models/{mapper['id']}",
+                    data=json.dumps(mapper),
+                )
+                click.echo(f'  + Updated scope "dataspaceunit-dataspace-audience" audience → {audience_url}')
+            except Exception as e:
+                click.echo(f'  ! Warning: could not update audience mapper: {e}')
 
     click.echo(f'  + Creating scope "dataspaceunit-nbf-claim"' )
     if not any(scope['name'] == 'dataspaceunit-nbf-claim' for scope in client_scopes):

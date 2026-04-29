@@ -40,7 +40,8 @@ for CONNECTOR in citycouncil company; do
     fi
 
     # Find pod name
-    POD=$(kubectl get pods -n demo -l "app.kubernetes.io/name=${CONN_NAME}-interface" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
+    POD=$(kubectl get pods -n demo -l "service=${CONN_NAME}-interface" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
+          kubectl get pods -n demo -l "app.kubernetes.io/name=${CONN_NAME}-interface" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || \
           kubectl get pods -n demo | grep "${CONN_NAME}-int" | awk '{print $1}' | head -1)
 
     if [ -z "$POD" ]; then
@@ -49,33 +50,50 @@ for CONNECTOR in citycouncil company; do
     fi
 
     CONFIG_PATH="/usr/share/nginx/html/inesdata-connector-interface/assets/config/app.config.json"
+    TEMPLATE_PATH="/usr/share/nginx/html/inesdata-connector-interface/assets/config/app.config.template.json"
     echo "  Patching config for ${CONNECTOR} (pod: ${POD})..."
 
-    kubectl exec -n demo "$POD" -- cat "$CONFIG_PATH" | python3 -c "
-import sys, json
-c = json.load(sys.stdin)
+    # Use template if main config is empty
+    READ_PATH=$(kubectl exec -n demo "$POD" -- sh -c "[ -s '$CONFIG_PATH' ] && echo '$CONFIG_PATH' || echo '$TEMPLATE_PATH'")
+
+    kubectl exec -n demo "$POD" -- cat "$READ_PATH" | python3 -c "
+import sys, json, re
+content = sys.stdin.read()
+content = re.sub(r':\s*(\\\$[A-Z0-9_]+)', ': false', content)
+c = json.loads(content)
 base = 'https://${PUBLIC_HOST}'
 conn = '${CONNECTOR}'
 c['managementApiUrl'] = f'{base}/c/{conn}/management'
 c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
 c['sharedUrl']        = f'{base}/c/{conn}/shared'
 c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
+c['oauth2']['clientId'] = 'dataspace-users'
+c['oauth2']['scope'] = 'openid profile email'
+c['oauth2']['responseType'] = 'code'
 c['oauth2']['allowedUrls'] = base
 c['oauth2']['redirectPath'] = '/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | sudo tee /var/www/connector-configs/app.config.${CONNECTOR}.json > /dev/null
 
-    # Also patch in-pod for consistency
-    kubectl exec -n demo "$POD" -- cat "$CONFIG_PATH" | python3 -c "
+    # Patch in-pod config with INTERNAL URLs so Playwright tests (which open
+    # the portal via the internal connector hostname) make management API
+    # requests directly to the connector pod — bypassing the external proxy
+    # where large (50 MB) chunk uploads can be dropped.
+    # NOTE: catalogUrl must be /management/federatedcatalog not /federatedcatalog
+    # because the external nginx proxy rewrites /c/{conn}/federatedcatalog → /management/federatedcatalog
+    cat /var/www/connector-configs/app.config.${CONNECTOR}.json | python3 -c "
 import sys, json
 c = json.load(sys.stdin)
-base = 'https://${PUBLIC_HOST}'
-conn = '${CONNECTOR}'
-c['managementApiUrl'] = f'{base}/c/{conn}/management'
-c['catalogUrl']       = f'{base}/c/{conn}/federatedcatalog'
-c['sharedUrl']        = f'{base}/c/{conn}/shared'
-c['oauth2']['issuer'] = f'{base}/auth/realms/demo'
-c['oauth2']['allowedUrls'] = base
+internal_base = 'http://${CONN_NAME}.${INTERNAL_DOMAIN}'
+ext_base = 'https://${PUBLIC_HOST}'
+c['managementApiUrl'] = f'{internal_base}/management'
+c['catalogUrl']       = f'{internal_base}/management/federatedcatalog'
+c['sharedUrl']        = f'{internal_base}/shared'
+c['oauth2']['issuer'] = f'{ext_base}/auth/realms/demo'
+c['oauth2']['clientId'] = 'dataspace-users'
+c['oauth2']['scope'] = 'openid profile email'
+c['oauth2']['responseType'] = 'code'
+c['oauth2']['allowedUrls'] = internal_base
 c['oauth2']['redirectPath'] = '/inesdata-connector-interface'
 print(json.dumps(c, indent=2))
 " | kubectl exec -n demo "$POD" -i -- tee "$CONFIG_PATH" > /dev/null
@@ -312,11 +330,17 @@ print(json.dumps(r))
     echo "  Keycloak frontendUrl set for realm '${REALM_NAME}'"
 done
 
+KC_TOKEN=$(curl -s -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "client_id=admin-cli&username=admin&password=change-me&grant_type=password" | \
+    python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
 echo "  Patching security-admin-console redirectUris..."
 CLIENT_UUID=$(curl -s "${KC_URL}/admin/realms/master/clients?clientId=security-admin-console" \
-    -H "Authorization: Bearer $KC_TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
-CLIENT=$(curl -s "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" -H "Authorization: Bearer $KC_TOKEN")
-UPDATED_CLIENT=$(echo "$CLIENT" | python3 -c "
+    -H "Authorization: Bearer $KC_TOKEN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if isinstance(d,list) and d else '')")
+if [ -n "$CLIENT_UUID" ]; then
+    CLIENT=$(curl -s "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" -H "Authorization: Bearer $KC_TOKEN")
+    UPDATED_CLIENT=$(echo "$CLIENT" | python3 -c "
 import sys,json
 c = json.load(sys.stdin)
 existing = c.get('redirectUris', [])
@@ -326,13 +350,16 @@ for u in ['https://${PUBLIC_HOST}/auth/admin/*', 'https://${PUBLIC_HOST}/*', '*'
 c['redirectUris'] = existing
 print(json.dumps(c))
 ")
-curl -s -o /dev/null -w "%{http_code}" -X PUT \
-    "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" \
-    -H "Authorization: Bearer $KC_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$UPDATED_CLIENT"
-echo ""
-echo "  security-admin-console redirectUris updated"
+    curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        "${KC_URL}/admin/realms/master/clients/${CLIENT_UUID}" \
+        -H "Authorization: Bearer $KC_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$UPDATED_CLIENT"
+    echo ""
+    echo "  security-admin-console redirectUris updated"
+else
+    echo "  WARNING: security-admin-console client not found, skipping redirectUris patch"
+fi
 
 echo "  Patching security-admin-console webOrigins (both realms)..."
 for REALM_NAME in master demo; do
@@ -360,6 +387,49 @@ print(json.dumps(c))
     echo ""
     echo "  security-admin-console webOrigins updated for realm '${REALM_NAME}'"
 done
+
+echo "  Patching dataspaceunit-dataspace-audience mapper in demo realm..."
+# The aud mapper must match edc.oauth.provider.audience in connector values.
+# When PUBLIC_HOSTNAME is set the audience must use the external HTTPS URL.
+NEW_AUDIENCE="https://${PUBLIC_HOST}/auth/realms/demo"
+SCOPE_ID=$(curl -s "${KC_URL}/admin/realms/demo/client-scopes" \
+    -H "Authorization: Bearer $KC_TOKEN" | python3 -c "
+import sys,json
+scopes=json.load(sys.stdin)
+for s in scopes:
+    if s.get('name') == 'dataspaceunit-dataspace-audience':
+        print(s['id']); break
+")
+if [ -n "$SCOPE_ID" ]; then
+    MAPPER_ID=$(curl -s "${KC_URL}/admin/realms/demo/client-scopes/${SCOPE_ID}/protocol-mappers/models" \
+        -H "Authorization: Bearer $KC_TOKEN" | python3 -c "
+import sys,json
+mappers=json.load(sys.stdin)
+for m in mappers:
+    if m.get('name') == 'add-namespace-audience':
+        print(m['id']); break
+")
+    if [ -n "$MAPPER_ID" ]; then
+        MAPPER=$(curl -s "${KC_URL}/admin/realms/demo/client-scopes/${SCOPE_ID}/protocol-mappers/models/${MAPPER_ID}" \
+            -H "Authorization: Bearer $KC_TOKEN")
+        UPDATED_MAPPER=$(echo "$MAPPER" | python3 -c "
+import sys,json
+m=json.load(sys.stdin)
+m.setdefault('config',{})['included.custom.audience'] = '${NEW_AUDIENCE}'
+print(json.dumps(m))
+")
+        HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            "${KC_URL}/admin/realms/demo/client-scopes/${SCOPE_ID}/protocol-mappers/models/${MAPPER_ID}" \
+            -H "Authorization: Bearer $KC_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$UPDATED_MAPPER")
+        echo "  audience mapper updated → ${NEW_AUDIENCE} (HTTP ${HTTP})"
+    else
+        echo "  WARNING: add-namespace-audience mapper not found in scope ${SCOPE_ID}"
+    fi
+else
+    echo "  WARNING: dataspaceunit-dataspace-audience client scope not found in demo realm"
+fi
 
 echo ""
 echo "=========================================="

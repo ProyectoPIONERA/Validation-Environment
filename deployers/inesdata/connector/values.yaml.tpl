@@ -54,9 +54,9 @@ services:
     password: {{ keys.database.passwd }}
   keycloak:
     # comsrv prefix comes from the Helm release of the common services
-    hostname: {{ keys.keycloak_hostname }}
+    hostname: {% if keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
     external: {{ keys.keycloak_hostname }}
-    protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
+    protocol: {% if keys.public_hostname or keys.environment == 'PRO' %}https{% else %}http{% endif %}
   minio:
     # comsrv prefix comes from the Helm release of the common services
     hostname: {{ keys.minio_hostname }}

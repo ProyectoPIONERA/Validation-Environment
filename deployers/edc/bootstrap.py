@@ -35,6 +35,7 @@ def deployment_root() -> Path:
 
 
 def read_config_file(path: Path) -> dict[str, str]:
+    import re as _re
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -43,7 +44,9 @@ def read_config_file(path: Path) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
+        # Strip inline comments (whitespace followed by #)
+        value = _re.sub(r'\s+#.*$', '', value).strip()
+        values[key.strip()] = value
     return values
 
 

@@ -16,6 +16,21 @@ export class KeycloakLoginPage {
 
   async open(baseUrl: string): Promise<void> {
     await this.page.goto(baseUrl, { waitUntil: "networkidle" });
+    // Angular does a JS redirect to Keycloak after initialising the OIDC service.
+    // waitUntil:"networkidle" can fire on the Angular bootstrap page before that
+    // redirect happens (especially via nginx proxy where each hop adds latency).
+    // Wait up to 15s for one of: Keycloak login URL, already-authenticated app,
+    // or a visible sign-in trigger — so loginIfNeeded() always sees the final page.
+    const currentUrl = this.page.url();
+    const isOnKeycloak = /\/realms\/[^/]+\/|login-actions/.test(currentUrl);
+    const isAuthenticated = (await this.logoutControl().count()) > 0;
+    if (!isOnKeycloak && !isAuthenticated) {
+      await this.page
+        .waitForURL(/\/realms\/[^/]+\/|login-actions|#id_token|#access_token/, { timeout: 15_000 })
+        .catch(() => {
+          // No redirect in time — proceed; loginIfNeeded() will throw a clear error.
+        });
+    }
   }
 
   async loginIfNeeded(): Promise<void> {
