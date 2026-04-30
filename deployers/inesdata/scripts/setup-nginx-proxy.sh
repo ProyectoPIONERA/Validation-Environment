@@ -1,9 +1,9 @@
 #!/bin/bash
 # Sets up nginx reverse proxy on the VM host (pionera40 / 192.168.122.64)
-# to expose Minikube services via https://org1.pionera.oeg.fi.upm.es
+# to expose k3s (or Minikube) services via https://org1.pionera.oeg.fi.upm.es
 #
-# Run as: bash setup-nginx-proxy.sh [minikube_ip] [public_hostname]
-# Defaults: minikube_ip=192.168.49.2, public_hostname=org1.pionera.oeg.fi.upm.es
+# Run as: bash setup-nginx-proxy.sh [minikube_ip] [vm_ip] [public_hostname] [internal_domain]
+# Defaults: minikube_ip=192.168.49.2, vm_ip=192.168.122.64
 
 set -e
 
@@ -11,6 +11,15 @@ MINIKUBE_IP="${1:-192.168.49.2}"
 VM_IP="${2:-192.168.122.64}"
 PUBLIC_HOST="${3:-org1.pionera.oeg.fi.upm.es}"
 INTERNAL_DOMAIN="${4:-pionera.oeg.fi.upm.es}"
+
+# On k3s, ingress-nginx is NodePort (31667/32079); kube-proxy must NOT own
+# VM_IP:80/443, so nginx binds those ports directly and proxies to NodePort.
+# On minikube, ingress-nginx has externalIPs=MINIKUBE_IP so proxy directly.
+if command -v k3s &>/dev/null; then
+  INGRESS_BACKEND="${VM_IP}:31667"
+else
+  INGRESS_BACKEND="${MINIKUBE_IP}"
+fi
 
 # Ensure kubectl works when run as root (k3s puts kubeconfig at /etc/rancher/k3s/k3s.yaml)
 if [[ -z "${KUBECONFIG:-}" && -f /etc/rancher/k3s/k3s.yaml ]]; then
@@ -22,15 +31,21 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 echo "[1/5] Installing nginx and iptables-persistent..."
 sudo apt-get install -y nginx iptables-persistent
 
-echo "[2/5] Configuring iptables DNAT (VM IP → Minikube)..."
-# Remove existing rules if present
-sudo iptables -t nat -D PREROUTING -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
+echo "[2/5] Configuring iptables DNAT (public IP → VM nginx)..."
+# Remove existing rules if present (both old minikube-style and new VM-style)
+sudo iptables -t nat -D PREROUTING -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${MINIKUBE_IP}:80  2>/dev/null || true
+sudo iptables -t nat -D PREROUTING -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${VM_IP}:80        2>/dev/null || true
+sudo iptables -t nat -D PREROUTING -d 138.100.15.165 -p tcp --dport 443 -j DNAT --to-destination ${VM_IP}:443       2>/dev/null || true
 sudo iptables -t nat -D POSTROUTING -d ${MINIKUBE_IP} -j MASQUERADE 2>/dev/null || true
-sudo iptables -t nat -D OUTPUT -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
+sudo iptables -t nat -D OUTPUT -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${MINIKUBE_IP}:80  2>/dev/null || true
+sudo iptables -t nat -D OUTPUT -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${VM_IP}:80        2>/dev/null || true
+sudo iptables -t nat -D OUTPUT -d 138.100.15.165 -p tcp --dport 443 -j DNAT --to-destination ${VM_IP}:443       2>/dev/null || true
 
-sudo iptables -t nat -A PREROUTING -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
-sudo iptables -t nat -A POSTROUTING -d ${MINIKUBE_IP} -j MASQUERADE
-sudo iptables -t nat -A OUTPUT -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
+# Both HTTP and HTTPS go to system nginx on VM_IP; nginx proxies to k3s NodePort
+sudo iptables -t nat -A PREROUTING -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${VM_IP}:80
+sudo iptables -t nat -A PREROUTING -d 138.100.15.165 -p tcp --dport 443 -j DNAT --to-destination ${VM_IP}:443
+sudo iptables -t nat -A OUTPUT     -d 138.100.15.165 -p tcp --dport 80  -j DNAT --to-destination ${VM_IP}:80
+sudo iptables -t nat -A OUTPUT     -d 138.100.15.165 -p tcp --dport 443 -j DNAT --to-destination ${VM_IP}:443
 sudo netfilter-persistent save
 
 echo "[3/5] Generating app.config.json for connector interfaces..."
@@ -108,6 +123,14 @@ done
 
 echo "[4/5] Writing nginx config..."
 
+# Generate self-signed TLS certificate for the public host (valid 10 years)
+sudo openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+  -keyout /etc/nginx/pionera-selfsigned.key \
+  -out /etc/nginx/pionera-selfsigned.crt \
+  -subj "/CN=${PUBLIC_HOST}/O=Pionera" \
+  -addext "subjectAltName=DNS:${PUBLIC_HOST},DNS:*.${PUBLIC_HOST}" 2>/dev/null
+sudo chmod 600 /etc/nginx/pionera-selfsigned.key
+
 # Cookie-based routing: /inesdata-connector-interface/ routes to the connector
 # the user last visited via /c/<connector>/. This is needed because all Angular
 # SPAs share base href=/inesdata-connector-interface/ and the OIDC callback must
@@ -128,6 +151,11 @@ sudo sed -i "s/INTERNAL_DOMAIN_PLACEHOLDER/${INTERNAL_DOMAIN}/g" /etc/nginx/conf
 sudo tee /etc/nginx/sites-enabled/pionera-dataspace.conf > /dev/null << NGINXEOF
 server {
     listen ${VM_IP}:80;
+    listen ${VM_IP}:443 ssl;
+    ssl_certificate     /etc/nginx/pionera-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/pionera-selfsigned.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
     server_name ${PUBLIC_HOST};
 
     # Route app.config.json based on inesdata_connector cookie (set by /c/<connector>/)
@@ -165,12 +193,13 @@ server {
 
     location /auth/ {
         rewrite ^/auth/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host auth.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header Accept-Encoding "";
+        proxy_cookie_path /realms/ /auth/realms/;
         sub_filter_types application/json text/html;
         sub_filter_once off;
         sub_filter "http://auth.${INTERNAL_DOMAIN}/realms/"    "https://${PUBLIC_HOST}/auth/realms/";
@@ -182,13 +211,13 @@ server {
 
     location /s3/ {
         rewrite ^/s3/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host minio.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location /resources/ {
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host auth.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -197,7 +226,7 @@ server {
 
     location /s3-console/ {
         rewrite ^/s3-console/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host console.minio-s3.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header Accept-Encoding "";
@@ -208,14 +237,14 @@ server {
 
     location /rs-demo/ {
         rewrite ^/rs-demo/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host registration-service-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location /c/citycouncil/management/ {
         rewrite ^/c/citycouncil/management/(.*) /management/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -225,14 +254,14 @@ server {
 
     location /c/citycouncil/shared/ {
         rewrite ^/c/citycouncil/shared/(.*) /shared/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location /c/citycouncil/federatedcatalog/ {
         rewrite ^/c/citycouncil/federatedcatalog/(.*) /management/federatedcatalog/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
@@ -240,7 +269,7 @@ server {
     location /c/citycouncil/ {
         add_header Set-Cookie "inesdata_connector=citycouncil; Path=/; SameSite=Lax" always;
         rewrite ^/c/citycouncil/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-citycouncil-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -249,7 +278,7 @@ server {
 
     location /c/company/management/ {
         rewrite ^/c/company/management/(.*) /management/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-company-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -259,14 +288,14 @@ server {
 
     location /c/company/shared/ {
         rewrite ^/c/company/shared/(.*) /shared/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-company-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location /c/company/federatedcatalog/ {
         rewrite ^/c/company/federatedcatalog/(.*) /management/federatedcatalog/\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-company-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
     }
@@ -274,7 +303,7 @@ server {
     location /c/company/ {
         add_header Set-Cookie "inesdata_connector=company; Path=/; SameSite=Lax" always;
         rewrite ^/c/company/(.*) /\$1 break;
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host conn-company-demo.${INTERNAL_DOMAIN};
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -282,7 +311,7 @@ server {
     }
 
     location /inesdata-connector-interface/ {
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host \$connector_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -292,10 +321,15 @@ server {
 
 server {
     listen ${VM_IP}:80;
+    listen ${VM_IP}:443 ssl;
+    ssl_certificate     /etc/nginx/pionera-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/pionera-selfsigned.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
     server_name *.${PUBLIC_HOST};
 
     location / {
-        proxy_pass http://${MINIKUBE_IP};
+        proxy_pass http://${INGRESS_BACKEND};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;

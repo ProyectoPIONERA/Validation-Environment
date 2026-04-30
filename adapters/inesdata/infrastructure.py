@@ -152,14 +152,24 @@ class INESDataInfrastructureAdapter:
         return None
 
     def patch_ingress_external_ip(self):
-        """Patches the Ingress Controller LoadBalancer with the VM's external IP."""
-        vm_ip = self.get_vm_ip()
-        if not vm_ip:
-            print("Warning: Could not determine VM IP for ingress patching.")
-            return
+        """Patches the Ingress Controller service for external access.
 
-        print(f"Patching Ingress Controller with LoadBalancer IP: {vm_ip}")
-        patch_json = json.dumps({"spec": {"externalIPs": [vm_ip]}})
+        On k3s: sets type=NodePort so k3s ServiceLB does not intercept host
+        ports (192.168.x.x:80/443) needed by the nginx reverse proxy.
+        On minikube: sets externalIPs so kube-proxy routes host traffic in.
+        """
+        cluster_type = self._cluster_type()
+
+        if cluster_type == "k3s":
+            print("k3s detected: setting ingress-nginx-controller service type to NodePort")
+            patch_json = json.dumps({"spec": {"type": "NodePort"}})
+        else:
+            vm_ip = self.get_vm_ip()
+            if not vm_ip:
+                print("Warning: Could not determine VM IP for ingress patching.")
+                return
+            print(f"Patching Ingress Controller with LoadBalancer IP: {vm_ip}")
+            patch_json = json.dumps({"spec": {"externalIPs": [vm_ip]}})
 
         cmd = (
             f"kubectl patch svc ingress-nginx-controller "
