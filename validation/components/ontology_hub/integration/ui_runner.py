@@ -17,6 +17,7 @@ from validation.components.ontology_hub.integration.runner import (
     evaluate_html_page_response,
     evaluate_term_search_response,
 )
+from validation.components.artifact_cleanup import cleanup_empty_experiment_artifact_dirs
 from validation.components.ontology_hub.runtime_config import resolve_ontology_hub_runtime
 
 
@@ -24,6 +25,7 @@ COMPONENT_KEY = "ontology-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ontology_hub", "integration", "playwright.config.js")
 PLAYWRIGHT_WORKDIR = Path(__file__).resolve().parents[2] / "ui"
 COMPONENT_UI_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_EXPERIMENTS_DIR = Path(__file__).resolve().parents[4] / "experiments" / "_standalone"
 PLAYWRIGHT_COMMAND_PREFIX = [
     os.path.join(".", "node_modules", ".bin", "playwright"),
@@ -140,7 +142,7 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
-def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
+def _build_ui_artifact_paths(experiment_dir: str | None, *, create: bool = True) -> Dict[str, str]:
     if experiment_dir:
         base_dir = os.path.join(experiment_dir, "components", COMPONENT_KEY, "ui")
     else:
@@ -156,11 +158,12 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
         "resolved_runtime_json": os.path.join(base_dir, "resolved_runtime.json"),
         "preflight_json": os.path.join(base_dir, "preflight.json"),
     }
-    for path in paths.values():
-        if path.endswith(".json"):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        else:
-            os.makedirs(path, exist_ok=True)
+    if create:
+        for path in paths.values():
+            if path.endswith(".json"):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+            else:
+                os.makedirs(path, exist_ok=True)
     return paths
 
 
@@ -711,4 +714,5 @@ def run_ontology_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         },
     }
     _write_json(artifact_paths["report_json"], suite_result)
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=PROJECT_ROOT / "experiments")
     return suite_result

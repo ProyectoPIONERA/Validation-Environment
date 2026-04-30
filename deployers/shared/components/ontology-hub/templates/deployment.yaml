@@ -125,3 +125,14 @@ spec:
             periodSeconds: {{ .Values.health.periodSeconds }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: versions
+              mountPath: {{ .Values.versions.mountPath | default "/app/versions" | quote }}
+      volumes:
+        - name: versions
+          {{- if .Values.versions.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "ontology-hub.fullname" . }}-versions
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

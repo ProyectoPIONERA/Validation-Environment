@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Callable
+
+from validation.components.artifact_cleanup import cleanup_empty_experiment_artifact_dirs
 
 
 LEVEL6_UI_SMOKE_SPECS = (
@@ -20,6 +23,10 @@ LEVEL6_UI_DATASPACE_SPECS = (
 LEVEL6_UI_OPS_SPEC = os.path.join("ops", "minio-bucket-visibility.spec.ts")
 LEVEL6_UI_OPS_CONFIG = "playwright.ops.config.ts"
 DEFAULT_INTERACTION_MARKER_DELAY_MS = "150"
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
 def ui_ops_suite_available(ui_test_dir: str) -> bool:
@@ -118,7 +125,7 @@ def run_ui_smoke(
         ui_test_dir,
         env,
     )
-    return enrich_result(
+    result = enrich_result(
         {
             "connector": connector,
             "test": "ui-core-smoke",
@@ -130,6 +137,8 @@ def run_ui_smoke(
             "error": error,
         }
     )
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=_project_root() / "experiments")
+    return result
 
 
 def run_ui_dataspace(
@@ -178,7 +187,7 @@ def run_ui_dataspace(
         ui_test_dir,
         env,
     )
-    return enrich_result(
+    result = enrich_result(
         {
             "provider_connector": provider_connector,
             "consumer_connector": consumer_connector,
@@ -190,6 +199,8 @@ def run_ui_dataspace(
             "error": error,
         }
     )
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=_project_root() / "experiments")
+    return result
 
 
 def run_ui_ops(
@@ -234,7 +245,7 @@ def run_ui_ops(
         ui_test_dir,
         env,
     )
-    return enrich_result(
+    result = enrich_result(
         {
             "test": "ui-ops-minio-console",
             "status": status,
@@ -247,6 +258,8 @@ def run_ui_ops(
             "error": error,
         }
     )
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=_project_root() / "experiments")
+    return result
 
 
 def run_core_ui_tests(

@@ -1,5 +1,7 @@
 import shutil
 import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -32,6 +34,26 @@ class OntologyHubChartSampleDataTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        return rendered.stdout
+
+    def _render_chart_with_values(self, values_yaml: str) -> str:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as handle:
+            handle.write(values_yaml)
+            handle.flush()
+            rendered = subprocess.run(
+                [
+                    "helm",
+                    "template",
+                    "ontology-hub-test",
+                    str(self.chart_dir),
+                    "-f",
+                    handle.name,
+                ],
+                cwd=self.validation_environment_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         return rendered.stdout
 
     def test_demo_values_render_sample_data_resources(self):
@@ -80,7 +102,27 @@ class OntologyHubChartSampleDataTests(unittest.TestCase):
         self.assertNotIn("seed-ontology-hub-mongodb", rendered)
         self.assertNotIn("seed-ontology-hub-elasticsearch", rendered)
         self.assertNotIn("prepare-ontology-hub-version-files", rendered)
-        self.assertNotIn("ontology-hub-versions", rendered)
+        self.assertIn('mountPath: "/app/versions"', rendered)
+        self.assertIn("emptyDir: {}", rendered)
+        self.assertNotIn("kind: PersistentVolumeClaim", rendered)
+
+    def test_versions_persistence_renders_pvc_when_enabled(self):
+        rendered = self._render_chart_with_values(
+            textwrap.dedent(
+                """
+                versions:
+                  persistence:
+                    enabled: true
+                    size: 2Gi
+                """
+            )
+        )
+
+        self.assertIn("name: ontology-hub-test-versions", rendered)
+        self.assertIn("app.kubernetes.io/component: versions", rendered)
+        self.assertIn("persistentVolumeClaim:", rendered)
+        self.assertIn("claimName: ontology-hub-test-versions", rendered)
+        self.assertIn('storage: "2Gi"', rendered)
 
 
 if __name__ == "__main__":

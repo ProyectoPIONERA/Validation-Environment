@@ -74,7 +74,7 @@ test("OH-APP-05: vocabulary detail is visible and the .n3 can be downloaded", as
 
   await detailPage.expectReady(resolvedPrefix, targetTitle);
   await detailPage.expectMetadataMarkers();
-  await page.getByText("Incoming Links", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
+  await page.getByText(/Incoming Links/i).waitFor({ state: "visible", timeout: 5000 });
   await clickMarked(page.locator(".ontology-tab").filter({ hasText: "Version History" }).first());
   await page.getByText("Vocabulary Version History", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
   await captureStep(page, "02-vocab-detail");

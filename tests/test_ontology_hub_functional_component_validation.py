@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 
 from validation.components.ontology_hub.functional import runtime_preparation
@@ -21,11 +22,33 @@ class OntologyHubFunctionalComponentValidationTests(unittest.TestCase):
         self.assertTrue(str(PLAYWRIGHT_WORKDIR).endswith("Validation-Environment/validation/ui"))
 
     def test_build_artifact_paths_resolves_relative_experiment_dir_under_project_root(self):
-        paths = _build_artifact_paths("experiments/relative-ontology-hub-test")
+        experiment_dir = f"experiments/relative-ontology-hub-test-{uuid.uuid4().hex}"
+        paths = _build_artifact_paths(experiment_dir, create=False)
 
         self.assertTrue(
             paths["json_report_file"].startswith(str(PROJECT_ROOT / "experiments")),
         )
+        self.assertFalse(os.path.exists(paths["base_dir"]))
+
+    def test_functional_ui_runner_prunes_empty_playwright_dirs(self):
+        experiments_root = PROJECT_ROOT / "experiments"
+        with tempfile.TemporaryDirectory(dir=str(experiments_root)) as tmpdir, mock.patch(
+            "validation.components.ontology_hub.functional.ui_runner._prepare_functional_runtime",
+            return_value=(True, None),
+        ), mock.patch(
+            "validation.components.ontology_hub.functional.ui_runner.subprocess.run",
+            side_effect=FileNotFoundError("playwright missing"),
+        ):
+            result = run_ontology_hub_functional_validation(
+                "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
+                experiment_dir=tmpdir,
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))
+            self.assertFalse(os.path.exists(result["artifacts"]["test_results_dir"]))
+            self.assertFalse(os.path.exists(result["artifacts"]["html_report_dir"]))
+            self.assertFalse(os.path.exists(result["artifacts"]["blob_report_dir"]))
 
     def test_functional_ui_runner_uses_framework_preparation_hook(self):
         with mock.patch(

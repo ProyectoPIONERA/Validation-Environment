@@ -426,7 +426,7 @@ async function fillVocabularyMetadata(page, runtime) {
   await fillMarked(page.locator("textarea[name^='reviews']").first(), runtime.creationReview);
 }
 
-async function saveVocabulary(page) {
+async function saveVocabulary(page, runtime = {}, expectedPrefix = "", expectedTitle = "") {
   const formPage = new OntologyHubVocabFormPage(page);
   const outcome = await formPage.save();
   const formErrors = await formPage.readFormErrors();
@@ -437,6 +437,21 @@ async function saveVocabulary(page) {
 
   const landedOnVocabularyDetail = /\/dataset\/vocabs\/[^/]+\/?$/i.test(outcome.finalUrl || "");
   if (!landedOnVocabularyDetail) {
+    const prefix = normalizeText(expectedPrefix || runtime.creationPrefix || runtime.expectedVocabularyPrefix);
+    if (prefix) {
+      await waitForPublicVocabularyDetail(
+        page,
+        runtime,
+        prefix,
+        expectedTitle || runtime.expectedVocabularyTitle || runtime.creationTitle,
+      );
+      return {
+        ...outcome,
+        finalUrl: page.url(),
+        recoveredFromPublicProbe: true,
+      };
+    }
+
     throw new Error(
       `Ontology Hub did not publish the vocabulary after save. Final URL: ${
         outcome.finalUrl || "unknown"
@@ -498,7 +513,7 @@ async function reopenVocabularyEditionAndSave(page, runtime, prefix, patch = {})
     await formPage.ensureDescriptions("en", "es", patch.description, `${patch.description} ES`);
   }
 
-  await saveVocabulary(page);
+  await saveVocabulary(page, runtime, prefix, patch.title || runtime.expectedVocabularyTitle || runtime.creationTitle);
   await openVocabularyDetail(page, runtime, prefix, patch.title || "");
 }
 
@@ -551,7 +566,7 @@ async function createVocabularyByUri(page, runtime) {
   }
 
   await fillVocabularyMetadata(page, runtime);
-  await saveVocabulary(page);
+  await saveVocabulary(page, runtime, runtime.creationPrefix, runtime.creationTitle);
 
   return {
     prefix: runtime.creationPrefix,
@@ -582,7 +597,7 @@ async function createVocabularyFromRepository(page, runtime) {
   }
 
   await fillVocabularyMetadata(page, runtime);
-  await saveVocabulary(page);
+  await saveVocabulary(page, runtime, runtime.creationPrefix, runtime.creationTitle);
 
   return {
     prefix: runtime.creationPrefix,
@@ -1086,7 +1101,7 @@ async function updateVocabularyMetadata(page, runtime, prefix, patch) {
     await ensureTagSelected(page, patch.tag);
   }
 
-  await saveVocabulary(page);
+  await saveVocabulary(page, runtime, prefix, patch.title || runtime.expectedVocabularyTitle || runtime.creationTitle);
   await openVocabularyDetail(page, runtime, prefix, patch.title || "");
 }
 

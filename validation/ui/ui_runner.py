@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from deployers.infrastructure.lib.contracts import DeploymentContext, ValidationProfile
+from validation.components.artifact_cleanup import cleanup_empty_experiment_artifact_dirs
 
 
 def _project_root() -> Path:
@@ -199,4 +200,5 @@ def run_playwright_validation(
     with open(artifact_paths["summary_file"], "w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)
 
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=_project_root() / "experiments")
     return result

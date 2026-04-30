@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from validation.components.artifact_cleanup import cleanup_empty_experiment_artifact_dirs
 
 COMPONENT_KEY = "ai-model-hub"
 PLAYWRIGHT_CONFIG_RELATIVE = os.path.join("..", "components", "ai_model_hub", "ui", "playwright.config.js")
@@ -124,7 +125,7 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
-def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
+def _build_ui_artifact_paths(experiment_dir: str | None, *, create: bool = True) -> Dict[str, str]:
     if experiment_dir:
         experiment_path = Path(experiment_dir)
         if not experiment_path.is_absolute():
@@ -141,11 +142,12 @@ def _build_ui_artifact_paths(experiment_dir: str | None) -> Dict[str, str]:
         "json_report_file": str(base_dir / "results.json"),
         "report_json": str(base_dir / "ai_model_hub_ui_validation.json"),
     }
-    for path in paths.values():
-        if path.endswith(".json"):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        else:
-            os.makedirs(path, exist_ok=True)
+    if create:
+        for path in paths.values():
+            if path.endswith(".json"):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+            else:
+                os.makedirs(path, exist_ok=True)
     return paths
 
 
@@ -338,6 +340,7 @@ def _disabled_suite_result(base_url: str, experiment_dir: str | None) -> Dict[st
         },
     }
     _write_json(artifact_paths["report_json"], suite_result)
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=PROJECT_ROOT / "experiments")
     return suite_result
 
 
@@ -453,4 +456,5 @@ def run_ai_model_hub_ui_validation(base_url: str, experiment_dir: str | None = N
         },
     }
     _write_json(artifact_paths["report_json"], suite_result)
+    cleanup_empty_experiment_artifact_dirs(artifact_paths, experiments_root=PROJECT_ROOT / "experiments")
     return suite_result

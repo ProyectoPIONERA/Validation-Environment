@@ -71,6 +71,58 @@ warning por errores propios de la aplicacion.
 | `OH-APP-17` | La pagina de administracion de usuarios devuelve `500`. | Error server-side que bloquea la promocion de usuario a admin. |
 | `OH-APP-22` | La pagina de patrones devuelve `500`. | Error server-side que bloquea la generacion del zip. |
 
+La ejecucion `vm-single` reproducida el `2026-04-30 14:00:47`, tras corregir la
+cascada inicial de publicacion de vocabularios y montar `/app/versions` en el
+chart, queda en `23/27`. `AI Model Hub` pasa en el mismo experimento y
+`Ontology Hub` queda en warning por cuatro fallos propios del componente:
+
+| Caso | Sintoma observado en `vm-single` | Lectura tecnica |
+| --- | --- | --- |
+| `OH-APP-05` | El detalle publico expone metadata, enlace `.n3`, incoming/outgoing links y version history, pero la automatizacion esperaba un tab `Version History`. | Desalineacion puntual de selector frente a la UI actual; no apunta a infraestructura. |
+| `OH-APP-10` | Tras editar metadata, el detalle publico sigue mostrando el tag anterior `Services` en lugar de `Vocabularies`. | Posible problema de persistencia o reindexado de tags en Ontology Hub. |
+| `OH-APP-17` | La promocion a admin no encuentra `a[href='/edition/signup']`; la pagina de edicion muestra `+ Vocab` y `+ Agent`, pero no `+ USER`. | Diferencia de permisos/estado de usuario en la UI; el flujo no puede completar la promocion esperada por el caso. |
+| `OH-APP-22` | La pagina de patrones devuelve `500 - Oops! something went wrong - 500`. | Error server-side ya observado en local que bloquea la generacion del zip. |
+
+En esta ejecucion ya pasan `OH-APP-14` y `OH-APP-24`, que habian fallado en
+sondeos previos de `vm-single`.
+
+### Bug OH-APP-14: versiones y ficheros `.n3`
+
+En sondeos previos de `vm-single`, el crash de `OH-APP-14` dejo este stack trace en el pod
+`demo-ontology-hub`:
+
+```text
+Error: ENOENT: no such file or directory, unlink './versions/<vocab-id>/<vocab-id>_2026-01-01.n3'
+```
+
+La secuencia es:
+
+1. `OH-APP-11` crea una version con fecha `2026-03-31` y sube un `.n3`.
+2. `OH-APP-12` edita la version y cambia la fecha a `2026-01-01`, segun la hoja `Ontology Hub`.
+3. Ontology Hub actualiza la metadata en MongoDB y despues intenta renombrar o borrar el fichero fisico asociado.
+4. Si el fichero no existe en `/app/versions`, el controlador `versions.js` lanza la excepcion con `throw err`.
+5. La excepcion termina el proceso Node y Kubernetes reinicia el pod.
+
+El bug principal esta en la aplicacion: las operaciones `fs.rename`/`fs.unlink`
+de versiones no deberian terminar el proceso ante `ENOENT`; deberian mantener
+MongoDB y el filesystem en un estado consistente o devolver un error controlado.
+
+El framework mitiga la parte de infraestructura montando `/app/versions` como
+volumen del chart de Ontology Hub. Por defecto usa `emptyDir` para mantener
+compatibilidad con despliegues efimeros, y permite activar PVC con:
+
+```yaml
+versions:
+  persistence:
+    enabled: true
+    size: 1Gi
+```
+
+Esto reduce la desincronizacion entre MongoDB y los ficheros `.n3` cuando hay
+reinicios del pod. En el experimento `2026-04-30 14:00:47`, `OH-APP-14` ya no
+se reproduce como fallo, aunque la correccion defensiva en `versions.js` sigue
+siendo recomendable para evitar que un `ENOENT` pueda terminar el proceso Node.
+
 `Level 6` puede terminar como `Succeeded` porque el nivel se ejecuto de forma
 controlada y genero los artefactos esperados. Eso no significa que todos los
 casos funcionales del componente hayan pasado; el detalle vive en

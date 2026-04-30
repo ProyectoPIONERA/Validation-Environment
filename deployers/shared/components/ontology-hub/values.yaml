@@ -72,6 +72,12 @@ elasticsearch:
 # use this map for extra envs or overrides.
 env: {}
 
+versions:
+  mountPath: /app/versions
+  persistence:
+    enabled: false
+    size: 1Gi
+
 secrets:
   existingSecretName: ""
   values: {}
