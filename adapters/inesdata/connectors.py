@@ -10,13 +10,15 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
-from deployers.shared.lib.topology import LOCAL_TOPOLOGY, normalize_topology
+from deployers.shared.lib.topology import LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY, normalize_topology
 from .config import INESDataConfigAdapter, InesdataConfig
 from runtime_dependencies import ensure_python_requirements
 
 
 class INESDataConnectorsAdapter:
     """Contains INESData connector lifecycle logic."""
+
+    LEVEL4_LOCAL_IMAGE_TOPOLOGIES = {LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY}
 
     def __init__(self, run, run_silent, auto_mode_getter, infrastructure_adapter, config_adapter=None, config_cls=None):
         self.run = run
@@ -47,7 +49,7 @@ class INESDataConnectorsAdapter:
     def _resolve_level4_local_image_policy(self, *, mode, label):
         normalized_mode = str(mode or "auto").strip().lower() or "auto"
         topology = self._normalized_topology()
-        if topology == LOCAL_TOPOLOGY:
+        if topology in self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES:
             return {
                 "topology": topology,
                 "mode": normalized_mode,
@@ -58,6 +60,7 @@ class INESDataConnectorsAdapter:
             }
 
         if normalized_mode == "required":
+            supported = ", ".join(sorted(self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES))
             return {
                 "topology": topology,
                 "mode": normalized_mode,
@@ -66,7 +69,7 @@ class INESDataConnectorsAdapter:
                 "message": "",
                 "error": (
                     f"{label} local image preparation mode 'required' is only supported in "
-                    f"topology '{LOCAL_TOPOLOGY}'. Configure pullable image references before "
+                    f"topologies {supported}. Configure pullable image references before "
                     f"running Level 4 on topology '{topology}'."
                 ),
             }
@@ -1130,6 +1133,16 @@ class INESDataConnectorsAdapter:
         print(f"Unknown INESData local images mode '{raw_value}'. Falling back to auto.")
         return "auto"
 
+    def _local_minikube_profile(self):
+        env_profile = os.getenv("PIONERA_MINIKUBE_PROFILE") or os.getenv("MINIKUBE_PROFILE")
+        if env_profile:
+            return env_profile.strip() or "minikube"
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        return str(deployer_config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
+
     def _maybe_prepare_level4_local_connector_images(self, namespace):
         mode = self._level4_local_images_mode()
         policy = self._resolve_level4_local_image_policy(
@@ -1183,6 +1196,8 @@ class INESDataConnectorsAdapter:
                 platform_dir,
                 "--namespace",
                 namespace,
+                "--minikube-profile",
+                self._local_minikube_profile(),
                 "--deploy-target",
                 "connectors",
                 "--skip-deploy",

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCES_DIR="$ADAPTER_DIR/sources"
 MANIFESTS_DIR="${MANIFESTS_DIR:-/tmp/inesdata-manifests}"
+DOCKERFILE_OVERRIDES_DIR="${DOCKERFILE_OVERRIDES_DIR:-$MANIFESTS_DIR/dockerfiles}"
 DRY_RUN=1
 TARGET="TODO"
 MANIFEST_FILE_OVERRIDE=""
@@ -13,6 +14,7 @@ REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
 REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-inesdata}"
 GRADLE_MAX_WORKERS="${GRADLE_MAX_WORKERS:-1}"
 GRADLE_COMMON_ARGS="${GRADLE_COMMON_ARGS:---no-daemon --no-parallel -Dorg.gradle.workers.max=$GRADLE_MAX_WORKERS}"
+LOCAL_DOCKERFILE_FIXUPS="${INESDATA_LOCAL_DOCKERFILE_FIXUPS:-true}"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +36,7 @@ Environment variables:
   MANIFESTS_DIR (default: /tmp/inesdata-manifests)
   GRADLE_MAX_WORKERS (default: 1)
   GRADLE_COMMON_ARGS (default: --no-daemon --no-parallel -Dorg.gradle.workers.max=<GRADLE_MAX_WORKERS>)
+  INESDATA_LOCAL_DOCKERFILE_FIXUPS (default: true; use temporary Dockerfiles without modifying sources)
 
 Component keys:
   connector
@@ -182,6 +185,59 @@ run_cmd() {
   fi
 }
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dockerfile_for_build() {
+  local component="$1"
+  local repo_dir="$2"
+  local dockerfile="$3"
+  local source_dockerfile="$repo_dir/$dockerfile"
+  local override_dockerfile
+
+  if ! is_truthy "$LOCAL_DOCKERFILE_FIXUPS"; then
+    printf '%s\n' "$dockerfile"
+    return
+  fi
+
+  case "$component" in
+    connector|connector-interface)
+      ;;
+    *)
+      printf '%s\n' "$dockerfile"
+      return
+      ;;
+  esac
+
+  if [[ ! -f "$source_dockerfile" ]]; then
+    printf '%s\n' "$dockerfile"
+    return
+  fi
+
+  mkdir -p "$DOCKERFILE_OVERRIDES_DIR"
+  override_dockerfile="$DOCKERFILE_OVERRIDES_DIR/${component}.Dockerfile"
+  cp "$source_dockerfile" "$override_dockerfile"
+
+  case "$component" in
+    connector)
+      sed -i 's/adduser --no-create-home --disabled-password --ingroup/adduser --no-create-home --disabled-password --gecos "" --ingroup/' "$override_dockerfile"
+      ;;
+    connector-interface)
+      sed -i 's/FROM node:18\.16-alpine as builder/FROM node:18.20-alpine as builder/' "$override_dockerfile"
+      ;;
+  esac
+
+  printf '%s\n' "$override_dockerfile"
+}
+
 component_has_changes() {
   local repo_dir="$1"
 
@@ -302,7 +358,8 @@ for component in "${selected_components[@]}"; do
   fi
   full_image="$image:$tag"
 
-  build_cmd="docker build -f $dockerfile -t $full_image $extra_args ."
+  effective_dockerfile="$(dockerfile_for_build "$component" "$repo_dir" "$dockerfile")"
+  build_cmd="docker build -f $effective_dockerfile -t $full_image $extra_args ."
   echo -e "$component\t$repo_dir\t$image\t$tag\t$full_image\t$build_cmd" >> "$MANIFEST_FILE"
 
   echo

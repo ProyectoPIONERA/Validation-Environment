@@ -357,6 +357,9 @@ class INESDataConfigAdapter:
     def foundation_minikube_runtime(self):
         """Return shared Level 1 Minikube runtime settings with config/env overrides."""
         config = self.load_deployer_config()
+        topology = str(getattr(self, "topology", "local") or "local").strip().lower()
+        default_cpus = 8 if topology == "vm-single" else getattr(self.config, "MINIKUBE_CPUS", 4)
+        default_memory = 24576 if topology == "vm-single" else getattr(self.config, "MINIKUBE_MEMORY", 12288)
         return {
             "driver": self._normalized_string(
                 config.get("MINIKUBE_DRIVER"),
@@ -364,11 +367,11 @@ class INESDataConfigAdapter:
             ),
             "cpus": self._normalized_positive_int_string(
                 config.get("MINIKUBE_CPUS"),
-                getattr(self.config, "MINIKUBE_CPUS", 4),
+                default_cpus,
             ),
             "memory": self._normalized_positive_int_string(
                 config.get("MINIKUBE_MEMORY"),
-                getattr(self.config, "MINIKUBE_MEMORY", 12288),
+                default_memory,
             ),
             "profile": self._normalized_string(
                 config.get("MINIKUBE_PROFILE"),
@@ -411,6 +414,11 @@ class INESDataConfigAdapter:
             "k8s_service_name": config.get("KAFKA_K8S_SERVICE_NAME", "framework-kafka"),
             "k8s_local_port": config.get("KAFKA_K8S_LOCAL_PORT", "39092"),
             "minikube_profile": config.get("KAFKA_MINIKUBE_PROFILE", "minikube"),
+            "topology": self.topology,
+            "validation_backend": config.get(
+                "KAFKA_EDC_VALIDATION_BACKEND",
+                "kubernetes-exec" if self.topology == "vm-single" else "python-client",
+            ),
         }
 
         optional_mapping = {
@@ -429,6 +437,7 @@ class INESDataConfigAdapter:
             "max_block_ms": "KAFKA_MAX_BLOCK_MS",
             "consumer_request_timeout_ms": "KAFKA_CONSUMER_REQUEST_TIMEOUT_MS",
             "topic_ready_timeout_seconds": "KAFKA_TOPIC_READY_TIMEOUT_SECONDS",
+            "validation_backend": "KAFKA_EDC_VALIDATION_BACKEND",
         }
         for key, config_key in optional_mapping.items():
             value = config.get(config_key)

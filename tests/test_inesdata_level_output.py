@@ -221,6 +221,18 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
         infrastructure.run_silent.assert_any_call("minikube -p vm-local addons enable ingress")
 
+    def test_vm_single_minikube_runtime_defaults_to_reproducible_vm_capacity(self):
+        self.config_adapter = LevelOutputConfigAdapter()
+        self.config_adapter.topology = "vm-single"
+        infrastructure = self._make_infrastructure()
+
+        runtime = infrastructure._minikube_runtime_config()
+
+        self.assertEqual(runtime["driver"], "docker")
+        self.assertEqual(runtime["cpus"], "8")
+        self.assertEqual(runtime["memory"], "24576")
+        self.assertEqual(runtime["profile"], "minikube")
+
     def test_minikube_runtime_capacity_fails_when_requested_memory_exceeds_docker_memory(self):
         infrastructure = self._make_infrastructure()
         infrastructure.run_silent = mock.Mock(return_value=str(16 * 1024 * 1024 * 1024))
@@ -324,6 +336,7 @@ minio:
             config_cls=self.config,
         )
         infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.setup_cluster = mock.Mock()
 
         command_results = {
             "which kubectl": "/usr/bin/kubectl",
@@ -344,12 +357,12 @@ minio:
             result = infrastructure.setup_cluster_preflight(topology="vm-single")
 
         self.assertEqual(result["status"], "ready")
-        self.assertEqual(result["mode"], "preflight")
+        self.assertEqual(result["mode"], "managed-recreate")
         self.assertEqual(result["topology"], "vm-single")
         self.assertEqual(result["current_context"], "vm-single-context")
-        self.assertEqual(result["cluster_creation"], "skipped")
-        self.assertIn("LEVEL 1 - CLUSTER PREFLIGHT", output.getvalue())
-        self.assertIn("Topology 'vm-single' uses an existing Kubernetes cluster.", output.getvalue())
+        self.assertEqual(result["cluster_creation"], "recreated")
+        infrastructure.setup_cluster.assert_called_once_with()
+        self.assertIn("Level 1 will recreate the managed Minikube cluster", output.getvalue())
         self.assertEqual(result["checks"][-1]["label"], "create namespace permission")
         self.assertEqual(result["checks"][-1]["status"], "passed")
 
@@ -381,6 +394,8 @@ minio:
             infrastructure.deploy_infrastructure_for_topology("vm-single")
 
         rendered = output.getvalue()
+        self.assertIn("Shared common-services deployer artifacts found", rendered)
+        self.assertNotIn("INESData deployer artifacts found", rendered)
         self.assertIn("Skipping client-side hosts synchronization for topology 'vm-single'.", rendered)
         self.assertIn("LEVEL 2 COMPLETE", rendered)
         infrastructure.manage_hosts_entries.assert_not_called()
@@ -1710,6 +1725,35 @@ minio:
         infrastructure.deploy_infrastructure()
 
         self.assertEqual(seen.get("timeout_seconds"), 240)
+
+    def test_deploy_infrastructure_uses_vm_single_cold_start_budget(self):
+        self.config_adapter.topology = "vm-single"
+        infrastructure = self._make_infrastructure()
+        infrastructure.config.TIMEOUT_POD_WAIT = 120
+        infrastructure.ensure_wsl_docker_config = lambda: True
+        infrastructure.sync_common_values = lambda: None
+        infrastructure.reconcile_common_services_source_of_truth = lambda: None
+        infrastructure.manage_hosts_entries = lambda _entries: None
+        infrastructure.add_helm_repos = lambda: None
+        infrastructure._common_services_release_exists = lambda: False
+        infrastructure.wait_for_level2_service_pods = lambda *_args, **_kwargs: True
+        infrastructure.wait_for_vault_pod = lambda *_args, **_kwargs: True
+        infrastructure.setup_vault = lambda *_args, **_kwargs: True
+        infrastructure.sync_vault_token_to_deployer_config = lambda: True
+        infrastructure.reconcile_vault_state_for_local_runtime = lambda: True
+        infrastructure.verify_common_services_ready_for_level3 = lambda: (True, None)
+
+        seen = {}
+
+        def fake_deploy(*_args, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        infrastructure.deploy_helm_release = fake_deploy
+
+        infrastructure.deploy_infrastructure()
+
+        self.assertEqual(seen.get("timeout_seconds"), 600)
 
     def test_deploy_infrastructure_does_not_force_short_timeout_for_existing_common_release(self):
         infrastructure = self._make_infrastructure()

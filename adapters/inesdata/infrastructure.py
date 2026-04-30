@@ -106,7 +106,13 @@ class INESDataInfrastructureAdapter:
                     "local_resource_profile": deployer_config.get("LOCAL_RESOURCE_PROFILE"),
                 }
 
+        topology = str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower()
+        default_cpus = 8 if topology == "vm-single" else 4
+        default_memory = 24576 if topology == "vm-single" else 12288
+
         def _default(attr_name, fallback):
+            if topology == "vm-single" and attr_name in {"MINIKUBE_CPUS", "MINIKUBE_MEMORY"}:
+                return str(fallback)
             value = getattr(self.config, attr_name, fallback)
             normalized = str(value or "").strip()
             return normalized or str(fallback)
@@ -123,11 +129,18 @@ class INESDataInfrastructureAdapter:
 
         return {
             "driver": str(runtime.get("driver") or _default("MINIKUBE_DRIVER", "docker")).strip() or "docker",
-            "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", 4)),
-            "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", 12288)),
+            "cpus": _positive_int_string(runtime.get("cpus"), _default("MINIKUBE_CPUS", default_cpus)),
+            "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", default_memory)),
             "profile": str(runtime.get("profile") or _default("MINIKUBE_PROFILE", "minikube")).strip() or "minikube",
             "local_resource_profile": str(runtime.get("local_resource_profile") or "").strip().lower(),
         }
+
+    def _is_vm_single_topology(self):
+        return str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower() == "vm-single"
+
+    def _common_services_startup_timeout(self):
+        baseline = 600 if self._is_vm_single_topology() else 180
+        return max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), baseline)
 
     def _registration_service_namespace(self):
         config_namespace_getter = getattr(self.config, "registration_service_namespace", None)
@@ -2503,7 +2516,7 @@ class INESDataInfrastructureAdapter:
 
     def verify_common_services_ready_for_level3(self):
         """Ensure Level 2 leaves common services stable enough for Level 3."""
-        common_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
+        common_ready_timeout = max(self._common_services_startup_timeout(), 300)
         common_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
         release_status = self._common_services_release_status()
         if release_status is None:
@@ -2703,7 +2716,7 @@ class INESDataInfrastructureAdapter:
                 ),
             )
 
-        print("INESData deployer artifacts found")
+        print("Shared common-services deployer artifacts found")
 
         self.config_adapter.copy_local_deployer_config()
 
@@ -2725,10 +2738,7 @@ class INESDataInfrastructureAdapter:
 
         print("\nDeploying common services...")
         common_release_exists = self._common_services_release_exists()
-        common_services_startup_timeout = max(
-            int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)),
-            180,
-        )
+        common_services_startup_timeout = self._common_services_startup_timeout()
         common_services_deployed = self.deploy_helm_release(
             self.config.helm_release_common(),
             self.config.NS_COMMON,

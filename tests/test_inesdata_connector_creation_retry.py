@@ -1228,7 +1228,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(infra.local_calls, 0)
             self.assertEqual(infra.vault_calls, 1)
 
-    def test_level4_local_image_policy_disables_local_overrides_outside_local_topology(self):
+    def test_level4_local_image_policy_enables_managed_minikube_topologies(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -1248,11 +1248,11 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             )
 
             self.assertEqual(policy["topology"], "vm-single")
-            self.assertFalse(policy["prepare_local_images"])
-            self.assertFalse(policy["allow_local_image_overrides"])
-            self.assertIn("chart-configured image references", policy["message"])
+            self.assertTrue(policy["prepare_local_images"])
+            self.assertTrue(policy["allow_local_image_overrides"])
+            self.assertEqual(policy["message"], "")
 
-    def test_local_connector_image_override_path_is_ignored_outside_local_topology(self):
+    def test_local_connector_image_override_path_is_used_for_vm_single(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
@@ -1270,7 +1270,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 mock.patch("adapters.inesdata.connectors.os.path.isfile", return_value=True),
                 mock.patch("adapters.inesdata.connectors.os.path.getsize", return_value=1),
             ):
-                self.assertIsNone(adapter._local_connector_image_override_path())
+                self.assertIsNotNone(adapter._local_connector_image_override_path())
 
     def test_explicit_connector_image_override_path_writes_runtime_override_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1330,11 +1330,11 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "INESData connector image override is incomplete"):
                     adapter._explicit_connector_image_override_path()
 
-    def test_level4_local_connector_images_fail_when_required_outside_local_topology(self):
+    def test_level4_local_connector_images_fail_when_required_outside_managed_minikube_topology(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
-            config_adapter.topology = "vm-single"
+            config_adapter.topology = "vm-distributed"
             adapter = INESDataConnectorsAdapter(
                 run=lambda *_args, **_kwargs: object(),
                 run_silent=lambda *_args, **_kwargs: "",
@@ -1815,6 +1815,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(events[0][0], "prepare-images")
             self.assertEqual(events[1], ("create-connector", "conn-a-demo"))
             self.assertIn("--deploy-target connectors", events[0][1])
+            self.assertIn("--minikube-profile minikube", events[0][1])
             self.assertIn("--skip-deploy", events[0][1])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
 

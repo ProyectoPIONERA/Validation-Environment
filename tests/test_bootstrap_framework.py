@@ -61,6 +61,22 @@ class BootstrapFrameworkTests(unittest.TestCase):
             )
         os.chmod(fake_python, os.stat(fake_python).st_mode | stat.S_IXUSR)
 
+        node_path = os.path.join(fake_bin, "node")
+        with open(node_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    if [[ "${1:-}" == "--version" ]]; then
+                      printf 'v20.0.0\\n'
+                    fi
+                    exit 0
+                    """
+                )
+            )
+        os.chmod(node_path, os.stat(node_path).st_mode | stat.S_IXUSR)
+
         for command_name in ("npm", "npx"):
             command_path = os.path.join(fake_bin, command_name)
             with open(command_path, "w", encoding="utf-8") as handle:
@@ -80,7 +96,228 @@ class BootstrapFrameworkTests(unittest.TestCase):
                 else:
                     handle.write("#!/usr/bin/env bash\nexit 0\n")
             os.chmod(command_path, os.stat(command_path).st_mode | stat.S_IXUSR)
+
+        java_path = os.path.join(fake_bin, "java")
+        with open(java_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    printf 'openjdk version "17.0.10" 2024-01-16\\n' >&2
+                    exit 0
+                    """
+                )
+            )
+        os.chmod(java_path, os.stat(java_path).st_mode | stat.S_IXUSR)
         return root, fake_bin
+
+    def test_bootstrap_fails_fast_with_vm_ubuntu_hint_when_npm_is_missing(self):
+        root, fake_bin = self._prepare_workspace()
+        with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as handle:
+            handle.write('{"private": true}\n')
+        for command_name in ("npm", "npx", "node"):
+            os.remove(os.path.join(fake_bin, command_name))
+        for command_name in ("bash", "cat", "chmod", "dirname", "mkdir", "uname"):
+            os.symlink(shutil.which(command_name), os.path.join(fake_bin, command_name))
+        node_path = os.path.join(fake_bin, "node")
+        with open(node_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/bin/bash
+                    set -euo pipefail
+                    if [[ "${1:-}" == "--version" ]]; then
+                      printf 'v20.0.0\\n'
+                      exit 0
+                    fi
+                    exit 0
+                    """
+                )
+            )
+        os.chmod(node_path, os.stat(node_path).st_mode | stat.S_IXUSR)
+        env = dict(os.environ)
+        env["PATH"] = fake_bin
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-ui-node",
+                "--skip-playwright",
+                "--without-system-deps",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("npm is required for Newman/Playwright validation", result.stderr)
+        self.assertIn("sudo apt-get update && sudo apt-get install -y nodejs npm", result.stderr)
+        self.assertNotIn("Installing Python requirements", result.stdout)
+
+    def test_bootstrap_installs_missing_node_tooling_on_linux_when_system_deps_are_enabled(self):
+        root, fake_bin = self._prepare_workspace()
+        with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as handle:
+            handle.write('{"private": true}\n')
+        for command_name in ("npm", "npx", "node"):
+            os.remove(os.path.join(fake_bin, command_name))
+        for command_name in ("bash", "cat", "chmod", "dirname", "mkdir", "uname"):
+            os.symlink(shutil.which(command_name), os.path.join(fake_bin, command_name))
+        install_log = os.path.join(root, "apt.log")
+        sudo_path = os.path.join(fake_bin, "sudo")
+        with open(sudo_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    "$@"
+                    """
+                )
+            )
+        os.chmod(sudo_path, os.stat(sudo_path).st_mode | stat.S_IXUSR)
+        apt_get_path = os.path.join(fake_bin, "apt-get")
+        with open(apt_get_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\n' "$*" >> "${BOOTSTRAP_APT_LOG:?}"
+                    if [[ "${1:-}" == "install" ]]; then
+                      fake_bin="${BOOTSTRAP_FAKE_BIN:?}"
+                      printf '%s\n' '#!/usr/bin/env bash' 'if [[ "${1:-}" == "--version" ]]; then printf "v20.0.0\\n"; fi' 'exit 0' > "$fake_bin/node"
+                      printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$fake_bin/npm"
+                      printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$fake_bin/npx"
+                      chmod +x "$fake_bin/node" "$fake_bin/npm" "$fake_bin/npx"
+                    fi
+                    exit 0
+                    """
+                )
+            )
+        os.chmod(apt_get_path, os.stat(apt_get_path).st_mode | stat.S_IXUSR)
+        env = dict(os.environ)
+        env["PATH"] = fake_bin
+        env["BOOTSTRAP_APT_LOG"] = install_log
+        env["BOOTSTRAP_FAKE_BIN"] = fake_bin
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-ui-node",
+                "--skip-playwright",
+                "--skip-deployer-config",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("Node.js/npm tooling is missing or too old", result.stdout)
+        with open(install_log, encoding="utf-8") as handle:
+            apt_commands = handle.read()
+        self.assertIn("update", apt_commands)
+        self.assertIn("install -y nodejs npm", apt_commands)
+
+    def test_bootstrap_fails_fast_with_vm_ubuntu_hint_when_java_is_missing_without_system_deps(self):
+        root, fake_bin = self._prepare_workspace()
+        with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as handle:
+            handle.write('{"private": true}\n')
+        os.remove(os.path.join(fake_bin, "java"))
+        env = dict(os.environ)
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+        result = subprocess.run(
+            [
+                "bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-root-node",
+                "--skip-ui-node",
+                "--skip-playwright",
+                "--without-system-deps",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Java 17+ is required for local connector image builds", result.stderr)
+        self.assertIn("sudo apt-get update && sudo apt-get install -y openjdk-17-jdk", result.stderr)
+        self.assertNotIn("Installing Python requirements", result.stdout)
+
+    def test_bootstrap_installs_missing_java_tooling_on_linux_when_system_deps_are_enabled(self):
+        root, fake_bin = self._prepare_workspace()
+        with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as handle:
+            handle.write('{"private": true}\n')
+        os.remove(os.path.join(fake_bin, "java"))
+        for command_name in ("bash", "cat", "chmod", "cp", "dirname", "mkdir", "uname"):
+            target = shutil.which(command_name)
+            if target and not os.path.exists(os.path.join(fake_bin, command_name)):
+                os.symlink(target, os.path.join(fake_bin, command_name))
+        install_log = os.path.join(root, "apt.log")
+        sudo_path = os.path.join(fake_bin, "sudo")
+        with open(sudo_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    "$@"
+                    """
+                )
+            )
+        os.chmod(sudo_path, os.stat(sudo_path).st_mode | stat.S_IXUSR)
+        apt_get_path = os.path.join(fake_bin, "apt-get")
+        with open(apt_get_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\n' "$*" >> "${BOOTSTRAP_APT_LOG:?}"
+                    if [[ "${1:-}" == "install" && "$*" == *"openjdk-17-jdk"* ]]; then
+                      fake_bin="${BOOTSTRAP_FAKE_BIN:?}"
+                      printf '%s\n' '#!/usr/bin/env bash' "printf 'openjdk version \"17.0.10\" 2024-01-16\\n' >&2" 'exit 0' > "$fake_bin/java"
+                      chmod +x "$fake_bin/java"
+                    fi
+                    exit 0
+                    """
+                )
+            )
+        os.chmod(apt_get_path, os.stat(apt_get_path).st_mode | stat.S_IXUSR)
+        env = dict(os.environ)
+        env["PATH"] = fake_bin
+        env["BOOTSTRAP_APT_LOG"] = install_log
+        env["BOOTSTRAP_FAKE_BIN"] = fake_bin
+
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                os.path.join(root, "scripts", "bootstrap_framework.sh"),
+                "--skip-root-node",
+                "--skip-ui-node",
+                "--skip-playwright",
+                "--skip-deployer-config",
+            ],
+            cwd=root,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("Java 17+ tooling is missing or too old", result.stdout)
+        with open(install_log, encoding="utf-8") as handle:
+            apt_commands = handle.read()
+        self.assertIn("update", apt_commands)
+        self.assertIn("install -y openjdk-17-jdk", apt_commands)
 
     def test_bootstrap_initializes_deployer_configs(self):
         root, fake_bin = self._prepare_workspace()

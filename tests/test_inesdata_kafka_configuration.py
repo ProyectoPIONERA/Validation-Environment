@@ -75,6 +75,7 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
         self.assertEqual(config["container_image"], "confluentinc/cp-kafka:7.5.2")
         self.assertEqual(config["container_env_file"], env_file)
         self.assertEqual(config["message_count"], "25")
+        self.assertEqual(config["validation_backend"], "python-client")
 
     def test_get_kafka_config_defaults_to_kubernetes_dataspace_namespace(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -96,6 +97,47 @@ class InesdataKafkaConfigurationTests(unittest.TestCase):
         self.assertEqual(config["provisioner"], "kubernetes")
         self.assertEqual(config["k8s_namespace"], "demo")
         self.assertEqual(config["k8s_service_name"], "framework-kafka")
+        self.assertEqual(config["validation_backend"], "python-client")
+
+    def test_get_kafka_config_uses_kubernetes_exec_backend_for_vm_single_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_deployer_config(
+                tmpdir,
+                [
+                    "DS_1_NAME=demo",
+                    "DS_1_NAMESPACE=demo",
+                ],
+            )
+
+            with (
+                mock.patch.object(InesdataConfig, "script_dir", return_value=tmpdir),
+                mock.patch.object(InesdataConfig, "deployer_config_path", return_value=config_path),
+            ):
+                adapter = InesdataAdapter(topology="vm-single")
+                config = adapter.get_kafka_config()
+
+        self.assertEqual(config["topology"], "vm-single")
+        self.assertEqual(config["validation_backend"], "kubernetes-exec")
+
+    def test_get_kafka_config_allows_overriding_vm_single_kafka_validation_backend(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_deployer_config(
+                tmpdir,
+                [
+                    "DS_1_NAME=demo",
+                    "DS_1_NAMESPACE=demo",
+                    "KAFKA_EDC_VALIDATION_BACKEND=python-client",
+                ],
+            )
+
+            with (
+                mock.patch.object(InesdataConfig, "script_dir", return_value=tmpdir),
+                mock.patch.object(InesdataConfig, "deployer_config_path", return_value=config_path),
+            ):
+                adapter = InesdataAdapter(topology="vm-single")
+                config = adapter.get_kafka_config()
+
+        self.assertEqual(config["validation_backend"], "python-client")
 
     def test_get_kafka_config_uses_provider_namespace_when_role_aligned_level4_is_active(self):
         with tempfile.TemporaryDirectory() as tmpdir:

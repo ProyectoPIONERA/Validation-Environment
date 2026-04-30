@@ -8,6 +8,13 @@ import unittest
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SCRIPT_PATH = os.path.join(PROJECT_ROOT, "adapters", "edc", "scripts", "build_image.sh")
+DASHBOARD_SCRIPT_PATH = os.path.join(
+    PROJECT_ROOT,
+    "adapters",
+    "edc",
+    "scripts",
+    "build_dashboard_image.sh",
+)
 LOCAL_EDC_SERVICE_EXTENSIONS_PATH = os.path.join(
     PROJECT_ROOT,
     "adapters",
@@ -38,6 +45,13 @@ def _touch(path, *, contents="", executable=False, mtime=None):
 
 
 class EdcBuildImageScriptTests(unittest.TestCase):
+    def test_dashboard_image_script_invokes_sync_with_bash(self):
+        with open(DASHBOARD_SCRIPT_PATH, "r", encoding="utf-8") as handle:
+            script = handle.read()
+
+        self.assertIn('bash "$SCRIPT_DIR/sync_dashboard_sources.sh" --apply', script)
+        self.assertNotIn('\n  "$SCRIPT_DIR/sync_dashboard_sources.sh" --apply', script)
+
     def test_local_edc_service_extensions_register_adapter_kafka_bridge(self):
         if not os.path.isfile(LOCAL_EDC_SERVICE_EXTENSIONS_PATH):
             self.skipTest("local EDC connector source checkout is not materialized")

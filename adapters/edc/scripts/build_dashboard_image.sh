@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! -d "$DASHBOARD_REPO_DIR/.git" ]]; then
-  "$SCRIPT_DIR/sync_dashboard_sources.sh" --apply
+  bash "$SCRIPT_DIR/sync_dashboard_sources.sh" --apply
 fi
 
 DASHBOARD_DIR="$DASHBOARD_REPO_DIR"
