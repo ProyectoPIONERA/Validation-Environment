@@ -14,6 +14,8 @@ La documentación es intencionadamente compacta. Describe cómo funciona el fram
 6. [Validación](./validation.md): nivel 6, Newman, Playwright, métricas y reportes.
 7. [Desarrollo y testing](./development-and-testing.md): cómo extender el framework y ejecutar pruebas focalizadas.
 8. [Troubleshooting](./troubleshooting.md): problemas frecuentes y cómo resolverlos.
+9. [Tutorial despliegue VM con k3s](./tutorial-k3s-vm-setup.md): guía paso a paso para despliegue en VM con k3s y acceso externo HTTPS.
+10. [Acceso externo a conectores](./acceso_externo_conectores_pionera.md): arquitectura de red, URLs, credenciales y diagnóstico.
 
 ## Entrada Principal
 

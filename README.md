@@ -116,10 +116,17 @@ Si `sudo` es passwordless, el proxy se configura automáticamente.
 
 | URL | Usuario | Contraseña |
 |-----|---------|------------|
-| `https://org1.pionera.oeg.fi.upm.es/c/citycouncil/inesdata-connector-interface/` | `user-conn-citycouncil-demo` | `skaEFXy1XaPgrek*` |
-| `https://org1.pionera.oeg.fi.upm.es/c/company/inesdata-connector-interface/` | `user-conn-company-demo` | `XMSi1tr*vl*30bjo` |
+| `https://org1.pionera.oeg.fi.upm.es/c/citycouncil/inesdata-connector-interface/` | `user-conn-citycouncil-demo` | ver `credentials-connector-conn-citycouncil-demo.json` |
+| `https://org1.pionera.oeg.fi.upm.es/c/company/inesdata-connector-interface/` | `user-conn-company-demo` | ver `credentials-connector-conn-company-demo.json` |
 | `https://org1.pionera.oeg.fi.upm.es/auth/admin/demo/console/` | `admin` | `change-me` |
 | `https://org1.pionera.oeg.fi.upm.es/s3-console/` | `admin` | `change-me` |
+
+Las contraseñas de los usuarios de conector se encuentran en:
+
+```text
+deployers/inesdata/deployments/DEV/demo/credentials-connector-conn-citycouncil-demo.json  → connector_user.passwd
+deployers/inesdata/deployments/DEV/demo/credentials-connector-conn-company-demo.json       → connector_user.passwd
+```
 
 ## Configuración
 
@@ -245,7 +252,7 @@ Para ejecución local, el framework espera:
 | Bloque | Herramientas principales |
 | --- | --- |
 | Base local | Python 3.10+, Git, Docker |
-| Kubernetes local | Minikube, Helm, `kubectl` |
+| Kubernetes local | **k3s** (topología VM) o Minikube (topología local), Helm, `kubectl` |
 | Validación | Node.js, `npm`, Newman, Playwright |
 | Operación | cliente PostgreSQL `psql`, permisos para `hosts` cuando aplique |
 
@@ -255,6 +262,9 @@ Verificación rápida:
 python3 --version
 git --version
 docker --version
+# k3s (entorno VM):
+k3s --version
+# Minikube (entorno local):
 minikube version
 helm version
 kubectl version --client=true
@@ -277,8 +287,8 @@ puede usar `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
 ## Minikube Tunnel
 
-En despliegues locales puede ser necesario mantener `minikube tunnel` abierto en
-otra terminal:
+En despliegues **locales** (topología `local`) puede ser necesario mantener
+`minikube tunnel` abierto en otra terminal:
 
 ```bash
 minikube tunnel
@@ -287,6 +297,10 @@ minikube tunnel
 Cuando `minikube tunnel` solicite contraseña, puede que la consola no muestre un
 indicador visible. Introduce la contraseña y pulsa `Enter`.
 
+En despliegues **VM con k3s** (topología `vm-single`) no se necesita `minikube tunnel`.
+El servicio `ingress-nginx-controller` se configura como `NodePort` y el proxy nginx
+de la VM escucha directamente en los puertos 80 y 443.
+
 Los accesos funcionales locales deben ejercitar los hostnames publicados por
 Ingress. El framework puede usar `port-forward` como apoyo interno para
 diagnósticos o clientes host-side, pero no debe sustituir los endpoints de
@@ -294,10 +308,26 @@ navegador o API. El fallback de `port-forward` para conectores está desactivado
 por defecto y solo debe habilitarse temporalmente con
 `PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true`.
 
-## Acceso Externo (entorno VM/PIONERA)
+## Acceso Externo (entorno VM/PIONERA con k3s)
 
-En entornos desplegados en VM (topología `vm-single`), los conectores corren dentro
-de Minikube y no son accesibles desde fuera por defecto.
+En entornos desplegados en VM (topología `vm-single`), los servicios corren dentro
+de k3s. El acceso externo se realiza a través de un nginx reverse proxy en la VM
+que escucha en los puertos 80 y 443 y reenvía al ingress-nginx de k3s vía NodePort.
+
+### Arquitectura de red
+
+```
+[Browser] → HTTPS 443 → [Hypervisor 138.100.15.165]
+                              │ proxy
+                              ▼
+                    [VM nginx 192.168.122.64:443]
+                              │ proxy_pass NodePort 31667
+                              ▼
+                    [k3s ingress-nginx :31667]
+                              │
+                              ▼
+                    [Pods: Keycloak, MinIO, Conectores]
+```
 
 ### Configuración automática (recomendada)
 
@@ -320,16 +350,28 @@ bash deployers/inesdata/scripts/setup-nginx-proxy.sh \
 ### Qué hace el script
 
 1. Instala nginx e iptables-persistent en la VM.
-2. Configura reglas iptables DNAT (VM → Minikube).
-3. Parchea `app.config.json` en los pods con URLs HTTPS correctas.
-4. Escribe configuración nginx con rutas por prefijo y routing por cookie
-   para que el callback OIDC llegue al pod correcto de cada conector.
-5. Establece el `frontendUrl` de Keycloak vía Admin API.
+2. Detecta k3s y configura `INGRESS_BACKEND` como `VM_IP:31667` (NodePort).
+3. Configura reglas iptables DNAT para puertos 80 y 443 hacia el nginx de la VM.
+4. Genera certificado TLS autofirmado para el hostname público.
+5. Parchea `app.config.json` en los pods con URLs HTTPS correctas.
+6. Escribe configuración nginx con rutas por prefijo, routing por cookie,
+   y `proxy_cookie_path` para que los cookies de sesión Keycloak funcionen
+   correctamente al acceder vía el prefijo `/auth/`.
+7. Establece el `frontendUrl` de Keycloak vía Admin API.
 
 El script es idempotente: se puede re-ejecutar sin problemas.
 
+### Consideración k3s: tipo de servicio NodePort
+
+En k3s, el ingress-nginx-controller se configura automáticamente como tipo
+`LoadBalancer` con la IP de la VM. Esto hace que kube-proxy intercepte el tráfico
+a los puertos 80/443 antes de que llegue al nginx de la VM. El framework corrige
+esto en Level 1 cambiando el servicio a `NodePort`.
+
 La arquitectura y URLs de acceso están documentadas en
-[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md).
+[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md)
+y el tutorial completo en
+[docs/tutorial-k3s-vm-setup.md](./docs/tutorial-k3s-vm-setup.md).
 
 ## CLI Principal
 
