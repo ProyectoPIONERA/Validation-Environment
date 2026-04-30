@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import subprocess
 import time
 import uuid
 from datetime import datetime
@@ -116,6 +117,7 @@ class KafkaEdcValidationSuite:
             "pre_run_settle_seconds": "KAFKA_EDC_PRE_RUN_SETTLE_SECONDS",
             "agreement_visibility_timeout_seconds": "KAFKA_EDC_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS",
             "message_sample_limit": "KAFKA_EDC_MESSAGE_SAMPLE_LIMIT",
+            "validation_backend": "KAFKA_EDC_VALIDATION_BACKEND",
         }
         for key, config_key in optional_mapping.items():
             value = deployer.get(config_key)
@@ -646,7 +648,117 @@ class KafkaEdcValidationSuite:
             runtime["_last_topic_ensure_method"] = "runtime_manager"
         return ensured
 
+    @staticmethod
+    def _use_kubernetes_exec_backend(runtime):
+        backend = str((runtime or {}).get("validation_backend") or "").strip().lower()
+        if backend not in {"kubernetes-exec", "k8s-exec"}:
+            return False
+        provisioner = str((runtime or {}).get("provisioner") or "").strip().lower()
+        return provisioner.startswith("kubernetes")
+
+    @staticmethod
+    def _kubernetes_exec_ids(runtime):
+        namespace = str((runtime or {}).get("k8s_namespace") or "demo").strip() or "demo"
+        service_name = str((runtime or {}).get("k8s_service_name") or "framework-kafka").strip() or "framework-kafka"
+        return namespace, service_name
+
+    def _run_kubernetes_kafka_command(self, runtime, kafka_args, input_text=None):
+        namespace, deployment_name = self._kubernetes_exec_ids(runtime)
+        command = [
+            "kubectl",
+            "exec",
+            "-n",
+            namespace,
+        ]
+        if input_text is not None:
+            command.append("-i")
+        command.extend([
+            f"deployment/{deployment_name}",
+            "--",
+            *list(kafka_args),
+        ])
+        kafka_manager = self.kafka_manager
+        runner = getattr(kafka_manager, "command_runner", None) if kafka_manager is not None else None
+        if callable(runner):
+            return runner(command, input_text=input_text)
+        return subprocess.run(
+            command,
+            text=True,
+            input=input_text,
+            capture_output=True,
+            check=False,
+        )
+
+    def _ensure_topic_with_kubernetes_exec(self, runtime, topic_name):
+        list_result = self._run_kubernetes_kafka_command(
+            runtime,
+            ["kafka-topics", "--bootstrap-server", "localhost:9092", "--list"],
+        )
+        if getattr(list_result, "returncode", 1) != 0:
+            raise RuntimeError((getattr(list_result, "stderr", "") or "").strip() or "Kafka topic list failed")
+        existing_topics = set((getattr(list_result, "stdout", "") or "").splitlines())
+        if topic_name not in existing_topics:
+            create_result = self._run_kubernetes_kafka_command(
+                runtime,
+                [
+                    "kafka-topics",
+                    "--bootstrap-server",
+                    "localhost:9092",
+                    "--create",
+                    "--if-not-exists",
+                    "--topic",
+                    topic_name,
+                    "--partitions",
+                    "1",
+                    "--replication-factor",
+                    "1",
+                ],
+            )
+            if getattr(create_result, "returncode", 1) != 0:
+                raise RuntimeError((getattr(create_result, "stderr", "") or "").strip() or "Kafka topic create failed")
+
+        verify_result = self._run_kubernetes_kafka_command(
+            runtime,
+            ["kafka-topics", "--bootstrap-server", "localhost:9092", "--list"],
+        )
+        if getattr(verify_result, "returncode", 1) != 0:
+            raise RuntimeError((getattr(verify_result, "stderr", "") or "").strip() or "Kafka topic verify failed")
+        verified_topics = set((getattr(verify_result, "stdout", "") or "").splitlines())
+        if topic_name not in verified_topics:
+            raise RuntimeError(f"Kafka topic '{topic_name}' could not be created or verified")
+        runtime["_last_topic_ensure_method"] = "kubernetes_exec"
+        return True
+
+    def _kubernetes_topic_end_offset(self, runtime, topic_name):
+        result = self._run_kubernetes_kafka_command(
+            runtime,
+            [
+                "kafka-run-class",
+                "kafka.tools.GetOffsetShell",
+                "--broker-list",
+                "localhost:9092",
+                "--topic",
+                topic_name,
+                "--time",
+                "-1",
+            ],
+        )
+        if getattr(result, "returncode", 1) != 0:
+            raise RuntimeError((getattr(result, "stderr", "") or "").strip() or "Kafka offset lookup failed")
+        for line in (getattr(result, "stdout", "") or "").splitlines():
+            parts = line.strip().split(":")
+            if len(parts) >= 3 and parts[0] == topic_name and parts[1] == "0":
+                try:
+                    return int(parts[2])
+                except (TypeError, ValueError):
+                    continue
+        return 0
+
     def _ensure_topic_with_runtime(self, runtime, topic_name):
+        if self._use_kubernetes_exec_backend(runtime):
+            if self._ensure_topic_with_kubernetes_exec(runtime, topic_name):
+                return True
+
         admin_client_class, new_topic_class = self._load_kafka_admin_classes()
         last_exc = None
         hard_restart_attempted = False
@@ -1384,14 +1496,13 @@ class KafkaEdcValidationSuite:
         upper = float(ordered[upper_index])
         return lower + (upper - lower) * weight
 
-    def _wait_for_transfer_runtime_stabilization(self, runtime, transfer_process, source_topic):
+    def _wait_for_transfer_runtime_stabilization(self, runtime, transfer_process, source_topic, destination_topic=None):
         timeout_seconds = max(int(runtime.get("startup_grace_seconds", 0)), 0)
         correlation_id = None
-        destination_topic = None
         if isinstance(transfer_process, dict):
             correlation_id = transfer_process.get("correlationId")
             data_destination = transfer_process.get("dataDestination")
-            if isinstance(data_destination, dict):
+            if destination_topic is None and isinstance(data_destination, dict):
                 destination_topic = data_destination.get("topic")
 
         if timeout_seconds <= 0:
@@ -1399,6 +1510,39 @@ class KafkaEdcValidationSuite:
                 "strategy": "disabled",
                 "seconds_waited": 0,
             }
+
+        if self._use_kubernetes_exec_backend(runtime) and destination_topic:
+            started_at = time.time()
+            probe_timeout_seconds = min(timeout_seconds, self.DEFAULT_STABILIZATION_PROBE_TIMEOUT_SECONDS)
+            try:
+                probe_result = self._wait_for_end_to_end_probe_with_kubernetes_exec(
+                    runtime,
+                    source_topic,
+                    destination_topic,
+                    timeout_seconds=probe_timeout_seconds,
+                )
+                return {
+                    "strategy": "kubernetes_exec_probe_ready",
+                    "seconds_waited": round(max(0.0, time.time() - started_at), 2),
+                    "group_id": None,
+                    "state": "ProbeRelayed",
+                    "member_count": 0,
+                    "source_topic": source_topic,
+                    "destination_topic": destination_topic,
+                    "probe": probe_result,
+                }
+            except Exception as probe_exc:
+                return {
+                    "strategy": "kubernetes_exec_probe_timeout",
+                    "seconds_waited": round(max(0.0, time.time() - started_at), 2),
+                    "correlation_id": correlation_id,
+                    "group_id": None,
+                    "last_state": None,
+                    "last_member_count": 0,
+                    "source_topic": source_topic,
+                    "destination_topic": destination_topic,
+                    "probe_error": str(probe_exc),
+                }
 
         admin_client_class, _ = self._load_kafka_admin_classes()
         stabilization_runtime = dict(runtime)
@@ -1567,6 +1711,90 @@ class KafkaEdcValidationSuite:
 
         raise RuntimeError("Kafka transfer path did not relay a probe message in time")
 
+    def _produce_kubernetes_exec_message(self, runtime, topic, payload):
+        result = self._run_kubernetes_kafka_command(
+            runtime,
+            ["kafka-console-producer", "--bootstrap-server", "localhost:9092", "--topic", topic],
+            input_text=json.dumps(payload, separators=(",", ":")) + "\n",
+        )
+        if getattr(result, "returncode", 1) != 0:
+            raise RuntimeError((getattr(result, "stderr", "") or "").strip() or "Kafka console producer failed")
+
+    def _consume_kubernetes_exec_messages(self, runtime, topic, timeout_ms=2000, max_messages=50, offset=None):
+        kafka_args = [
+            "kafka-console-consumer",
+            "--bootstrap-server",
+            "localhost:9092",
+            "--topic",
+            topic,
+        ]
+        if offset is None:
+            kafka_args.append("--from-beginning")
+        else:
+            kafka_args.extend(["--partition", "0", "--offset", str(int(offset))])
+        kafka_args.extend([
+            "--timeout-ms",
+            str(int(timeout_ms)),
+            "--max-messages",
+            str(int(max_messages)),
+        ])
+        result = self._run_kubernetes_kafka_command(runtime, kafka_args)
+        output = getattr(result, "stdout", "") or ""
+        messages = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                decoded = self._decode_message_value(line.encode("utf-8"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if isinstance(decoded, dict):
+                messages.append(decoded)
+        return messages
+
+    def _wait_for_end_to_end_probe_with_kubernetes_exec(self, runtime, source_topic, destination_topic, *, timeout_seconds=None):
+        if timeout_seconds is None:
+            timeout_seconds = runtime.get("startup_grace_seconds", 0)
+        timeout_seconds = max(int(timeout_seconds), 0)
+        if timeout_seconds <= 0:
+            return {
+                "status": "skipped",
+                "attempts": 0,
+                "seconds_waited": 0,
+            }
+
+        started_at = time.time()
+        deadline = started_at + timeout_seconds
+        attempts = 0
+        poll_timeout_ms = max(500, min(2000, int(runtime.get("consumer_request_timeout_ms", 60000))))
+
+        while time.time() <= deadline:
+            attempts += 1
+            probe_payload = {
+                "message_id": f"kafka-transfer-probe-{self.uuid_factory()}",
+                "producer_timestamp_ms": self.time_provider(),
+                "probe": True,
+            }
+            self._produce_kubernetes_exec_message(runtime, source_topic, probe_payload)
+            messages = self._consume_kubernetes_exec_messages(
+                runtime,
+                destination_topic,
+                timeout_ms=poll_timeout_ms,
+                max_messages=100,
+            )
+            for payload in messages:
+                if payload.get("message_id") == probe_payload["message_id"]:
+                    return {
+                        "status": "ready",
+                        "attempts": attempts,
+                        "seconds_waited": round(max(0.0, time.time() - started_at), 2),
+                        "probe_message_id": probe_payload["message_id"],
+                    }
+            time.sleep(max(1, int(runtime.get("poll_interval_seconds", 1))))
+
+        raise RuntimeError("Kafka transfer path did not relay a probe message in time")
+
     def _open_probe_clients(self, runtime, destination_topic):
         producer_class, consumer_class = self._load_kafka_classes()
         producer_kwargs = self._build_kafka_client_kwargs(runtime)
@@ -1588,6 +1816,14 @@ class KafkaEdcValidationSuite:
         return producer, consumer, group_id
 
     def _measure_transfer_latency(self, runtime, source_topic, destination_topic, probe_result=None):
+        if self._use_kubernetes_exec_backend(runtime):
+            return self._measure_transfer_latency_with_kubernetes_exec(
+                runtime,
+                source_topic,
+                destination_topic,
+                probe_result=probe_result,
+            )
+
         producer = None
         consumer = None
         group_id = None
@@ -1696,6 +1932,110 @@ class KafkaEdcValidationSuite:
             "message_samples": message_samples,
         }
 
+    def _measure_transfer_latency_with_kubernetes_exec(self, runtime, source_topic, destination_topic, probe_result=None):
+        message_count = int(runtime["message_count"])
+        message_sample_limit = max(int(runtime.get("message_sample_limit", 5)), 0)
+        produced_count = 0
+        consumed_count = 0
+        invalid_latency_count = 0
+        latencies_ms = []
+        message_samples = []
+        sample_ids = set()
+        expected_ids = set()
+
+        if probe_result is None:
+            probe_result = self._wait_for_end_to_end_probe_with_kubernetes_exec(
+                runtime,
+                source_topic,
+                destination_topic,
+            )
+
+        destination_start_offset = self._kubernetes_topic_end_offset(runtime, destination_topic)
+        start_ms = self.time_provider()
+        for index in range(message_count):
+            message_id = f"kafka-transfer-{index}-{self.uuid_factory()}"
+            payload = {
+                "message_id": message_id,
+                "producer_timestamp_ms": self.time_provider(),
+            }
+            expected_ids.add(message_id)
+            if len(message_samples) < message_sample_limit:
+                message_samples.append(
+                    {
+                        "message_id": message_id,
+                        "source_topic": source_topic,
+                        "destination_topic": destination_topic,
+                        "status": "produced",
+                    }
+                )
+                sample_ids.add(message_id)
+            self._produce_kubernetes_exec_message(runtime, source_topic, payload)
+            produced_count += 1
+
+        deadline = time.time() + int(runtime["consumer_poll_timeout_seconds"])
+        while time.time() <= deadline and consumed_count < message_count:
+            messages = self._consume_kubernetes_exec_messages(
+                runtime,
+                destination_topic,
+                timeout_ms=2000,
+                max_messages=max(1, message_count),
+                offset=destination_start_offset,
+            )
+            for payload in messages:
+                if payload.get("probe"):
+                    continue
+                message_id = payload.get("message_id")
+                if message_id not in expected_ids:
+                    continue
+                expected_ids.remove(message_id)
+                produced_at = payload.get("producer_timestamp_ms")
+                consumed_at = self.time_provider()
+                try:
+                    latency = float(consumed_at) - float(produced_at)
+                except (TypeError, ValueError):
+                    invalid_latency_count += 1
+                    continue
+                if math.isnan(latency) or math.isinf(latency) or latency < 0:
+                    invalid_latency_count += 1
+                    continue
+                if message_id in sample_ids:
+                    for sample in message_samples:
+                        if sample.get("message_id") == message_id:
+                            sample["status"] = "consumed"
+                            sample["latency_ms"] = round(latency, 2)
+                            break
+                latencies_ms.append(latency)
+                consumed_count += 1
+                if consumed_count >= message_count:
+                    break
+            if consumed_count >= message_count:
+                break
+            time.sleep(0.5)
+
+        duration_seconds = max((self.time_provider() - start_ms) / 1000.0, 0.001)
+        if invalid_latency_count > 0:
+            raise RuntimeError(f"Detected {invalid_latency_count} invalid Kafka latency samples")
+        if not latencies_ms:
+            raise RuntimeError("No Kafka messages were consumed through the EDC transfer")
+
+        return {
+            "status": "completed",
+            "messages_produced": produced_count,
+            "messages_consumed": consumed_count,
+            "source_topic": source_topic,
+            "destination_topic": destination_topic,
+            "consumer_group_id": "kubernetes-exec",
+            "average_latency_ms": round(sum(latencies_ms) / len(latencies_ms), 2),
+            "min_latency_ms": round(min(latencies_ms), 2),
+            "max_latency_ms": round(max(latencies_ms), 2),
+            "p50_latency_ms": round(self._compute_percentile(latencies_ms, 0.50), 2),
+            "p95_latency_ms": round(self._compute_percentile(latencies_ms, 0.95), 2),
+            "p99_latency_ms": round(self._compute_percentile(latencies_ms, 0.99), 2),
+            "throughput_messages_per_second": round(consumed_count / duration_seconds, 2),
+            "probe": probe_result,
+            "message_samples": message_samples,
+        }
+
     @staticmethod
     def _pair_artifact_path(experiment_dir, provider, consumer):
         artifact_dir = os.path.join(experiment_dir, "kafka_transfer")
@@ -1789,6 +2129,7 @@ class KafkaEdcValidationSuite:
             "bootstrap_servers": runtime.get("host_bootstrap_servers") or runtime.get("bootstrap_servers"),
             "cluster_bootstrap_servers": runtime.get("cluster_bootstrap_servers"),
             "broker_source": broker_source,
+            "validation_backend": runtime.get("validation_backend") or "python-client",
             "source_topic": source_topic,
             "destination_topic": destination_topic,
             "steps": [],
@@ -1964,6 +2305,7 @@ class KafkaEdcValidationSuite:
                 runtime,
                 transfer_result["raw"],
                 source_topic,
+                destination_topic=destination_topic,
             )
             stabilization_probe = stabilization.get("probe")
             if stabilization.get("strategy") != "disabled":

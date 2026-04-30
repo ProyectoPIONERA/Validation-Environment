@@ -351,6 +351,45 @@ class _FakeKafkaManager:
         return False
 
 
+class _FakeKubernetesKafkaManager(_FakeKafkaManager):
+    def __init__(self):
+        super().__init__()
+        self.cluster_bootstrap_servers = "framework-kafka.demoedc.svc.cluster.local:9092"
+        self.commands = []
+
+    def command_runner(self, command, input_text=None):
+        self.commands.append({"command": list(command), "input_text": input_text})
+        if "kafka-topics" in command:
+            if "--list" in command:
+                return mock.Mock(returncode=0, stdout="\n".join(sorted(_FakeBrokerState.topics)) + "\n", stderr="")
+            if "--create" in command:
+                topic = command[command.index("--topic") + 1]
+                _FakeBrokerState.topics.setdefault(topic, [])
+                return mock.Mock(returncode=0, stdout="", stderr="")
+        if "kafka-console-producer" in command:
+            topic = command[command.index("--topic") + 1]
+            for line in (input_text or "").splitlines():
+                value = line.encode("utf-8")
+                _FakeBrokerState.topics.setdefault(topic, []).append(value)
+                destination_topic = _FakeBrokerState.routes.get(topic)
+                if destination_topic:
+                    _FakeBrokerState.topics.setdefault(destination_topic, []).append(value)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        if "kafka-console-consumer" in command:
+            topic = command[command.index("--topic") + 1]
+            offset = int(command[command.index("--offset") + 1]) if "--offset" in command else 0
+            messages = [
+                value.decode("utf-8") if isinstance(value, bytes) else str(value)
+                for value in _FakeBrokerState.topics.get(topic, [])[offset:]
+            ]
+            return mock.Mock(returncode=0, stdout="\n".join(messages) + ("\n" if messages else ""), stderr="")
+        if "kafka-run-class" in command and "kafka.tools.GetOffsetShell" in command:
+            topic = command[command.index("--topic") + 1]
+            offset = len(_FakeBrokerState.topics.get(topic, []))
+            return mock.Mock(returncode=0, stdout=f"{topic}:0:{offset}\n", stderr="")
+        return mock.Mock(returncode=1, stdout="", stderr=f"Unexpected command: {' '.join(command)}")
+
+
 class _StepwiseKafkaManager(_FakeKafkaManager):
     def __init__(self, responses, *, started_by_framework=True, provisioning_mode="kubernetes"):
         super().__init__()
@@ -516,6 +555,76 @@ class KafkaEdcValidationSuiteTests(unittest.TestCase):
             self.assertEqual(session.destination_bootstrap_servers, "broker-cluster:29092")
             self.assertIn("transfer-1", session.terminated_transfers)
             self.assertIn("transfer-1", session.deprovisioned_transfers)
+
+    def test_run_pair_uses_kubernetes_exec_backend_for_framework_kubernetes_broker(self):
+        counter = itertools.count(2000, 5)
+        session = _FakeSession()
+        kafka_manager = _FakeKubernetesKafkaManager()
+        credentials = {
+            "conn-provider": {"connector_user": {"user": "provider-user", "passwd": "provider-pass"}},
+            "conn-consumer": {"connector_user": {"user": "consumer-user", "passwd": "consumer-pass"}},
+        }
+
+        suite = KafkaEdcValidationSuite(
+            load_connector_credentials=lambda connector: credentials[connector],
+            load_deployer_config=lambda: {"KC_URL": "http://keycloak.local"},
+            kafka_runtime_loader=lambda: {
+                "bootstrap_servers": "127.0.0.1:39092",
+                "cluster_bootstrap_servers": "framework-kafka.demoedc.svc.cluster.local:9092",
+                "provisioner": "kubernetes",
+                "validation_backend": "kubernetes-exec",
+                "k8s_namespace": "demoedc",
+                "k8s_service_name": "framework-kafka",
+                "topic_name": "edc-kafka-suite",
+                "message_count": 2,
+                "security_protocol": "PLAINTEXT",
+                "consumer_poll_timeout_seconds": 5,
+                "startup_grace_seconds": 5,
+                "poll_interval_seconds": 1,
+            },
+            ds_domain_resolver=lambda: "example.local",
+            ds_name_loader=lambda: "dataspace",
+            kafka_manager=kafka_manager,
+            session=session,
+            time_provider=lambda: float(next(counter)),
+            uuid_factory=iter(["k8scase", "suffix", "probe", "id1", "id2", "id3", "id4"]).__next__,
+        )
+
+        result = suite.run_pair("conn-provider", "conn-consumer")
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["validation_backend"], "kubernetes-exec")
+        self.assertEqual(result["metrics"]["messages_produced"], 2)
+        self.assertEqual(result["metrics"]["messages_consumed"], 2)
+        self.assertEqual(result["metrics"]["consumer_group_id"], "kubernetes-exec")
+        self.assertEqual(result["steps"][0]["method"], "kubernetes_exec")
+        self.assertEqual(result["steps"][1]["method"], "kubernetes_exec")
+        stabilization_steps = [
+            step for step in result["steps"]
+            if step.get("name") == "wait_for_transfer_runtime_stabilization"
+        ]
+        self.assertEqual(stabilization_steps[0]["strategy"], "kubernetes_exec_probe_ready")
+        self.assertEqual(session.asset_bootstrap_servers, "framework-kafka.demoedc.svc.cluster.local:9092")
+        self.assertEqual(session.destination_bootstrap_servers, "framework-kafka.demoedc.svc.cluster.local:9092")
+        self.assertEqual(_FakeAdminClient.created_topics, [])
+        self.assertTrue(
+            any(
+                command["command"][:5] == ["kubectl", "exec", "-n", "demoedc", "deployment/framework-kafka"]
+                for command in kafka_manager.commands
+            )
+        )
+        self.assertTrue(
+            any(
+                "-i" in command["command"] and "kafka-console-producer" in command["command"]
+                for command in kafka_manager.commands
+            )
+        )
+        self.assertTrue(
+            any(
+                "--offset" in command["command"] and "kafka-console-consumer" in command["command"]
+                for command in kafka_manager.commands
+            )
+        )
 
     def test_run_pair_waits_for_contract_agreement_visibility_before_transfer(self):
         session = _DelayedAgreementSession()
