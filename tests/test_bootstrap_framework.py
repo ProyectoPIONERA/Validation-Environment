@@ -229,8 +229,12 @@ class BootstrapFrameworkTests(unittest.TestCase):
         with open(os.path.join(root, "package.json"), "w", encoding="utf-8") as handle:
             handle.write('{"private": true}\n')
         os.remove(os.path.join(fake_bin, "java"))
+        for command_name in ("bash", "cat", "chmod", "dirname", "mkdir", "uname"):
+            target = shutil.which(command_name)
+            if target and not os.path.exists(os.path.join(fake_bin, command_name)):
+                os.symlink(target, os.path.join(fake_bin, command_name))
         env = dict(os.environ)
-        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+        env["PATH"] = fake_bin
 
         result = subprocess.run(
             [
