@@ -65,7 +65,7 @@ hasta que la ruta Kubernetes correspondiente esté implementada para cada nivel.
 1. Clona el repositorio:
 
 ```bash
-git clone --branch feature/new-pionera-automation --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
+git clone --branch feature/new-pionera-automation-kubernetes --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
 cd Validation-Environment
 ```
 
