@@ -210,7 +210,10 @@ El diagrama local de referencia está disponible en [Inicio rápido](./getting-s
 
 ## VM Single
 
-`vm-single` representa una máquina virtual respaldada por Kubernetes.
+`vm-single` representa una máquina virtual respaldada por Kubernetes. Para que
+el quickstart sea reproducible, `Level 1` recrea por defecto el cluster
+Minikube gestionado por el framework dentro de la VM y después ejecuta los
+checks de acceso, ingress, storage y permisos.
 
 Estado actual del framework:
 
@@ -226,6 +229,10 @@ PIONERA_VM_SINGLE_IP
 PIONERA_VM_SINGLE_ADDRESS
 PIONERA_HOSTS_ADDRESS
 PIONERA_INGRESS_EXTERNAL_IP
+PIONERA_MINIKUBE_DRIVER
+PIONERA_MINIKUBE_CPUS
+PIONERA_MINIKUBE_MEMORY
+PIONERA_MINIKUBE_PROFILE
 ```
 
 Ejemplo:

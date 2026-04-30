@@ -50,6 +50,10 @@ TOPOLOGY_OVERLAY_KEYS = {
             "VM_CONNECTORS_IP",
             "VM_COMPONENTS_IP",
             "INGRESS_EXTERNAL_IP",
+            "MINIKUBE_DRIVER",
+            "MINIKUBE_CPUS",
+            "MINIKUBE_MEMORY",
+            "MINIKUBE_PROFILE",
         }
     ),
     "vm-distributed": frozenset(

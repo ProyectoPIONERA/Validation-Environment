@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import getpass
 import importlib
 import inspect
 import json
@@ -118,6 +119,16 @@ def _env_flag(name, default=False):
     if raw_value is None:
         return default
     return str(raw_value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _argv_has_topology_option(argv):
+    args = list(sys.argv[1:] if argv is None else argv)
+    for index, value in enumerate(args):
+        if value == "--topology":
+            return index + 1 < len(args)
+        if value.startswith("--topology="):
+            return True
+    return False
 
 
 def _resolve_level6_validation_mode(mode=None, topology="local", env=None):
@@ -3359,6 +3370,10 @@ def _should_sync_deployer_hosts():
     return _env_flag("PIONERA_SYNC_HOSTS", default=False)
 
 
+def _should_update_hosts_with_sudo():
+    return _env_flag("PIONERA_HOSTS_USE_SUDO", default=False)
+
+
 def _deployer_hosts_address_override():
     value = str(os.getenv("PIONERA_HOSTS_ADDRESS") or "").strip()
     return value or None
@@ -3981,11 +3996,13 @@ def _sync_deployer_hosts_if_enabled(context, levels=None):
         hosts_file,
         blocks,
         config=dict(getattr(context, "config", {}) or {}),
+        use_sudo=_should_update_hosts_with_sudo(),
     )
     return {
         "status": "updated" if result["changed"] else "unchanged",
         "hosts_file": result["hosts_file"],
         "changed": result["changed"],
+        "elevated": result.get("elevated", False),
         "blocks": result["blocks"],
         "skipped_existing": result.get("skipped_existing", {}),
         "legacy_external_hostnames": result.get("legacy_external_hostnames", []),
@@ -4725,6 +4742,116 @@ def _flatten_url_map(urls, prefix=None):
     return flattened
 
 
+def _collect_url_hostnames(urls):
+    hostnames = []
+    seen = set()
+    for _label, value in _flatten_url_map(urls):
+        parsed = urllib.parse.urlparse(str(value or ""))
+        hostname = str(parsed.hostname or "").strip()
+        if hostname and hostname not in seen:
+            seen.add(hostname)
+            hostnames.append(hostname)
+    return hostnames
+
+
+def _collect_browser_urls(urls):
+    browser_urls = []
+    seen = set()
+    for _label, value in _flatten_url_map(urls):
+        text = str(value or "").strip()
+        parsed = urllib.parse.urlparse(text)
+        if parsed.scheme in {"http", "https"} and parsed.netloc and text not in seen:
+            seen.add(text)
+            browser_urls.append(text)
+    return browser_urls
+
+
+def _detect_vm_access_ip(minikube_ip=None):
+    minikube_prefix = ""
+    if minikube_ip and "." in minikube_ip:
+        minikube_prefix = ".".join(str(minikube_ip).split(".")[:3]) + "."
+
+    candidates = []
+    for token in _command_stdout(["hostname", "-I"]).split():
+        candidate = _normalized_topology_address(token)
+        if not candidate or candidate.startswith("127."):
+            continue
+        if candidate.startswith("172.17."):
+            continue
+        if minikube_prefix and candidate.startswith(minikube_prefix):
+            continue
+        candidates.append(candidate)
+
+    if candidates:
+        return candidates[0]
+    for token in _command_stdout(["hostname", "-I"]).split():
+        candidate = _normalized_topology_address(token)
+        if candidate and not candidate.startswith("127."):
+            return candidate
+    return ""
+
+
+def _build_vm_single_local_browser_access(urls):
+    hostnames = _collect_url_hostnames(urls)
+    browser_urls = _collect_browser_urls(urls)
+    if not hostnames and not browser_urls:
+        return {}
+
+    minikube_ip = _normalized_topology_address(_command_stdout(["minikube", "ip"]))
+    vm_ip = _detect_vm_access_ip(minikube_ip=minikube_ip)
+    ssh_user = os.getenv("USER") or getpass.getuser()
+    tunnel_target = minikube_ip or "<minikube-ip>"
+    vm_target = vm_ip or "<vm-ip>"
+    ssh_target = f"{ssh_user}@{vm_target}" if ssh_user else f"<user>@{vm_target}"
+
+    return {
+        "strategy": "ssh-tunnel",
+        "vm_ip": vm_ip,
+        "minikube_ip": minikube_ip,
+        "ssh_user": ssh_user,
+        "ssh_target": ssh_target,
+        "tunnel_command_80": f"sudo ssh -N -L 127.0.0.1:80:{tunnel_target}:80 {ssh_target}",
+        "tunnel_command_8080": f"ssh -N -L 127.0.0.1:8080:{tunnel_target}:80 {ssh_target}",
+        "hosts_entries": [f"127.0.0.1 {hostname}" for hostname in hostnames],
+        "browser_urls": browser_urls,
+    }
+
+
+def _append_local_browser_access_lines(lines, access):
+    if not isinstance(access, dict) or not access:
+        return
+
+    lines.append("Local Browser Access:")
+    if access.get("vm_ip"):
+        lines.append(f"- VM IP: {access['vm_ip']}")
+    if access.get("minikube_ip"):
+        lines.append(f"- Minikube IP: {access['minikube_ip']}")
+    if access.get("ssh_user"):
+        lines.append(f"- SSH user: {access['ssh_user']}")
+
+    command_80 = access.get("tunnel_command_80")
+    command_8080 = access.get("tunnel_command_8080")
+    if command_80:
+        lines.append("- SSH tunnel for local port 80:")
+        lines.append(f"  {command_80}")
+    if command_8080:
+        lines.append("- SSH tunnel without sudo:")
+        lines.append(f"  {command_8080}")
+
+    hosts_entries = [str(value or "").strip() for value in access.get("hosts_entries") or [] if str(value or "").strip()]
+    if hosts_entries:
+        lines.append("- Local hosts entries:")
+        for entry in hosts_entries:
+            lines.append(f"  {entry}")
+
+    browser_urls = [str(value or "").strip() for value in access.get("browser_urls") or [] if str(value or "").strip()]
+    if browser_urls:
+        lines.append("- Browser URLs:")
+        for url in browser_urls:
+            lines.append(f"  {url}")
+        lines.append("  If you use the 8080 tunnel, add :8080 to the hostname in these URLs.")
+
+
 def _append_url_lines(lines, urls, heading="URLs", multiline=False):
     flattened = _flatten_url_map(urls)
     if not flattened:
@@ -5003,7 +5130,7 @@ def run_available_access_urls(adapter, deployer_name=None, deployer_registry=Non
         if connector_urls:
             urls["connectors"] = connector_urls
 
-    return {
+    result = {
         "status": "available",
         "adapter": resolved_deployer_name,
         "topology": topology,
@@ -5011,6 +5138,11 @@ def run_available_access_urls(adapter, deployer_name=None, deployer_registry=Non
         "access_urls_view": True,
         "urls": urls,
     }
+    if normalize_topology(topology) == "vm-single":
+        local_browser_access = _build_vm_single_local_browser_access(urls)
+        if local_browser_access:
+            result["local_browser_access"] = local_browser_access
+    return result
 
 
 def _build_recreate_dataspace_plan(adapter, context):
@@ -6506,6 +6638,7 @@ def _interactive_ensure_hosts_ready_for_levels(
     environment_overrides = {
         "PIONERA_SYNC_HOSTS": "true",
         "PIONERA_HOSTS_FILE": readiness["hosts_file"],
+        "PIONERA_HOSTS_USE_SUDO": "true",
     }
 
     try:
@@ -6890,6 +7023,7 @@ def _print_action_result(result):
             payload.get("urls"),
             multiline=bool(payload.get("access_urls_view")),
         )
+        _append_local_browser_access_lines(lines, payload.get("local_browser_access"))
         _append_config_migration_warning_lines(lines, payload.get("config_migration_warnings"))
         _append_if_value(lines, "Next step", payload.get("next_step"))
         return lines
@@ -6982,12 +7116,23 @@ def run_interactive_menu(
     experiment_storage=ExperimentStorage,
     kafka_manager_cls=KafkaManager,
     topology="local",
+    prompt_initial_topology=False,
 ):
     """Run a guided menu equivalent to the legacy numbered-level workflow."""
     registry = adapter_registry or ADAPTER_REGISTRY
     current_adapter = None
     if len(registry) == 1:
         current_adapter = sorted(registry)[0]
+
+    if prompt_initial_topology:
+        selected_topology = _select_topology_interactive(
+            topology,
+            available_topologies=SUPPORTED_TOPOLOGIES,
+        )
+        topology = selected_topology
+        print(f"Active topology set to {topology}.")
+        if normalize_topology(topology) == "vm-single":
+            _interactive_offer_vm_single_address_configuration(required=False)
 
     while True:
         _print_interactive_menu(current_adapter, adapter_registry=registry, topology=topology)
@@ -7201,7 +7346,7 @@ def run_interactive_menu(
                     continue
                 current_adapter = selected_adapter
                 if not _interactive_confirm(
-                    f"Run all levels 1-6 with adapter {current_adapter} for Levels 3-6?",
+                    f"Run all levels 1-6 with adapter {current_adapter} for Levels 3-6 (topology: {topology})?",
                     default=False,
                 ):
                     print("Full level execution cancelled.")
@@ -7237,7 +7382,7 @@ def run_interactive_menu(
                     level_adapter = selected_adapter
                     level_scope = f" for {selected_adapter}"
                 if not _interactive_confirm(
-                    f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]}{level_scope}?",
+                    f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]}{level_scope} (topology: {topology})?",
                     default=False,
                 ):
                     print(f"Level {level_id} cancelled.")
@@ -7437,6 +7582,7 @@ def main(
     parser = create_parser(adapter_registry=adapter_registry)
     args = parser.parse_args(argv)
     registry = adapter_registry or ADAPTER_REGISTRY
+    topology_option_provided = _argv_has_topology_option(argv)
 
     if args.iterations < 1:
         parser.error("--iterations must be greater than or equal to 1")
@@ -7454,6 +7600,7 @@ def main(
                 experiment_storage=experiment_storage,
                 kafka_manager_cls=kafka_manager_cls,
                 topology=args.topology,
+                prompt_initial_topology=not topology_option_provided,
             )
         parser.print_help()
         return 1
@@ -7469,6 +7616,7 @@ def main(
             experiment_storage=experiment_storage,
             kafka_manager_cls=kafka_manager_cls,
             topology=args.topology,
+            prompt_initial_topology=sys.stdin.isatty() and not topology_option_provided,
         )
 
     if args.adapter == "list":

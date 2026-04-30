@@ -1,9 +1,10 @@
 # 14. Entorno Productivo de Validacion
 
 El entorno productivo de validacion se representa con topologias Kubernetes
-distintas al modo local. El modo local usa `Minikube`; las topologias VM usan
-Kubernetes directamente y mantienen la misma separacion por niveles del
-framework.
+distintas al modo local. El modo local usa `Minikube` en la maquina de
+desarrollo; `vm-single` usa un Minikube gestionado dentro de la VM para hacer
+reproducible el quickstart; y las topologias VM mantienen la misma separacion
+por niveles del framework.
 
 ![PIONERA production validation environment](<./pionera production validation environment.png>)
 

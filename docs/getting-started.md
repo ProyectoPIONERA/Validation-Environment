@@ -14,7 +14,10 @@ Para ejecución local, el framework espera:
 - cliente PostgreSQL;
 - permisos para actualizar el fichero `hosts` del sistema cuando la sincronización de hosts esté habilitada.
 
-La topología local usa Minikube. Las topologías VM usan Kubernetes directamente y actualmente se exponen de forma segura mediante contexto de topología, planificación de hosts y guardas de ejecución cuando la operación VM real aún no está implementada.
+La topología local usa Minikube en la máquina de desarrollo. La topología
+`vm-single` usa Minikube gestionado dentro de la VM y `Level 1` lo recrea para
+mantener una configuración reproducible. `vm-distributed` sigue modelada como
+topología planificada con guardas de ejecución.
 
 ## Vista Local
 
@@ -27,7 +30,22 @@ El siguiente diagrama resume el entorno local de validación:
 Desde la raíz del repositorio:
 
 ```bash
+node --version
+npm --version
 bash scripts/bootstrap_framework.sh
+```
+
+`npm` es obligatorio porque el framework instala Newman y Playwright para las
+validaciones funcionales. Java 17+ es obligatorio para construir las imágenes
+locales de conectores EDC/INESData que después se cargan en Minikube. En una VM
+Ubuntu nueva, el bootstrap intenta instalar Node.js con `npm` y OpenJDK 17
+automáticamente mediante `apt-get` cuando faltan. Si usas `--without-system-deps`
+o tu entorno no permite instalar paquetes del sistema, instálalos antes del
+bootstrap:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nodejs npm openjdk-17-jdk
 ```
 
 El bootstrap requiere Python `3.10+`. Si `python3` apunta a una versión más
@@ -185,6 +203,10 @@ El menú expone seis niveles:
 - `Level 6`: ejecuta validaciones.
 
 Para un despliegue local desde cero, ejecuta los niveles secuencialmente del `1` al `6`, o usa la opción `0` del menú.
+
+En una terminal interactiva, `python3 main.py` pregunta primero la topología
+activa y después muestra el menú. Usa `python3 main.py menu --topology local` o
+`python3 main.py menu --topology vm-single` si quieres entrar directamente.
 
 La referencia completa del menú está en [Referencia del menú](./menu-reference.md).
 

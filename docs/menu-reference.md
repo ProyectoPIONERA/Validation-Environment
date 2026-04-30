@@ -133,6 +133,11 @@ La salida puede incluir:
 - URLs de portales, conectores y componentes
 - `MinIO Bucket` por conector cuando aplique
 
+En topología `vm-single`, la salida añade una sección `Local Browser Access`
+con los valores detectados automáticamente desde la VM: IP candidata de la VM,
+IP de Minikube, usuario SSH, comando de túnel SSH, entradas para el fichero
+`hosts` de la máquina local y URLs que puedes abrir en tu navegador local.
+
 `M - Run metrics / benchmarks`
 
 Ejecuta métricas o benchmarks independientes sobre el adapter elegido para esa operación. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.

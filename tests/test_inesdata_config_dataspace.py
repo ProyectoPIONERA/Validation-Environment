@@ -182,6 +182,7 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
                 "cpus": "4",
                 "memory": "8192",
                 "profile": "ubuntu-vm",
+                "local_resource_profile": "",
             },
         )
 

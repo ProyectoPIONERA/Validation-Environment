@@ -8,7 +8,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
     """Neutral facade for shared Level 1-2 foundation logic."""
 
     def setup_cluster_preflight(self, topology=LOCAL_TOPOLOGY):
-        """Validate an externally managed cluster before VM-based execution."""
+        """Prepare and validate the cluster required by VM-based execution."""
         normalized_topology = normalize_topology(topology)
         if normalized_topology == LOCAL_TOPOLOGY:
             return self.setup_cluster()
@@ -17,13 +17,12 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 f"Level 1 preflight is not implemented for topology '{normalized_topology}' yet."
             )
 
-        self.announce_level(1, "CLUSTER PREFLIGHT")
-        self.ensure_unix_environment()
-
         print(
-            "Topology 'vm-single' uses an existing Kubernetes cluster.\n"
-            "Level 1 will run a preflight only and will not create or reset Minikube."
+            "Topology 'vm-single' uses a Kubernetes cluster managed on the VM.\n"
+            "Level 1 will recreate the managed Minikube cluster to keep runs reproducible."
         )
+        self.setup_cluster()
+        print("Managed vm-single cluster recreated. Running cluster preflight checks.")
 
         checks = []
 
@@ -118,10 +117,10 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
         self.complete_level(1)
         return {
             "status": "ready",
-            "mode": "preflight",
+            "mode": "managed-recreate",
             "topology": normalized_topology,
             "current_context": current_context,
-            "cluster_creation": "skipped",
+            "cluster_creation": "recreated",
             "checks": checks,
         }
 

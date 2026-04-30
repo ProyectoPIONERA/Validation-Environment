@@ -462,6 +462,48 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("- Public Portal Login:", output)
         self.assertIn("  http://demo.dev.ds.dataspaceunit.upm", output)
 
+    def test_action_result_prints_vm_single_local_browser_access(self):
+        payload = {
+            "status": "available",
+            "adapter": "edc",
+            "topology": "vm-single",
+            "dataspace": "demoedc",
+            "access_urls_view": True,
+            "urls": {
+                "registration_service": "http://registration-service-demoedc.dev.ds.dataspaceunit.upm",
+            },
+            "local_browser_access": {
+                "vm_ip": "192.168.122.134",
+                "minikube_ip": "192.168.49.2",
+                "ssh_user": "pionera",
+                "tunnel_command_80": (
+                    "sudo ssh -N -L 127.0.0.1:80:192.168.49.2:80 "
+                    "pionera@192.168.122.134"
+                ),
+                "tunnel_command_8080": (
+                    "ssh -N -L 127.0.0.1:8080:192.168.49.2:80 "
+                    "pionera@192.168.122.134"
+                ),
+                "hosts_entries": [
+                    "127.0.0.1 registration-service-demoedc.dev.ds.dataspaceunit.upm",
+                ],
+                "browser_urls": [
+                    "http://registration-service-demoedc.dev.ds.dataspaceunit.upm",
+                ],
+            },
+        }
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            main._print_action_result(payload)
+
+        output = stdout.getvalue()
+        self.assertIn("Local Browser Access:", output)
+        self.assertIn("VM IP: 192.168.122.134", output)
+        self.assertIn("Minikube IP: 192.168.49.2", output)
+        self.assertIn("sudo ssh -N -L 127.0.0.1:80:192.168.49.2:80 pionera@192.168.122.134", output)
+        self.assertIn("127.0.0.1 registration-service-demoedc.dev.ds.dataspaceunit.upm", output)
+
     def test_kafka_transfer_results_are_printed_with_neutral_summary(self):
         results = [
             {
@@ -1150,6 +1192,68 @@ class InesdataPortalReadinessTests(unittest.TestCase):
             "http://registration-service-demo.dev.ds.dataspaceunit.upm",
         )
 
+    def test_run_available_access_urls_includes_vm_single_local_browser_access(self):
+        adapter = FakeAdapter()
+        fake_context = types.SimpleNamespace(
+            config={"DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm"},
+            dataspace_name="demoedc",
+            environment="DEV",
+            connectors=["conn-citycounciledc-demoedc"],
+            components=[],
+        )
+
+        def fake_command_stdout(command):
+            if command == ["minikube", "ip"]:
+                return "192.168.49.2"
+            if command == ["hostname", "-I"]:
+                return "192.168.122.134 172.17.0.1 192.168.49.1"
+            return ""
+
+        with mock.patch.object(
+            main,
+            "_resolve_deployer_context",
+            return_value=("edc", fake_context),
+        ), mock.patch(
+            "deployers.edc.bootstrap.common_access_urls",
+            return_value={
+                "keycloak_admin_console": "http://admin.auth.dev.ed.dataspaceunit.upm/admin",
+            },
+        ), mock.patch(
+            "deployers.edc.bootstrap.build_connector_access_urls",
+            return_value={
+                "connector_ingress": "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm",
+                "edc_dashboard_login": "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm/edc-dashboard/",
+            },
+        ), mock.patch(
+            "deployers.edc.bootstrap.dataspace_domain_base",
+            return_value="dev.ds.dataspaceunit.upm",
+        ), mock.patch(
+            "deployers.edc.bootstrap.access_protocol",
+            return_value="http",
+        ), mock.patch.object(
+            main,
+            "_command_stdout",
+            side_effect=fake_command_stdout,
+        ), mock.patch.dict(os.environ, {"USER": "pionera"}, clear=False):
+            result = main.run_available_access_urls(adapter, deployer_name="edc", topology="vm-single")
+
+        access = result["local_browser_access"]
+        self.assertEqual(access["vm_ip"], "192.168.122.134")
+        self.assertEqual(access["minikube_ip"], "192.168.49.2")
+        self.assertEqual(access["ssh_user"], "pionera")
+        self.assertEqual(
+            access["tunnel_command_80"],
+            "sudo ssh -N -L 127.0.0.1:80:192.168.49.2:80 pionera@192.168.122.134",
+        )
+        self.assertIn(
+            "127.0.0.1 conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm",
+            access["hosts_entries"],
+        )
+        self.assertIn(
+            "http://conn-citycounciledc-demoedc.dev.ds.dataspaceunit.upm",
+            access["browser_urls"],
+        )
+
 
 class NoConnectorDeployAdapter:
     def deploy_infrastructure(self):
@@ -1490,6 +1594,34 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("usage:", stdout.getvalue().lower())
 
+    def test_no_argument_interactive_entry_prompts_for_topology_before_menu(self):
+        stdout = io.StringIO()
+        with mock.patch.object(sys, "argv", ["main.py"]), mock.patch.object(
+            sys.stdin,
+            "isatty",
+            return_value=True,
+        ), mock.patch("builtins.input", side_effect=["2", "Q"]), mock.patch.object(
+            main,
+            "_interactive_offer_vm_single_address_configuration",
+            return_value=True,
+        ) as vm_single_prompt, contextlib.redirect_stdout(stdout):
+            result = main.main(
+                None,
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        self.assertEqual(result["topology"], "vm-single")
+        rendered = stdout.getvalue()
+        self.assertIn("Available topologies:", rendered)
+        self.assertIn("Active topology set to vm-single.", rendered)
+        self.assertIn("Topology: vm-single", rendered)
+        vm_single_prompt.assert_called_once_with(required=False)
+
     def test_menu_command_exits_without_running_actions(self):
         stdout = io.StringIO()
         with mock.patch("builtins.input", side_effect=["Q"]), contextlib.redirect_stdout(stdout):
@@ -1685,6 +1817,28 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["topology"], "vm-single")
         run_level.assert_called_once()
         self.assertEqual(run_level.call_args.kwargs["topology"], "vm-single")
+
+    def test_menu_level_confirmation_includes_active_topology(self):
+        stdout = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["1", "Q"]), mock.patch.object(
+            main,
+            "_interactive_confirm",
+            return_value=False,
+        ) as confirm, contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu", "--topology", "vm-single"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        self.assertEqual(result["status"], "exited")
+        confirm.assert_called_once_with(
+            "Run Level 1: Setup Cluster (shared foundation) (topology: vm-single)?",
+            default=False,
+        )
 
     def test_interactive_vm_single_address_configuration_updates_infrastructure_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1892,6 +2046,37 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("registration-service-fake-ds.example.local", hosts_content)
         self.assertIn("conn-b.example.local", hosts_content)
         self.assertIn("Host entries are missing for adapter 'inesdata'", stdout.getvalue())
+
+    def test_interactive_hosts_preflight_enables_sudo_for_system_hosts(self):
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {"PIONERA_HOSTS_FILE": hosts_file.name},
+            clear=False,
+        ):
+            hosts_file.write("127.0.0.1 localhost\n")
+            hosts_file.flush()
+
+            observed = {}
+
+            def fake_run_hosts(*_args, **_kwargs):
+                observed["use_sudo"] = os.getenv("PIONERA_HOSTS_USE_SUDO")
+                return {"hosts_sync": {"status": "updated"}, "hosts_plan": {}}
+
+            with mock.patch("builtins.input", side_effect=["Y"]), mock.patch.object(
+                main,
+                "run_hosts",
+                side_effect=fake_run_hosts,
+            ):
+                result = main._interactive_ensure_hosts_ready_for_levels(
+                    "inesdata",
+                    levels=[3],
+                    adapter_registry={"inesdata": "fake_adapter_module:FakeAdapter"},
+                    deployer_registry={"inesdata": "fake_deployer_module:FakeDeployer"},
+                    topology="local",
+                )
+
+        self.assertFalse(result)
+        self.assertEqual(observed["use_sudo"], "true")
 
     def test_edc_interactive_hosts_preflight_applies_only_missing_entries(self):
         with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(

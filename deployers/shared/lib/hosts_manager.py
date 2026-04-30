@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import subprocess
 from typing import Any
 from urllib.parse import urlparse
 
@@ -176,6 +177,7 @@ def apply_managed_blocks(
     blocks: list[HostBlock],
     *,
     config: dict[str, Any] | None = None,
+    use_sudo: bool = False,
 ) -> dict[str, Any]:
     existing_content = ""
     if os.path.exists(hosts_file):
@@ -189,17 +191,40 @@ def apply_managed_blocks(
     )
     updated_content, missing_blocks, skipped_existing = merge_missing_managed_blocks(existing_content, blocks)
     changed = updated_content != existing_content
+    elevated = False
     if changed:
-        with open(hosts_file, "w", encoding="utf-8") as handle:
-            handle.write(updated_content)
+        try:
+            with open(hosts_file, "w", encoding="utf-8") as handle:
+                handle.write(updated_content)
+        except PermissionError:
+            if not use_sudo:
+                raise
+            _write_hosts_file_with_sudo(hosts_file, updated_content)
+            elevated = True
 
     return {
         "hosts_file": hosts_file,
         "changed": changed,
+        "elevated": elevated,
         "blocks": blocks_as_dict(missing_blocks),
         "skipped_existing": skipped_existing,
         "legacy_external_hostnames": legacy_external_hostnames,
     }
+
+
+def _write_hosts_file_with_sudo(hosts_file: str, content: str) -> None:
+    try:
+        subprocess.run(
+            ["sudo", "tee", hosts_file],
+            input=content,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise PermissionError("sudo is not available to update the hosts file") from exc
+    except subprocess.CalledProcessError as exc:
+        raise PermissionError("sudo could not update the hosts file") from exc
 
 
 def merge_missing_managed_blocks(

@@ -73,12 +73,28 @@ cd Validation-Environment
 2. Prepara dependencias del framework:
 
 ```bash
+node --version
+npm --version
+java -version
 bash scripts/bootstrap_framework.sh
 ```
 
 En Linux/WSL, este comando instala también las dependencias del sistema que
 Playwright necesita para arrancar los navegadores. Si el entorno no permite
 instalar paquetes del sistema, usa `--without-system-deps`.
+
+`npm` es obligatorio porque las validaciones usan Newman y Playwright, también
+en topología `vm-single`. Java 17+ es obligatorio para construir las imágenes
+locales de conectores EDC/INESData que después se cargan en Minikube. En una VM
+Ubuntu nueva, el bootstrap intenta instalar Node.js con `npm` y OpenJDK 17
+automáticamente mediante `apt-get` cuando faltan. Si usas `--without-system-deps`
+o tu entorno no permite instalar paquetes del sistema, instálalos antes del
+bootstrap:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nodejs npm openjdk-17-jdk
+```
 
 El bootstrap también crea automáticamente los ficheros locales
 `deployer.config` a partir de sus `.example` cuando aún no existen. No los
@@ -105,6 +121,10 @@ deployers/edc/deployer.config
 ```bash
 python3 main.py menu
 ```
+
+También puedes ejecutar `python3 main.py` en una terminal interactiva; antes de
+mostrar el menú, el framework preguntará la topología activa. Si ya sabes la
+topología, pásala explícitamente con `--topology` para entrar directo.
 
 El menú guiado es la entrada recomendada para usuarios que quieran ejecutar los
 niveles de despliegue sin memorizar comandos.
@@ -199,7 +219,9 @@ hostname -I
 
 - usa esa IP de la VM solo como valor provisional inicial en
   `VM_EXTERNAL_IP` e `INGRESS_EXTERNAL_IP`;
-- después de `Level 1`, obtén la IP real del cluster con:
+- en `vm-single`, `Level 1` recrea el cluster Minikube gestionado por el
+  framework en la VM para asegurar una configuración reproducible;
+- después de `Level 1`, obtén la IP real del cluster recreado con:
 
 ```bash
 minikube ip
@@ -405,6 +427,7 @@ Para ejecución local, el framework espera:
 | Base local | Python 3.10+, Git, Docker |
 | Kubernetes local | Minikube, Helm, `kubectl` |
 | Validación | Node.js, `npm`, Newman, Playwright |
+| Builds de conectores | Java 17+ / OpenJDK 17 |
 | Operación | cliente PostgreSQL `psql`, permisos para `hosts` cuando aplique |
 
 Verificación rápida:
