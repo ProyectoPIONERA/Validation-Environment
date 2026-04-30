@@ -89,6 +89,7 @@ cp deployers/infrastructure/deployer.config.example deployers/infrastructure/dep
 Edita `deployers/infrastructure/deployer.config` y ajusta al menos:
 
 ```text
+CLUSTER_TYPE=k3s                              # k3s para VM, minikube para escritorio local
 KC_PASSWORD=change-me
 PG_PASSWORD=change-me
 MINIO_PASSWORD=change-me

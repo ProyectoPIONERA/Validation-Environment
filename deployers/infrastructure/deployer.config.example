@@ -21,7 +21,8 @@ VT_URL=http://127.0.0.1:8200
 VT_TOKEN=
 DOMAIN_BASE=pionera.oeg.fi.upm.es
 DS_DOMAIN_BASE=pionera.oeg.fi.upm.es
-CLUSTER_TYPE=minikube
+# CLUSTER_TYPE: use "k3s" for VM deployments (recommended), "minikube" for local desktop
+CLUSTER_TYPE=k3s
 MINIKUBE_PROFILE=minikube
 K3S_KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 VM_EXTERNAL_IP=
