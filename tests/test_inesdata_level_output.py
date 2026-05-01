@@ -399,6 +399,40 @@ minio:
         )
         self.assertFalse(any(command.startswith("minikube delete") for command in run_commands))
 
+    def test_setup_cluster_k3s_fails_fast_when_installation_is_incomplete_without_sudo(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "CLUSTER_TYPE": "k3s",
+                "K3S_KUBECONFIG": "/tmp/k3s.yaml",
+            }
+        )
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.wait_for_kubernetes_ready = mock.Mock(return_value=True)
+
+        def fake_run(command, **_kwargs):
+            if command == "which k3s":
+                return "/usr/local/bin/k3s"
+            if command in {
+                "systemctl status k3s --no-pager",
+                "test -f /tmp/k3s.yaml",
+                "sudo -n true",
+            }:
+                return None
+            return object()
+
+        infrastructure.run = mock.Mock(side_effect=fake_run)
+
+        with self.assertRaisesRegex(RuntimeError, "k3s is not fully installed"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                infrastructure.setup_cluster()
+
+        run_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("systemctl status k3s --no-pager", run_commands)
+        self.assertIn("sudo -n true", run_commands)
+        self.assertFalse(any(command.startswith("curl -sfL https://get.k3s.io") for command in run_commands))
+        infrastructure.wait_for_kubernetes_ready.assert_not_called()
+
     def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
             run=self._run,

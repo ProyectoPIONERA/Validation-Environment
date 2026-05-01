@@ -2739,17 +2739,44 @@ class INESDataInfrastructureAdapter:
 
         print("Cluster runtime: k3s")
         print("Checking k3s installation...")
-        if self.run("which k3s", capture=True, check=False) is None:
-            print("Installing k3s with Traefik disabled...")
+        k3s_binary = self.run("which k3s", capture=True, check=False)
+        service_ready = self.run("systemctl status k3s --no-pager", capture=True, check=False) is not None
+        kubeconfig_ready = self.run(f"test -f {kubeconfig_q}", capture=True, check=False) is not None
+        sudo_ready = self.run("sudo -n true", capture=True, check=False) is not None
+
+        if k3s_binary is None or not service_ready or not kubeconfig_ready:
+            if not sudo_ready:
+                details = []
+                if k3s_binary is None:
+                    details.append("k3s binary is missing")
+                if not service_ready:
+                    details.append("k3s systemd service is missing or inactive")
+                if not kubeconfig_ready:
+                    details.append(f"k3s kubeconfig is missing at {kubeconfig}")
+                self._fail(
+                    "k3s is not fully installed and sudo is not available non-interactively",
+                    root_cause=(
+                        "; ".join(details)
+                        + ". Install k3s manually or enable passwordless sudo for Level 1, then retry."
+                    ),
+                )
+            print("Installing or repairing k3s with Traefik disabled...")
             self.run("curl -sfL https://get.k3s.io | sh -s - --disable=traefik")
         else:
             print("k3s already installed")
-            self.run("sudo systemctl start k3s", check=False)
+
+        if sudo_ready:
+            self.run("sudo -n systemctl start k3s", check=False)
+        elif self.run("systemctl is-active k3s", capture=True, check=False) is None:
+            self._fail(
+                "k3s service is not active and sudo is not available non-interactively",
+                root_cause="Run 'sudo systemctl start k3s' manually, then retry Level 1.",
+            )
 
         if kubeconfig:
             os.environ.setdefault("KUBECONFIG", kubeconfig)
-            if os.path.exists(kubeconfig) and not os.access(kubeconfig, os.R_OK):
-                self.run(f"sudo chmod 644 {kubeconfig_q}", check=False)
+            if self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None and sudo_ready:
+                self.run(f"sudo -n chmod 644 {kubeconfig_q}", check=False)
 
         print("\nChecking Helm installation...")
         if self.run("which helm", capture=True, check=False) is None:
