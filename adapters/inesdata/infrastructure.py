@@ -16,6 +16,7 @@ from deployers.infrastructure.lib.public_hostnames import (
     canonical_common_service_config_values,
     canonical_common_service_hostnames,
 )
+from deployers.shared.lib.cluster_runtime import build_cluster_runtime
 from framework.local_capacity import LOCAL_COEXISTENCE_MEMORY_MB, parse_memory_quantity_mb
 from .config import INESDataConfigAdapter, InesdataConfig
 
@@ -133,6 +134,32 @@ class INESDataInfrastructureAdapter:
             "memory": _positive_int_string(runtime.get("memory"), _default("MINIKUBE_MEMORY", default_memory)),
             "profile": str(runtime.get("profile") or _default("MINIKUBE_PROFILE", "minikube")).strip() or "minikube",
             "local_resource_profile": str(runtime.get("local_resource_profile") or "").strip().lower(),
+        }
+
+    def _cluster_runtime_config(self):
+        getter = getattr(self.config_adapter, "cluster_runtime", None)
+        if callable(getter):
+            try:
+                runtime = dict(getter() or {})
+            except Exception:
+                runtime = {}
+        else:
+            runtime = {}
+        if not runtime:
+            load_config = getattr(self.config_adapter, "load_deployer_config", None)
+            if callable(load_config):
+                try:
+                    deployer_config = dict(load_config() or {})
+                except Exception:
+                    deployer_config = {}
+            else:
+                deployer_config = {}
+            topology = str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower()
+            runtime = build_cluster_runtime(deployer_config, topology=topology)
+        return {
+            "cluster_type": str(runtime.get("cluster_type") or "minikube").strip().lower() or "minikube",
+            "k3s_kubeconfig": str(runtime.get("k3s_kubeconfig") or "/etc/rancher/k3s/k3s.yaml").strip()
+            or "/etc/rancher/k3s/k3s.yaml",
         }
 
     def _is_vm_single_topology(self):
@@ -2646,6 +2673,16 @@ class INESDataInfrastructureAdapter:
     def setup_cluster(self):
         self.announce_level(1, "CLUSTER SETUP")
         self.ensure_unix_environment()
+        cluster_runtime = self._cluster_runtime_config()
+        if cluster_runtime["cluster_type"] == "k3s":
+            self._setup_cluster_k3s(cluster_runtime)
+            self.run("kubectl get pods -n ingress-nginx", check=False)
+            cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
+            if not cluster_ready:
+                self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
+            self.complete_level(1)
+            return
+
         if not self.ensure_wsl_docker_config():
             self._fail("Could not adjust WSL Docker configuration safely")
         runtime = self._minikube_runtime_config()
@@ -2695,6 +2732,77 @@ class INESDataInfrastructureAdapter:
         if not cluster_ready:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         self.complete_level(1)
+
+    def _setup_cluster_k3s(self, runtime):
+        kubeconfig = runtime["k3s_kubeconfig"]
+        kubeconfig_q = shlex.quote(kubeconfig)
+
+        print("Cluster runtime: k3s")
+        print("Checking k3s installation...")
+        if self.run("which k3s", capture=True, check=False) is None:
+            print("Installing k3s with Traefik disabled...")
+            self.run("curl -sfL https://get.k3s.io | sh -s - --disable=traefik")
+        else:
+            print("k3s already installed")
+            self.run("sudo systemctl start k3s", check=False)
+
+        if kubeconfig:
+            os.environ.setdefault("KUBECONFIG", kubeconfig)
+            if os.path.exists(kubeconfig) and not os.access(kubeconfig, os.R_OK):
+                self.run(f"sudo chmod 644 {kubeconfig_q}", check=False)
+
+        print("\nChecking Helm installation...")
+        if self.run("which helm", capture=True, check=False) is None:
+            self.run("sudo snap install helm --classic", check=False)
+        self.run("helm version")
+
+        if not self.wait_for_kubernetes_ready():
+            self._fail("k3s cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
+
+        print("\nInstalling ingress-nginx for k3s...\n")
+        self.run("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", check=False)
+        self.run("helm repo update")
+        if self.run_silent("helm status ingress-nginx -n ingress-nginx") is None:
+            self.run(
+                "helm install ingress-nginx ingress-nginx/ingress-nginx "
+                "-n ingress-nginx --create-namespace "
+                "--set controller.service.type=NodePort "
+                "--set controller.watchIngressWithoutClass=true "
+                "--set controller.allowSnippetAnnotations=true "
+                "--set controller.config.allow-snippet-annotations=true "
+                "--set controller.config.annotations-risk-level=Critical "
+                "--wait --timeout 180s"
+            )
+        else:
+            print("ingress-nginx already installed")
+
+        self._patch_k3s_ingress_nginx_service()
+        self._patch_k3s_ingress_nginx_configmap()
+
+    def _patch_k3s_ingress_nginx_service(self):
+        print("Ensuring k3s ingress-nginx-controller uses NodePort...")
+        patch_json = json.dumps({"spec": {"type": "NodePort"}})
+        self.run(
+            "kubectl patch svc ingress-nginx-controller "
+            f"-n ingress-nginx --type merge -p {shlex.quote(patch_json)}",
+            check=False,
+        )
+
+    def _patch_k3s_ingress_nginx_configmap(self):
+        print("Allowing ingress-nginx snippet annotations for k3s DEV flows...")
+        patch_json = json.dumps(
+            {
+                "data": {
+                    "allow-snippet-annotations": "true",
+                    "annotations-risk-level": "Critical",
+                }
+            }
+        )
+        self.run(
+            "kubectl patch configmap ingress-nginx-controller "
+            f"-n ingress-nginx --type merge -p {shlex.quote(patch_json)}",
+            check=False,
+        )
 
     def _deploy_infrastructure_runtime(self, *, skip_hosts=False, host_sync_message=None):
         self.announce_level(2, "DEPLOY COMMON SERVICES")

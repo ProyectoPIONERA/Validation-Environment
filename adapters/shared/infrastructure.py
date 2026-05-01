@@ -17,9 +17,11 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 f"Level 1 preflight is not implemented for topology '{normalized_topology}' yet."
             )
 
+        cluster_runtime = self._cluster_runtime_config()
+        cluster_type = cluster_runtime.get("cluster_type", "minikube")
         print(
             "Topology 'vm-single' uses a Kubernetes cluster managed on the VM.\n"
-            "Level 1 will recreate the managed Minikube cluster to keep runs reproducible."
+            f"Level 1 will prepare the managed {cluster_type} cluster to keep runs reproducible."
         )
         self.setup_cluster()
         print("Managed vm-single cluster recreated. Running cluster preflight checks.")
@@ -119,6 +121,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             "status": "ready",
             "mode": "managed-recreate",
             "topology": normalized_topology,
+            "cluster_runtime": cluster_type,
             "current_context": current_context,
             "cluster_creation": "recreated",
             "checks": checks,

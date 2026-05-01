@@ -359,12 +359,45 @@ minio:
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["mode"], "managed-recreate")
         self.assertEqual(result["topology"], "vm-single")
+        self.assertEqual(result["cluster_runtime"], "minikube")
         self.assertEqual(result["current_context"], "vm-single-context")
         self.assertEqual(result["cluster_creation"], "recreated")
         infrastructure.setup_cluster.assert_called_once_with()
-        self.assertIn("Level 1 will recreate the managed Minikube cluster", output.getvalue())
+        self.assertIn("Level 1 will prepare the managed minikube cluster", output.getvalue())
         self.assertEqual(result["checks"][-1]["label"], "create namespace permission")
         self.assertEqual(result["checks"][-1]["status"], "passed")
+
+    def test_setup_cluster_uses_k3s_runtime_without_minikube_delete(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "CLUSTER_TYPE": "k3s",
+                "K3S_KUBECONFIG": "/tmp/k3s.yaml",
+            }
+        )
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.wait_for_kubernetes_ready = lambda: True
+        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.run = mock.Mock(return_value=object())
+        infrastructure.run_silent = mock.Mock(return_value=None)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            infrastructure.setup_cluster()
+
+        run_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("which k3s", run_commands)
+        self.assertIn("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", run_commands)
+        self.assertTrue(
+            any(
+                command.startswith("helm install ingress-nginx")
+                and "--set controller.service.type=NodePort" in command
+                for command in run_commands
+            )
+        )
+        self.assertTrue(
+            any(command.startswith("kubectl patch svc ingress-nginx-controller") for command in run_commands)
+        )
+        self.assertFalse(any(command.startswith("minikube delete") for command in run_commands))
 
     def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
