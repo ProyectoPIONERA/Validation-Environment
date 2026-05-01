@@ -433,6 +433,48 @@ minio:
         self.assertFalse(any(command.startswith("curl -sfL https://get.k3s.io") for command in run_commands))
         infrastructure.wait_for_kubernetes_ready.assert_not_called()
 
+    def test_setup_cluster_k3s_can_repair_incomplete_installation_from_interactive_menu(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "CLUSTER_TYPE": "k3s",
+                "K3S_KUBECONFIG": "/tmp/k3s.yaml",
+            }
+        )
+        infrastructure = INESDataInfrastructureAdapter(
+            run=self._run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: False,
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.wait_for_kubernetes_ready = lambda: True
+        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+
+        def fake_run(command, **_kwargs):
+            if command == "which k3s":
+                return "/usr/local/bin/k3s"
+            if command in {
+                "systemctl status k3s --no-pager",
+                "test -f /tmp/k3s.yaml",
+                "sudo -n true",
+            }:
+                return None
+            return object()
+
+        infrastructure.run = mock.Mock(side_effect=fake_run)
+        infrastructure.run_silent = mock.Mock(return_value="")
+
+        with mock.patch("sys.stdin.isatty", return_value=True), mock.patch("builtins.input", return_value="y"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                infrastructure.setup_cluster()
+
+        run_commands = [call.args[0] for call in infrastructure.run.call_args_list]
+        self.assertIn("curl -sfL https://get.k3s.io | sudo sh -s - --disable=traefik", run_commands)
+        self.assertIn("sudo systemctl start k3s", run_commands)
+        self.assertIn("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", run_commands)
+        self.assertFalse(any(command.startswith("minikube delete") for command in run_commands))
+
     def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
             run=self._run,

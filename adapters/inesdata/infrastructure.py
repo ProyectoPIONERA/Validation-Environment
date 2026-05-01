@@ -4,6 +4,7 @@ import shutil
 import shlex
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import requests
@@ -60,6 +61,18 @@ class INESDataInfrastructureAdapter:
 
     def _auto_mode(self):
         return self.auto_mode_getter() if callable(self.auto_mode_getter) else bool(self.auto_mode_getter)
+
+    def _confirm_interactive(self, prompt, default=False):
+        if self._auto_mode() or not getattr(sys.stdin, "isatty", lambda: False)():
+            return False
+        default_label = "Y/n" if default else "y/N"
+        try:
+            answer = input(f"{prompt} ({default_label}): ").strip().lower()
+        except EOFError:
+            return False
+        if not answer:
+            return bool(default)
+        return answer in {"y", "yes", "s", "si", "sí"}
 
     @staticmethod
     def _fail(message, root_cause=None):
@@ -2743,30 +2756,47 @@ class INESDataInfrastructureAdapter:
         service_ready = self.run("systemctl status k3s --no-pager", capture=True, check=False) is not None
         kubeconfig_ready = self.run(f"test -f {kubeconfig_q}", capture=True, check=False) is not None
         sudo_ready = self.run("sudo -n true", capture=True, check=False) is not None
+        interactive_sudo_allowed = False
 
         if k3s_binary is None or not service_ready or not kubeconfig_ready:
+            details = []
+            if k3s_binary is None:
+                details.append("k3s binary is missing")
+            if not service_ready:
+                details.append("k3s systemd service is missing or inactive")
+            if not kubeconfig_ready:
+                details.append(f"k3s kubeconfig is missing at {kubeconfig}")
             if not sudo_ready:
-                details = []
-                if k3s_binary is None:
-                    details.append("k3s binary is missing")
-                if not service_ready:
-                    details.append("k3s systemd service is missing or inactive")
-                if not kubeconfig_ready:
-                    details.append(f"k3s kubeconfig is missing at {kubeconfig}")
-                self._fail(
-                    "k3s is not fully installed and sudo is not available non-interactively",
-                    root_cause=(
-                        "; ".join(details)
-                        + ". Install k3s manually or enable passwordless sudo for Level 1, then retry."
-                    ),
+                print("k3s installation is incomplete:")
+                for detail in details:
+                    print(f"  - {detail}")
+                interactive_sudo_allowed = self._confirm_interactive(
+                    "Install or repair k3s now using sudo?",
+                    default=False,
                 )
+                if not interactive_sudo_allowed:
+                    self._fail(
+                        "k3s is not fully installed and sudo is not available non-interactively",
+                        root_cause=(
+                            "; ".join(details)
+                            + ". Install k3s manually, run Level 1 from the interactive menu and approve "
+                            "the k3s repair prompt, or enable passwordless sudo for Level 1, then retry."
+                        ),
+                    )
             print("Installing or repairing k3s with Traefik disabled...")
-            self.run("curl -sfL https://get.k3s.io | sh -s - --disable=traefik")
+            install_command = (
+                "curl -sfL https://get.k3s.io | sudo -n sh -s - --disable=traefik"
+                if sudo_ready
+                else "curl -sfL https://get.k3s.io | sudo sh -s - --disable=traefik"
+            )
+            self.run(install_command)
         else:
             print("k3s already installed")
 
         if sudo_ready:
             self.run("sudo -n systemctl start k3s", check=False)
+        elif interactive_sudo_allowed:
+            self.run("sudo systemctl start k3s", check=False)
         elif self.run("systemctl is-active k3s", capture=True, check=False) is None:
             self._fail(
                 "k3s service is not active and sudo is not available non-interactively",
@@ -2777,6 +2807,8 @@ class INESDataInfrastructureAdapter:
             os.environ.setdefault("KUBECONFIG", kubeconfig)
             if self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None and sudo_ready:
                 self.run(f"sudo -n chmod 644 {kubeconfig_q}", check=False)
+            elif self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None and interactive_sudo_allowed:
+                self.run(f"sudo chmod 644 {kubeconfig_q}", check=False)
 
         print("\nChecking Helm installation...")
         if self.run("which helm", capture=True, check=False) is None:
