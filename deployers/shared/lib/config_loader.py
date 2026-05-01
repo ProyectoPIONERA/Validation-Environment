@@ -36,6 +36,7 @@ TOPOLOGY_OVERLAY_KEYS = {
             "LOCAL_HOSTS_ADDRESS",
             "LOCAL_INGRESS_EXTERNAL_IP",
             "LOCAL_RESOURCE_PROFILE",
+            "CLUSTER_TYPE",
             "MINIKUBE_DRIVER",
             "MINIKUBE_CPUS",
             "MINIKUBE_MEMORY",
@@ -50,6 +51,8 @@ TOPOLOGY_OVERLAY_KEYS = {
             "VM_CONNECTORS_IP",
             "VM_COMPONENTS_IP",
             "INGRESS_EXTERNAL_IP",
+            "CLUSTER_TYPE",
+            "K3S_KUBECONFIG",
             "MINIKUBE_DRIVER",
             "MINIKUBE_CPUS",
             "MINIKUBE_MEMORY",
@@ -67,6 +70,8 @@ TOPOLOGY_OVERLAY_KEYS = {
             "VM_COMPONENTS_IP",
             "VM_OBSERVABILITY_IP",
             "INGRESS_EXTERNAL_IP",
+            "CLUSTER_TYPE",
+            "K3S_KUBECONFIG",
         }
     ),
 }

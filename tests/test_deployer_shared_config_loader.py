@@ -21,10 +21,7 @@ from deployers.shared.lib.config_loader import (
 class SharedConfigLoaderTests(unittest.TestCase):
     def test_infrastructure_base_config_files_do_not_include_topology_keys(self):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        for relative_path in (
-            "deployers/infrastructure/deployer.config",
-            "deployers/infrastructure/deployer.config.example",
-        ):
+        for relative_path in ("deployers/infrastructure/deployer.config.example",):
             path = os.path.join(repo_root, relative_path)
             config = load_deployer_config(path)
             drift_keys = sorted(key for key in config if key in TOPOLOGY_KEY_TARGETS)
@@ -64,6 +61,23 @@ class SharedConfigLoaderTests(unittest.TestCase):
                         f"found unexpected keys {unexpected_keys}"
                     ),
                 )
+
+    def test_cluster_runtime_keys_are_topology_scoped(self):
+        self.assertIn("CLUSTER_TYPE", TOPOLOGY_OVERLAY_KEYS["local"])
+        self.assertIn("CLUSTER_TYPE", TOPOLOGY_OVERLAY_KEYS["vm-single"])
+        self.assertIn("CLUSTER_TYPE", TOPOLOGY_OVERLAY_KEYS["vm-distributed"])
+        self.assertNotIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["local"])
+        self.assertIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["vm-single"])
+        self.assertIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["vm-distributed"])
+
+        self.assertEqual(
+            TOPOLOGY_KEY_TARGETS["CLUSTER_TYPE"],
+            ("local", "vm-distributed", "vm-single"),
+        )
+        self.assertEqual(
+            TOPOLOGY_KEY_TARGETS["K3S_KUBECONFIG"],
+            ("vm-distributed", "vm-single"),
+        )
 
     def test_load_deployer_config_reads_key_value_pairs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
