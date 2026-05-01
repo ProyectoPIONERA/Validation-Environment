@@ -223,6 +223,48 @@ class InesdataConfigDataspaceTests(unittest.TestCase):
         self.assertEqual(runtime["memory"], "16384")
         self.assertEqual(runtime["profile"], "vm-override")
 
+    def test_cluster_runtime_preserves_vm_single_minikube_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata"), exist_ok=True)
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            runtime = INESDataConfigAdapter(TempConfig, topology="vm-single").cluster_runtime()
+
+        self.assertEqual(runtime["cluster_type"], "minikube")
+        self.assertEqual(runtime["k3s_kubeconfig"], "/etc/rancher/k3s/k3s.yaml")
+
+    def test_cluster_runtime_reads_vm_single_k3s_overlay(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "deployers", "infrastructure", "topologies"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "deployers", "inesdata"), exist_ok=True)
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "deployer.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("ENVIRONMENT=DEV\n")
+            with open(
+                os.path.join(tmpdir, "deployers", "infrastructure", "topologies", "vm-single.config"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("CLUSTER_TYPE=k3s\nK3S_KUBECONFIG=/tmp/k3s.yaml\n")
+
+            class TempConfig(InesdataConfig):
+                @classmethod
+                def script_dir(cls):
+                    return tmpdir
+
+            runtime = INESDataConfigAdapter(TempConfig, topology="vm-single").cluster_runtime()
+
+        self.assertEqual(runtime["cluster_type"], "k3s")
+        self.assertEqual(runtime["k3s_kubeconfig"], "/tmp/k3s.yaml")
+
     def test_primary_dataspace_name_prefers_deployer_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = DataspaceAwareConfig(tmpdir)

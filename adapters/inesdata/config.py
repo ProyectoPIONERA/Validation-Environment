@@ -6,6 +6,7 @@ from deployers.infrastructure.lib.config_loader import (
     INFRASTRUCTURE_MANAGED_KEYS,
     load_layered_deployer_config,
 )
+from deployers.shared.lib.cluster_runtime import build_cluster_runtime
 from deployers.infrastructure.lib.public_hostnames import (
     clean_public_hostname,
     resolved_common_service_hostnames,
@@ -40,6 +41,8 @@ class InesdataConfig:
     MINIKUBE_PROFILE = "minikube"
     MINIKUBE_ADDONS = ["ingress"]
     MINIKUBE_IP = "192.168.49.2"
+    CLUSTER_TYPE = "minikube"
+    K3S_KUBECONFIG = "/etc/rancher/k3s/k3s.yaml"
 
     PORT_POSTGRES = 5432
     PORT_VAULT = 8200
@@ -380,6 +383,18 @@ class INESDataConfigAdapter:
             "local_resource_profile": self._normalized_string(
                 config.get("LOCAL_RESOURCE_PROFILE"),
                 "",
+            ),
+        }
+
+    def cluster_runtime(self):
+        """Return the configured cluster runtime without changing current defaults."""
+        config = self.load_deployer_config()
+        runtime = build_cluster_runtime(config, topology=self.topology)
+        return {
+            **runtime,
+            "k3s_kubeconfig": self._normalized_string(
+                runtime.get("k3s_kubeconfig"),
+                getattr(self.config, "K3S_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"),
             ),
         }
 
