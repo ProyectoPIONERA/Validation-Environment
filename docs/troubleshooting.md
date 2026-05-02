@@ -246,6 +246,24 @@ Esta protección evita desplegar una imagen por defecto no verificada. Si la
 preparación automática falla, revisa que Docker, Minikube y el repositorio bajo
 `adapters/edc/sources/connector` estén disponibles.
 
+## EDC Level 4 Falla con Credenciales Docker en WSL
+
+En WSL con Docker Desktop, `~/.docker/config.json` puede contener
+`credsStore=desktop` o `credsStore=desktop.exe`. Si esa configuración no es
+usable desde la terminal WSL, `Level 4` de EDC puede fallar durante la
+preparación automática de imágenes locales con un mensaje similar a:
+
+```text
+ERROR [internal] load metadata for docker.io/library/python:3.12-alpine
+error getting credentials - err: exit status 1
+```
+
+El fallo ocurre antes del despliegue Kubernetes: Docker no puede resolver las
+credenciales para descargar o inspeccionar la imagen base. El framework valida
+la configuración Docker de WSL antes de construir imágenes locales EDC y elimina
+automáticamente esos `credsStore` problemáticos, conservando el resto del
+fichero. Después, vuelve a ejecutar `Level 4` desde el mismo menú.
+
 ## Playwright EDC Recibe 503 de NGINX
 
 Si todas las pruebas UI de EDC fallan con un error de login y la captura muestra:

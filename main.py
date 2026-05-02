@@ -4165,6 +4165,14 @@ def _edc_local_minikube_profile(adapter):
     return str(config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
 
 
+def _ensure_docker_client_ready_for_local_image_build(adapter):
+    infrastructure = getattr(adapter, "infrastructure", None)
+    ensure_config = getattr(infrastructure, "ensure_wsl_docker_config", None)
+    if callable(ensure_config) and not ensure_config():
+        raise RuntimeError("Could not adjust WSL Docker configuration safely before building local images.")
+    return True
+
+
 def _prepare_edc_local_connector_image_override(adapter):
     if _env_flag("PIONERA_SKIP_EDC_LOCAL_CONNECTOR_IMAGE_BUILD", default=False):
         raise RuntimeError(
@@ -4186,6 +4194,7 @@ def _prepare_edc_local_connector_image_override(adapter):
     if not os.path.isfile(script_path):
         raise RuntimeError(f"EDC connector image build script not found: {script_path}")
 
+    _ensure_docker_client_ready_for_local_image_build(adapter)
     minikube_profile = _edc_local_minikube_profile(adapter)
     command = [
         "bash",
@@ -4260,6 +4269,7 @@ def _prepare_edc_local_dashboard_images(adapter, config):
         if not os.path.isfile(script_path):
             raise RuntimeError(f"EDC dashboard image build script not found: {script_path}")
 
+    _ensure_docker_client_ready_for_local_image_build(adapter)
     minikube_profile = _edc_local_minikube_profile(adapter)
     env = dict(os.environ)
     env["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]

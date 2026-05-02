@@ -373,6 +373,10 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 return False
             print("Level 4 local EDC images disabled by configuration.")
             return True
+        ensure_docker_config = getattr(getattr(self, "infrastructure", None), "ensure_wsl_docker_config", None)
+        if callable(ensure_docker_config) and not ensure_docker_config():
+            print("Could not adjust WSL Docker configuration before preparing local EDC images.")
+            return False
         if not self._maybe_prepare_level4_local_edc_connector_image(connector_mode):
             return False
         if not self._maybe_prepare_level4_local_edc_dashboard_images(mode):

@@ -221,6 +221,30 @@ class InesdataLevelOutputTests(unittest.TestCase):
         )
         infrastructure.run_silent.assert_any_call("minikube -p vm-local addons enable ingress")
 
+    def test_wsl_docker_config_repair_removes_desktop_exe_creds_store(self):
+        docker_dir = os.path.join(self.tmpdir.name, ".docker")
+        os.makedirs(docker_dir, exist_ok=True)
+        docker_config_path = os.path.join(docker_dir, "config.json")
+        with open(docker_config_path, "w", encoding="utf-8") as handle:
+            json.dump({"auths": {"ghcr.io": {}}, "credsStore": "desktop.exe"}, handle)
+
+        infrastructure = self._make_infrastructure()
+        infrastructure.is_wsl = lambda: True
+
+        def expanduser(path):
+            if path == "~/.docker/config.json":
+                return docker_config_path
+            return path
+
+        with mock.patch("adapters.inesdata.infrastructure.os.path.expanduser", side_effect=expanduser):
+            self.assertTrue(infrastructure.ensure_wsl_docker_config())
+
+        with open(docker_config_path, encoding="utf-8") as handle:
+            repaired = json.load(handle)
+
+        self.assertNotIn("credsStore", repaired)
+        self.assertEqual(repaired["auths"], {"ghcr.io": {}})
+
     def test_vm_single_minikube_runtime_defaults_to_reproducible_vm_capacity(self):
         self.config_adapter = LevelOutputConfigAdapter()
         self.config_adapter.topology = "vm-single"

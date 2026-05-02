@@ -271,11 +271,12 @@ class INESDataInfrastructureAdapter:
             print("Skipping automatic adjustment.")
             return True
 
-        if config.get("credsStore") != "desktop":
+        creds_store = str(config.get("credsStore") or "").strip().lower()
+        if creds_store not in {"desktop", "desktop.exe"}:
             print("No WSL Docker credsStore adjustment required.")
             return True
 
-        config.pop("credsStore", None)
+        removed_creds_store = config.pop("credsStore", None)
         try:
             with open(docker_config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
@@ -284,7 +285,7 @@ class INESDataInfrastructureAdapter:
             print(f"Could not write Docker config ({docker_config_path}): {e}")
             return False
 
-        print(f"Removed credsStore=desktop from {docker_config_path}")
+        print(f"Removed credsStore={removed_creds_store} from {docker_config_path}")
         return True
 
     def get_hosts_path(self):
