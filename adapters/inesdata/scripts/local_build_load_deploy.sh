@@ -17,6 +17,8 @@ fi
 PLATFORM_DIR="${PLATFORM_DIR:-$DEFAULT_PLATFORM_DIR}"
 K8S_NAMESPACE="${K8S_NAMESPACE:-demo}"
 MINIKUBE_PROFILE="${MINIKUBE_PROFILE:-minikube}"
+CLUSTER_RUNTIME="${CLUSTER_RUNTIME:-minikube}"
+K3S_IMAGE_IMPORT_COMMAND="${K3S_IMAGE_IMPORT_COMMAND:-sudo k3s ctr -n k8s.io images import}"
 LOCAL_REGISTRY_HOST="${LOCAL_REGISTRY_HOST:-local}"
 LOCAL_NAMESPACE="${LOCAL_NAMESPACE:-inesdata}"
 
@@ -36,7 +38,8 @@ LEGACY_CONNECTORS_TARGET="__legacy-connectors__"
 usage() {
   cat <<'EOF'
 Usage: local_build_load_deploy.sh [--apply] [--manifest <path>] [--platform-dir <path>] [--namespace <name>]
-                                 [--minikube-profile <name>] [--skip-build] [--skip-load] [--skip-deploy] [--build-only]
+                                 [--minikube-profile <name>] [--cluster-runtime <minikube|k3s>]
+                                 [--skip-build] [--skip-load] [--skip-deploy] [--build-only]
                                  [--target TODO|CHANGED|connector|connector-interface|registration-service|public-portal-backend|public-portal-frontend]
                                  [--component <value>]
 
@@ -46,8 +49,9 @@ Options:
   --platform-dir <path>       Path to local INESData deployer artifacts (default: ./deployers/inesdata).
   --namespace <name>          Kubernetes namespace and dataspace name (default: demo).
   --minikube-profile <name>   Minikube profile name (default: minikube).
+  --cluster-runtime <value>   Cluster runtime used for local image loading: minikube or k3s (default: minikube).
   --skip-build                Skip image build, use provided/latest manifest.
-  --skip-load                 Skip loading images into minikube.
+  --skip-load                 Skip loading images into the cluster runtime.
   --skip-deploy               Build and load images, but do not run helm upgrade.
   --build-only                Build images only (equivalent to --skip-load --skip-deploy).
   --target <value>            Update target. Use TODO for all images, CHANGED for modified source components, or one component key.
@@ -62,6 +66,8 @@ Environment variables:
   PLATFORM_DIR
   K8S_NAMESPACE
   MINIKUBE_PROFILE
+  CLUSTER_RUNTIME
+  K3S_IMAGE_IMPORT_COMMAND
   LOCAL_REGISTRY_HOST
   LOCAL_NAMESPACE
 EOF
@@ -87,6 +93,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --minikube-profile)
       MINIKUBE_PROFILE="${2:-}"
+      shift 2
+      ;;
+    --cluster-runtime)
+      CLUSTER_RUNTIME="${2:-}"
       shift 2
       ;;
     --skip-build)
@@ -163,6 +173,19 @@ run_cmd() {
   else
     eval "$@"
   fi
+}
+
+normalize_cluster_runtime() {
+  CLUSTER_RUNTIME="$(printf '%s' "${CLUSTER_RUNTIME:-minikube}" | tr '[:upper:]' '[:lower:]')"
+  case "$CLUSTER_RUNTIME" in
+    minikube|k3s)
+      ;;
+    *)
+      echo "Unsupported cluster runtime: $CLUSTER_RUNTIME" >&2
+      echo "Supported values: minikube, k3s" >&2
+      exit 1
+      ;;
+  esac
 }
 
 resolve_manifest() {
@@ -326,6 +349,11 @@ prune_replaced_images() {
 
     echo "Pruning replaced image: $current_image"
 
+    if [[ "$CLUSTER_RUNTIME" == "k3s" ]]; then
+      echo "Skipping prune for k3s-imported image: $current_image"
+      continue
+    fi
+
     if [[ "$DRY_RUN" -eq 1 ]]; then
       run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image rm \"$current_image\""
       continue
@@ -349,10 +377,51 @@ prune_replaced_images() {
   done < "$before_file"
 }
 
+load_image_into_k3s() {
+  local full_image="$1"
+  local archive_file
+
+  archive_file="$(mktemp "${TMPDIR:-/tmp}/inesdata-image-XXXXXX.tar")"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run_cmd "docker save \"$full_image\" -o \"$archive_file\""
+    run_cmd "$K3S_IMAGE_IMPORT_COMMAND \"$archive_file\""
+    run_cmd "rm -f \"$archive_file\""
+    return
+  fi
+
+  docker save "$full_image" -o "$archive_file"
+  # shellcheck disable=SC2086
+  if ! $K3S_IMAGE_IMPORT_COMMAND "$archive_file"; then
+    rm -f "$archive_file"
+    return 1
+  fi
+  rm -f "$archive_file"
+}
+
+load_image_into_runtime() {
+  local full_image="$1"
+
+  case "$CLUSTER_RUNTIME" in
+    minikube)
+      run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$full_image\""
+      ;;
+    k3s)
+      load_image_into_k3s "$full_image"
+      ;;
+  esac
+}
+
+normalize_cluster_runtime
+
 echo "Mode: $([[ "$DRY_RUN" -eq 1 ]] && echo "dry-run" || echo "apply")"
 echo "Platform dir: $PLATFORM_DIR"
 echo "K8s namespace: $K8S_NAMESPACE"
-echo "Minikube profile: $MINIKUBE_PROFILE"
+echo "Cluster runtime: $CLUSTER_RUNTIME"
+if [[ "$CLUSTER_RUNTIME" == "minikube" ]]; then
+  echo "Minikube profile: $MINIKUBE_PROFILE"
+else
+  echo "K3s image import command: $K3S_IMAGE_IMPORT_COMMAND"
+fi
 echo "Local image prefix: $LOCAL_REGISTRY_HOST/$LOCAL_NAMESPACE"
 echo "Target: $TARGET"
 echo "Prune replaced images: $([[ "$PRUNE_REPLACED_IMAGES" -eq 1 ]] && echo "yes" || echo "no")"
@@ -481,7 +550,11 @@ if [[ "$RUN_LOAD" -eq 0 ]]; then
 fi
 
 echo
-echo "== Load images into minikube =="
+if [[ "$CLUSTER_RUNTIME" == "minikube" ]]; then
+  echo "== Load images into minikube =="
+else
+  echo "== Load images into k3s containerd =="
+fi
 
 load_keys=()
 case "$TARGET" in
@@ -505,7 +578,7 @@ esac
 for key in "${load_keys[@]}"; do
   full_image="${IMAGE_BY_COMPONENT[$key]}"
   echo "$key -> $full_image"
-  run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$full_image\""
+  load_image_into_runtime "$full_image"
 done
 
 mkdir -p "$OVERRIDES_DIR"

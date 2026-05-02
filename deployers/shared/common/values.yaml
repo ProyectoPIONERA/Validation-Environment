@@ -12,6 +12,7 @@ keycloak:
   image:
     repository: bitnamilegacy/keycloak
     tag: 24.0.4-debian-12-r1
+  proxy: none
   auth:
     adminUser: admin
     adminPassword: CHANGE_ME
@@ -26,9 +27,15 @@ keycloak:
   ingress:
     enabled: true
     hostname: auth.dev.ed.dataspaceunit.upm
+    annotations:
+      nginx.ingress.kubernetes.io/configuration-snippet: |
+        proxy_cookie_flags ~ nosecure nosamesite;
   adminIngress:
     enabled: true
     hostname: admin.auth.dev.ed.dataspaceunit.upm
+    annotations:
+      nginx.ingress.kubernetes.io/configuration-snippet: |
+        proxy_cookie_flags ~ nosecure nosamesite;
   keycloakConfigCli:
     image:
       repository: bitnamilegacy/keycloak-config-cli

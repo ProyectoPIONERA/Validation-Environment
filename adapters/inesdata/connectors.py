@@ -10,7 +10,13 @@ from urllib.parse import urlparse
 import requests
 import yaml
 
-from deployers.shared.lib.topology import LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY, normalize_topology
+from deployers.shared.lib.topology import (
+    LOCAL_TOPOLOGY,
+    VM_SINGLE_TOPOLOGY,
+    build_topology_profile,
+    normalize_topology,
+)
+from deployers.shared.lib.cluster_runtime import build_cluster_runtime
 from .config import INESDataConfigAdapter, InesdataConfig
 from runtime_dependencies import ensure_python_requirements
 
@@ -897,10 +903,13 @@ class INESDataConnectorsAdapter:
         return []
 
     def update_connector_host_aliases(self, values_file, connectors, connector_name=None, ds_name=None, ds_namespace=None):
-        if not self._is_local_topology():
+        topology = self._normalized_topology()
+        if topology not in {LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY}:
             return
 
-        minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
+        host_alias_ip = self._connector_host_alias_ip(topology)
+        if not host_alias_ip:
+            return
 
         with open(values_file) as f:
             values = yaml.safe_load(f)
@@ -913,12 +922,30 @@ class INESDataConnectorsAdapter:
         hostnames.extend(self.build_connector_hostnames(connectors))
 
         values["hostAliases"] = [{
-            "ip": minikube_ip,
+            "ip": host_alias_ip,
             "hostnames": hostnames
         }]
 
         with open(values_file, "w") as f:
             yaml.dump(values, f, sort_keys=False)
+
+    def _connector_host_alias_ip(self, topology=None):
+        normalized_topology = normalize_topology(topology or self._normalized_topology())
+        cluster_type = str(self._cluster_runtime().get("cluster_type") or "minikube").strip().lower() or "minikube"
+        if normalized_topology == LOCAL_TOPOLOGY or (
+            normalized_topology == VM_SINGLE_TOPOLOGY and cluster_type == "minikube"
+        ):
+            return self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
+
+        if normalized_topology == VM_SINGLE_TOPOLOGY and cluster_type == "k3s":
+            try:
+                deployer_config = self.config_adapter.load_deployer_config() or {}
+            except Exception:
+                deployer_config = {}
+            profile = build_topology_profile(VM_SINGLE_TOPOLOGY, deployer_config)
+            return str(profile.ingress_external_ip or profile.default_address or "").strip()
+
+        return ""
 
     def _find_dataspace_for_connector(self, connector_name):
         for dataspace in self.load_dataspace_connectors() or []:
@@ -1143,6 +1170,19 @@ class INESDataConnectorsAdapter:
             deployer_config = {}
         return str(deployer_config.get("MINIKUBE_PROFILE") or "minikube").strip() or "minikube"
 
+    def _cluster_runtime(self):
+        runtime_getter = getattr(self.config_adapter, "cluster_runtime", None)
+        if callable(runtime_getter):
+            try:
+                return dict(runtime_getter() or {})
+            except Exception:
+                pass
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        return build_cluster_runtime(deployer_config, topology=self._normalized_topology())
+
     def _maybe_prepare_level4_local_connector_images(self, namespace):
         mode = self._level4_local_images_mode()
         policy = self._resolve_level4_local_image_policy(
@@ -1186,6 +1226,8 @@ class INESDataConnectorsAdapter:
             return True
 
         platform_dir = self.config.repo_dir()
+        cluster_runtime = self._cluster_runtime()
+        cluster_type = str(cluster_runtime.get("cluster_type") or "minikube").strip().lower() or "minikube"
         command = " ".join(
             shlex.quote(part)
             for part in [
@@ -1198,6 +1240,8 @@ class INESDataConnectorsAdapter:
                 namespace,
                 "--minikube-profile",
                 self._local_minikube_profile(),
+                "--cluster-runtime",
+                cluster_type,
                 "--deploy-target",
                 "connectors",
                 "--skip-deploy",
@@ -1205,6 +1249,7 @@ class INESDataConnectorsAdapter:
         )
 
         print("\nPreparing local INESData connector images for Level 4...")
+        print(f"Cluster runtime: {cluster_type}")
         print("This builds and loads inesdata-connector and inesdata-connector-interface before Helm deploy.")
         result = self.run(command, check=False)
         if result is None:
@@ -2621,7 +2666,16 @@ class INESDataConnectorsAdapter:
             self.infrastructure.manage_hosts_entries(connector_hosts)
         else:
             print(f"Skipping connector hosts synchronization for topology '{self.config_adapter.topology}'.")
-        self.wait_for_all_connectors(all_connectors)
+        if not self.wait_for_all_connectors(all_connectors):
+            print("Aborting Level 4 because connector interface readiness failed")
+            return []
+        if self._normalized_topology() == VM_SINGLE_TOPOLOGY and not self.validate_connectors_with_stabilization(
+            all_connectors,
+            retries=1,
+            wait_seconds=30,
+        ):
+            print("Aborting Level 4 because connector Management API readiness failed")
+            return []
         return all_connectors
 
     def get_cluster_connectors(self):

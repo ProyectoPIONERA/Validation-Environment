@@ -73,6 +73,11 @@ from deployers.infrastructure.lib.public_hostnames import (
 from deployers.infrastructure.lib.orchestrator import DeployerOrchestrator
 from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES as DEPLOYER_SUPPORTED_TOPOLOGIES
 from deployers.infrastructure.lib.topology import LOCAL_TOPOLOGY, normalize_topology
+from deployers.shared.lib.cluster_runtime import (
+    SUPPORTED_CLUSTER_TYPES,
+    build_cluster_runtime,
+    normalize_cluster_type,
+)
 from validation.core.test_data_cleanup import run_pre_validation_cleanup
 from validation.orchestration.hosts import (
     ensure_public_endpoints_accessible,
@@ -3371,7 +3376,15 @@ def _should_sync_deployer_hosts():
 
 
 def _should_update_hosts_with_sudo():
-    return _env_flag("PIONERA_HOSTS_USE_SUDO", default=False)
+    if _env_flag("PIONERA_HOSTS_USE_SUDO", default=False):
+        return True
+    hosts_file = _deployer_hosts_file()
+    if not hosts_file:
+        return False
+    normalized = os.path.abspath(os.path.expanduser(hosts_file))
+    if normalized not in {"/etc/hosts", "/private/etc/hosts"}:
+        return False
+    return not os.access(normalized, os.W_OK)
 
 
 def _deployer_hosts_address_override():
@@ -3390,7 +3403,12 @@ def _deployer_hosts_default_address(context=None):
 
 
 def _deployer_hosts_file():
-    return str(os.getenv("PIONERA_HOSTS_FILE") or "").strip()
+    configured = str(os.getenv("PIONERA_HOSTS_FILE") or "").strip()
+    if configured:
+        return configured
+    if _should_sync_deployer_hosts():
+        return local_menu_tools.get_hosts_path() or ""
+    return ""
 
 
 def _infrastructure_deployer_config_path():
@@ -3471,8 +3489,20 @@ def _normalized_topology_address(value):
     return text
 
 
+def _effective_vm_single_cluster_type():
+    try:
+        config = _load_effective_infrastructure_deployer_config(topology="vm-single")
+        return build_cluster_runtime(config, topology="vm-single").get("cluster_type", "minikube")
+    except Exception:
+        return "minikube"
+
+
 def _configured_vm_single_address():
     config = _load_effective_infrastructure_deployer_config(topology="vm-single")
+    cluster_type = _effective_vm_single_cluster_type()
+    candidates = _detect_vm_single_address_candidates() if cluster_type == "k3s" else {}
+    vm_ip = _normalized_topology_address(candidates.get("vm_ip"))
+    minikube_ip = _normalized_topology_address(candidates.get("minikube_ip"))
     for key in (
         "VM_SINGLE_ADDRESS",
         "VM_SINGLE_IP",
@@ -3482,6 +3512,8 @@ def _configured_vm_single_address():
     ):
         value = _normalized_topology_address(config.get(key))
         if value:
+            if cluster_type == "k3s" and vm_ip and minikube_ip and value == minikube_ip:
+                continue
             return value
     return ""
 
@@ -3497,6 +3529,7 @@ def _command_stdout(args):
 
 
 def _detect_vm_single_address_candidates():
+    cluster_type = _effective_vm_single_cluster_type()
     vm_ip = ""
     for token in _command_stdout(["hostname", "-I"]).split():
         candidate = _normalized_topology_address(token)
@@ -3511,13 +3544,18 @@ def _detect_vm_single_address_candidates():
             minikube_ip = candidate
             break
 
-    recommended_source = "minikube" if minikube_ip else ("vm" if vm_ip else "")
-    recommended_address = minikube_ip or vm_ip
+    if cluster_type == "k3s" and vm_ip:
+        recommended_source = "vm"
+        recommended_address = vm_ip
+    else:
+        recommended_source = "minikube" if minikube_ip else ("vm" if vm_ip else "")
+        recommended_address = minikube_ip or vm_ip
     return {
         "vm_ip": vm_ip,
         "minikube_ip": minikube_ip,
         "recommended_address": recommended_address,
         "recommended_source": recommended_source,
+        "cluster_type": cluster_type,
     }
 
 
@@ -3525,8 +3563,12 @@ def _synchronize_vm_single_addresses_after_level1():
     candidates = _detect_vm_single_address_candidates()
     minikube_ip = _normalized_topology_address(candidates.get("minikube_ip"))
     vm_ip = _normalized_topology_address(candidates.get("vm_ip"))
-    if not minikube_ip:
-        return {"status": "skipped", "reason": "minikube-ip-unavailable"}
+    cluster_type = str(candidates.get("cluster_type") or _effective_vm_single_cluster_type()).strip()
+    target_ip = vm_ip if cluster_type == "k3s" else minikube_ip
+    source = "vm" if cluster_type == "k3s" else "minikube"
+    if not target_ip:
+        reason = "vm-ip-unavailable" if cluster_type == "k3s" else "minikube-ip-unavailable"
+        return {"status": "skipped", "reason": reason}
 
     _seed_infrastructure_deployer_config_if_missing()
     config_path = _seed_infrastructure_topology_config_if_missing("vm-single")
@@ -3540,31 +3582,36 @@ def _synchronize_vm_single_addresses_after_level1():
     def _should_sync_shared(current_value):
         if not current_value:
             return True
-        if current_value == minikube_ip:
+        if current_value == target_ip:
             return False
+        if cluster_type == "k3s" and minikube_ip and current_value == minikube_ip:
+            return True
         return bool(vm_ip) and current_value == vm_ip
 
     if _should_sync_shared(current_vm_external):
-        updates["VM_EXTERNAL_IP"] = minikube_ip
+        updates["VM_EXTERNAL_IP"] = target_ip
     if _should_sync_shared(current_ingress):
-        updates["INGRESS_EXTERNAL_IP"] = minikube_ip
+        updates["INGRESS_EXTERNAL_IP"] = target_ip
 
     syncing_from_provisional_shared = bool(vm_ip) and baseline_shared == vm_ip
     shared_updated = bool({"VM_EXTERNAL_IP", "INGRESS_EXTERNAL_IP"} & set(updates))
 
     for key in ("VM_COMMON_IP", "VM_DATASPACE_IP", "VM_CONNECTORS_IP", "VM_COMPONENTS_IP"):
         current_value = _normalized_topology_address(raw_config.get(key))
-        if current_value == minikube_ip:
+        if current_value == target_ip:
+            continue
+        if cluster_type == "k3s" and minikube_ip and current_value == minikube_ip:
+            updates[key] = target_ip
             continue
         if not current_value:
             if shared_updated or syncing_from_provisional_shared:
-                updates[key] = minikube_ip
+                updates[key] = target_ip
             continue
         if vm_ip and current_value == vm_ip:
-            updates[key] = minikube_ip
+            updates[key] = target_ip
             continue
         if syncing_from_provisional_shared and current_value == baseline_shared:
-            updates[key] = minikube_ip
+            updates[key] = target_ip
 
     if not updates:
         return {"status": "skipped", "reason": "already-configured"}
@@ -3581,8 +3628,8 @@ def _synchronize_vm_single_addresses_after_level1():
             "INGRESS_EXTERNAL_IP",
         ),
     )
-    print("Updated vm-single topology address values from detected minikube ip.")
-    return {"status": "updated", "source": "minikube"}
+    print(f"Updated vm-single topology address values from detected {source} ip.")
+    return {"status": "updated", "source": source}
 
 
 def _write_key_value_updates(path, updates, preferred_order):
@@ -3944,17 +3991,26 @@ def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
     existing_content = _read_hosts_file_content(resolved_hosts_file)
     existing_hostnames = parse_hostnames(existing_content)
     required_keys = _host_plan_levels_required_for_levels(levels)
-    required_hostnames = _dedupe_ordered(
-        hostname
-        for key in required_keys
-        for hostname in list(plan.get(key) or [])
-    )
-    missing_hostnames = [
-        hostname
-        for hostname in required_hostnames
-        if hostname.lower() not in existing_hostnames
-    ]
     blocks = build_context_host_blocks(context, address=_deployer_hosts_address_override())
+    existing_addresses = _parse_hosts_addresses(existing_content)
+    expected_entries = [
+        entry
+        for block in _filter_host_blocks_for_levels(blocks, levels)
+        for entry in list(getattr(block, "entries", []) or [])
+    ]
+    required_hostnames = _dedupe_ordered(entry.hostname for entry in expected_entries)
+    missing_hostnames = []
+    for entry in expected_entries:
+        hostname_key = str(entry.hostname or "").strip().lower()
+        if not hostname_key:
+            continue
+        if hostname_key not in existing_hostnames:
+            missing_hostnames.append(entry.hostname)
+            continue
+        expected_address = str(entry.address or "").strip()
+        if expected_address and expected_address not in existing_addresses.get(hostname_key, set()):
+            missing_hostnames.append(entry.hostname)
+    missing_hostnames = _dedupe_ordered(missing_hostnames)
     legacy_external_hostnames = detect_legacy_external_hostnames(
         existing_content,
         block_names=[block.name for block in blocks],
@@ -3970,6 +4026,23 @@ def _build_hosts_readiness_plan(context, levels=None, hosts_file=None):
         "legacy_external_hostnames": legacy_external_hostnames,
         "hosts_plan": plan,
     }
+
+
+def _parse_hosts_addresses(content):
+    addresses = {}
+    for raw_line in (content or "").splitlines():
+        active_part = raw_line.split("#", 1)[0].strip()
+        if not active_part:
+            continue
+        parts = active_part.split()
+        if len(parts) < 2:
+            continue
+        address = parts[0].strip()
+        for hostname in parts[1:]:
+            hostname_key = hostname.strip().lower()
+            if hostname_key:
+                addresses.setdefault(hostname_key, set()).add(address)
+    return addresses
 
 
 def _sync_deployer_hosts_if_enabled(context, levels=None):
@@ -4173,6 +4246,20 @@ def _ensure_docker_client_ready_for_local_image_build(adapter):
     return True
 
 
+def _edc_local_cluster_runtime(adapter, topology="local"):
+    config_adapter = getattr(adapter, "config_adapter", None)
+    runtime_getter = getattr(config_adapter, "cluster_runtime", None)
+    if callable(runtime_getter):
+        try:
+            return str((runtime_getter() or {}).get("cluster_type") or "minikube").strip().lower() or "minikube"
+        except Exception:
+            pass
+    config_loader = getattr(config_adapter, "load_deployer_config", None)
+    config = dict(config_loader() or {}) if callable(config_loader) else {}
+    normalized_topology = normalize_topology(topology or getattr(adapter, "topology", None) or "local")
+    return build_cluster_runtime(config, topology=normalized_topology).get("cluster_type", "minikube")
+
+
 def _prepare_edc_local_connector_image_override(adapter):
     if _env_flag("PIONERA_SKIP_EDC_LOCAL_CONNECTOR_IMAGE_BUILD", default=False):
         raise RuntimeError(
@@ -4196,6 +4283,7 @@ def _prepare_edc_local_connector_image_override(adapter):
 
     _ensure_docker_client_ready_for_local_image_build(adapter)
     minikube_profile = _edc_local_minikube_profile(adapter)
+    cluster_runtime = _edc_local_cluster_runtime(adapter, topology=getattr(adapter, "topology", "local"))
     command = [
         "bash",
         script_path,
@@ -4206,11 +4294,14 @@ def _prepare_edc_local_connector_image_override(adapter):
         image_tag,
         "--minikube-profile",
         minikube_profile,
+        "--cluster-runtime",
+        cluster_runtime,
     ]
 
     print(
         "EDC connector image overrides are not configured. "
-        f"Preparing local image automatically: {image_name}:{image_tag}"
+        f"Preparing local image automatically: {image_name}:{image_tag} "
+        f"(cluster runtime: {cluster_runtime})"
     )
     result = subprocess.run(command, cwd=root_dir, check=False)
     if result.returncode != 0:
@@ -4227,10 +4318,11 @@ def _prepare_edc_local_connector_image_override(adapter):
         "image_name": image_name,
         "image_tag": image_tag,
         "minikube_profile": minikube_profile,
+        "cluster_runtime": cluster_runtime,
     }
 
 
-def _run_edc_local_image_script(script_path, minikube_profile, env):
+def _run_edc_local_image_script(script_path, minikube_profile, env, cluster_runtime="minikube"):
     root_dir = os.path.dirname(os.path.abspath(__file__))
     command = [
         "bash",
@@ -4238,6 +4330,8 @@ def _run_edc_local_image_script(script_path, minikube_profile, env):
         "--apply",
         "--minikube-profile",
         minikube_profile,
+        "--cluster-runtime",
+        cluster_runtime,
     ]
     result = subprocess.run(command, cwd=root_dir, check=False, env=env)
     if result.returncode != 0:
@@ -4271,6 +4365,7 @@ def _prepare_edc_local_dashboard_images(adapter, config):
 
     _ensure_docker_client_ready_for_local_image_build(adapter)
     minikube_profile = _edc_local_minikube_profile(adapter)
+    cluster_runtime = _edc_local_cluster_runtime(adapter, topology=getattr(adapter, "topology", "local"))
     env = dict(os.environ)
     env["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
     env["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
@@ -4280,10 +4375,11 @@ def _prepare_edc_local_dashboard_images(adapter, config):
     print(
         "EDC dashboard is enabled. Preparing local dashboard images automatically: "
         f"{images['dashboard_name']}:{images['dashboard_tag']} and "
-        f"{images['proxy_name']}:{images['proxy_tag']}"
+        f"{images['proxy_name']}:{images['proxy_tag']} "
+        f"(cluster runtime: {cluster_runtime})"
     )
-    _run_edc_local_image_script(dashboard_script, minikube_profile, env)
-    _run_edc_local_image_script(proxy_script, minikube_profile, env)
+    _run_edc_local_image_script(dashboard_script, minikube_profile, env, cluster_runtime=cluster_runtime)
+    _run_edc_local_image_script(proxy_script, minikube_profile, env, cluster_runtime=cluster_runtime)
 
     os.environ["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
     os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
@@ -4297,6 +4393,7 @@ def _prepare_edc_local_dashboard_images(adapter, config):
         "dashboard_image": f"{images['dashboard_name']}:{images['dashboard_tag']}",
         "dashboard_proxy_image": f"{images['proxy_name']}:{images['proxy_tag']}",
         "minikube_profile": minikube_profile,
+        "cluster_runtime": cluster_runtime,
     }
 
 
@@ -5919,6 +6016,23 @@ def run_run(
     )
 
 
+def _topology_runtime_environment_overrides(topology="local"):
+    normalized_topology = normalize_topology(topology)
+    if normalized_topology != "vm-single":
+        return {}
+    try:
+        config = _load_effective_infrastructure_deployer_config(topology=normalized_topology)
+        runtime = build_cluster_runtime(config, topology=normalized_topology)
+    except Exception:
+        return {}
+    if runtime.get("cluster_type") != "k3s":
+        return {}
+    kubeconfig = str(runtime.get("k3s_kubeconfig") or "").strip()
+    if not kubeconfig:
+        return {}
+    return {"KUBECONFIG": kubeconfig}
+
+
 def run_level(
     adapter,
     level,
@@ -5943,6 +6057,22 @@ def run_level(
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
+    if os.environ.get("PIONERA_LEVEL_RUNTIME_ENV_ACTIVE") != "true":
+        environment_overrides = _topology_runtime_environment_overrides(topology)
+        if environment_overrides:
+            environment_overrides["PIONERA_LEVEL_RUNTIME_ENV_ACTIVE"] = "true"
+            with _temporary_environment(environment_overrides):
+                return run_level(
+                    adapter,
+                    level_id,
+                    deployer_name=resolved_deployer_name,
+                    deployer_registry=deployer_registry,
+                    topology=topology,
+                    validation_engine_cls=validation_engine_cls,
+                    metrics_collector_cls=metrics_collector_cls,
+                    experiment_storage=experiment_storage,
+                    baseline=baseline,
+                )
     level_context = None
     level_local_capacity = None
     if normalized_topology != "local" and not (
@@ -6188,6 +6318,7 @@ def _run_interactive_level2_with_shared_foundation(
     baseline=False,
 ):
     shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=adapter_registry)
+    execution_context = _interactive_execution_context(topology)
     adapter = build_adapter(
         shared_adapter_name,
         adapter_registry=adapter_registry,
@@ -6204,7 +6335,10 @@ def _run_interactive_level2_with_shared_foundation(
             print("Shared common services are already healthy.")
             print("Level 2 manages the shared foundation used by all adapters in this cluster.")
 
-            if _interactive_confirm("Reuse shared common services?", default=True):
+            if _interactive_confirm(
+                f"Reuse shared common services ({execution_context})?",
+                default=True,
+            ):
                 announcer = getattr(infrastructure, "announce_level", None)
                 if callable(announcer):
                     announcer(2, "DEPLOY COMMON SERVICES")
@@ -6233,7 +6367,8 @@ def _run_interactive_level2_with_shared_foundation(
                 return payload
 
             if not _interactive_confirm(
-                "Recreate shared common services now? This resets common-srvs for all local adapters.",
+                f"Recreate shared common services now ({execution_context})? "
+                "This resets common-srvs for all adapters in this cluster.",
                 default=False,
             ):
                 print("Level 2 cancelled.")
@@ -6443,6 +6578,13 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print("=" * 50)
     print()
     print(f"Topology: {topology}")
+    try:
+        cluster_runtime = _resolve_interactive_cluster_runtime(topology)
+        print(f"Cluster runtime: {cluster_runtime.get('cluster_type', 'minikube')} (active)")
+        if normalize_topology(topology) == "vm-single" and cluster_runtime.get("cluster_type") == "k3s":
+            print(f"K3s kubeconfig: {cluster_runtime.get('k3s_kubeconfig')}")
+    except ValueError as exc:
+        print(f"Cluster runtime: invalid ({exc})")
     if adapter_name:
         print(f"Adapter: {adapter_name}")
     print()
@@ -6456,6 +6598,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print("[Operations]")
     print("S - Select adapter")
     print("T - Select topology")
+    print("K - Select cluster runtime")
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
     print("U - Show available access URLs")
@@ -6500,6 +6643,7 @@ def _print_interactive_help():
     print("    If you skip it, the menu still asks automatically when an action needs an adapter.")
     print("T - Use when you want to change the active topology for this menu session.")
     print("    It switches between local, vm-single and vm-distributed without editing configuration files.")
+    print("K - Use when vm-single is active and you want to choose Minikube or k3s for this menu session.")
     print("P - Use before deploying to inspect the plan without changing the environment.")
     print("    If Levels 3-6 need an adapter and none has been chosen yet, the menu asks for one automatically.")
     print("H - Use to inspect or apply local hosts entries needed by the selected adapter.")
@@ -6588,6 +6732,165 @@ def _select_topology_interactive(current_topology="local", available_topologies=
     return topologies[index]
 
 
+def _resolve_interactive_cluster_runtime(topology="local"):
+    normalized_topology = normalize_topology(topology)
+    config = _load_effective_infrastructure_deployer_config(topology=normalized_topology)
+    return build_cluster_runtime(config, topology=normalized_topology)
+
+
+def _interactive_cluster_runtime_label(topology="local"):
+    try:
+        return _resolve_interactive_cluster_runtime(topology).get("cluster_type", "minikube")
+    except ValueError as exc:
+        return f"invalid ({exc})"
+
+
+def _interactive_execution_context(topology="local", adapter_name=None):
+    parts = []
+    if adapter_name:
+        parts.append(f"adapter: {adapter_name}")
+    parts.append(f"topology: {normalize_topology(topology)}")
+    parts.append(f"cluster: {_interactive_cluster_runtime_label(topology)}")
+    return ", ".join(parts)
+
+
+def _select_cluster_runtime_interactive(current_runtime=None, topology="local"):
+    normalized_topology = normalize_topology(topology)
+    if normalized_topology != "vm-single":
+        runtime = _interactive_cluster_runtime_label(normalized_topology)
+        print()
+        print(f"Cluster runtime selection is currently only configurable for vm-single. Active runtime: {runtime}")
+        return current_runtime or runtime
+
+    current = normalize_cluster_type(
+        current_runtime or _resolve_interactive_cluster_runtime(normalized_topology).get("cluster_type"),
+        topology=normalized_topology,
+    )
+
+    print()
+    print("Available cluster runtimes for vm-single:")
+    for index, cluster_type in enumerate(SUPPORTED_CLUSTER_TYPES, start=1):
+        marker = " (current)" if cluster_type == current else ""
+        print(f"{index} - {cluster_type}{marker}")
+    print("B - Back")
+
+    choice = _interactive_read("\nSelection: ").strip().upper()
+    if not choice or choice == "B":
+        return current
+
+    try:
+        index = int(choice) - 1
+    except ValueError:
+        print("Invalid selection.")
+        return current
+
+    if index < 0 or index >= len(SUPPORTED_CLUSTER_TYPES):
+        print("Invalid selection.")
+        return current
+    return SUPPORTED_CLUSTER_TYPES[index]
+
+
+def _detect_k3s_kubeconfig_candidate():
+    env_kubeconfig = os.environ.get("KUBECONFIG")
+    for candidate in (token for token in str(env_kubeconfig or "").split(os.pathsep) if token):
+        normalized = os.path.abspath(os.path.expanduser(candidate))
+        if normalized.endswith("/k3s.yaml") and os.path.isfile(normalized):
+            return normalized
+    return "/etc/rancher/k3s/k3s.yaml"
+
+
+def _k3s_kubeconfig_value(existing_config):
+    candidate = str((existing_config or {}).get("K3S_KUBECONFIG") or "").strip()
+    normalized = os.path.abspath(os.path.expanduser(candidate)) if candidate else ""
+    if normalized.endswith("/.kube/config"):
+        return _detect_k3s_kubeconfig_candidate()
+    return candidate or _detect_k3s_kubeconfig_candidate()
+
+
+def _cluster_runtime_config_updates(cluster_runtime, existing_config=None):
+    normalized = normalize_cluster_type(cluster_runtime, topology="vm-single")
+    existing = dict(existing_config or {})
+    updates = {"CLUSTER_TYPE": normalized}
+    if normalized == "k3s":
+        runtime = build_cluster_runtime({"CLUSTER_TYPE": "k3s"}, topology="vm-single")
+        detected_kubeconfig = _detect_k3s_kubeconfig_candidate()
+        existing_ingress_service_type = str(existing.get("K3S_INGRESS_SERVICE_TYPE") or "").strip()
+        k3s_ingress_service_type = existing_ingress_service_type or runtime["k3s_ingress_service_type"]
+        if existing_ingress_service_type == "NodePort":
+            k3s_ingress_service_type = runtime["k3s_ingress_service_type"]
+        updates.update(
+            {
+                "K3S_KUBECONFIG": _k3s_kubeconfig_value(existing) or detected_kubeconfig,
+                "K3S_INSTALL_EXEC": existing.get("K3S_INSTALL_EXEC") or runtime["k3s_install_exec"],
+                "K3S_SERVICE_NAME": existing.get("K3S_SERVICE_NAME") or runtime["k3s_service_name"],
+                "K3S_INGRESS_CONTROLLER": existing.get("K3S_INGRESS_CONTROLLER")
+                or runtime["k3s_ingress_controller"],
+                "K3S_INGRESS_SERVICE_TYPE": k3s_ingress_service_type,
+                "K3S_REPAIR_ON_LEVEL1": existing.get("K3S_REPAIR_ON_LEVEL1") or runtime["k3s_repair_on_level1"],
+                "K3S_WRITE_KUBECONFIG_MODE": existing.get("K3S_WRITE_KUBECONFIG_MODE")
+                or runtime["k3s_write_kubeconfig_mode"],
+            }
+        )
+    return updates
+
+
+def _write_key_value_config_updates(config_path, updates):
+    lines = []
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+
+    pending = dict(updates)
+    rendered = []
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in raw_line:
+            rendered.append(raw_line)
+            continue
+        key, _value = raw_line.split("=", 1)
+        normalized_key = key.strip()
+        if normalized_key in pending:
+            rendered.append(f"{normalized_key}={pending.pop(normalized_key)}\n")
+        else:
+            rendered.append(raw_line)
+
+    if rendered and not rendered[-1].endswith("\n"):
+        rendered[-1] = f"{rendered[-1]}\n"
+    for key, value in pending.items():
+        rendered.append(f"{key}={value}\n")
+
+    with open(config_path, "w", encoding="utf-8") as handle:
+        handle.writelines(rendered)
+
+
+def _persist_vm_single_cluster_runtime(cluster_runtime):
+    config_path = _seed_infrastructure_topology_config_if_missing("vm-single")
+    existing_config = load_raw_deployer_config(config_path)
+    updates = _cluster_runtime_config_updates(cluster_runtime, existing_config=existing_config)
+    _write_key_value_config_updates(config_path, updates)
+    print(f"Saved cluster runtime '{updates['CLUSTER_TYPE']}' in {_framework_relative_path(config_path)}.")
+    return config_path
+
+
+def _offer_persist_vm_single_cluster_runtime(cluster_runtime, previous_runtime=None):
+    normalized = normalize_cluster_type(cluster_runtime, topology="vm-single")
+    previous = normalize_cluster_type(previous_runtime, topology="vm-single") if previous_runtime else None
+    if previous == normalized:
+        return None
+    if not _interactive_confirm(
+        "Save this vm-single cluster runtime in deployers/infrastructure/topologies/vm-single.config?",
+        default=True,
+    ):
+        print("Cluster runtime kept for this menu session only.")
+        return None
+    return _persist_vm_single_cluster_runtime(normalized)
+
+
+def _set_session_cluster_runtime_override(cluster_runtime):
+    os.environ["PIONERA_CLUSTER_TYPE"] = normalize_cluster_type(cluster_runtime, topology="vm-single")
+    print(f"Active cluster runtime set to {os.environ['PIONERA_CLUSTER_TYPE']}.")
+
+
 def _print_adapter_selection_hint(adapter_name):
     if str(adapter_name or "").strip().lower() not in {"edc", "inesdata"}:
         return
@@ -6625,7 +6928,7 @@ def _interactive_ensure_hosts_ready_for_levels(
 
     hosts_file = readiness.get("hosts_file") or "(not detected)"
     print()
-    print(f"Host entries are missing for adapter '{current_adapter}' in this execution.")
+    print(f"Host entries are missing for adapter '{current_adapter}' in this execution, or existing entries are outdated.")
     print(f"Hosts file: {hosts_file}")
     for hostname in missing_hostnames:
         print(f"- {hostname}")
@@ -7072,6 +7375,7 @@ def _run_recreate_dataspace_interactive(
     print("=" * 50)
     print(f"Adapter: {resolved_deployer_name}")
     print(f"Topology: {topology}")
+    print(f"Cluster runtime: {_interactive_cluster_runtime_label(topology)}")
     print(f"Dataspace: {dataspace_name}")
     print(f"Namespace: {plan.get('namespace')}")
     print("Shared services: preserved")
@@ -7085,7 +7389,10 @@ def _run_recreate_dataspace_interactive(
         print("Dataspace recreation cancelled.")
         return None
 
-    with_connectors = _interactive_confirm("Recreate Level 4 connectors now?", default=False)
+    with_connectors = _interactive_confirm(
+        f"Recreate Level 4 connectors now ({_interactive_execution_context(topology, current_adapter)})?",
+        default=False,
+    )
 
     return run_recreate_dataspace(
         adapter,
@@ -7134,254 +7441,108 @@ def run_interactive_menu(
     if len(registry) == 1:
         current_adapter = sorted(registry)[0]
 
-    if prompt_initial_topology:
-        selected_topology = _select_topology_interactive(
-            topology,
-            available_topologies=SUPPORTED_TOPOLOGIES,
-        )
-        topology = selected_topology
-        print(f"Active topology set to {topology}.")
-        if normalize_topology(topology) == "vm-single":
-            _interactive_offer_vm_single_address_configuration(required=False)
+    original_cluster_type_env_present = "PIONERA_CLUSTER_TYPE" in os.environ
+    original_cluster_type_env = os.environ.get("PIONERA_CLUSTER_TYPE")
 
-    while True:
-        _print_interactive_menu(current_adapter, adapter_registry=registry, topology=topology)
-        choice = _interactive_read("\nSelection: ").strip().upper()
+    def restore_cluster_type_env():
+        if original_cluster_type_env_present:
+            os.environ["PIONERA_CLUSTER_TYPE"] = original_cluster_type_env
+        else:
+            os.environ.pop("PIONERA_CLUSTER_TYPE", None)
 
-        if not choice or choice == "Q":
-            print("\nExiting Dataspace Validation Environment\n")
-            return {"status": "exited", "adapter": current_adapter, "topology": topology}
+    try:
+        if prompt_initial_topology:
+            selected_topology = _select_topology_interactive(
+                topology,
+                available_topologies=SUPPORTED_TOPOLOGIES,
+            )
+            topology = selected_topology
+            print(f"Active topology set to {topology}.")
+            if normalize_topology(topology) == "vm-single":
+                previous_runtime = _interactive_cluster_runtime_label(topology)
+                selected_runtime = _select_cluster_runtime_interactive(topology=topology)
+                _set_session_cluster_runtime_override(selected_runtime)
+                _offer_persist_vm_single_cluster_runtime(selected_runtime, previous_runtime=previous_runtime)
+                _interactive_offer_vm_single_address_configuration(required=False)
 
-        try:
-            if choice in {"?", "HELP"}:
-                _print_interactive_help()
-                continue
+        while True:
+            _print_interactive_menu(current_adapter, adapter_registry=registry, topology=topology)
+            choice = _interactive_read("\nSelection: ").strip().upper()
 
-            if choice == "S":
-                selected_adapter = _select_adapter_interactive(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if selected_adapter != current_adapter:
-                    current_adapter = selected_adapter
-                    _print_adapter_selection_hint(current_adapter)
-                continue
+            if not choice or choice == "Q":
+                print("\nExiting Dataspace Validation Environment\n")
+                return {"status": "exited", "adapter": current_adapter, "topology": topology}
 
-            if choice == "T":
-                selected_topology = _select_topology_interactive(
-                    topology,
-                    available_topologies=SUPPORTED_TOPOLOGIES,
-                )
-                if selected_topology != topology:
-                    topology = selected_topology
-                    print(f"Active topology set to {topology}.")
+            try:
+                if choice in {"?", "HELP"}:
+                    _print_interactive_help()
+                    continue
+
+                if choice == "S":
+                    selected_adapter = _select_adapter_interactive(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if selected_adapter != current_adapter:
+                        current_adapter = selected_adapter
+                        _print_adapter_selection_hint(current_adapter)
+                    continue
+
+                if choice == "T":
+                    selected_topology = _select_topology_interactive(
+                        topology,
+                        available_topologies=SUPPORTED_TOPOLOGIES,
+                    )
+                    if selected_topology != topology:
+                        topology = selected_topology
+                        print(f"Active topology set to {topology}.")
+                        if normalize_topology(topology) == "vm-single":
+                            previous_runtime = _interactive_cluster_runtime_label(topology)
+                            selected_runtime = _select_cluster_runtime_interactive(topology=topology)
+                            _set_session_cluster_runtime_override(selected_runtime)
+                            _offer_persist_vm_single_cluster_runtime(selected_runtime, previous_runtime=previous_runtime)
+                            _interactive_offer_vm_single_address_configuration(required=False)
+                    continue
+
+                if choice == "K":
+                    previous_runtime = _interactive_cluster_runtime_label(topology)
+                    selected_runtime = _select_cluster_runtime_interactive(
+                        topology=topology,
+                    )
                     if normalize_topology(topology) == "vm-single":
-                        _interactive_offer_vm_single_address_configuration(required=False)
-                continue
-
-            if normalize_topology(topology) == "vm-single" and _menu_action_requires_vm_single_address(choice):
-                if not _interactive_offer_vm_single_address_configuration(required=True):
+                        _set_session_cluster_runtime_override(selected_runtime)
+                        _offer_persist_vm_single_cluster_runtime(selected_runtime, previous_runtime=previous_runtime)
                     continue
 
-            if choice == "B":
-                _run_legacy_menu_action("bootstrap")
-                continue
+                if normalize_topology(topology) == "vm-single" and _menu_action_requires_vm_single_address(choice):
+                    if not _interactive_offer_vm_single_address_configuration(required=True):
+                        continue
 
-            if choice == "D":
-                _run_legacy_menu_action("doctor")
-                continue
-
-            if choice == "R":
-                result = _run_local_repair_interactive(
-                    current_adapter,
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                )
-                if result is not None:
-                    current_adapter = result.get("adapter") or current_adapter
-                    _print_action_result(result)
-                continue
-
-            if choice == "C":
-                _run_legacy_menu_action("cleanup")
-                continue
-
-            if choice == "L":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
+                if choice == "B":
+                    _run_legacy_menu_action("bootstrap")
                     continue
-                current_adapter = selected_adapter
-                _run_legacy_menu_action("local_images", current_adapter=current_adapter)
-                continue
 
-            if choice == "I":
-                _run_legacy_menu_action("inesdata_ui")
-                continue
-
-            if choice == "O":
-                _run_legacy_menu_action("ontology_hub_ui")
-                continue
-
-            if choice == "A":
-                _run_legacy_menu_action("ai_model_hub_ui")
-                continue
-
-            if choice == "X":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
+                if choice == "D":
+                    _run_legacy_menu_action("doctor")
                     continue
-                current_adapter = selected_adapter
-                _print_action_result(
-                    _run_recreate_dataspace_interactive(
-                        current_adapter=current_adapter,
+
+                if choice == "R":
+                    result = _run_local_repair_interactive(
+                        current_adapter,
                         adapter_registry=registry,
                         deployer_registry=deployer_registry,
                         topology=topology,
                     )
-                )
-                continue
+                    if result is not None:
+                        current_adapter = result.get("adapter") or current_adapter
+                        _print_action_result(result)
+                    continue
 
-            if choice == "P":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
+                if choice == "C":
+                    _run_legacy_menu_action("cleanup")
                     continue
-                current_adapter = selected_adapter
-                preview = build_dry_run_preview(
-                    adapter_name=current_adapter,
-                    command="deploy",
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    validation_engine_cls=validation_engine_cls,
-                    metrics_collector_cls=metrics_collector_cls,
-                    experiment_storage=experiment_storage,
-                    topology=topology,
-                    include_deployer_dry_run=True,
-                )
-                _print_action_result(preview)
-                continue
 
-            if choice == "H":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
-                    continue
-                current_adapter = selected_adapter
-                adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
-                if _should_sync_deployer_hosts() and not _interactive_confirm(
-                    "PIONERA_SYNC_HOSTS is enabled. Apply changes to the hosts file?",
-                    default=False,
-                ):
-                    print("Hosts operation cancelled.")
-                    continue
-                result = run_hosts(
-                    adapter,
-                    deployer_name=current_adapter,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                )
-                _print_action_result(result)
-                result = _interactive_offer_hosts_plan_apply(
-                    result,
-                    adapter,
-                    deployer_name=current_adapter,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                )
-                continue
-
-            if choice == "U":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
-                    continue
-                current_adapter = selected_adapter
-                adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
-                _print_action_result(
-                    run_available_access_urls(
-                        adapter,
-                        deployer_name=current_adapter,
-                        deployer_registry=deployer_registry,
-                        topology=topology,
-                    )
-                )
-                continue
-
-            if choice == "M":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
-                    continue
-                current_adapter = selected_adapter
-                if not _interactive_confirm(f"Run metrics for {current_adapter}?", default=False):
-                    print("Metrics cancelled.")
-                    continue
-                kafka_enabled = _interactive_confirm("Enable standalone Kafka broker benchmark?", default=False)
-                adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
-                _print_action_result(
-                    run_metrics(
-                        adapter,
-                        deployer_name=current_adapter,
-                        deployer_registry=deployer_registry,
-                        topology=topology,
-                        metrics_collector_cls=metrics_collector_cls,
-                        experiment_storage=experiment_storage,
-                        kafka_enabled=kafka_enabled,
-                        kafka_manager_cls=kafka_manager_cls,
-                    )
-                )
-                continue
-
-            if choice == "0":
-                selected_adapter = _interactive_require_adapter_selection(
-                    current_adapter,
-                    adapter_registry=registry,
-                )
-                if not selected_adapter:
-                    continue
-                current_adapter = selected_adapter
-                if not _interactive_confirm(
-                    f"Run all levels 1-6 with adapter {current_adapter} for Levels 3-6 (topology: {topology})?",
-                    default=False,
-                ):
-                    print("Full level execution cancelled.")
-                    continue
-                result = _run_interactive_full_levels(
-                    current_adapter,
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                    validation_engine_cls=validation_engine_cls,
-                    metrics_collector_cls=metrics_collector_cls,
-                    experiment_storage=experiment_storage,
-                )
-                if result is not None:
-                    _print_action_result(result)
-                continue
-
-            if choice in {str(level_id) for level_id in LEVEL_DESCRIPTIONS}:
-                level_id = int(choice)
-                level_adapter = current_adapter
-                level_scope = ""
-                if level_id in {1, 2}:
-                    level_adapter = _shared_foundation_adapter_name(adapter_registry=registry)
-                    level_scope = " (shared foundation)"
-                else:
+                if choice == "L":
                     selected_adapter = _interactive_require_adapter_selection(
                         current_adapter,
                         adapter_registry=registry,
@@ -7389,54 +7550,158 @@ def run_interactive_menu(
                     if not selected_adapter:
                         continue
                     current_adapter = selected_adapter
-                    level_adapter = selected_adapter
-                    level_scope = f" for {selected_adapter}"
-                if not _interactive_confirm(
-                    f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]}{level_scope} (topology: {topology})?",
-                    default=False,
-                ):
-                    print(f"Level {level_id} cancelled.")
-                    continue
-                if level_id >= 3 and not _interactive_ensure_hosts_ready_for_levels(
-                    level_adapter,
-                    levels=[level_id],
-                    adapter_registry=registry,
-                    deployer_registry=deployer_registry,
-                    topology=topology,
-                ):
+                    _run_legacy_menu_action("local_images", current_adapter=current_adapter)
                     continue
 
-                if level_id == 1:
-                    shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=registry)
-                    shared_adapter = build_adapter(
-                        shared_adapter_name,
+                if choice == "I":
+                    _run_legacy_menu_action("inesdata_ui")
+                    continue
+
+                if choice == "O":
+                    _run_legacy_menu_action("ontology_hub_ui")
+                    continue
+
+                if choice == "A":
+                    _run_legacy_menu_action("ai_model_hub_ui")
+                    continue
+
+                if choice == "X":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
                         adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    _print_action_result(
+                        _run_recreate_dataspace_interactive(
+                            current_adapter=current_adapter,
+                            adapter_registry=registry,
+                            deployer_registry=deployer_registry,
+                            topology=topology,
+                        )
+                    )
+                    continue
+
+                if choice == "P":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    preview = build_dry_run_preview(
+                        adapter_name=current_adapter,
+                        command="deploy",
+                        adapter_registry=registry,
+                        deployer_registry=deployer_registry,
+                        validation_engine_cls=validation_engine_cls,
+                        metrics_collector_cls=metrics_collector_cls,
+                        experiment_storage=experiment_storage,
+                        topology=topology,
+                        include_deployer_dry_run=True,
+                    )
+                    _print_action_result(preview)
+                    continue
+
+                if choice == "H":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
+                    if _should_sync_deployer_hosts() and not _interactive_confirm(
+                        "PIONERA_SYNC_HOSTS is enabled. Apply changes to the hosts file?",
+                        default=False,
+                    ):
+                        print("Hosts operation cancelled.")
+                        continue
+                    result = run_hosts(
+                        adapter,
+                        deployer_name=current_adapter,
+                        deployer_registry=deployer_registry,
                         topology=topology,
                     )
-                    _print_action_result(
-                        {
-                            "status": "completed",
-                            "scope": "shared foundation",
-                            "adapter": level_adapter,
-                            "topology": topology,
-                            "levels": [
-                                run_level(
-                                    shared_adapter,
-                                    1,
-                                    deployer_name=shared_adapter_name,
-                                    deployer_registry=deployer_registry,
-                                    topology=topology,
-                                    validation_engine_cls=validation_engine_cls,
-                                    metrics_collector_cls=metrics_collector_cls,
-                                    experiment_storage=experiment_storage,
-                                )
-                            ],
-                        }
+                    _print_action_result(result)
+                    result = _interactive_offer_hosts_plan_apply(
+                        result,
+                        adapter,
+                        deployer_name=current_adapter,
+                        deployer_registry=deployer_registry,
+                        topology=topology,
                     )
                     continue
 
-                if level_id == 2:
-                    result = _run_interactive_level2_with_shared_foundation(
+                if choice == "U":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
+                    _print_action_result(
+                        run_available_access_urls(
+                            adapter,
+                            deployer_name=current_adapter,
+                            deployer_registry=deployer_registry,
+                            topology=topology,
+                        )
+                    )
+                    continue
+
+                if choice == "M":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    if not _interactive_confirm(
+                        f"Run metrics ({_interactive_execution_context(topology, current_adapter)})?",
+                        default=False,
+                    ):
+                        print("Metrics cancelled.")
+                        continue
+                    kafka_enabled = _interactive_confirm("Enable standalone Kafka broker benchmark?", default=False)
+                    adapter = build_adapter(current_adapter, adapter_registry=registry, topology=topology)
+                    _print_action_result(
+                        run_metrics(
+                            adapter,
+                            deployer_name=current_adapter,
+                            deployer_registry=deployer_registry,
+                            topology=topology,
+                            metrics_collector_cls=metrics_collector_cls,
+                            experiment_storage=experiment_storage,
+                            kafka_enabled=kafka_enabled,
+                            kafka_manager_cls=kafka_manager_cls,
+                        )
+                    )
+                    continue
+
+                if choice == "0":
+                    selected_adapter = _interactive_require_adapter_selection(
+                        current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if not selected_adapter:
+                        continue
+                    current_adapter = selected_adapter
+                    if not _interactive_confirm(
+                        f"Run all levels 1-6 with adapter {current_adapter} for Levels 3-6 "
+                        f"({_interactive_execution_context(topology)})?",
+                        default=False,
+                    ):
+                        print("Full level execution cancelled.")
+                        continue
+                    result = _run_interactive_full_levels(
+                        current_adapter,
                         adapter_registry=registry,
                         deployer_registry=deployer_registry,
                         topology=topology,
@@ -7445,36 +7710,113 @@ def run_interactive_menu(
                         experiment_storage=experiment_storage,
                     )
                     if result is not None:
+                        _print_action_result(result)
+                    continue
+
+                if choice in {str(level_id) for level_id in LEVEL_DESCRIPTIONS}:
+                    level_id = int(choice)
+                    level_adapter = current_adapter
+                    level_scope = ""
+                    if level_id in {1, 2}:
+                        level_adapter = _shared_foundation_adapter_name(adapter_registry=registry)
+                        level_scope = " (shared foundation)"
+                    else:
+                        selected_adapter = _interactive_require_adapter_selection(
+                            current_adapter,
+                            adapter_registry=registry,
+                        )
+                        if not selected_adapter:
+                            continue
+                        current_adapter = selected_adapter
+                        level_adapter = selected_adapter
+                        level_scope = f" for {selected_adapter}"
+                    if not _interactive_confirm(
+                        f"Run Level {level_id}: {LEVEL_DESCRIPTIONS[level_id]}{level_scope} "
+                        f"({_interactive_execution_context(topology)})?",
+                        default=False,
+                    ):
+                        print(f"Level {level_id} cancelled.")
+                        continue
+                    if level_id >= 3 and not _interactive_ensure_hosts_ready_for_levels(
+                        level_adapter,
+                        levels=[level_id],
+                        adapter_registry=registry,
+                        deployer_registry=deployer_registry,
+                        topology=topology,
+                    ):
+                        continue
+
+                    if level_id == 1:
+                        shared_adapter_name = _shared_foundation_adapter_name(adapter_registry=registry)
+                        shared_adapter = build_adapter(
+                            shared_adapter_name,
+                            adapter_registry=registry,
+                            topology=topology,
+                        )
                         _print_action_result(
                             {
                                 "status": "completed",
                                 "scope": "shared foundation",
                                 "adapter": level_adapter,
                                 "topology": topology,
-                                "levels": [result],
+                                "levels": [
+                                    run_level(
+                                        shared_adapter,
+                                        1,
+                                        deployer_name=shared_adapter_name,
+                                        deployer_registry=deployer_registry,
+                                        topology=topology,
+                                        validation_engine_cls=validation_engine_cls,
+                                        metrics_collector_cls=metrics_collector_cls,
+                                        experiment_storage=experiment_storage,
+                                    )
+                                ],
                             }
                         )
+                        continue
+
+                    if level_id == 2:
+                        result = _run_interactive_level2_with_shared_foundation(
+                            adapter_registry=registry,
+                            deployer_registry=deployer_registry,
+                            topology=topology,
+                            validation_engine_cls=validation_engine_cls,
+                            metrics_collector_cls=metrics_collector_cls,
+                            experiment_storage=experiment_storage,
+                        )
+                        if result is not None:
+                            _print_action_result(
+                                {
+                                    "status": "completed",
+                                    "scope": "shared foundation",
+                                    "adapter": level_adapter,
+                                    "topology": topology,
+                                    "levels": [result],
+                                }
+                            )
+                        continue
+
+                    _print_action_result(
+                        run_levels(
+                            level_adapter,
+                            levels=[level_id],
+                            adapter_registry=registry,
+                            deployer_registry=deployer_registry,
+                            topology=topology,
+                            validation_engine_cls=validation_engine_cls,
+                            metrics_collector_cls=metrics_collector_cls,
+                            experiment_storage=experiment_storage,
+                        )
+                    )
                     continue
 
-                _print_action_result(
-                    run_levels(
-                        level_adapter,
-                        levels=[level_id],
-                        adapter_registry=registry,
-                        deployer_registry=deployer_registry,
-                        topology=topology,
-                        validation_engine_cls=validation_engine_cls,
-                        metrics_collector_cls=metrics_collector_cls,
-                        experiment_storage=experiment_storage,
-                    )
-                )
-                continue
-
-            print("Invalid selection. Please try again.")
-        except KeyboardInterrupt:
-            print("\nOperation cancelled by user.\n")
-        except Exception as exc:
-            print(f"\nOperation error: {exc}\n")
+                print("Invalid selection. Please try again.")
+            except KeyboardInterrupt:
+                print("\nOperation cancelled by user.\n")
+            except Exception as exc:
+                print(f"\nOperation error: {exc}\n")
+    finally:
+        restore_cluster_type_env()
 
 
 def print_available_adapters(adapter_registry=None):

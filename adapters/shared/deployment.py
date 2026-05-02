@@ -8,7 +8,13 @@ import requests
 import yaml
 
 from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
-from deployers.shared.lib.topology import LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY, normalize_topology
+from deployers.shared.lib.cluster_runtime import build_cluster_runtime
+from deployers.shared.lib.topology import (
+    LOCAL_TOPOLOGY,
+    VM_SINGLE_TOPOLOGY,
+    build_topology_profile,
+    normalize_topology,
+)
 from runtime_dependencies import ensure_python_requirements
 
 
@@ -221,9 +227,50 @@ class SharedDataspaceDeploymentAdapter:
         self._cleanup_dataspace_before_recreate()
         return self.deploy_dataspace()
 
-    def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None):
-        if minikube_ip is None:
-            minikube_ip = self.run("minikube ip", capture=True) or self.config.MINIKUBE_IP
+    def _deployer_config(self):
+        load_config = getattr(self.config_adapter, "load_deployer_config", None)
+        if callable(load_config):
+            try:
+                return dict(load_config() or {})
+            except Exception:
+                return {}
+        return {}
+
+    def _cluster_runtime(self, topology):
+        runtime_getter = getattr(self.config_adapter, "cluster_runtime", None)
+        if callable(runtime_getter):
+            try:
+                runtime = dict(runtime_getter() or {})
+            except Exception:
+                runtime = {}
+            if runtime:
+                return runtime
+        return build_cluster_runtime(self._deployer_config(), topology=topology)
+
+    def _host_alias_ip_for_topology(self, topology):
+        normalized_topology = normalize_topology(topology)
+        cluster_type = str(self._cluster_runtime(normalized_topology).get("cluster_type") or "minikube").strip().lower()
+        if normalized_topology == LOCAL_TOPOLOGY or cluster_type == "minikube":
+            return self.run("minikube ip", capture=True) or getattr(self.config, "MINIKUBE_IP", "")
+
+        if normalized_topology == VM_SINGLE_TOPOLOGY and cluster_type == "k3s":
+            profile = build_topology_profile(VM_SINGLE_TOPOLOGY, self._deployer_config())
+            return str(profile.ingress_external_ip or profile.default_address or "").strip()
+
+        return ""
+
+    def update_helm_values_with_host_aliases(self, values_file, minikube_ip=None, topology=None):
+        host_alias_ip = minikube_ip or self._host_alias_ip_for_topology(
+            topology
+            or getattr(self.config_adapter, "topology", None)
+            or getattr(self, "topology", None)
+            or LOCAL_TOPOLOGY
+        )
+        if not host_alias_ip:
+            self._fail(
+                "Could not resolve registration-service hostAliases IP",
+                root_cause="check topology address and cluster runtime configuration",
+            )
 
         with open(values_file) as f:
             values = yaml.safe_load(f)
@@ -238,7 +285,7 @@ class SharedDataspaceDeploymentAdapter:
             hostnames = self.config.host_alias_domains()
 
         values["hostAliases"] = [{
-            "ip": minikube_ip,
+            "ip": host_alias_ip,
             "hostnames": hostnames
         }]
 
@@ -578,9 +625,7 @@ class SharedDataspaceDeploymentAdapter:
             self._fail("Registration service values file not found")
 
         if update_minikube_host_aliases:
-            minikube_ip = self.run("minikube ip", capture=True)
-            if minikube_ip:
-                self.update_helm_values_with_host_aliases(values_file, minikube_ip)
+            self.update_helm_values_with_host_aliases(values_file, topology=normalized_topology)
 
         print("\nDeploying registration-service...")
         if not self.infrastructure.deploy_helm_release(
@@ -621,5 +666,5 @@ class SharedDataspaceDeploymentAdapter:
         return self._deploy_dataspace_runtime(
             topology=normalized_topology,
             require_tunnel_prompt=False,
-            update_minikube_host_aliases=False,
+            update_minikube_host_aliases=True,
         )

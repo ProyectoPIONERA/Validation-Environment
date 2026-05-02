@@ -30,10 +30,4 @@ ingress:
   registration:
     hostname:
       registration-service-{{ keys.dataspace_name }}{{ '.ds.dataspaceunit-project.eu' if keys.environment == 'PRO' else '.dev.ds.dataspaceunit.upm' }}
-hostAliases:
-- ip: "192.168.49.2"
-  hostnames:
-  - "auth.dev.ed.dataspaceunit.upm"
-  - "admin.auth.dev.ed.dataspaceunit.upm"
-  - "minio.dev.ed.dataspaceunit.upm"
-  - "console.minio-s3.dev.ed.dataspaceunit.upm"
+hostAliases: []

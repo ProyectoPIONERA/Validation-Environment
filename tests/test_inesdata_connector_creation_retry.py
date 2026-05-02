@@ -309,11 +309,11 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             ],
         )
 
-    def test_update_connector_host_aliases_skips_non_local_topology(self):
+    def test_update_connector_host_aliases_skips_vm_distributed_topology(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ConnectorRetryConfig(tmpdir)
             config_adapter = ConnectorRetryConfigAdapter(tmpdir)
-            config_adapter.topology = "vm-single"
+            config_adapter.topology = "vm-distributed"
             values_path = config.connector_values_file("conn-a-pilot")
             with open(values_path, "w", encoding="utf-8") as handle:
                 yaml.safe_dump({"hostAliases": []}, handle, sort_keys=False)
@@ -338,6 +338,61 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 rendered = yaml.safe_load(handle)
 
         self.assertEqual(rendered["hostAliases"], [])
+        run.assert_not_called()
+
+    def test_update_connector_host_aliases_uses_vm_single_k3s_ingress_ip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ConnectorRetryConfig(tmpdir)
+
+            class K3sConfigAdapter(ConnectorRetryConfigAdapter):
+                topology = "vm-single"
+
+                def load_deployer_config(self):
+                    config_data = super().load_deployer_config()
+                    config_data.update(
+                        {
+                            "CLUSTER_TYPE": "k3s",
+                            "VM_EXTERNAL_IP": "192.168.122.134",
+                            "INGRESS_EXTERNAL_IP": "192.168.122.134",
+                        }
+                    )
+                    return config_data
+
+                def host_alias_domains(self, ds_name=None, ds_namespace=None):
+                    del ds_namespace
+                    return [
+                        "auth.dev.ed.dataspaceunit.upm",
+                        f"registration-service-{ds_name}.dev.ds.dataspaceunit.upm",
+                    ]
+
+            config_adapter = K3sConfigAdapter(tmpdir)
+            values_path = config.connector_values_file("conn-a-demo")
+            with open(values_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump({"hostAliases": []}, handle, sort_keys=False)
+
+            run = mock.Mock(return_value="192.168.49.2")
+            adapter = INESDataConnectorsAdapter(
+                run=run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=object(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+
+            adapter.update_connector_host_aliases(
+                values_path,
+                ["conn-a-demo", "conn-b-demo"],
+                connector_name="conn-a-demo",
+                ds_name="demo",
+            )
+
+            with open(values_path, "r", encoding="utf-8") as handle:
+                rendered = yaml.safe_load(handle)
+
+        self.assertEqual(rendered["hostAliases"][0]["ip"], "192.168.122.134")
+        self.assertIn("auth.dev.ed.dataspaceunit.upm", rendered["hostAliases"][0]["hostnames"])
+        self.assertIn("conn-a-demo.dev.ds.dataspaceunit.upm", rendered["hostAliases"][0]["hostnames"])
         run.assert_not_called()
 
     def test_update_connector_layout_metadata_persists_namespace_plan_for_connector(self):
@@ -1685,7 +1740,8 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.connector_is_healthy = lambda *_args, **_kwargs: True
             adapter.connector_database_credentials_valid = lambda *_args, **_kwargs: True
             adapter.create_connector = mock.Mock()
-            adapter.wait_for_all_connectors = mock.Mock()
+            adapter.wait_for_all_connectors = mock.Mock(return_value=True)
+            adapter.validate_connectors_with_stabilization = mock.Mock(return_value=True)
 
             with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
                 deployed = adapter.deploy_connectors()
@@ -1737,13 +1793,15 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             adapter.connector_is_healthy = lambda *_args, **_kwargs: True
             adapter.connector_database_credentials_valid = lambda *_args, **_kwargs: True
             adapter.create_connector = mock.Mock()
-            adapter.wait_for_all_connectors = mock.Mock()
+            adapter.wait_for_all_connectors = mock.Mock(return_value=True)
+            adapter.validate_connectors_with_stabilization = mock.Mock(return_value=True)
 
             with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
                 deployed = adapter.deploy_connectors()
 
             self.assertEqual(deployed, ["conn-a-demo"])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+            adapter.validate_connectors_with_stabilization.assert_called_once()
             self.assertEqual(infra.host_calls, 0)
             self.assertIsNone(infra.host_entries)
 
@@ -1798,7 +1856,7 @@ class ConnectorCreationRetryTests(unittest.TestCase):
                 }
             ]
             adapter.connector_already_exists = lambda *_args, **_kwargs: False
-            adapter.wait_for_all_connectors = mock.Mock()
+            adapter.wait_for_all_connectors = mock.Mock(return_value=True)
 
             def create_connector(connector, _connectors):
                 events.append(("create-connector", connector))
@@ -1816,8 +1874,83 @@ class ConnectorCreationRetryTests(unittest.TestCase):
             self.assertEqual(events[1], ("create-connector", "conn-a-demo"))
             self.assertIn("--deploy-target connectors", events[0][1])
             self.assertIn("--minikube-profile minikube", events[0][1])
+            self.assertIn("--cluster-runtime minikube", events[0][1])
             self.assertIn("--skip-deploy", events[0][1])
             adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+
+    def test_deploy_connectors_prepares_local_images_with_k3s_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            class LocalImagesConfig(ConnectorRetryConfig):
+                def script_dir(self):
+                    return self.root
+
+            class K3sConfigAdapter(ConnectorRetryConfigAdapter):
+                topology = "vm-single"
+
+                def load_deployer_config(self):
+                    config = super().load_deployer_config()
+                    config["CLUSTER_TYPE"] = "k3s"
+                    return config
+
+            config = LocalImagesConfig(tmpdir)
+            config_adapter = K3sConfigAdapter(tmpdir)
+            os.makedirs(config.repo_dir(), exist_ok=True)
+            open(config.repo_requirements_path(), "w", encoding="utf-8").close()
+            os.makedirs(config.venv_path(), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "adapters", "inesdata", "scripts"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "adapters", "inesdata", "sources", "inesdata-connector"), exist_ok=True)
+            os.makedirs(
+                os.path.join(tmpdir, "adapters", "inesdata", "sources", "inesdata-connector-interface"),
+                exist_ok=True,
+            )
+            script_path = os.path.join(tmpdir, "adapters", "inesdata", "scripts", "local_build_load_deploy.sh")
+            open(script_path, "w", encoding="utf-8").close()
+            events = []
+
+            class Infra:
+                def manage_hosts_entries(self, _entries):
+                    return None
+
+            def fake_run(cmd, **_kwargs):
+                if "local_build_load_deploy.sh" in cmd:
+                    events.append(cmd)
+                return object()
+
+            adapter = INESDataConnectorsAdapter(
+                run=fake_run,
+                run_silent=lambda *_args, **_kwargs: "",
+                auto_mode_getter=lambda: True,
+                infrastructure_adapter=Infra(),
+                config_adapter=config_adapter,
+                config_cls=config,
+            )
+            adapter.load_dataspace_connectors = lambda: [
+                {
+                    "name": "demo",
+                    "namespace": "demo",
+                    "connectors": ["conn-a-demo"],
+                }
+            ]
+            adapter.connector_already_exists = lambda *_args, **_kwargs: False
+
+            def create_connector(connector, _connectors):
+                with open(config.connector_values_file(connector), "w", encoding="utf-8") as handle:
+                    handle.write("hostAliases: []\n")
+                return True
+
+            adapter.create_connector = mock.Mock(side_effect=create_connector)
+            adapter.wait_for_all_connectors = mock.Mock(return_value=True)
+            adapter.validate_connectors_with_stabilization = mock.Mock(return_value=True)
+
+            with mock.patch("adapters.inesdata.connectors.ensure_python_requirements", lambda *_args, **_kwargs: None):
+                deployed = adapter.deploy_connectors()
+
+            self.assertEqual(deployed, ["conn-a-demo"])
+            self.assertEqual(len(events), 1)
+            self.assertIn("--cluster-runtime k3s", events[0])
+            self.assertIn("--minikube-profile minikube", events[0])
+            adapter.wait_for_all_connectors.assert_called_once_with(["conn-a-demo"])
+            adapter.validate_connectors_with_stabilization.assert_called_once()
 
     def test_deploy_connectors_cleans_stale_connectors_in_discovered_target_namespace(self):
         with tempfile.TemporaryDirectory() as tmpdir:

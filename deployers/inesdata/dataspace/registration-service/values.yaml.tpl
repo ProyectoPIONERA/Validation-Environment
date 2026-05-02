@@ -30,10 +30,4 @@ ingress:
   registration:
     hostname:
       registration-service-{{ keys.dataspace_name }}.{% if keys.environment == 'PRO' %}ds.dataspaceunit-project.eu{% else %}{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}{% endif %}
-hostAliases:
-- ip: 192.168.49.2
-  hostnames:
-  - {{ keys.keycloak_hostname | default('auth.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
-  - {{ keys.keycloak_admin_hostname | default('admin.auth.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
-  - {{ keys.minio_hostname | default('minio.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
-  - {{ keys.minio_console_hostname | default('console.minio-s3.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
+hostAliases: []

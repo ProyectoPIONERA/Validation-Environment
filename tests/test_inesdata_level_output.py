@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import yaml
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from adapters.inesdata.deployment import INESDataDeploymentAdapter
@@ -161,7 +163,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.ensure_unix_environment = lambda: None
         infrastructure.ensure_wsl_docker_config = lambda: True
         infrastructure.wait_for_kubernetes_ready = lambda: True
-        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.verify_cluster_ready_for_level2 = lambda **_kwargs: (True, None)
 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -178,7 +180,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.ensure_unix_environment = lambda: None
         infrastructure.ensure_wsl_docker_config = lambda: True
         infrastructure.wait_for_kubernetes_ready = lambda: True
-        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.verify_cluster_ready_for_level2 = lambda **_kwargs: (True, None)
         infrastructure.run = mock.Mock(return_value=object())
         infrastructure.run_silent = mock.Mock(
             side_effect=lambda command, *_args, **_kwargs: None
@@ -208,7 +210,7 @@ class InesdataLevelOutputTests(unittest.TestCase):
         infrastructure.ensure_unix_environment = lambda: None
         infrastructure.ensure_wsl_docker_config = lambda: True
         infrastructure.wait_for_kubernetes_ready = lambda: True
-        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.verify_cluster_ready_for_level2 = lambda **_kwargs: (True, None)
         infrastructure.run = mock.Mock(return_value=object())
         infrastructure.run_silent = mock.Mock(return_value="")
 
@@ -350,6 +352,8 @@ minio:
         self.assertIn("hostname: auth.dev.ed.dataspaceunit.upm", values_text)
         self.assertIn("hostname: admin.auth.dev.ed.dataspaceunit.upm", values_text)
         self.assertIn("adminPassword: kc-secret", values_text)
+        self.assertIn("proxy: none", values_text)
+        self.assertIn("proxy_cookie_flags ~ nosecure nosamesite;", values_text)
 
     def test_setup_cluster_preflight_reports_ready_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
@@ -401,7 +405,7 @@ minio:
         infrastructure = self._make_infrastructure()
         infrastructure.ensure_unix_environment = lambda: None
         infrastructure.wait_for_kubernetes_ready = lambda: True
-        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.verify_cluster_ready_for_level2 = lambda **_kwargs: (True, None)
         infrastructure.run = mock.Mock(return_value=object())
         infrastructure.run_silent = mock.Mock(return_value=None)
 
@@ -414,7 +418,7 @@ minio:
         self.assertTrue(
             any(
                 command.startswith("helm install ingress-nginx")
-                and "--set controller.service.type=NodePort" in command
+                and "--set controller.service.type=LoadBalancer" in command
                 for command in run_commands
             )
         )
@@ -473,7 +477,7 @@ minio:
         )
         infrastructure.ensure_unix_environment = lambda: None
         infrastructure.wait_for_kubernetes_ready = lambda: True
-        infrastructure.verify_cluster_ready_for_level2 = lambda: (True, None)
+        infrastructure.verify_cluster_ready_for_level2 = lambda **_kwargs: (True, None)
 
         def fake_run(command, **_kwargs):
             if command == "which k3s":
@@ -498,6 +502,39 @@ minio:
         self.assertIn("sudo systemctl start k3s", run_commands)
         self.assertIn("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", run_commands)
         self.assertFalse(any(command.startswith("minikube delete") for command in run_commands))
+
+    def test_setup_cluster_k3s_fails_when_kubeconfig_points_to_minikube(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "CLUSTER_TYPE": "k3s",
+                "K3S_KUBECONFIG": "/home/pionera/.kube/config",
+            }
+        )
+        infrastructure = self._make_infrastructure()
+        infrastructure.ensure_unix_environment = lambda: None
+        infrastructure.wait_for_kubernetes_ready = mock.Mock(return_value=True)
+
+        def fake_run(command, **_kwargs):
+            if command == "kubectl config current-context":
+                return "minikube"
+            if command in {
+                "which k3s",
+                "systemctl status k3s --no-pager",
+                "test -f /home/pionera/.kube/config",
+                "sudo -n true",
+                "systemctl is-active k3s",
+                "test -r /home/pionera/.kube/config",
+            }:
+                return object()
+            return object()
+
+        infrastructure.run = mock.Mock(side_effect=fake_run)
+
+        with self.assertRaisesRegex(RuntimeError, "Minikube kubeconfig"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                infrastructure.setup_cluster()
+
+        infrastructure.wait_for_kubernetes_ready.assert_not_called()
 
     def test_deploy_infrastructure_for_topology_skips_hosts_sync_for_vm_single(self):
         infrastructure = SharedFoundationInfrastructureAdapter(
@@ -1129,7 +1166,7 @@ minio:
         self.assertIn("KC_INTERNAL_URL/KC_URL not defined in deployer.config", message)
         self.assertIn("deployers/infrastructure/deployer.config.example", message)
 
-    def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_minikube_host_aliases(self):
+    def test_deploy_dataspace_for_vm_single_skips_tunnel_prompt_and_updates_runtime_host_aliases(self):
         infrastructure = self._make_infrastructure()
         run = mock.Mock(return_value=object())
         deployment = INESDataDeploymentAdapter(
@@ -1172,8 +1209,51 @@ minio:
         infrastructure.ensure_local_infra_access.assert_not_called()
         infrastructure.reconcile_vault_state_for_local_runtime.assert_not_called()
         infrastructure.sync_common_credentials_from_kubernetes.assert_called_once()
-        deployment.update_helm_values_with_host_aliases.assert_not_called()
+        deployment.update_helm_values_with_host_aliases.assert_called_once_with(
+            self.config.registration_values_file(),
+            topology="vm-single",
+        )
         self.assertFalse(any(call.args and call.args[0] == "minikube ip" for call in run.call_args_list))
+
+    def test_update_registration_host_aliases_uses_vm_single_k3s_ingress_ip(self):
+        self.config_adapter = LevelOutputConfigAdapter(
+            {
+                "CLUSTER_TYPE": "k3s",
+                "VM_SINGLE_IP": "192.168.122.134",
+            }
+        )
+        self.config_adapter.topology = "vm-single"
+        self.config_adapter.host_alias_domains = lambda **_kwargs: [
+            "auth.dev.ed.dataspaceunit.upm",
+            "registration-service-demo.dev.ds.dataspaceunit.upm",
+        ]
+        run = mock.Mock(return_value="192.168.49.2")
+        deployment = INESDataDeploymentAdapter(
+            run=run,
+            run_silent=self._run_silent,
+            auto_mode_getter=lambda: True,
+            infrastructure_adapter=self._make_infrastructure(),
+            config_adapter=self.config_adapter,
+            config_cls=self.config,
+        )
+
+        deployment.update_helm_values_with_host_aliases(
+            self.config.registration_values_file(),
+            topology="vm-single",
+        )
+
+        with open(self.config.registration_values_file(), encoding="utf-8") as handle:
+            values = yaml.safe_load(handle)
+
+        self.assertEqual(values["hostAliases"][0]["ip"], "192.168.122.134")
+        self.assertEqual(
+            values["hostAliases"][0]["hostnames"],
+            [
+                "auth.dev.ed.dataspaceunit.upm",
+                "registration-service-demo.dev.ds.dataspaceunit.upm",
+            ],
+        )
+        run.assert_not_called()
 
     def test_level3_postgres_cleanup_reconciles_residual_role_directly(self):
         deployment = INESDataDeploymentAdapter(
@@ -1386,6 +1466,62 @@ minio:
 
         self.assertEqual(updated["minio"]["rootUser"], "minio-admin")
         self.assertEqual(updated["minio"]["rootPassword"], "minio-secret")
+        self.assertEqual(updated["keycloak"]["proxy"], "none")
+        self.assertEqual(
+            updated["keycloak"]["ingress"]["annotations"][
+                INESDataInfrastructureAdapter.KEYCLOAK_HTTP_COOKIE_ANNOTATION
+            ],
+            INESDataInfrastructureAdapter.KEYCLOAK_HTTP_COOKIE_SNIPPET,
+        )
+        self.assertEqual(
+            updated["keycloak"]["adminIngress"]["annotations"][
+                INESDataInfrastructureAdapter.KEYCLOAK_HTTP_COOKIE_ANNOTATION
+            ],
+            INESDataInfrastructureAdapter.KEYCLOAK_HTTP_COOKIE_SNIPPET,
+        )
+
+    def test_apply_sync_keeps_keycloak_proxy_for_tls_values(self):
+        infrastructure = self._make_infrastructure()
+        values = {
+            "postgresql": {
+                "auth": {
+                    "postgresPassword": "old",
+                    "password": "old",
+                }
+            },
+            "keycloak": {
+                "proxy": "edge",
+                "tls": {"enabled": True},
+                "externalDatabase": {"password": "old"},
+                "auth": {
+                    "adminUser": "old",
+                    "adminPassword": "old",
+                },
+                "keycloakConfigCli": {
+                    "extraEnv": [
+                        {"name": "KEYCLOAK_USER", "value": "old"},
+                        {"name": "KEYCLOAK_PASSWORD", "value": "old"},
+                    ]
+                },
+            },
+            "minio": {
+                "rootUser": "old",
+                "rootPassword": "old",
+            },
+        }
+
+        updated = infrastructure.apply_sync(
+            values,
+            {
+                "PG_PASSWORD": "pg-secret",
+                "KC_USER": "admin",
+                "KC_PASSWORD": "kc-secret",
+                "MINIO_USER": "minio-admin",
+                "MINIO_PASSWORD": "minio-secret",
+            },
+        )
+
+        self.assertEqual(updated["keycloak"]["proxy"], "edge")
 
     def test_sync_vault_token_validates_artifact_before_updating_config(self):
         infrastructure = self._make_infrastructure()
@@ -2005,6 +2141,31 @@ minio:
             duration=10,
             poll_interval=3,
             timeout=180,
+        )
+
+    def test_verify_cluster_ready_for_level2_uses_k3s_service_status_for_k3s_runtime(self):
+        infrastructure = self._make_infrastructure()
+        infrastructure.run_silent = mock.Mock(
+            side_effect=lambda command: {
+                "systemctl is-active k3s": "active",
+                "kubectl get nodes --no-headers": "vm-node Ready control-plane",
+            }.get(command)
+        )
+        infrastructure.wait_for_pods = mock.Mock(return_value=True)
+        infrastructure.wait_for_namespace_stability = mock.Mock(return_value=True)
+
+        ready, root_cause = infrastructure.verify_cluster_ready_for_level2(
+            cluster_runtime={
+                "cluster_type": "k3s",
+                "k3s_service_name": "k3s",
+            }
+        )
+
+        self.assertTrue(ready)
+        self.assertIsNone(root_cause)
+        self.assertNotIn(
+            "minikube status --output=json",
+            [call.args[0] for call in infrastructure.run_silent.call_args_list],
         )
 
     def test_verify_common_services_ready_for_level3_uses_extended_timeouts(self):

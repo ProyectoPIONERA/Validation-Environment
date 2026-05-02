@@ -1600,7 +1600,7 @@ class MainCliTests(unittest.TestCase):
             sys.stdin,
             "isatty",
             return_value=True,
-        ), mock.patch("builtins.input", side_effect=["2", "Q"]), mock.patch.object(
+        ), mock.patch("builtins.input", side_effect=["2", "2", "N", "Q"]), mock.patch.object(
             main,
             "_interactive_offer_vm_single_address_configuration",
             return_value=True,
@@ -1619,8 +1619,125 @@ class MainCliTests(unittest.TestCase):
         rendered = stdout.getvalue()
         self.assertIn("Available topologies:", rendered)
         self.assertIn("Active topology set to vm-single.", rendered)
+        self.assertIn("Available cluster runtimes for vm-single:", rendered)
+        self.assertIn("Active cluster runtime set to k3s.", rendered)
         self.assertIn("Topology: vm-single", rendered)
+        self.assertIn("Cluster runtime: k3s", rendered)
         vm_single_prompt.assert_called_once_with(required=False)
+
+    def test_menu_vm_single_cluster_runtime_override_is_session_scoped(self):
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"PIONERA_CLUSTER_TYPE": "minikube"}, clear=False), mock.patch(
+            "builtins.input",
+            side_effect=["2", "2", "N", "Q"],
+        ), mock.patch.object(
+            main,
+            "_interactive_offer_vm_single_address_configuration",
+            return_value=True,
+        ), contextlib.redirect_stdout(stdout):
+            result = main.run_interactive_menu(
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+                topology="local",
+                prompt_initial_topology=True,
+            )
+
+            self.assertEqual(result["status"], "exited")
+            self.assertIn("Cluster runtime: k3s", stdout.getvalue())
+            self.assertEqual(os.environ.get("PIONERA_CLUSTER_TYPE"), "minikube")
+
+    def test_vm_single_k3s_persist_updates_preserve_existing_k3s_values(self):
+        updates = main._cluster_runtime_config_updates(
+            "k3s",
+            existing_config={
+                "K3S_KUBECONFIG": "/custom/k3s.yaml",
+                "K3S_INSTALL_EXEC": "--disable=traefik --write-kubeconfig-mode=0640",
+                "K3S_INGRESS_SERVICE_TYPE": "LoadBalancer",
+            },
+        )
+
+        self.assertEqual(updates["CLUSTER_TYPE"], "k3s")
+        self.assertEqual(updates["K3S_KUBECONFIG"], "/custom/k3s.yaml")
+        self.assertEqual(updates["K3S_INSTALL_EXEC"], "--disable=traefik --write-kubeconfig-mode=0640")
+        self.assertEqual(updates["K3S_INGRESS_SERVICE_TYPE"], "LoadBalancer")
+        self.assertEqual(updates["K3S_SERVICE_NAME"], "k3s")
+
+    def test_vm_single_k3s_persist_replaces_generic_user_kubeconfig(self):
+        updates = main._cluster_runtime_config_updates(
+            "k3s",
+            existing_config={"K3S_KUBECONFIG": "/home/pionera/.kube/config"},
+        )
+
+        self.assertEqual(updates["CLUSTER_TYPE"], "k3s")
+        self.assertEqual(updates["K3S_KUBECONFIG"], "/etc/rancher/k3s/k3s.yaml")
+        self.assertEqual(updates["K3S_INGRESS_SERVICE_TYPE"], "LoadBalancer")
+
+    def test_vm_single_k3s_address_detection_prefers_vm_ip_over_minikube_ip(self):
+        def fake_stdout(args):
+            if args == ["hostname", "-I"]:
+                return "198.51.100.20 172.17.0.1"
+            if args == ["minikube", "ip"]:
+                return "192.0.2.10"
+            return ""
+
+        with mock.patch.object(main, "_effective_vm_single_cluster_type", return_value="k3s"), mock.patch.object(
+            main,
+            "_command_stdout",
+            side_effect=fake_stdout,
+        ):
+            candidates = main._detect_vm_single_address_candidates()
+
+        self.assertEqual(candidates["recommended_source"], "vm")
+        self.assertEqual(candidates["recommended_address"], "198.51.100.20")
+
+    def test_vm_single_k3s_level1_sync_replaces_stale_minikube_addresses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "deployer.config")
+            example_path = os.path.join(tmpdir, "deployer.config.example")
+            overlay_path = os.path.join(tmpdir, "topologies", "vm-single.config")
+            with open(example_path, "w", encoding="utf-8") as handle:
+                handle.write("ENVIRONMENT=DEV\n")
+            os.makedirs(os.path.dirname(overlay_path), exist_ok=True)
+            with open(overlay_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "CLUSTER_TYPE=k3s\n"
+                    "VM_EXTERNAL_IP=192.0.2.10\n"
+                    "VM_COMMON_IP=192.0.2.10\n"
+                    "INGRESS_EXTERNAL_IP=192.0.2.10\n"
+                )
+
+            with mock.patch.object(
+                main,
+                "_infrastructure_deployer_config_path",
+                return_value=config_path,
+            ), mock.patch.object(
+                main,
+                "_infrastructure_deployer_config_example_path",
+                return_value=example_path,
+            ), mock.patch.object(
+                main,
+                "_detect_vm_single_address_candidates",
+                return_value={
+                    "vm_ip": "198.51.100.20",
+                    "minikube_ip": "192.0.2.10",
+                    "recommended_address": "198.51.100.20",
+                    "recommended_source": "vm",
+                    "cluster_type": "k3s",
+                },
+            ):
+                result = main._synchronize_vm_single_addresses_after_level1()
+
+            with open(overlay_path, "r", encoding="utf-8") as handle:
+                config_text = handle.read()
+
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["source"], "vm")
+        self.assertIn("VM_EXTERNAL_IP=198.51.100.20\n", config_text)
+        self.assertIn("VM_COMMON_IP=198.51.100.20\n", config_text)
+        self.assertIn("INGRESS_EXTERNAL_IP=198.51.100.20\n", config_text)
 
     def test_menu_command_exits_without_running_actions(self):
         stdout = io.StringIO()
@@ -1642,6 +1759,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("[Full Deployment]", stdout.getvalue())
         self.assertIn("[Operations]", stdout.getvalue())
         self.assertIn("T - Select topology", stdout.getvalue())
+        self.assertIn("K - Select cluster runtime", stdout.getvalue())
         self.assertIn("X - Recreate dataspace", stdout.getvalue())
         self.assertIn("[Developer]", stdout.getvalue())
         self.assertIn("L - Build and Deploy Local Images", stdout.getvalue())
@@ -1667,6 +1785,7 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("4 - Use when connector deployments changed", stdout.getvalue())
         self.assertIn("S - Use when you want to preselect the adapter", stdout.getvalue())
         self.assertIn("T - Use when you want to change the active topology", stdout.getvalue())
+        self.assertIn("K - Use when vm-single is active", stdout.getvalue())
         self.assertIn("H - Use to inspect or apply local hosts entries", stdout.getvalue())
         self.assertIn("U - Use to print access URLs derived from the selected adapter config", stdout.getvalue())
         self.assertIn("X - Use only when you intentionally want to destroy and recreate", stdout.getvalue())
@@ -1771,7 +1890,7 @@ class MainCliTests(unittest.TestCase):
 
     def test_menu_can_preselect_topology_with_shortcut_t(self):
         stdout = io.StringIO()
-        with mock.patch("builtins.input", side_effect=["T", "2", "Q"]), mock.patch.object(
+        with mock.patch("builtins.input", side_effect=["T", "2", "1", "N", "Q"]), mock.patch.object(
             main,
             "_interactive_offer_vm_single_address_configuration",
             return_value=True,
@@ -1790,12 +1909,13 @@ class MainCliTests(unittest.TestCase):
         rendered = stdout.getvalue()
         self.assertIn("Available topologies:", rendered)
         self.assertIn("Active topology set to vm-single.", rendered)
+        self.assertIn("Available cluster runtimes for vm-single:", rendered)
         self.assertIn("Topology: vm-single", rendered)
         vm_single_prompt.assert_called_once_with(required=False)
 
     def test_menu_level_execution_uses_selected_topology_from_shortcut_t(self):
         stdout = io.StringIO()
-        with mock.patch("builtins.input", side_effect=["T", "2", "1", "Y", "Q"]), mock.patch.object(
+        with mock.patch("builtins.input", side_effect=["T", "2", "1", "N", "1", "Y", "Q"]), mock.patch.object(
             main,
             "run_level",
             return_value={"level": 1, "name": "Setup Cluster", "status": "completed", "result": {}},
@@ -1824,7 +1944,11 @@ class MainCliTests(unittest.TestCase):
             main,
             "_interactive_confirm",
             return_value=False,
-        ) as confirm, contextlib.redirect_stdout(stdout):
+        ) as confirm, mock.patch.object(
+            main,
+            "_interactive_cluster_runtime_label",
+            return_value="minikube",
+        ), contextlib.redirect_stdout(stdout):
             result = main.main(
                 ["menu", "--topology", "vm-single"],
                 adapter_registry=self.registry,
@@ -1836,7 +1960,7 @@ class MainCliTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "exited")
         confirm.assert_called_once_with(
-            "Run Level 1: Setup Cluster (shared foundation) (topology: vm-single)?",
+            "Run Level 1: Setup Cluster (shared foundation) (topology: vm-single, cluster: minikube)?",
             default=False,
         )
 
@@ -2877,6 +3001,32 @@ class MainCliTests(unittest.TestCase):
         adapter.deployment.deploy_dataspace_for_topology.assert_called_once_with(topology="vm-single")
         self.assertEqual(adapter.calls, [])
 
+    def test_run_level_vm_single_k3s_sets_kubeconfig_for_every_level(self):
+        adapter = FakeAdapterWithInfrastructure()
+        observed = {}
+
+        def fake_deploy_dataspace_for_topology(**_kwargs):
+            observed["kubeconfig"] = os.environ.get("KUBECONFIG")
+            return {"status": "deployed", "mode": "vm-single"}
+
+        adapter.deployment = mock.Mock()
+        adapter.deployment.deploy_dataspace_for_topology = mock.Mock(side_effect=fake_deploy_dataspace_for_topology)
+
+        with mock.patch.object(
+            main,
+            "_topology_runtime_environment_overrides",
+            return_value={"KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"},
+        ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}), mock.patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            result = main.run_level(adapter, 3, deployer_name="fake", topology="vm-single")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(observed["kubeconfig"], "/etc/rancher/k3s/k3s.yaml")
+        self.assertIsNone(os.environ.get("KUBECONFIG"))
+
     def test_run_level_four_uses_vm_single_connector_deployment(self):
         adapter = FakeAdapter()
 
@@ -3589,6 +3739,31 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "updated")
         self.assertIn("127.0.0.1 conn-a.example.local", result["hosts_sync"]["skipped_existing"]["connectors fake fake-ds"])
         self.assertIn("127.0.0.1 conn-b.example.local", hosts_content)
+
+    def test_hosts_command_uses_detected_hosts_file_when_sync_enabled(self):
+        adapter = FakeAdapter()
+
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8") as hosts_file, mock.patch.dict(
+            os.environ,
+            {
+                "PIONERA_SYNC_HOSTS": "true",
+            },
+            clear=False,
+        ), mock.patch.object(main.local_menu_tools, "get_hosts_path", return_value=hosts_file.name):
+            hosts_file.write("127.0.0.1 localhost\n")
+            hosts_file.flush()
+            result = main.run_hosts(
+                adapter,
+                deployer_name="fake",
+                deployer_registry=self.deployer_registry,
+                topology="local",
+            )
+            hosts_file.seek(0)
+            hosts_content = hosts_file.read()
+
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["hosts_sync"]["hosts_file"], hosts_file.name)
+        self.assertIn("127.0.0.1 registration-service-fake-ds.example.local", hosts_content)
         self.assertEqual(hosts_content.count("conn-a.example.local"), 1)
 
     def test_hosts_command_reports_legacy_external_hostnames(self):

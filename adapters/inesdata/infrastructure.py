@@ -47,6 +47,8 @@ class INESDataInfrastructureAdapter:
         "MINIO_CONSOLE_HOSTNAME",
     )
     POSTGRES_SERVICE_PORT = 5432
+    KEYCLOAK_HTTP_COOKIE_ANNOTATION = "nginx.ingress.kubernetes.io/configuration-snippet"
+    KEYCLOAK_HTTP_COOKIE_SNIPPET = "proxy_cookie_flags ~ nosecure nosamesite;\n"
 
     def __init__(self, run, run_silent, auto_mode_getter, config_adapter=None, config_cls=None):
         self.run = run
@@ -173,6 +175,17 @@ class INESDataInfrastructureAdapter:
             "cluster_type": str(runtime.get("cluster_type") or "minikube").strip().lower() or "minikube",
             "k3s_kubeconfig": str(runtime.get("k3s_kubeconfig") or "/etc/rancher/k3s/k3s.yaml").strip()
             or "/etc/rancher/k3s/k3s.yaml",
+            "k3s_install_exec": str(runtime.get("k3s_install_exec") or "--disable=traefik").strip()
+            or "--disable=traefik",
+            "k3s_service_name": str(runtime.get("k3s_service_name") or "k3s").strip() or "k3s",
+            "k3s_ingress_controller": str(runtime.get("k3s_ingress_controller") or "ingress-nginx").strip()
+            or "ingress-nginx",
+            "k3s_ingress_service_type": str(runtime.get("k3s_ingress_service_type") or "NodePort").strip()
+            or "NodePort",
+            "k3s_repair_on_level1": str(runtime.get("k3s_repair_on_level1") or "prompt").strip().lower()
+            or "prompt",
+            "k3s_write_kubeconfig_mode": str(runtime.get("k3s_write_kubeconfig_mode") or "0644").strip()
+            or "0644",
         }
 
     def _is_vm_single_topology(self):
@@ -217,6 +230,40 @@ class INESDataInfrastructureAdapter:
             cls._first_config_value(config, "MINIO_ADMIN_USER", "MINIO_USER"),
             cls._first_config_value(config, "MINIO_ADMIN_PASS", "MINIO_PASSWORD"),
         )
+
+    @staticmethod
+    def _truthy_yaml_value(value):
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"true", "yes", "y", "1", "on"}
+
+    @classmethod
+    def _plain_http_keycloak_ingress(cls, values):
+        keycloak = values.get("keycloak", {}) or {}
+        tls_enabled = cls._truthy_yaml_value((keycloak.get("tls", {}) or {}).get("enabled"))
+        ingress_tls = cls._truthy_yaml_value((keycloak.get("ingress", {}) or {}).get("tls"))
+        admin_ingress_tls = cls._truthy_yaml_value((keycloak.get("adminIngress", {}) or {}).get("tls"))
+        return not tls_enabled and not ingress_tls and not admin_ingress_tls
+
+    @classmethod
+    def _expected_keycloak_proxy(cls, values):
+        if cls._plain_http_keycloak_ingress(values):
+            return "none"
+        return None
+
+    @classmethod
+    def _apply_keycloak_proxy_policy(cls, values):
+        expected_proxy = cls._expected_keycloak_proxy(values)
+        if expected_proxy:
+            keycloak = values.setdefault("keycloak", {})
+            keycloak["proxy"] = expected_proxy
+            for ingress_key in ("ingress", "adminIngress"):
+                ingress = keycloak.setdefault(ingress_key, {})
+                annotations = ingress.setdefault("annotations", {})
+                annotations[cls.KEYCLOAK_HTTP_COOKIE_ANNOTATION] = LiteralScalarString(
+                    cls.KEYCLOAK_HTTP_COOKIE_SNIPPET
+                )
+        return values
 
     def announce_level(self, level, title):
         if level in self._announced_levels:
@@ -1688,6 +1735,26 @@ class INESDataInfrastructureAdapter:
         add_row("PG_PASSWORD", "keycloak.externalDatabase.password", "PG_PASSWORD", values["keycloak"]["externalDatabase"]["password"])
         add_row("KC_USER", "keycloak.auth.adminUser", "KC_USER", values["keycloak"]["auth"]["adminUser"])
         add_row("KC_PASSWORD", "keycloak.auth.adminPassword", "KC_PASSWORD", values["keycloak"]["auth"]["adminPassword"])
+        expected_proxy = self._expected_keycloak_proxy(values)
+        if expected_proxy:
+            add_row_value(
+                "KEYCLOAK_HTTP_PROXY",
+                "keycloak.proxy",
+                expected_proxy,
+                values.get("keycloak", {}).get("proxy", ""),
+            )
+            for ingress_key in ("ingress", "adminIngress"):
+                add_row_value(
+                    "KEYCLOAK_HTTP_COOKIE_FLAGS",
+                    f"keycloak.{ingress_key}.annotations.{self.KEYCLOAK_HTTP_COOKIE_ANNOTATION}",
+                    self.KEYCLOAK_HTTP_COOKIE_SNIPPET,
+                    (
+                        values.get("keycloak", {})
+                        .get(ingress_key, {})
+                        .get("annotations", {})
+                        .get(self.KEYCLOAK_HTTP_COOKIE_ANNOTATION, "")
+                    ),
+                )
         minio_user, minio_password = self._minio_admin_credentials(config)
         minio_values = values.get("minio", {})
         add_row_value("MINIO_USER", "minio.rootUser", minio_user, minio_values.get("rootUser"))
@@ -1747,6 +1814,7 @@ class INESDataInfrastructureAdapter:
         values["keycloak"]["externalDatabase"]["password"] = pg_password
         values["keycloak"]["auth"]["adminUser"] = kc_user
         values["keycloak"]["auth"]["adminPassword"] = kc_password
+        self._apply_keycloak_proxy_policy(values)
         values.setdefault("minio", {})
         if minio_user:
             values["minio"]["rootUser"] = minio_user
@@ -2520,23 +2588,31 @@ class INESDataInfrastructureAdapter:
         self.run(f"kubectl get pods -n {namespace}", check=False)
         return False
 
-    def verify_cluster_ready_for_level2(self):
+    def verify_cluster_ready_for_level2(self, cluster_runtime=None):
         """Ensure Level 1 leaves a cluster stable enough for Level 2."""
         ingress_ready_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 300)
         ingress_stability_timeout = max(int(getattr(self.config, "TIMEOUT_NAMESPACE", 90)), 180)
-        status = self.run_silent("minikube status --output=json")
-        if not status:
-            return False, "minikube status unavailable"
+        runtime = dict(cluster_runtime or self._cluster_runtime_config())
+        cluster_type = str(runtime.get("cluster_type") or "minikube").strip().lower()
 
-        try:
-            status_data = json.loads(status)
-        except json.JSONDecodeError:
-            return False, "minikube status output is not valid JSON"
+        if cluster_type == "k3s":
+            service_name = str(runtime.get("k3s_service_name") or "k3s").strip() or "k3s"
+            if self.run_silent(f"systemctl is-active {shlex.quote(service_name)}") != "active":
+                return False, f"{service_name} service is not active"
+        else:
+            status = self.run_silent("minikube status --output=json")
+            if not status:
+                return False, "minikube status unavailable"
 
-        for key in ("Host", "Kubelet", "APIServer"):
-            value = str(status_data.get(key, "")).lower()
-            if value != "running":
-                return False, f"{key} is '{status_data.get(key)}'"
+            try:
+                status_data = json.loads(status)
+            except json.JSONDecodeError:
+                return False, "minikube status output is not valid JSON"
+
+            for key in ("Host", "Kubelet", "APIServer"):
+                value = str(status_data.get(key, "")).lower()
+                if value != "running":
+                    return False, f"{key} is '{status_data.get(key)}'"
 
         nodes = self.run_silent("kubectl get nodes --no-headers")
         if not nodes or " Ready " not in f" {nodes} ":
@@ -2691,7 +2767,7 @@ class INESDataInfrastructureAdapter:
         if cluster_runtime["cluster_type"] == "k3s":
             self._setup_cluster_k3s(cluster_runtime)
             self.run("kubectl get pods -n ingress-nginx", check=False)
-            cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
+            cluster_ready, root_cause = self.verify_cluster_ready_for_level2(cluster_runtime=cluster_runtime)
             if not cluster_ready:
                 self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
             self.complete_level(1)
@@ -2741,6 +2817,7 @@ class INESDataInfrastructureAdapter:
                 "Warning: minikube reported a transient ingress addon enable failure; "
                 "verifying ingress controller readiness directly."
             )
+        self._patch_ingress_nginx_configmap()
         self.run("kubectl get pods -n ingress-nginx", check=False)
         cluster_ready, root_cause = self.verify_cluster_ready_for_level2()
         if not cluster_ready:
@@ -2750,11 +2827,18 @@ class INESDataInfrastructureAdapter:
     def _setup_cluster_k3s(self, runtime):
         kubeconfig = runtime["k3s_kubeconfig"]
         kubeconfig_q = shlex.quote(kubeconfig)
+        service_name = runtime.get("k3s_service_name") or "k3s"
+        service_name_q = shlex.quote(service_name)
+        install_exec = runtime.get("k3s_install_exec") or "--disable=traefik"
+        ingress_controller = runtime.get("k3s_ingress_controller") or "ingress-nginx"
+        ingress_service_type = runtime.get("k3s_ingress_service_type") or "NodePort"
+        repair_policy = str(runtime.get("k3s_repair_on_level1") or "prompt").strip().lower()
+        kubeconfig_mode = runtime.get("k3s_write_kubeconfig_mode") or "0644"
 
         print("Cluster runtime: k3s")
         print("Checking k3s installation...")
         k3s_binary = self.run("which k3s", capture=True, check=False)
-        service_ready = self.run("systemctl status k3s --no-pager", capture=True, check=False) is not None
+        service_ready = self.run(f"systemctl status {service_name_q} --no-pager", capture=True, check=False) is not None
         kubeconfig_ready = self.run(f"test -f {kubeconfig_q}", capture=True, check=False) is not None
         sudo_ready = self.run("sudo -n true", capture=True, check=False) is not None
         interactive_sudo_allowed = False
@@ -2771,10 +2855,15 @@ class INESDataInfrastructureAdapter:
                 print("k3s installation is incomplete:")
                 for detail in details:
                     print(f"  - {detail}")
-                interactive_sudo_allowed = self._confirm_interactive(
-                    "Install or repair k3s now using sudo?",
-                    default=False,
-                )
+                if repair_policy in {"1", "true", "yes", "on", "always"}:
+                    interactive_sudo_allowed = True
+                elif repair_policy in {"0", "false", "no", "off", "never"}:
+                    interactive_sudo_allowed = False
+                else:
+                    interactive_sudo_allowed = self._confirm_interactive(
+                        "Install or repair k3s now using sudo?",
+                        default=False,
+                    )
                 if not interactive_sudo_allowed:
                     self._fail(
                         "k3s is not fully installed and sudo is not available non-interactively",
@@ -2784,32 +2873,61 @@ class INESDataInfrastructureAdapter:
                             "the k3s repair prompt, or enable passwordless sudo for Level 1, then retry."
                         ),
                     )
-            print("Installing or repairing k3s with Traefik disabled...")
+            print(f"Installing or repairing k3s with install args: {install_exec}")
+            install_exec_args = " ".join(shlex.quote(part) for part in shlex.split(install_exec))
             install_command = (
-                "curl -sfL https://get.k3s.io | sudo -n sh -s - --disable=traefik"
+                f"curl -sfL https://get.k3s.io | sudo -n sh -s - {install_exec_args}"
                 if sudo_ready
-                else "curl -sfL https://get.k3s.io | sudo sh -s - --disable=traefik"
+                else f"curl -sfL https://get.k3s.io | sudo sh -s - {install_exec_args}"
             )
             self.run(install_command)
         else:
             print("k3s already installed")
 
+        self._disable_k3s_agent_for_single_node_server(
+            service_name=service_name,
+            sudo_ready=sudo_ready,
+            interactive_sudo_allowed=interactive_sudo_allowed,
+        )
+
         if sudo_ready:
-            self.run("sudo -n systemctl start k3s", check=False)
+            self.run(f"sudo -n systemctl start {service_name_q}", check=False)
         elif interactive_sudo_allowed:
-            self.run("sudo systemctl start k3s", check=False)
-        elif self.run("systemctl is-active k3s", capture=True, check=False) is None:
+            self.run(f"sudo systemctl start {service_name_q}", check=False)
+
+        service_active = self.run(f"systemctl is-active {service_name_q}", capture=True, check=False)
+        if service_active is None:
             self._fail(
-                "k3s service is not active and sudo is not available non-interactively",
-                root_cause="Run 'sudo systemctl start k3s' manually, then retry Level 1.",
+                "k3s service is not active after installation or repair",
+                root_cause=(
+                    f"Run 'systemctl status {service_name}' and 'journalctl -xeu {service_name}' to inspect "
+                    f"the failed service, then start it with 'sudo systemctl start {service_name}' and retry Level 1."
+                ),
             )
 
         if kubeconfig:
-            os.environ.setdefault("KUBECONFIG", kubeconfig)
+            os.environ["KUBECONFIG"] = kubeconfig
             if self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None and sudo_ready:
-                self.run(f"sudo -n chmod 644 {kubeconfig_q}", check=False)
+                self.run(f"sudo -n chmod {shlex.quote(kubeconfig_mode)} {kubeconfig_q}", check=False)
             elif self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None and interactive_sudo_allowed:
-                self.run(f"sudo chmod 644 {kubeconfig_q}", check=False)
+                self.run(f"sudo chmod {shlex.quote(kubeconfig_mode)} {kubeconfig_q}", check=False)
+            if self.run(f"test -r {kubeconfig_q}", capture=True, check=False) is None:
+                self._fail(
+                    "k3s kubeconfig is not readable",
+                    root_cause=(
+                        f"{kubeconfig} is not readable by the current user. Set K3S_WRITE_KUBECONFIG_MODE=0644 "
+                        "or run the Level 1 repair with sudo so the framework can adjust the kubeconfig mode."
+                    ),
+                )
+            current_context = self.run("kubectl config current-context", capture=True, check=False)
+            if str(current_context or "").strip().lower() == "minikube":
+                self._fail(
+                    "k3s Level 1 is using the Minikube kubeconfig",
+                    root_cause=(
+                        f"K3S_KUBECONFIG points to {kubeconfig}, whose current context is minikube. "
+                        "Set K3S_KUBECONFIG=/etc/rancher/k3s/k3s.yaml or another kubeconfig that targets k3s."
+                    ),
+                )
 
         print("\nChecking Helm installation...")
         if self.run("which helm", capture=True, check=False) is None:
@@ -2819,37 +2937,74 @@ class INESDataInfrastructureAdapter:
         if not self.wait_for_kubernetes_ready():
             self._fail("k3s cluster failed to initialize", root_cause="Kubernetes node did not become Ready")
 
-        print("\nInstalling ingress-nginx for k3s...\n")
+        print(f"\nInstalling {ingress_controller} for k3s...\n")
         self.run("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx", check=False)
         self.run("helm repo update")
         if self.run_silent("helm status ingress-nginx -n ingress-nginx") is None:
-            self.run(
+            existing_controller = self.run_silent(
+                "kubectl get deployment ingress-nginx-controller -n ingress-nginx -o name"
+            )
+            if existing_controller:
+                print(
+                    "ingress-nginx resources already exist outside Helm; "
+                    "reusing them and reconciling service/configmap settings."
+                )
+            elif self.run(
                 "helm install ingress-nginx ingress-nginx/ingress-nginx "
                 "-n ingress-nginx --create-namespace "
-                "--set controller.service.type=NodePort "
+                f"--set controller.service.type={shlex.quote(ingress_service_type)} "
                 "--set controller.watchIngressWithoutClass=true "
                 "--set controller.allowSnippetAnnotations=true "
                 "--set controller.config.allow-snippet-annotations=true "
                 "--set controller.config.annotations-risk-level=Critical "
                 "--wait --timeout 180s"
-            )
+            ) is None:
+                self._fail("Failed to install ingress-nginx for k3s")
         else:
-            print("ingress-nginx already installed")
+            print(f"{ingress_controller} already installed")
 
-        self._patch_k3s_ingress_nginx_service()
-        self._patch_k3s_ingress_nginx_configmap()
+        self._patch_k3s_ingress_nginx_service(ingress_service_type)
+        self._patch_ingress_nginx_configmap()
 
-    def _patch_k3s_ingress_nginx_service(self):
-        print("Ensuring k3s ingress-nginx-controller uses NodePort...")
-        patch_json = json.dumps({"spec": {"type": "NodePort"}})
+    def _disable_k3s_agent_for_single_node_server(
+        self,
+        *,
+        service_name="k3s",
+        sudo_ready=False,
+        interactive_sudo_allowed=False,
+    ):
+        if str(service_name or "").strip() != "k3s":
+            return
+        if self.run("systemctl list-unit-files k3s-agent.service --no-pager", capture=True, check=False) is None:
+            return
+
+        print("Disabling residual k3s-agent service for vm-single server runtime...")
+        if sudo_ready:
+            self.run("sudo -n systemctl stop k3s-agent", check=False)
+            self.run("sudo -n systemctl disable k3s-agent", check=False)
+        elif interactive_sudo_allowed:
+            self.run("sudo systemctl stop k3s-agent", check=False)
+            self.run("sudo systemctl disable k3s-agent", check=False)
+        elif self.run("systemctl is-active k3s-agent", capture=True, check=False) is not None:
+            self._fail(
+                "k3s-agent is active while vm-single expects k3s server",
+                root_cause=(
+                    "Run 'sudo systemctl stop k3s-agent && sudo systemctl disable k3s-agent', "
+                    "then retry Level 1."
+                ),
+            )
+
+    def _patch_k3s_ingress_nginx_service(self, service_type="NodePort"):
+        print(f"Ensuring k3s ingress-nginx-controller uses {service_type}...")
+        patch_json = json.dumps({"spec": {"type": service_type}})
         self.run(
             "kubectl patch svc ingress-nginx-controller "
             f"-n ingress-nginx --type merge -p {shlex.quote(patch_json)}",
             check=False,
         )
 
-    def _patch_k3s_ingress_nginx_configmap(self):
-        print("Allowing ingress-nginx snippet annotations for k3s DEV flows...")
+    def _patch_ingress_nginx_configmap(self):
+        print("Allowing ingress-nginx snippet annotations for DEV HTTP flows...")
         patch_json = json.dumps(
             {
                 "data": {
