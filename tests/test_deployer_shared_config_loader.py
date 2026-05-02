@@ -69,6 +69,11 @@ class SharedConfigLoaderTests(unittest.TestCase):
         self.assertNotIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["local"])
         self.assertIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["vm-single"])
         self.assertIn("K3S_KUBECONFIG", TOPOLOGY_OVERLAY_KEYS["vm-distributed"])
+        self.assertIn("K3S_INSTALL_EXEC", TOPOLOGY_OVERLAY_KEYS["vm-single"])
+        self.assertIn("K3S_INSTALL_EXEC", TOPOLOGY_OVERLAY_KEYS["vm-distributed"])
+        self.assertIn("K3S_SERVICE_NAME", TOPOLOGY_OVERLAY_KEYS["vm-single"])
+        self.assertIn("K3S_INGRESS_SERVICE_TYPE", TOPOLOGY_OVERLAY_KEYS["vm-single"])
+        self.assertIn("K3S_REPAIR_ON_LEVEL1", TOPOLOGY_OVERLAY_KEYS["vm-single"])
 
         self.assertEqual(
             TOPOLOGY_KEY_TARGETS["CLUSTER_TYPE"],
@@ -76,6 +81,10 @@ class SharedConfigLoaderTests(unittest.TestCase):
         )
         self.assertEqual(
             TOPOLOGY_KEY_TARGETS["K3S_KUBECONFIG"],
+            ("vm-distributed", "vm-single"),
+        )
+        self.assertEqual(
+            TOPOLOGY_KEY_TARGETS["K3S_INSTALL_EXEC"],
             ("vm-distributed", "vm-single"),
         )
 
