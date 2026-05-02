@@ -4,6 +4,11 @@
 
 El nivel 6 es el nivel de validación. Debe validar el dataspace desplegado y los componentes habilitados sin requerir un nivel adicional de validación de servicios.
 
+Para entornos externos que el framework no despliega, como un INESData
+productivo existente, la ruta objetivo es usar un `validation target` en modo
+`validation-only`. Esa ruta se documenta en
+[Validación de INESData externo](./29_inesdata_external_validation_targets.md).
+
 Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 
 - limpieza de datos de prueba;

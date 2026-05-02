@@ -130,8 +130,11 @@ Puedes partir de un environment como este, ajustando credenciales y dominios a t
   "consumer_password": "<copiar localmente>",
   "dsDomain": "dev.ds.dataspaceunit.upm",
   "dataspace": "demo",
-  "keycloakUrl": "http://keycloak.dev.ed.dataspaceunit.upm",
+  "keycloakUrl": "http://auth.dev.ed.dataspaceunit.upm",
   "keycloakClientId": "dataspace-users",
+  "adapter": "inesdata",
+  "transferStartPath": "inesdatatransferprocesses",
+  "transferDestinationType": "InesDataStore",
   "providerProtocolAddress": "http://conn-citycouncil-demo:19194/protocol",
   "consumerProtocolAddress": "http://conn-company-demo:19194/protocol"
 }

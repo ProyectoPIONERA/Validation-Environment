@@ -10,6 +10,7 @@ Los artefactos asociados son:
 - `Validation-Environment/validation/core/collections/postman/02_connector_management_api.json`
 - `Validation-Environment/validation/core/collections/postman/03_e2e_compact.json`
 - `Validation-Environment/validation/core/collections/postman/00_environment.json`
+- `Validation-Environment/validation/core/collections/postman/00_environment_edc.json`
 
 Antes de lanzar estas colecciones desde `Level 6`, el framework ejecuta un
 preflight ligero sobre Management API para el par `provider/consumer`. Esa
@@ -37,9 +38,10 @@ Esta carpeta contiene tres variantes importables en Postman:
    - flujo compacto orientado a `03` + `04` + `05` + `06`
    - útil cuando se quiere validar el recorrido E2E principal con menos tiempo de ejecución
 
-Las tres colecciones reutilizan el mismo environment:
+Las tres colecciones reutilizan un environment del adapter que quieras probar:
 
-- `Validation-Environment/validation/core/collections/postman/00_environment.json`
+- `Validation-Environment/validation/core/collections/postman/00_environment.json` para INESData
+- `Validation-Environment/validation/core/collections/postman/00_environment_edc.json` para EDC
 
 La lógica original que el framework inyecta dinámicamente sigue estando en:
 
@@ -65,11 +67,12 @@ La colección `03_e2e_compact.json` reduce tiempo de ejecución porque elimina c
 
 Antes de importar o reconstruir manualmente la colección, crea un environment con estas variables base. Si quieres ahorrar tiempo, puedes importar directamente:
 
-- `Validation-Environment/validation/core/collections/postman/00_environment.json`
+- `Validation-Environment/validation/core/collections/postman/00_environment.json` para INESData
+- `Validation-Environment/validation/core/collections/postman/00_environment_edc.json` para EDC
 
-Ese fichero es el **environment importable de Postman** y contiene solo las variables base necesarias, sin variables derivadas del flujo.
+Esos ficheros son **environments importables de Postman** y contienen solo las variables base necesarias, sin variables derivadas del flujo.
 
-Las variables base que debe contener son:
+### Environment INESData
 
 ```json
 {
@@ -81,10 +84,35 @@ Las variables base que debe contener son:
   "consumer_password": "<copiar localmente>",
   "dsDomain": "dev.ds.dataspaceunit.upm",
   "dataspace": "demo",
-  "keycloakUrl": "http://keycloak.dev.ed.dataspaceunit.upm",
+  "keycloakUrl": "http://auth.dev.ed.dataspaceunit.upm",
   "keycloakClientId": "dataspace-users",
+  "adapter": "inesdata",
+  "transferStartPath": "inesdatatransferprocesses",
+  "transferDestinationType": "InesDataStore",
   "providerProtocolAddress": "http://conn-citycouncil-demo:19194/protocol",
   "consumerProtocolAddress": "http://conn-company-demo:19194/protocol"
+}
+```
+
+### Environment EDC
+
+```json
+{
+  "provider": "conn-citycounciledc-demoedc",
+  "consumer": "conn-companyedc-demoedc",
+  "provider_user": "user-conn-citycounciledc-demoedc",
+  "provider_password": "<copiar localmente>",
+  "consumer_user": "user-conn-companyedc-demoedc",
+  "consumer_password": "<copiar localmente>",
+  "dsDomain": "dev.ds.dataspaceunit.upm",
+  "dataspace": "demoedc",
+  "keycloakUrl": "http://auth.dev.ed.dataspaceunit.upm",
+  "keycloakClientId": "dataspace-users",
+  "adapter": "edc",
+  "transferStartPath": "adaptertransferprocesses",
+  "transferDestinationType": "AmazonS3",
+  "providerProtocolAddress": "http://conn-citycounciledc-demoedc:19194/protocol",
+  "consumerProtocolAddress": "http://conn-companyedc-demoedc:19194/protocol"
 }
 ```
 
@@ -92,6 +120,7 @@ Notas importantes:
 
 - `providerProtocolAddress` y `consumerProtocolAddress` **no** son endpoints pensados para ser invocados directamente desde Postman en tu máquina; son direcciones que el conector utiliza internamente cuando recibe la request de Management API.
 - Las contraseñas locales del entorno demo actual se generan bajo `deployers/inesdata/deployments/DEV/demo/credentials-connector-<connector>.json`, campo `connector_user.passwd`.
+- Para EDC, las contraseñas equivalentes se generan bajo `deployers/edc/deployments/DEV/demoedc/credentials-connector-<connector>.json`, campo `connector_user.passwd`.
 - La colección compacta genera dinámicamente todos los identificadores `e2e_*`, así que no hace falta precargarlos en el environment.
 
 ## Variables de colección usadas para reintentos
@@ -826,14 +855,14 @@ pm.test("Contract agreement is available", function () {
 
 ### 9. Start Transfer Process
 
-- **Objetivo**: Iniciar la transferencia real de INESData usando `AmazonS3-PUSH`.
+- **Objetivo**: Iniciar la transferencia real usando `AmazonS3-PUSH` y el endpoint del adapter configurado.
 - **Referencia funcional en el framework**: `06_consumer_transfer.json` - request `Start Transfer Process`.
 - **Método**: `POST`
-- **URL**: `http://{{consumer}}.{{dsDomain}}/management/v3/inesdatatransferprocesses`
+- **URL**: `http://{{consumer}}.{{dsDomain}}/management/v3/{{transferStartPath}}`
 - **Headers**:
   - `Authorization: Bearer {{consumer_jwt}}`
   - `Content-Type: application/json`
-- **Variables requeridas antes de lanzar la request**: `consumer_jwt`, `consumer`, `dsDomain`, `e2e_asset_id`, `e2e_agreement_id`, `providerProtocolAddress`
+- **Variables requeridas antes de lanzar la request**: `consumer_jwt`, `consumer`, `dsDomain`, `transferStartPath`, `transferDestinationType`, `e2e_asset_id`, `e2e_agreement_id`, `providerProtocolAddress`
 - **Variables que deja preparadas para la siguiente request**: `e2e_transfer_id`, `transfer_start_attempt` (solo mientras reintenta)
 
 **Body (`raw`)**
@@ -850,7 +879,7 @@ pm.test("Contract agreement is available", function () {
   "protocol": "dataspace-protocol-http",
   "transferType": "AmazonS3-PUSH",
   "dataDestination": {
-    "type": "InesDataStore"
+    "type": "{{transferDestinationType}}"
   }
 }
 ```

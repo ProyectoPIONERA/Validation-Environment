@@ -12,8 +12,9 @@ La documentación es intencionadamente compacta. Describe cómo funciona el fram
 4. [Deployers y topologías](./deployers-and-topologies.md): `local`, `vm-single` y `vm-distributed`.
 5. [Adapters](./adapters.md): adapters `inesdata` y `edc`.
 6. [Validación](./validation.md): nivel 6, Newman, Playwright, métricas y reportes.
-7. [Desarrollo y testing](./development-and-testing.md): cómo extender el framework y ejecutar pruebas focalizadas.
-8. [Troubleshooting](./troubleshooting.md): problemas frecuentes y cómo resolverlos.
+7. [Validación de INESData externo](./29_inesdata_external_validation_targets.md): guía objetivo para targets externos y suites extendidas.
+8. [Desarrollo y testing](./development-and-testing.md): cómo extender el framework y ejecutar pruebas focalizadas.
+9. [Troubleshooting](./troubleshooting.md): problemas frecuentes y cómo resolverlos.
 
 ## Entrada Principal
 
@@ -31,8 +32,9 @@ El menú guiado es la entrada recomendada para usuarios no especializados. El CL
 ## Documentos Numerados
 
 Los documentos `00` a `10` conservan la documentacion historica principal del
-framework. Los documentos `11` a `28` recogen el estado implementado y las
-decisiones tecnicas consolidadas sin incluir notas internas de planificacion.
+framework. Los documentos `11` a `29` recogen el estado implementado, decisiones
+tecnicas consolidadas y guias objetivo sin incluir notas internas de
+planificacion.
 
 | Doc | Tema |
 | --- | --- |
@@ -65,3 +67,4 @@ decisiones tecnicas consolidadas sin incluir notas internas de planificacion.
 | [26](./26_edc_shared_components_integration_plan.md) | Componentes compartidos en EDC |
 | [27](./27_legacy_deployment_folders_removal.md) | Carpetas legacy de despliegue |
 | [28](./28_external_vm_contributions_and_topology_integration_plan.md) | Topologias VM y contribuciones tecnicas |
+| [29](./29_inesdata_external_validation_targets.md) | Validacion de INESData externo |

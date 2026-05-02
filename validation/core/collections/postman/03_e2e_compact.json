@@ -990,7 +990,7 @@
           }
         ],
         "url": {
-          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/inesdatatransferprocesses",
+          "raw": "http://{{consumer}}.{{dsDomain}}/management/v3/{{transferStartPath}}",
           "protocol": "http",
           "host": [
             "{{consumer}}",
@@ -999,19 +999,19 @@
           "path": [
             "management",
             "v3",
-            "inesdatatransferprocesses"
+            "{{transferStartPath}}"
           ]
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"assetId\": \"{{e2e_asset_id}}\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"AmazonS3-PUSH\",\n  \"dataDestination\": {\n    \"type\": \"InesDataStore\"\n  }\n}",
+          "raw": "{\n  \"@context\": {\n    \"@vocab\": \"https://w3id.org/edc/v0.0.1/ns/\"\n  },\n  \"@type\": \"TransferRequest\",\n  \"assetId\": \"{{e2e_asset_id}}\",\n  \"contractId\": \"{{e2e_agreement_id}}\",\n  \"counterPartyAddress\": \"{{providerProtocolAddress}}\",\n  \"protocol\": \"dataspace-protocol-http\",\n  \"transferType\": \"AmazonS3-PUSH\",\n  \"dataDestination\": {\n    \"type\": \"{{transferDestinationType}}\"\n  }\n}",
           "options": {
             "raw": {
               "language": "json"
             }
           }
         },
-        "description": "Inicia la transferencia INESData AmazonS3-PUSH."
+        "description": "Inicia la transferencia AmazonS3-PUSH usando el endpoint del adapter configurado."
       }
     },
     {

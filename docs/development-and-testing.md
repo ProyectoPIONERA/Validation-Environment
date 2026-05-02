@@ -104,6 +104,11 @@ Las nuevas validaciones deben seguir este orden:
 4. Guardar artefactos en `experiments/`.
 5. Añadir pruebas focalizadas de orquestación y configuración.
 
+Para pruebas específicas de un INESData externo o productivo, no modifiques las
+suites base. Crea suites opt-in bajo `validation/projects/inesdata/` y actívalas
+desde el target correspondiente, como se describe en
+[Validación de INESData externo](./29_inesdata_external_validation_targets.md).
+
 ## Ficheros Generados y Sensibles
 
 No subas:
