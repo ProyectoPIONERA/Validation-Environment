@@ -1,6 +1,8 @@
 import json
 import os
 import subprocess
+import sys
+import getpass
 from datetime import datetime
 from pathlib import Path
 
@@ -29,12 +31,104 @@ def _default_inesdata_adapter():
     return InesdataAdapter()
 
 
+def _ui_runtime_env_from_adapter(adapter):
+    env = dict(os.environ)
+    config_loader = getattr(adapter, "load_deployer_config", None)
+    config = config_loader() if callable(config_loader) else {}
+    if not isinstance(config, dict):
+        config = {}
+
+    keycloak_url = str(config.get("KC_INTERNAL_URL") or config.get("KC_URL") or "").strip()
+    if keycloak_url:
+        env.setdefault("UI_KEYCLOAK_URL", keycloak_url)
+
+    return env
+
+
 def _cleanup_playwright_processes():
     subprocess.run(
         "pkill -f '(chrome|chromium).*playwright' || true",
         shell=True,
         check=False,
     )
+
+
+def _headed_browser_display_available(env=None):
+    if not sys.platform.startswith("linux"):
+        return True
+    runtime_env = env or os.environ
+    return bool(runtime_env.get("DISPLAY") or runtime_env.get("WAYLAND_DISPLAY"))
+
+
+def _parse_key_value_file(path):
+    values = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        return values
+    return values
+
+
+def _display_candidate_vm_host(env=None):
+    runtime_env = env or os.environ
+    ssh_connection = str(runtime_env.get("SSH_CONNECTION") or "").strip()
+    ssh_parts = ssh_connection.split()
+    if len(ssh_parts) >= 3 and ssh_parts[2]:
+        return ssh_parts[2]
+
+    candidate_files = [
+        project_root() / "deployers" / "infrastructure" / "topologies" / "vm-single.config",
+        project_root() / "deployers" / "infrastructure" / "deployer.config",
+    ]
+    for config_file in candidate_files:
+        values = _parse_key_value_file(config_file)
+        for key in ("VM_EXTERNAL_IP", "VM_SINGLE_IP", "VM_SINGLE_ADDRESS", "INGRESS_EXTERNAL_IP", "HOSTS_ADDRESS"):
+            value = str(values.get(key) or "").strip()
+            if value and value.upper() not in {"X", "AUTO", "REPLACE_ME"}:
+                return value
+    return "<VM_IP>"
+
+
+def _display_candidate_ssh_user(env=None):
+    runtime_env = env or os.environ
+    return str(runtime_env.get("USER") or runtime_env.get("LOGNAME") or getpass.getuser() or "user").strip() or "user"
+
+
+def _print_headed_browser_display_guidance(label):
+    ssh_user = _display_candidate_ssh_user()
+    vm_host = _display_candidate_vm_host()
+    ssh_target = f"{ssh_user}@{vm_host}"
+    print(
+        "\nCannot run UI mode "
+        f"'{label}' from this shell because no graphical display is available."
+    )
+    print("Playwright headed mode needs an X11/Wayland display inside the machine where it runs.")
+    print("\nRecommended workflow:")
+    print("1. From Windows, use WSL to open the SSH session. WSLg usually provides the X server.")
+    print("   If WSLg is not available, start a Windows X server first, such as VcXsrv or X410.")
+    print("   On macOS, install and start XQuartz before opening the SSH session.")
+    print("   On a Linux desktop, an X11/Wayland display is usually already available.")
+    print("2. From that local terminal, connect to the inferred current VM with X11 forwarding:")
+    print(f"   ssh -Y {ssh_target}")
+    print("   If your access requires a jump host, keep your normal -J/ProxyJump route and add -Y:")
+    print(f"   ssh -Y -J <jump-user>@<jump-host>:<jump-port> {ssh_target}")
+    print("3. Inside the VM shell opened by that command, verify that the display was forwarded:")
+    print("   echo $DISPLAY")
+    print("4. If DISPLAY is not empty, enter the framework, activate Python, and start the menu:")
+    print("   cd ~/Validation-Environment")
+    print("   source .venv/bin/activate")
+    print("   python3 main.py")
+    print("5. Select Live or Debug again from the UI validation menu.")
+    print("\nIf DISPLAY is still empty in the VM, the SSH forwarding did not reach the final machine.")
+    print("Check the local X server, the jump host, and X11Forwarding/xauth on each SSH hop.")
+    print("Use Normal mode for reproducible validation when visual browser playback is not required.")
+    print("For non-visible headed compatibility only, run the whole command under xvfb-run.\n")
 
 
 def _resolve_ui_mode():
@@ -57,6 +151,9 @@ def _resolve_ui_mode():
         if choice == "1":
             return {"label": "normal", "args": [], "env": {}}
         if choice == "2":
+            if not _headed_browser_display_available():
+                _print_headed_browser_display_guidance("live")
+                continue
             return {
                 "label": "live",
                 "args": ["--headed"],
@@ -66,6 +163,9 @@ def _resolve_ui_mode():
                     "PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS": "350",
                 },
             }
+        if not _headed_browser_display_available():
+            _print_headed_browser_display_guidance("debug")
+            continue
         return {
             "label": "debug",
             "args": ["--headed", "--debug"],
@@ -545,6 +645,17 @@ def _run_level6_ui_ops(
 def _run_core_ui_tests(mode, adapter=None):
     adapter = adapter or _default_inesdata_adapter()
     ui_test_dir = str(project_root() / "validation" / "ui")
+    runtime_env = _ui_runtime_env_from_adapter(adapter)
+    runtime_extra_env = {}
+    if runtime_env.get("UI_KEYCLOAK_URL"):
+        runtime_extra_env["UI_KEYCLOAK_URL"] = runtime_env["UI_KEYCLOAK_URL"]
+    mode = {
+        **mode,
+        "env": {
+            **runtime_extra_env,
+            **(mode.get("env") or {}),
+        },
+    }
     return orchestration_ui.run_core_ui_tests(
         mode,
         ui_test_dir=ui_test_dir,
@@ -558,7 +669,7 @@ def _run_core_ui_tests(mode, adapter=None):
         run_ui_ops=_run_level6_ui_ops,
         ui_ops_suite_available=_level6_ui_ops_suite_available,
         save_interactive_state=_save_interactive_core_ui_experiment_state,
-        environment=os.environ,
+        environment=runtime_env,
     )
 
 

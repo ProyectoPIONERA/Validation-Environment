@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import unittest
@@ -26,10 +27,45 @@ class FakeInteractiveAdapter:
         return {
             "DS_1_NAME": "demo",
             "DS_DOMAIN_BASE": "dev.ds.dataspaceunit.upm",
+            "KC_INTERNAL_URL": "http://auth.dev.ed.dataspaceunit.upm",
         }
 
 
 class UiInteractiveMenuTests(unittest.TestCase):
+    def test_resolve_ui_mode_rejects_live_without_display_on_linux(self):
+        output = io.StringIO()
+        with mock.patch.object(interactive_menu.sys, "platform", "linux"), mock.patch.dict(
+            interactive_menu.os.environ,
+            {
+                "SSH_CONNECTION": "198.51.100.10 51000 192.0.2.134 22",
+                "USER": "pionera",
+            },
+            clear=True,
+        ), mock.patch("builtins.input", side_effect=["2", "1"]), mock.patch("sys.stdout", output):
+            mode = interactive_menu._resolve_ui_mode()
+
+        self.assertEqual(mode, {"label": "normal", "args": [], "env": {}})
+        self.assertIn("From Windows, use WSL", output.getvalue())
+        self.assertIn("On macOS, install and start XQuartz", output.getvalue())
+        self.assertIn("ssh -Y pionera@192.0.2.134", output.getvalue())
+        self.assertIn("ssh -Y -J <jump-user>@<jump-host>:<jump-port> pionera@192.0.2.134", output.getvalue())
+        self.assertIn("echo $DISPLAY", output.getvalue())
+        self.assertIn("cd ~/Validation-Environment", output.getvalue())
+        self.assertIn("source .venv/bin/activate", output.getvalue())
+        self.assertIn("python3 main.py", output.getvalue())
+
+    def test_resolve_ui_mode_allows_live_when_display_is_available(self):
+        with mock.patch.object(interactive_menu.sys, "platform", "linux"), mock.patch.dict(
+            interactive_menu.os.environ,
+            {"DISPLAY": ":0"},
+            clear=True,
+        ), mock.patch("builtins.input", side_effect=["2"]):
+            mode = interactive_menu._resolve_ui_mode()
+
+        self.assertEqual(mode["label"], "live")
+        self.assertEqual(mode["args"], ["--headed"])
+        self.assertEqual(mode["env"]["PLAYWRIGHT_HEADED_GPU_FIX"], "1")
+
     @mock.patch.object(interactive_menu, "_run_ai_model_hub_ui_functional")
     @mock.patch.object(interactive_menu, "_resolve_ui_mode", return_value={"label": "Normal", "args": [], "env": {}})
     def test_run_ai_model_hub_ui_tests_interactive_routes_functional(
@@ -122,11 +158,29 @@ class UiInteractiveMenuTests(unittest.TestCase):
         self.assertEqual(mock_dataspace.call_count, 1)
         self.assertEqual(mock_ops.call_count, 1)
         self.assertEqual(mock_smoke.call_args.kwargs["extra_args"], ["--headed"])
-        self.assertEqual(mock_smoke.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        self.assertEqual(
+            mock_smoke.call_args.kwargs["extra_env"],
+            {
+                "UI_KEYCLOAK_URL": "http://auth.dev.ed.dataspaceunit.upm",
+                "PWDEBUG": "0",
+            },
+        )
         self.assertEqual(mock_dataspace.call_args.kwargs["extra_args"], ["--headed"])
-        self.assertEqual(mock_dataspace.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        self.assertEqual(
+            mock_dataspace.call_args.kwargs["extra_env"],
+            {
+                "UI_KEYCLOAK_URL": "http://auth.dev.ed.dataspaceunit.upm",
+                "PWDEBUG": "0",
+            },
+        )
         self.assertEqual(mock_ops.call_args.kwargs["extra_args"], ["--headed"])
-        self.assertEqual(mock_ops.call_args.kwargs["extra_env"], {"PWDEBUG": "0"})
+        self.assertEqual(
+            mock_ops.call_args.kwargs["extra_env"],
+            {
+                "UI_KEYCLOAK_URL": "http://auth.dev.ed.dataspaceunit.upm",
+                "PWDEBUG": "0",
+            },
+        )
         mock_aggregate.assert_called_once()
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["mode"], "Live")
