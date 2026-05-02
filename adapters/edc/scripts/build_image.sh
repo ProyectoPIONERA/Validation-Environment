@@ -10,6 +10,8 @@ DOCKERFILE="$ADAPTER_DIR/build/docker/connector.Dockerfile"
 IMAGE_NAME="validation-environment/edc-connector"
 IMAGE_TAG="local"
 MINIKUBE_PROFILE="minikube"
+CLUSTER_RUNTIME="${CLUSTER_RUNTIME:-minikube}"
+K3S_IMAGE_IMPORT_COMMAND="${K3S_IMAGE_IMPORT_COMMAND:-sudo k3s ctr -n k8s.io images import}"
 GRADLE_TASK=":transfer:transfer-00-prerequisites:connector:shadowJar"
 CONNECTOR_JAR="transfer/transfer-00-prerequisites/connector/build/libs/connector.jar"
 CONNECTOR_RUNTIME_DIR="transfer/transfer-00-prerequisites/connector"
@@ -24,7 +26,8 @@ usage() {
   cat <<'EOF'
 Usage: build_image.sh [--apply] [--source-dir <path>] [--image <name>] [--tag <tag>]
                       [--dockerfile <path>] [--gradle-task <task>] [--jar-path <path>]
-                      [--minikube-profile <name>] [--skip-minikube-load] [--force-build]
+                      [--minikube-profile <name>] [--cluster-runtime <minikube|k3s>]
+                      [--skip-minikube-load] [--force-build]
                       [--sync-source <path>] [--sync-git-url <url>]
 
 Build the local generic EDC connector image from adapters/edc/sources/connector.
@@ -38,7 +41,8 @@ Options:
   --gradle-task <task>       Gradle task used to assemble the connector jar.
   --jar-path <path>          Jar path relative to the source directory.
   --minikube-profile <name>  Minikube profile used for image load.
-  --skip-minikube-load       Build the image but do not load it into Minikube.
+  --cluster-runtime <value>  Cluster runtime used for local image loading: minikube or k3s.
+  --skip-minikube-load       Build the image but do not load it into the cluster runtime.
   --force-build              Force rebuilding connector.jar through Gradle even if it already exists.
   --sync-source <path>       Local source directory passed through to sync_sources.sh.
   --sync-git-url <url>       Git URL passed through to sync_sources.sh.
@@ -61,6 +65,43 @@ remove_minikube_image_if_present() {
   if [[ "$APPLY" -eq 1 ]]; then
     minikube -p "$MINIKUBE_PROFILE" ssh "docker image rm -f '$image_ref' >/dev/null 2>&1 || true"
   fi
+}
+
+normalize_cluster_runtime() {
+  CLUSTER_RUNTIME="$(printf '%s' "${CLUSTER_RUNTIME:-minikube}" | tr '[:upper:]' '[:lower:]')"
+  case "$CLUSTER_RUNTIME" in
+    minikube|k3s)
+      ;;
+    *)
+      echo "Unsupported cluster runtime: $CLUSTER_RUNTIME" >&2
+      echo "Supported values: minikube, k3s" >&2
+      exit 1
+      ;;
+  esac
+}
+
+load_image_into_k3s() {
+  local image_ref="$1"
+  local archive_file
+
+  archive_file="$(mktemp "${TMPDIR:-/tmp}/edc-image-XXXXXX.tar")"
+  run_cmd "docker save \"$image_ref\" -o \"$archive_file\""
+  run_cmd "$K3S_IMAGE_IMPORT_COMMAND \"$archive_file\""
+  run_cmd "rm -f \"$archive_file\""
+}
+
+load_image_into_runtime() {
+  local image_ref="$1"
+
+  case "$CLUSTER_RUNTIME" in
+    minikube)
+      remove_minikube_image_if_present "$image_ref"
+      run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$image_ref\""
+      ;;
+    k3s)
+      load_image_into_k3s "$image_ref"
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -97,6 +138,10 @@ while [[ $# -gt 0 ]]; do
       MINIKUBE_PROFILE="${2:-}"
       shift 2
       ;;
+    --cluster-runtime)
+      CLUSTER_RUNTIME="${2:-}"
+      shift 2
+      ;;
     --skip-minikube-load)
       SKIP_MINIKUBE_LOAD=1
       shift
@@ -124,6 +169,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+normalize_cluster_runtime
 
 sync_cmd=("\"$SYNC_SCRIPT\"")
 if [[ -n "$SYNC_SOURCE" ]]; then
@@ -178,7 +225,12 @@ echo "Dockerfile:        $DOCKERFILE"
 echo "Gradle task:       $GRADLE_TASK"
 echo "Connector jar:     $CONNECTOR_JAR"
 echo "Image:             $FULL_IMAGE"
-echo "Minikube profile:  $MINIKUBE_PROFILE"
+echo "Cluster runtime:   $CLUSTER_RUNTIME"
+if [[ "$CLUSTER_RUNTIME" == "minikube" ]]; then
+  echo "Minikube profile:  $MINIKUBE_PROFILE"
+else
+  echo "K3s import command:$K3S_IMAGE_IMPORT_COMMAND"
+fi
 
 connector_jar_rebuild_reason() {
   local jar_path="$1"
@@ -254,8 +306,7 @@ fi
 run_cmd "docker build -f \"$DOCKERFILE\" --build-arg CONNECTOR_JAR=\"$DOCKER_BUILD_JAR\" -t \"$FULL_IMAGE\" \"$DOCKER_BUILD_CONTEXT\""
 
 if [[ "$SKIP_MINIKUBE_LOAD" -eq 0 ]]; then
-  remove_minikube_image_if_present "$FULL_IMAGE"
-  run_cmd "minikube -p \"$MINIKUBE_PROFILE\" image load \"$FULL_IMAGE\""
+  load_image_into_runtime "$FULL_IMAGE"
 fi
 
 echo

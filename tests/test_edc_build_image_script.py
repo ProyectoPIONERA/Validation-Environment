@@ -227,6 +227,31 @@ class EdcBuildImageScriptTests(unittest.TestCase):
             completed.stdout,
         )
 
+    def test_build_image_imports_local_image_into_k3s_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._create_fake_source_tree(tmpdir)
+
+            completed = subprocess.run(
+                [
+                    "bash",
+                    SCRIPT_PATH,
+                    "--source-dir",
+                    tmpdir,
+                    "--cluster-runtime",
+                    "k3s",
+                ],
+                text=True,
+                capture_output=True,
+                cwd=PROJECT_ROOT,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Cluster runtime:   k3s", completed.stdout)
+        self.assertIn("docker save \"validation-environment/edc-connector:local\"", completed.stdout)
+        self.assertIn("sudo k3s ctr -n k8s.io images import", completed.stdout)
+        self.assertNotIn("minikube -p \"minikube\" image load", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

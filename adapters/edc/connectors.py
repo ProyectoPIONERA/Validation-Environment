@@ -259,7 +259,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return False
 
         minikube_profile = self._edc_local_minikube_profile()
+        cluster_type = str(self._cluster_runtime().get("cluster_type") or "minikube").strip().lower() or "minikube"
         print("\nPreparing local EDC connector image for Level 4...")
+        print(f"Cluster runtime: {cluster_type}")
         print(f"This builds and loads {image['name']}:{image['tag']} before Helm deploy.")
         if not self._run_level4_edc_image_script(
             script_path,
@@ -272,6 +274,8 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 image["tag"],
                 "--minikube-profile",
                 minikube_profile,
+                "--cluster-runtime",
+                cluster_type,
             ],
         ):
             print("Error preparing local EDC connector image for Level 4.")
@@ -312,12 +316,14 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 return False
 
         minikube_profile = self._edc_local_minikube_profile()
+        cluster_type = str(self._cluster_runtime().get("cluster_type") or "minikube").strip().lower() or "minikube"
         os.environ["PIONERA_EDC_DASHBOARD_IMAGE_NAME"] = images["dashboard_name"]
         os.environ["PIONERA_EDC_DASHBOARD_IMAGE_TAG"] = images["dashboard_tag"]
         os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME"] = images["proxy_name"]
         os.environ["PIONERA_EDC_DASHBOARD_PROXY_IMAGE_TAG"] = images["proxy_tag"]
 
         print("\nPreparing local EDC dashboard images for Level 4...")
+        print(f"Cluster runtime: {cluster_type}")
         print(
             "This builds and loads "
             f"{images['dashboard_name']}:{images['dashboard_tag']} and "
@@ -326,7 +332,12 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         for script_path in scripts:
             if not self._run_level4_edc_image_script(
                 script_path,
-                args=["--minikube-profile", minikube_profile],
+                args=[
+                    "--minikube-profile",
+                    minikube_profile,
+                    "--cluster-runtime",
+                    cluster_type,
+                ],
             ):
                 print("Error preparing local EDC dashboard images for Level 4.")
                 return False
