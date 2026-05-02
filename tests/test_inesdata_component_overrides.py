@@ -414,6 +414,37 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         build_mock.assert_called_once_with("ontology-hub:local", deployer_config)
         load_mock.assert_called_once_with("minikube", "ontology-hub:local")
 
+    def test_prepare_level6_local_image_imports_ontology_hub_into_k3s(self):
+        adapter = self._make_adapter()
+        adapter.config_adapter.topology = "vm-single"
+        deployer_config = {
+            "CLUSTER_TYPE": "k3s",
+            "LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "false",
+        }
+
+        with (
+            mock.patch.object(
+                adapter,
+                "_safe_load_yaml_file",
+                return_value={"image": {"repository": "ontology-hub", "tag": "local"}},
+            ),
+            mock.patch.object(adapter, "_minikube_is_available") as minikube_available_mock,
+            mock.patch.object(adapter, "_build_ontology_hub_image_on_host") as build_mock,
+            mock.patch.object(adapter, "_load_image_into_k3s") as load_k3s_mock,
+            mock.patch.object(adapter, "_load_image_into_minikube") as load_minikube_mock,
+        ):
+            result = adapter._maybe_prepare_level6_local_image(
+                "ontology-hub",
+                "/tmp/ontology-values.yaml",
+                deployer_config,
+            )
+
+        self.assertTrue(result)
+        minikube_available_mock.assert_not_called()
+        build_mock.assert_called_once_with("ontology-hub:local", deployer_config)
+        load_k3s_mock.assert_called_once_with("ontology-hub:local")
+        load_minikube_mock.assert_not_called()
+
     def test_prepare_level6_local_image_rebuilds_ontology_hub_without_consulting_host_cache(self):
         adapter = self._make_adapter()
         deployer_config = {"LEVEL5_AUTO_BUILD_LOCAL_IMAGES": "true"}
