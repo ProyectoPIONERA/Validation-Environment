@@ -157,7 +157,7 @@ automáticamente para establecer el `frontendUrl` de Keycloak, lo que asegura qu
 los tokens JWT contengan el issuer correcto para acceso externo vía HTTPS:
 
 ```text
-PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+PUBLIC_HOSTNAME=<your-public-hostname>
 ```
 
 También puedes sobreescribir valores con variables `PIONERA_*`, por ejemplo:
@@ -515,7 +515,7 @@ bash setup-nginx-proxy.sh [cluster_ip] [vm_ip] [public_hostname] [internal_domai
 Ejemplo:
 
 ```bash
-bash setup-nginx-proxy.sh 192.168.49.2 192.168.122.64 org1.pionera.oeg.fi.upm.es pionera.oeg.fi.upm.es
+bash setup-nginx-proxy.sh 192.168.49.2 <vm_ip> <public_hostname> <internal_domain>
 ```
 
 El script:

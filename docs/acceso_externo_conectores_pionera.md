@@ -7,17 +7,17 @@ Fecha: 2026-04-25
 
 ## Situación actual
 
-El entorno de validación PIONERA está desplegado en una máquina virtual (VM) con IP pública `138.100.15.165`. Dentro de esa VM corre **Minikube**, que es un clúster Kubernetes local. Todos los servicios (conectores, Keycloak, MinIO, etc.) están dentro de Minikube en la red interna `192.168.49.2`.
+El entorno de validación está desplegado en una máquina virtual (VM) con una IP pública, representada aquí como `203.0.113.10`. Dentro de esa VM corre **Minikube**, que es un clúster Kubernetes local. Todos los servicios (conectores, Keycloak, MinIO, etc.) están dentro de Minikube en la red interna `192.168.49.2`.
 
-El problema es que esa red interna **no es accesible desde fuera de la VM**. Los dominios que usan los servicios (`conn-citycouncil-demo.pionera.oeg.fi.upm.es`, `auth.pionera.oeg.fi.upm.es`, etc.) actualmente no resuelven nada en el DNS de la UPM — devuelven `NXDOMAIN`.
+El problema es que esa red interna **no es accesible desde fuera de la VM**. Los dominios que usan los servicios (`conn-citycouncil-demo.example.org`, `auth.example.org`, etc.) deben resolverse en DNS hacia la IP pública de la VM.
 
 ### Diagrama del estado actual
 
 ```
 [PC del usuario]                  [VM pública]               [Minikube interno]
-     │                            138.100.15.165              192.168.49.2
+     │                            203.0.113.10                192.168.49.2
      │                                  │                           │
-     │  DNS: *.pionera.oeg.fi.upm.es    │                           │
+     │  DNS: *.example.org              │                           │
      │  → NO RESUELVE ❌                │                           │
      │                                  │                           │
      │  Aunque resolviese:              │                           │
@@ -39,7 +39,7 @@ Son **dos cambios independientes**, uno técnico y uno administrativo.
 La VM tiene IP forwarding activado (`ip_forward=1`) y tiene instalado el nginx ingress controller de Kubernetes. Solo falta una regla **iptables DNAT** que redirija el tráfico entrante del puerto 80 hacia Minikube:
 
 ```bash
-sudo iptables -t nat -A PREROUTING -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination 192.168.49.2:80
+sudo iptables -t nat -A PREROUTING -d 203.0.113.10 -p tcp --dport 80 -j DNAT --to-destination 192.168.49.2:80
 sudo iptables -t nat -A POSTROUTING -d 192.168.49.2 -j MASQUERADE
 ```
 
@@ -49,15 +49,15 @@ El Ingress de Kubernetes (nginx ingress controller) ya está configurado correct
 
 ```
 [PC usuario]
-  → petición HTTP a 138.100.15.165:80
-    con cabecera: Host: conn-citycouncil-demo.pionera.oeg.fi.upm.es
+  → petición HTTP a 203.0.113.10:80
+    con cabecera: Host: conn-citycouncil-demo.example.org
 
 [VM - iptables DNAT]
   → redirige a 192.168.49.2:80
     cabecera Host se mantiene igual ✅
 
 [Minikube - nginx ingress]
-  → lee Host: conn-citycouncil-demo.pionera.oeg.fi.upm.es
+  → lee Host: conn-citycouncil-demo.example.org
   → enruta al pod correcto ✅
 ```
 
@@ -70,44 +70,44 @@ sudo netfilter-persistent save
 
 ---
 
-### Cambio 2 — Registro DNS wildcard en la UPM (administrativo)
+### Cambio 2 — Registro DNS wildcard (administrativo)
 
-El DNS de la UPM (`chita.fi.upm.es`, gestionado por `hostmaster.fi.upm.es`) ya tiene el registro raíz:
+El DNS público del despliegue debe tener un registro raíz como este:
 
 ```
-pionera.oeg.fi.upm.es    IN  A  138.100.15.165   ✅ existe
+example.org    IN  A  203.0.113.10
 ```
 
 Falta añadir un **único registro wildcard**:
 
 ```
-*.pionera.oeg.fi.upm.es  IN  A  138.100.15.165   ❌ no existe
+*.example.org  IN  A  203.0.113.10
 ```
 
 Esto resolvería automáticamente **todos** los subdominios:
-- `conn-citycouncil-demo.pionera.oeg.fi.upm.es → 138.100.15.165`
-- `conn-company-demo.pionera.oeg.fi.upm.es → 138.100.15.165`
-- `auth.pionera.oeg.fi.upm.es → 138.100.15.165`
-- `minio.pionera.oeg.fi.upm.es → 138.100.15.165`
-- `registration-service-demo.pionera.oeg.fi.upm.es → 138.100.15.165`
+- `conn-citycouncil-demo.example.org → 203.0.113.10`
+- `conn-company-demo.example.org → 203.0.113.10`
+- `auth.example.org → 203.0.113.10`
+- `minio.example.org → 203.0.113.10`
+- `registration-service-demo.example.org → 203.0.113.10`
 - (cualquier subdominio futuro también)
 
-**Acción**: Enviar solicitud a `hostmaster.fi.upm.es` pidiendo añadir el registro wildcard.
+**Acción**: solicitar al administrador DNS del despliegue que añada el registro wildcard.
 
 ---
 
 ## Flujo completo con los dos cambios aplicados
 
 ```
-[Browser en red UPM]
+[Browser en la red autorizada o VPN]
 
-  1. Escribe: http://conn-citycouncil-demo.pionera.oeg.fi.upm.es
+  1. Escribe: http://conn-citycouncil-demo.example.org
   
-  2. DNS UPM resuelve: 138.100.15.165
-     (gracias al wildcard *.pionera.oeg.fi.upm.es)
+  2. DNS resuelve: 203.0.113.10
+     (gracias al wildcard *.example.org)
 
-  3. Browser manda petición HTTP a 138.100.15.165:80
-     con cabecera Host: conn-citycouncil-demo.pionera.oeg.fi.upm.es
+  3. Browser manda petición HTTP a 203.0.113.10:80
+     con cabecera Host: conn-citycouncil-demo.example.org
 
   4. VM recibe en :80, iptables redirige a 192.168.49.2:80
      (cabecera Host intacta)
@@ -122,24 +122,24 @@ Esto resolvería automáticamente **todos** los subdominios:
 
 ## Servicios accesibles (URLs definitivas)
 
-> Accesibles desde cualquier PC en red UPM o VPN, sin modificar `/etc/hosts`.
+> Accesibles desde cualquier PC en la red autorizada o VPN, sin modificar `/etc/hosts`.
 
 | URL | Servicio |
 |-----|----------|
-| `https://org1.pionera.oeg.fi.upm.es/c/citycouncil/inesdata-connector-interface/` | Interfaz conector City Council |
-| `https://org1.pionera.oeg.fi.upm.es/c/company/inesdata-connector-interface/` | Interfaz conector Company |
-| `https://org1.pionera.oeg.fi.upm.es/auth/` | Keycloak (autenticación) |
-| `https://org1.pionera.oeg.fi.upm.es/auth/admin/demo/console/` | Consola admin Keycloak |
-| `https://org1.pionera.oeg.fi.upm.es/s3-console/` | Consola MinIO (almacenamiento) |
-| `https://org1.pionera.oeg.fi.upm.es/rs-demo/` | Servicio de registro del dataspace |
+| `https://public.example.org/c/citycouncil/inesdata-connector-interface/` | Interfaz conector City Council |
+| `https://public.example.org/c/company/inesdata-connector-interface/` | Interfaz conector Company |
+| `https://public.example.org/auth/` | Keycloak (autenticación) |
+| `https://public.example.org/auth/admin/demo/console/` | Consola admin Keycloak |
+| `https://public.example.org/s3-console/` | Consola MinIO (almacenamiento) |
+| `https://public.example.org/rs-demo/` | Servicio de registro del dataspace |
 
 ### Credenciales de acceso a los conectores
 
 | Conector | Usuario | Contraseña |
 |----------|---------|------------|
-| City Council | `user-conn-citycouncil-demo` | `skaEFXy1XaPgrek*` |
-| Company | `user-conn-company-demo` | `XMSi1tr*vl*30bjo` |
-| Keycloak admin | `admin` | `change-me` |
+| City Council | leer de `deployers/<adapter>/deployments/.../credentials-*.json` local | no publicar |
+| Company | leer de `deployers/<adapter>/deployments/.../credentials-*.json` local | no publicar |
+| Keycloak admin | leer de `deployers/<adapter>/deployer.config` local | no publicar |
 
 ---
 
@@ -148,7 +148,7 @@ Esto resolvería automáticamente **todos** los subdominios:
 | # | Acción | Responsable | Tiempo estimado |
 |---|--------|-------------|-----------------|
 | 1 | Ejecutar reglas iptables en la VM y hacer persistentes | Administrador VM | 5 minutos |
-| 2 | Enviar solicitud a `hostmaster.fi.upm.es` para añadir `*.pionera.oeg.fi.upm.es IN A 138.100.15.165` | Equipo PIONERA | 5 min solicitud / días para respuesta |
+| 2 | Solicitar al administrador DNS añadir `*.example.org IN A 203.0.113.10` usando los valores reales del despliegue | Equipo del despliegue | 5 min solicitud / días para respuesta |
 | 3 | Verificar acceso desde un PC externo a la VM | Cualquiera del equipo | Tras propagación DNS (~24h) |
 
 ---
@@ -158,6 +158,6 @@ Esto resolvería automáticamente **todos** los subdominios:
 | Solución | Viable | Motivo descarte |
 |----------|--------|-----------------|
 | SSH tunnel | ✅ pero manual | Requiere configuración en cada PC cliente |
-| `/etc/hosts` en cada PC | ✅ pero manual | No escala a todos los usuarios UPM |
-| ngrok / Cloudflare Tunnel | ✅ | Cambia las URLs, no usa `*.pionera.oeg.fi.upm.es` |
+| `/etc/hosts` en cada PC | ✅ pero manual | No escala a todos los usuarios |
+| ngrok / Cloudflare Tunnel | ✅ | Cambia las URLs, no usa el dominio público propio |
 | **iptables DNAT + DNS wildcard** | ✅ **RECOMENDADO** | Transparente para el usuario, URLs estables |

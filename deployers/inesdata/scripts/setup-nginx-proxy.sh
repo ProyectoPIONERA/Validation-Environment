@@ -1,31 +1,38 @@
 #!/bin/bash
-# Sets up nginx reverse proxy on the VM host (pionera40 / 192.168.122.64)
-# to expose Minikube services via https://org1.pionera.oeg.fi.upm.es
+# Sets up nginx reverse proxy on the VM host to expose Minikube services
+# via a caller-provided public hostname.
 #
-# Run as: bash setup-nginx-proxy.sh [minikube_ip] [public_hostname]
-# Defaults: minikube_ip=192.168.49.2, public_hostname=org1.pionera.oeg.fi.upm.es
+# Run as:
+#   bash setup-nginx-proxy.sh [minikube_ip] [vm_ip] [public_hostname] [internal_domain]
 
 set -e
 
 MINIKUBE_IP="${1:-192.168.49.2}"
-VM_IP="${2:-192.168.122.64}"
-PUBLIC_HOST="${3:-org1.pionera.oeg.fi.upm.es}"
-INTERNAL_DOMAIN="${4:-pionera.oeg.fi.upm.es}"
+VM_IP="${2:-$(hostname -I | awk '{print $1}')}"
+PUBLIC_HOST="${3:-}"
+INTERNAL_DOMAIN="${4:-dev.ds.dataspaceunit.upm}"
+KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD:-change-me}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+if [ -z "$VM_IP" ] || [ -z "$PUBLIC_HOST" ]; then
+    echo "Usage: bash setup-nginx-proxy.sh [minikube_ip] [vm_ip] <public_hostname> [internal_domain]" >&2
+    echo "Example: bash setup-nginx-proxy.sh 192.168.49.2 203.0.113.10 public.example.org dev.ds.dataspaceunit.upm" >&2
+    exit 2
+fi
 
 echo "[1/5] Installing nginx and iptables-persistent..."
 sudo apt-get install -y nginx iptables-persistent
 
 echo "[2/5] Configuring iptables DNAT (VM IP → Minikube)..."
 # Remove existing rules if present
-sudo iptables -t nat -D PREROUTING -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
+sudo iptables -t nat -D PREROUTING -d ${VM_IP} -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
 sudo iptables -t nat -D POSTROUTING -d ${MINIKUBE_IP} -j MASQUERADE 2>/dev/null || true
-sudo iptables -t nat -D OUTPUT -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
+sudo iptables -t nat -D OUTPUT -d ${VM_IP} -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80 2>/dev/null || true
 
-sudo iptables -t nat -A PREROUTING -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
+sudo iptables -t nat -A PREROUTING -d ${VM_IP} -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
 sudo iptables -t nat -A POSTROUTING -d ${MINIKUBE_IP} -j MASQUERADE
-sudo iptables -t nat -A OUTPUT -d 138.100.15.165 -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
+sudo iptables -t nat -A OUTPUT -d ${VM_IP} -p tcp --dport 80 -j DNAT --to-destination ${MINIKUBE_IP}:80
 sudo netfilter-persistent save
 
 echo "[3/5] Generating app.config.json for connector interfaces..."
@@ -244,7 +251,7 @@ echo "[5/5] Setting Keycloak realm frontendUrl..."
 KC_URL="http://auth.${INTERNAL_DOMAIN}"
 KC_TOKEN=$(curl -s -X POST "${KC_URL}/realms/master/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "client_id=admin-cli&username=admin&password=change-me&grant_type=password" | \
+    -d "client_id=admin-cli&username=admin&password=${KC_ADMIN_PASSWORD}&grant_type=password" | \
     python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 REALM=$(curl -s "${KC_URL}/admin/realms/demo" -H "Authorization: Bearer $KC_TOKEN")
