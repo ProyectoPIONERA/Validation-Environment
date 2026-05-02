@@ -13,6 +13,9 @@ import requests
 EDC_VOCAB = "https://w3id.org/edc/v0.0.1/ns/"
 DEFAULT_QUERY_LIMIT = 100
 DEFAULT_MAX_PAGES = 50
+DEFAULT_MANAGEMENT_TRANSIENT_RETRIES = 6
+DEFAULT_MANAGEMENT_TRANSIENT_RETRY_DELAY = 5.0
+TRANSIENT_MANAGEMENT_STATUS_CODES = {502, 503, 504}
 SUPPORTED_MODES = {"safe", "dry-run", "aggressive"}
 SAFE_TEST_OBJECT_PREFIXES = (
     "todos-",
@@ -193,6 +196,8 @@ class ManagementApiTestDataCleaner:
         max_pages: int = DEFAULT_MAX_PAGES,
         auth_retries: int = 2,
         auth_retry_delay: float = 2.0,
+        management_transient_retries: int = DEFAULT_MANAGEMENT_TRANSIENT_RETRIES,
+        management_transient_retry_delay: float = DEFAULT_MANAGEMENT_TRANSIENT_RETRY_DELAY,
     ):
         self.adapter = adapter
         self.context = context
@@ -206,6 +211,8 @@ class ManagementApiTestDataCleaner:
         self.max_pages = max(int(max_pages or DEFAULT_MAX_PAGES), 1)
         self.auth_retries = max(int(auth_retries or 0), 0)
         self.auth_retry_delay = max(float(auth_retry_delay or 0), 0.0)
+        self.management_transient_retries = max(int(management_transient_retries or 0), 0)
+        self.management_transient_retry_delay = max(float(management_transient_retry_delay or 0), 0.0)
         self.config = self._load_config()
         self.dataspace = str(getattr(context, "dataspace_name", "") or self.config.get("DS_1_NAME") or "").strip()
         self.ds_domain_base = str(getattr(context, "ds_domain_base", "") or self._resolve_adapter_domain() or "").strip()
@@ -357,14 +364,16 @@ class ManagementApiTestDataCleaner:
                 "limit": self.query_limit,
                 "filterExpression": [],
             }
-            response = self.session.post(
+            label = f"List {entity_kind}"
+            response = self._post_management_with_transient_retry(
                 f"{management_base_url}{request_path}",
+                label=label,
                 headers=self._json_headers(token),
                 json=payload,
                 timeout=30,
             )
-            self._assert_status(response, {200}, f"List {entity_kind}")
-            page_entities = list(iter_entities(self._json_body(response, f"List {entity_kind}")))
+            self._assert_status(response, {200}, label)
+            page_entities = list(iter_entities(self._json_body(response, label)))
             if not page_entities:
                 break
 
@@ -827,6 +836,29 @@ class ManagementApiTestDataCleaner:
     def _response_text(response: Any) -> str:
         return str(getattr(response, "text", "") or "")[:500]
 
+    def _post_management_with_transient_retry(self, url: str, *, label: str, **kwargs: Any) -> Any:
+        last_error = None
+        attempts = self.management_transient_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self.session.post(url, **kwargs)
+            except requests.RequestException as exc:
+                last_error = str(exc)
+                should_retry = attempt < attempts
+            else:
+                status_code = int(getattr(response, "status_code", 0) or 0)
+                if status_code not in TRANSIENT_MANAGEMENT_STATUS_CODES:
+                    return response
+                last_error = f"HTTP {status_code}: {self._response_text(response)}"
+                should_retry = attempt < attempts
+
+            if not should_retry:
+                break
+            if self.management_transient_retry_delay:
+                time.sleep(self.management_transient_retry_delay)
+
+        raise RuntimeError(f"{label} failed after transient management retries: {last_error}")
+
     def _assert_status(self, response: Any, expected_codes: set[int], label: str) -> None:
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code not in expected_codes:
@@ -878,6 +910,8 @@ def run_pre_validation_cleanup(
     session: Any = None,
     minio_client_factory: Any = None,
     report_enabled: bool = True,
+    management_transient_retries: int = DEFAULT_MANAGEMENT_TRANSIENT_RETRIES,
+    management_transient_retry_delay: float = DEFAULT_MANAGEMENT_TRANSIENT_RETRY_DELAY,
 ) -> dict[str, Any]:
     cleaner = ManagementApiTestDataCleaner(
         adapter=adapter,
@@ -888,5 +922,7 @@ def run_pre_validation_cleanup(
         session=session,
         minio_client_factory=minio_client_factory,
         report_enabled=report_enabled,
+        management_transient_retries=management_transient_retries,
+        management_transient_retry_delay=management_transient_retry_delay,
     )
     return cleaner.run()

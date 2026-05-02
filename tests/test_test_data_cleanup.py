@@ -169,6 +169,19 @@ class TransientAuthCleanupSession(FakeCleanupSession):
         return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
 
 
+class TransientManagementCleanupSession(FakeCleanupSession):
+    def __init__(self):
+        super().__init__()
+        self.contract_definition_attempts = 0
+
+    def post(self, url, headers=None, data=None, json=None, timeout=None):
+        if url.endswith("/contractdefinitions/request"):
+            self.contract_definition_attempts += 1
+            if self.contract_definition_attempts == 1:
+                return FakeResponse(502, {"message": "ingress settling"})
+        return super().post(url, headers=headers, data=data, json=json, timeout=timeout)
+
+
 class FakeMinioObject:
     def __init__(self, object_name):
         self.object_name = object_name
@@ -321,6 +334,24 @@ class TestDataCleanupTests(unittest.TestCase):
         self.assertEqual(report["status"], "completed")
         self.assertTrue(session.rejected_inventory_once)
         self.assertEqual(session.token_requests, 2)
+
+    def test_inventory_cleanup_retries_transient_management_gateway_error(self):
+        session = TransientManagementCleanupSession()
+
+        cleaner = ManagementApiTestDataCleaner(
+            adapter=FakeAdapter(),
+            context=fake_context(),
+            connectors=["conn-a"],
+            experiment_dir=None,
+            mode="safe",
+            session=session,
+            management_transient_retries=1,
+            management_transient_retry_delay=0,
+        )
+        report = cleaner.run()
+
+        self.assertEqual(report["status"], "completed")
+        self.assertEqual(session.contract_definition_attempts, 2)
 
     def test_dry_run_builds_plan_without_deleting(self):
         session = FakeCleanupSession()
