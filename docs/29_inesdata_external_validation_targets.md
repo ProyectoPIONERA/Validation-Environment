@@ -45,9 +45,17 @@ El fichero real no debe subirse a Git:
 validation/targets/inesdata-production.yaml
 ```
 
+La carpeta `validation/targets/` incluye un `.gitignore` específico para
+permitir versionar documentación y ejemplos `*.example.yaml`, pero bloquear
+targets reales por defecto.
+
 Las credenciales deben resolverse por variables de entorno, por el mecanismo de
 secretos aprobado por INESData o por prompt interactivo seguro. No deben
 escribirse en el YAML.
+
+En el menú interactivo, si faltan variables declaradas como `*_env`, el
+framework pide esos valores por consola y los mantiene solo en memoria durante
+la ejecución.
 
 Ejemplo base:
 
@@ -177,6 +185,15 @@ validation/
         helpers/
 ```
 
+La estructura base versionada incluye:
+
+- `validation/projects/inesdata/project_suites.yaml`;
+- `validation/projects/inesdata/linguistic/test_cases.yaml`;
+- `validation/projects/inesdata/mobility/test_cases.yaml`;
+- READMEs por dominio, `fixtures/` y `specs/`;
+- un ejemplo Playwright no ejecutable por defecto en
+  `validation/projects/inesdata/linguistic/specs/linguistic_catalog_smoke.example.ts`.
+
 Uso de cada carpeta:
 
 - `validation/core/`: pruebas comunes del dataspace.
@@ -253,25 +270,43 @@ Flujo por menú:
 
 ```text
 python3 main.py menu
--> Select adapter: inesdata
--> Select validation target: inesdata-production
--> Level 6: Run Validation Tests
+-> G - Validate target
+-> Select validation target
+-> Show target validation plan
 ```
 
-Flujo CLI:
+En el estado actual, `G - Validate target` incluye un runner mínimo seguro:
+
+- carga targets de `validation/targets/`;
+- muestra el plan de suites;
+- informa secretos requeridos sin imprimir valores;
+- no ejecuta limpieza ni borra datos;
+- no ejecuta escrituras;
+- ejecuta únicamente specs Playwright `read-only` explícitamente habilitados en
+  `project_suites`;
+- ignora plantillas `*.example.*` y termina como `skipped` si no existen specs
+  reales.
+
+Flujo CLI previsto:
 
 ```bash
 python3 main.py inesdata validate --target inesdata-production --profile read-only
 ```
 
+Esta ruta CLI queda como fase posterior. La base versionada actualmente prioriza
+el menú `G - Validate target`, porque es el flujo principal de uso del
+framework.
+
 El framework debe mostrar claramente:
 
 ```text
-Adapter: inesdata
+Project: inesdata
 Target: inesdata-production
 Mode: validation-only / read-only
 Levels 1-5: disabled for external target
 Level 6: enabled
+Cleanup: disabled
+Writes: disabled
 ```
 
 ## Criterios de Aceptación

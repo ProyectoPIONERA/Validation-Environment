@@ -88,6 +88,13 @@ from validation.orchestration.components import (
     should_run_component_validation as should_run_level6_component_validation,
 )
 from validation.orchestration.kafka import run_kafka_edc_validation
+from validation.orchestration.targets import (
+    build_validation_target_plan,
+    discover_validation_targets,
+    format_validation_target_plan,
+    load_validation_target,
+    run_validation_target_read_only,
+)
 from validation.components.runner import (
     run_component_validations as run_registered_component_validations,
     summarize_component_results,
@@ -6602,6 +6609,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print("P - Preview deployment plan")
     print("H - Plan/apply hosts entries")
     print("U - Show available access URLs")
+    print("G - Validate target")
     print("M - Run metrics / benchmarks")
     print("X - Recreate dataspace")
     print()
@@ -6650,6 +6658,8 @@ def _print_interactive_help():
     print("    It shows concrete hostnames, the sync result, and in menu mode can offer to apply the plan immediately.")
     print("U - Use to print access URLs derived from the selected adapter config in a readable format.")
     print("    Useful after Levels 2-5 when you want portal, connector, component or MinIO access details without searching files manually.")
+    print("G - Use to inspect an external INESData validation target without deploying PIONERA resources.")
+    print("    The current runner validates the target YAML and can run enabled read-only Playwright project specs.")
     print(
         "M - Use when you only need metrics or standalone benchmarks. "
         "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
@@ -6705,7 +6715,12 @@ def _select_adapter_interactive(current_adapter, adapter_registry=None):
     return adapters[index]
 
 
-def _select_topology_interactive(current_topology="local", available_topologies=None):
+def _select_topology_interactive(
+    current_topology="local",
+    available_topologies=None,
+    include_validation_target=False,
+    initial_prompt=False,
+):
     topologies = list(available_topologies or SUPPORTED_TOPOLOGIES or (LOCAL_TOPOLOGY,))
     normalized_current = normalize_topology(current_topology)
 
@@ -6714,11 +6729,26 @@ def _select_topology_interactive(current_topology="local", available_topologies=
     for index, topology_name in enumerate(topologies, start=1):
         marker = " (current)" if topology_name == normalized_current else ""
         print(f"{index} - {topology_name}{marker}")
-    print("B - Back")
+    if include_validation_target:
+        print()
+        print("[Other actions]")
+        print("G - Validate target")
+    if initial_prompt:
+        print()
+        print("[Navigation]")
+        print("Q - Exit")
+    else:
+        print("B - Back")
 
     choice = _interactive_read("\nSelection: ").strip().upper()
-    if not choice or choice == "B":
+    if not choice:
         return normalized_current
+    if initial_prompt and choice in ("Q", "B"):
+        return "exit"
+    if not initial_prompt and choice == "B":
+        return normalized_current
+    if include_validation_target and choice == "G":
+        return "validation-target"
 
     try:
         index = int(choice) - 1
@@ -7404,6 +7434,205 @@ def _run_recreate_dataspace_interactive(
     )
 
 
+def _print_validation_target_menu(selected_target=None, validation_project="inesdata"):
+    print()
+    print("=" * 50)
+    print("VALIDATION TARGET")
+    print("=" * 50)
+    print(f"Project: {validation_project}")
+    print("Mode: validation-only")
+    print("Safety: no cleanup, no writes, no destructive actions")
+    if selected_target:
+        label = selected_target.get("name") or selected_target.get("filename")
+        suffix = " (example)" if selected_target.get("example") else ""
+        print(f"Target: {label}{suffix}")
+    else:
+        print("Target: not selected")
+    print()
+    print("1 - Select validation target")
+    print("2 - Show target validation plan")
+    print("3 - Run target validation (read-only)")
+    print("B - Back")
+    print("=" * 50)
+
+
+def _select_validation_target_interactive(selected_target=None):
+    targets = discover_validation_targets()
+    if not targets:
+        print("No validation targets found under validation/targets/.")
+        return selected_target
+
+    print()
+    print("Available validation targets:")
+    for index, target in enumerate(targets, start=1):
+        marker = " (current)" if selected_target and selected_target.get("path") == target.get("path") else ""
+        suffix = " [example]" if target.get("example") else ""
+        status = target.get("status") or "available"
+        print(f"{index} - {target.get('name')}{suffix} ({status}){marker}")
+    print("B - Back")
+
+    choice = _interactive_read("\nSelection: ").strip().upper()
+    if not choice or choice == "B":
+        return selected_target
+    try:
+        selected_index = int(choice)
+    except ValueError:
+        print("Invalid target selection.")
+        return selected_target
+    if selected_index < 1 or selected_index > len(targets):
+        print("Invalid target selection.")
+        return selected_target
+
+    target = targets[selected_index - 1]
+    if target.get("status") == "invalid":
+        print(f"Target cannot be selected because it is invalid: {target.get('error')}")
+        return selected_target
+    print(f"Validation target selected: {target.get('name')}")
+    return target
+
+
+def _build_selected_validation_target_plan(selected_target, validation_project="inesdata", environ=None):
+    if not selected_target:
+        raise RuntimeError("Select a validation target first.")
+    payload, target_path = load_validation_target(selected_target.get("path") or selected_target.get("name"))
+    return build_validation_target_plan(
+        payload,
+        target_path=target_path,
+        adapter=validation_project or "inesdata",
+        environ=environ,
+    )
+
+
+def _print_validation_target_plan(plan):
+    print()
+    for line in format_validation_target_plan(plan):
+        print(line)
+
+
+def _secret_prompt_hidden(env_name):
+    normalized = str(env_name or "").upper()
+    return any(token in normalized for token in ("PASSWORD", "PASS", "TOKEN", "SECRET", "KEY"))
+
+
+def _prompt_validation_target_missing_secrets(plan, environ=None):
+    runtime_env = dict(os.environ if environ is None else environ)
+    missing = [item for item in list(plan.get("secrets") or []) if item.get("status") == "missing"]
+    if not missing:
+        return runtime_env
+
+    print()
+    print("Missing target credentials will be requested for this run only.")
+    print("Values are kept in memory and are not written to target files, logs or reports.")
+    for item in missing:
+        env_name = str(item.get("env") or "").strip()
+        if not env_name:
+            continue
+        prompt = f"{env_name}: "
+        if _secret_prompt_hidden(env_name):
+            value = getpass.getpass(prompt)
+        else:
+            value = _interactive_read(prompt)
+        if not value:
+            print(f"Credential not provided: {env_name}")
+            return None
+        runtime_env[env_name] = value
+    return runtime_env
+
+
+def _print_validation_target_run_result(result):
+    print()
+    status = str(result.get("status") or "unknown").strip()
+    print(f"Target validation status: {status}")
+    reason = str(result.get("reason") or "").strip()
+    if reason:
+        print(f"Reason: {reason}")
+    message = str(result.get("message") or "").strip()
+    if message:
+        print(message)
+    if result.get("experiment_dir"):
+        print(f"Artifacts: {result['experiment_dir']}")
+    for suite in result.get("suite_results") or []:
+        suite_name = suite.get("suite") or "unknown"
+        suite_status = suite.get("status") or "unknown"
+        specs = suite.get("specs") or []
+        print(f"- {suite_name}: {suite_status} ({len(specs)} spec(s))")
+        artifacts = suite.get("artifacts") or {}
+        if artifacts.get("html_report_dir"):
+            print(f"  Report: {artifacts['html_report_dir']}")
+        if artifacts.get("output_dir"):
+            print(f"  Evidence: {artifacts['output_dir']}")
+
+
+def _run_validation_target_menu_interactive(current_adapter=None, adapter_registry=None):
+    registry = adapter_registry or ADAPTER_REGISTRY
+    validation_project = "inesdata"
+    if validation_project not in registry:
+        print("Validation target scaffold currently supports INESData only, but the INESData adapter is not registered.")
+        return current_adapter
+
+    selected_target = None
+    target_runtime_env = dict(os.environ)
+    while True:
+        _print_validation_target_menu(
+            selected_target=selected_target,
+            validation_project=validation_project,
+        )
+        choice = _interactive_read("\nSelection: ").strip().upper()
+        if not choice or choice == "B":
+            return current_adapter
+
+        if choice == "1":
+            selected_target = _select_validation_target_interactive(selected_target=selected_target)
+            continue
+
+        if choice == "2":
+            if not selected_target:
+                selected_target = _select_validation_target_interactive(selected_target=selected_target)
+                if not selected_target:
+                    continue
+            plan = _build_selected_validation_target_plan(
+                selected_target,
+                validation_project=validation_project,
+                environ=target_runtime_env,
+            )
+            _print_validation_target_plan(plan)
+            continue
+
+        if choice == "3":
+            if not selected_target:
+                selected_target = _select_validation_target_interactive(selected_target=selected_target)
+                if not selected_target:
+                    continue
+            plan = _build_selected_validation_target_plan(
+                selected_target,
+                validation_project=validation_project,
+                environ=target_runtime_env,
+            )
+            updated_env = _prompt_validation_target_missing_secrets(plan, environ=target_runtime_env)
+            if updated_env is None:
+                print("Target validation cancelled because required credentials were not provided.")
+                continue
+            target_runtime_env = updated_env
+            plan = _build_selected_validation_target_plan(
+                selected_target,
+                validation_project=validation_project,
+                environ=target_runtime_env,
+            )
+            _print_validation_target_plan(plan)
+            print()
+            print("Running read-only target validation...")
+            payload, target_path = load_validation_target(selected_target.get("path") or selected_target.get("name"))
+            result = run_validation_target_read_only(
+                payload,
+                target_path=target_path,
+                environ=target_runtime_env,
+            )
+            _print_validation_target_run_result(result)
+            continue
+
+        print("Invalid selection. Please try again.")
+
+
 def _run_legacy_menu_action(action_name, current_adapter="inesdata"):
     """Run compatibility menu shortcuts through the migrated main.py modules."""
     migrated_actions = {
@@ -7455,15 +7684,26 @@ def run_interactive_menu(
             selected_topology = _select_topology_interactive(
                 topology,
                 available_topologies=SUPPORTED_TOPOLOGIES,
+                include_validation_target=True,
+                initial_prompt=True,
             )
-            topology = selected_topology
-            print(f"Active topology set to {topology}.")
-            if normalize_topology(topology) == "vm-single":
-                previous_runtime = _interactive_cluster_runtime_label(topology)
-                selected_runtime = _select_cluster_runtime_interactive(topology=topology)
-                _set_session_cluster_runtime_override(selected_runtime)
-                _offer_persist_vm_single_cluster_runtime(selected_runtime, previous_runtime=previous_runtime)
-                _interactive_offer_vm_single_address_configuration(required=False)
+            if selected_topology == "exit":
+                print("\nExiting Dataspace Validation Environment\n")
+                return {"status": "exited"}
+            if selected_topology == "validation-target":
+                current_adapter = _run_validation_target_menu_interactive(
+                    current_adapter=current_adapter,
+                    adapter_registry=registry,
+                )
+            else:
+                topology = selected_topology
+                print(f"Active topology set to {topology}.")
+                if normalize_topology(topology) == "vm-single":
+                    previous_runtime = _interactive_cluster_runtime_label(topology)
+                    selected_runtime = _select_cluster_runtime_interactive(topology=topology)
+                    _set_session_cluster_runtime_override(selected_runtime)
+                    _offer_persist_vm_single_cluster_runtime(selected_runtime, previous_runtime=previous_runtime)
+                    _interactive_offer_vm_single_address_configuration(required=False)
 
         while True:
             _print_interactive_menu(current_adapter, adapter_registry=registry, topology=topology)
@@ -7652,6 +7892,13 @@ def run_interactive_menu(
                             deployer_registry=deployer_registry,
                             topology=topology,
                         )
+                    )
+                    continue
+
+                if choice == "G":
+                    current_adapter = _run_validation_target_menu_interactive(
+                        current_adapter=current_adapter,
+                        adapter_registry=registry,
                     )
                     continue
 

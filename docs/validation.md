@@ -8,6 +8,10 @@ Para entornos externos que el framework no despliega, como un INESData
 productivo existente, la ruta objetivo es usar un `validation target` en modo
 `validation-only`. Esa ruta se documenta en
 [Validación de INESData externo](./29_inesdata_external_validation_targets.md).
+La base actual expone esta ruta desde el menú con `G - Validate target` en modo
+read-only seguro: valida el YAML, muestra el plan y puede ejecutar specs
+Playwright `read-only` explícitamente habilitados en `project_suites`. No
+ejecuta limpieza, escrituras, Newman productivo ni Kafka productivo.
 
 Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 

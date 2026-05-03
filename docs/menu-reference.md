@@ -19,6 +19,12 @@ Si una acción depende del adapter, el framework:
 - usa el adapter que hayas preseleccionado con `S`;
 - o lo pide en ese momento si todavía no se ha elegido uno.
 
+Cuando abres el framework con `python3 main.py`, el selector inicial muestra una
+sección `Other actions` con la misma opción `G - Validate target` que aparece
+después en `[Operations]`. Esa entrada sirve para validar targets externos sin
+elegir una topología PIONERA. La topología por defecto aparece marcada como
+`current`; `Back` solo aparece en submenús a los que ya has entrado.
+
 ## Full Deployment
 
 `0 - Run All Levels (1-6) sequentially`
@@ -137,6 +143,31 @@ En topología `vm-single`, la salida añade una sección `Local Browser Access`
 con los valores detectados automáticamente desde la VM: IP candidata de la VM,
 IP de Minikube, usuario SSH, comando de túnel SSH, entradas para el fichero
 `hosts` de la máquina local y URLs que puedes abrir en tu navegador local.
+
+`G - Validate target`
+
+Abre el flujo guiado para targets externos de validación, pensado inicialmente
+para INESData productivo o entornos que el framework no despliega.
+Este flujo no selecciona ni cambia el adapter activo usado por los niveles de
+despliegue; se muestra como proyecto de validación externo en modo
+`validation-only`.
+
+El flujo actual incluye un runner mínimo seguro:
+
+- permite seleccionar un target bajo `validation/targets/`;
+- valida el YAML del target;
+- muestra dataspaces, suites, componentes y secretos requeridos;
+- no ejecuta limpieza ni borra datos;
+- no ejecuta escrituras;
+- no ejecuta `Levels 1-5`;
+- ejecuta únicamente specs Playwright `read-only` explícitamente habilitados en
+  `project_suites`;
+- si solo existen plantillas `*.example.*`, termina como `skipped` sin ejecutar
+  Playwright.
+
+Úsalo para revisar que la configuración base de INESData externo está completa
+o para generar evidencias Playwright read-only cuando Joel añada specs reales.
+Newman y Kafka productivos quedan fuera de esta primera fase.
 
 `M - Run metrics / benchmarks`
 
