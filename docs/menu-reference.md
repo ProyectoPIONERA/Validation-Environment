@@ -169,6 +169,29 @@ El flujo actual incluye un runner mínimo seguro:
 o para generar evidencias Playwright read-only cuando Joel añada specs reales.
 Newman y Kafka productivos quedan fuera de esta primera fase.
 
+`E - View experiment reports`
+
+Abre un visor local de experimentos de validación. No requiere seleccionar
+adapter porque no despliega ni ejecuta validaciones: solo lee artefactos ya
+generados bajo `experiments/`.
+
+El flujo permite:
+
+- listar experimentos disponibles;
+- abrir el último experimento o seleccionar uno anterior;
+- generar un dashboard HTML propio del framework;
+- abrir reportes Playwright con `npx playwright show-report`;
+- ver rutas de artefactos sin imprimir JSON largos por consola.
+
+El dashboard se sirve únicamente en `127.0.0.1` y funciona como índice del
+experimento para Playwright, Newman, Kafka, componentes y postflight local
+cuando esos reportes existan.
+
+El campo `Dashboard status` resume hallazgos del visor; no sustituye el estado
+de ejecución de `Level 6`.
+
+Más detalle en [Visor de reportes de experimentos](./report_viewer.md).
+
 `M - Run metrics / benchmarks`
 
 Ejecuta métricas o benchmarks independientes sobre el adapter elegido para esa operación. El benchmark Kafka mide el broker de forma standalone y guarda resultados en `experiments/`, pero no reemplaza la validación funcional de `Level 6`. La validación Kafka E2E del dataspace se ejecuta automáticamente dentro de `Level 6` cuando el adapter es compatible.

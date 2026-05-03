@@ -109,6 +109,37 @@ class MainMenuMigrationTests(unittest.TestCase):
         self.assertNotIn("INESDATA adapter selected.", output)
         self.assertNotIn("Adapter: inesdata", output)
 
+    def test_report_viewer_menu_opens_without_adapter_selection(self):
+        stdout = io.StringIO()
+        with mock.patch.dict(sys.modules, {"inesdata": None}), mock.patch(
+            "builtins.input",
+            side_effect=["E", "Q"],
+        ), mock.patch.object(
+            main,
+            "discover_report_experiments",
+            return_value=[],
+        ), contextlib.redirect_stdout(stdout):
+            result = main.main(
+                ["menu"],
+                adapter_registry={
+                    "edc": "fake_adapter_module:FakeAdapter",
+                    "inesdata": "fake_adapter_module:FakeAdapter",
+                },
+                deployer_registry={
+                    "edc": "fake_deployer_module:FakeDeployer",
+                    "inesdata": "fake_deployer_module:FakeDeployer",
+                },
+                validation_engine_cls=FakeValidationEngine,
+                metrics_collector_cls=FakeMetricsCollector,
+                experiment_storage=FakeStorage,
+            )
+
+        output = stdout.getvalue()
+        self.assertEqual(result["status"], "exited")
+        self.assertIn("E - View experiment reports", output)
+        self.assertIn("No experiments found under experiments/.", output)
+        self.assertNotIn("Available adapters:", output)
+
     def test_validation_target_menu_does_not_change_active_deployment_adapter(self):
         stdout = io.StringIO()
         with mock.patch("builtins.input", side_effect=["B"]), contextlib.redirect_stdout(stdout):
@@ -146,6 +177,14 @@ class MainMenuMigrationTests(unittest.TestCase):
         self.assertEqual(runtime_env["INESDATA_PROD_VALIDATION_PASSWORD"], "credential-value-not-printed")
         self.assertIn("for this run only", output)
         self.assertNotIn("credential-value-not-printed", output)
+
+    def test_report_viewer_latest_selection_marks_dashboard_open(self):
+        experiments = [{"name": "experiment_1", "path": "/tmp/experiment_1"}]
+        with mock.patch("builtins.input", return_value="L"):
+            selected = main._select_report_experiment_interactive(experiments)
+
+        self.assertEqual(selected["name"], "experiment_1")
+        self.assertTrue(selected["_open_dashboard"])
 
     def test_initial_topology_prompt_uses_same_validation_target_label(self):
         with mock.patch.dict(sys.modules, {"inesdata": None}), mock.patch.object(

@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -15,12 +14,114 @@ from validation.ui.reporting import aggregate_level6_ui_results, enrich_level6_u
 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-FIXTURE_DIR = os.path.join(
-    os.path.dirname(__file__),
-    "fixtures",
-    "newman",
-    "minimal_run",
-)
+MINIMAL_NEWMAN_REPORTS = {
+    "01_environment_health.json": {
+        "collection": {"info": {"name": "01 Environment Health"}},
+        "run": {
+            "executions": [
+                {
+                    "item": {"name": "Provider health"},
+                    "request": {
+                        "method": "GET",
+                        "url": {"raw": "http://conn-a.example.local/health"},
+                    },
+                    "response": {
+                        "code": 200,
+                        "responseTime": 42,
+                        "timestamp": "2026-01-01T00:00:01.000Z",
+                    },
+                    "cursor": {"started": "2026-01-01T00:00:00.950Z"},
+                    "assertions": [{"assertion": "status is 200"}],
+                },
+                {
+                    "item": {"name": "Consumer health"},
+                    "request": {
+                        "method": "GET",
+                        "url": {"raw": "http://conn-b.example.local/health"},
+                    },
+                    "response": {
+                        "code": 200,
+                        "responseTime": 45,
+                        "timestamp": "2026-01-01T00:00:02.000Z",
+                    },
+                    "cursor": {"started": "2026-01-01T00:00:01.950Z"},
+                    "assertions": [{"assertion": "status is 200"}],
+                },
+            ],
+            "failures": [],
+        },
+    },
+    "05_consumer_negotiation.json": {
+        "collection": {"info": {"name": "05 Consumer Negotiation"}},
+        "run": {
+            "executions": [
+                {
+                    "item": {"name": "Direct DSP catalog"},
+                    "request": {
+                        "method": "POST",
+                        "url": {"raw": "http://conn-b.example.local/management/v3/catalog/request"},
+                    },
+                    "response": {
+                        "code": 200,
+                        "responseTime": 123,
+                        "timestamp": "2026-01-01T00:01:01.000Z",
+                    },
+                    "cursor": {"started": "2026-01-01T00:01:00.800Z"},
+                    "assertions": [{"assertion": "status is 200"}],
+                },
+                {
+                    "item": {"name": "Poll agreement state"},
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "http://conn-b.example.local/management/v3/contractnegotiations/negotiation-1"
+                        },
+                    },
+                    "response": {
+                        "code": 200,
+                        "responseTime": 210,
+                        "timestamp": "2026-01-01T00:01:05.000Z",
+                    },
+                    "cursor": {"started": "2026-01-01T00:01:04.750Z"},
+                    "assertions": [{"assertion": "agreement finalized"}],
+                },
+            ],
+            "failures": [
+                {
+                    "source": {"name": "Poll agreement state"},
+                    "error": {
+                        "test": "agreement finalized",
+                        "message": "expected state FINALIZED but got TERMINATED",
+                    },
+                }
+            ],
+        },
+    },
+    "06_consumer_transfer.json": {
+        "collection": {"info": {"name": "06 Consumer Transfer"}},
+        "run": {
+            "executions": [
+                {
+                    "item": {"name": "Endpoint data reference"},
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "http://conn-b.example.local/management/v3/edrs/transfer-1/dataaddress"
+                        },
+                    },
+                    "response": {
+                        "code": 200,
+                        "responseTime": 87,
+                        "timestamp": "2026-01-01T00:02:01.000Z",
+                    },
+                    "cursor": {"started": "2026-01-01T00:02:00.900Z"},
+                    "assertions": [{"assertion": "auth code is present"}],
+                }
+            ],
+            "failures": [],
+        },
+    },
+}
 
 
 def _materialize_fixture_reports(experiment_dir):
@@ -29,14 +130,10 @@ def _materialize_fixture_reports(experiment_dir):
     os.makedirs(pair_dir, exist_ok=True)
 
     exported = []
-    for file_name in (
-        "01_environment_health.json",
-        "05_consumer_negotiation.json",
-        "06_consumer_transfer.json",
-    ):
-        source = os.path.join(FIXTURE_DIR, file_name)
+    for file_name, report in MINIMAL_NEWMAN_REPORTS.items():
         target = os.path.join(pair_dir, file_name)
-        shutil.copyfile(source, target)
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(report, handle)
         exported.append(target)
 
     return exported

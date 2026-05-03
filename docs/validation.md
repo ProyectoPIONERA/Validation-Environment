@@ -212,11 +212,30 @@ Esta carpeta es salida generada y no debe subirse al repositorio.
 
 ## Reportes
 
+La forma recomendada de revisar reportes generados es desde el menú:
+
+```bash
+python3 main.py
+```
+
+Selecciona:
+
+```text
+E - View experiment reports
+```
+
+Ese visor lista experimentos bajo `experiments/`, genera un dashboard HTML local
+por experimento y resume artefactos largos de Newman, Kafka, componentes y
+postflight sin imprimir JSON completos por consola. Los reportes se sirven solo
+en `127.0.0.1`.
+
 Después de una validación o experimento:
 
 ```bash
 python3 main.py report <experiment_id>
 python3 main.py compare <experiment_a> <experiment_b>
 ```
+
+Más detalle en [Visor de reportes de experimentos](./report_viewer.md).
 
 Los reportes deben indicar adapter, topología, conectores y suites ejecutadas.

@@ -88,6 +88,14 @@ from validation.orchestration.components import (
     should_run_component_validation as should_run_level6_component_validation,
 )
 from validation.orchestration.kafka import run_kafka_edc_validation
+from validation.orchestration.reports import (
+    build_experiment_dashboard,
+    discover_report_experiments,
+    format_report_experiment_summary,
+    launch_playwright_report,
+    launch_static_report_server,
+    open_local_url,
+)
 from validation.orchestration.targets import (
     build_validation_target_plan,
     discover_validation_targets,
@@ -4559,6 +4567,29 @@ def _save_experiment_metadata(storage, experiment_dir, connectors, **kwargs):
     return save_method(experiment_dir, connectors, **filtered_kwargs)
 
 
+def _metadata_cluster_runtime_for_topology(topology="local"):
+    normalized_topology = normalize_topology(topology or LOCAL_TOPOLOGY)
+    try:
+        config = _load_effective_infrastructure_deployer_config(topology=normalized_topology)
+        runtime = build_cluster_runtime(config, topology=normalized_topology)
+        return str(runtime.get("cluster_type") or "").strip() or "unknown"
+    except Exception:
+        if normalized_topology == LOCAL_TOPOLOGY:
+            return "minikube"
+        return "unknown"
+
+
+def _experiment_metadata_context(adapter_name=None, topology="local", **extra):
+    normalized_topology = normalize_topology(topology or LOCAL_TOPOLOGY)
+    payload = {
+        "adapter_name": adapter_name,
+        "topology": normalized_topology,
+        "cluster_runtime": _metadata_cluster_runtime_for_topology(normalized_topology),
+    }
+    payload.update(extra)
+    return payload
+
+
 def run_hosts(adapter, deployer_name=None, deployer_registry=None, topology="local"):
     """Plan or apply local hosts entries for the selected deployer context."""
     resolved_deployer_name, context = _resolve_deployer_context(
@@ -5422,8 +5453,12 @@ def run_validate(
             experiment_storage,
             experiment_dir,
             connectors,
-            adapter=type(adapter).__name__,
-            baseline=baseline,
+            **_experiment_metadata_context(
+                adapter_name=resolved_deployer_name,
+                topology=topology,
+                adapter=type(adapter).__name__,
+                baseline=baseline,
+            ),
         )
     experiment_storage.newman_reports_dir(experiment_dir)
     local_capacity_preflight = _run_level6_local_capacity_preflight(
@@ -5777,8 +5812,12 @@ def run_metrics(
             experiment_storage,
             experiment_dir,
             connectors,
-            adapter=type(adapter).__name__,
-            baseline=baseline,
+            **_experiment_metadata_context(
+                adapter_name=deployer_name or _infer_deployer_name_from_adapter(adapter),
+                topology=topology,
+                adapter=type(adapter).__name__,
+                baseline=baseline,
+            ),
         )
     metrics = metrics_collector.collect(connectors, experiment_dir=experiment_dir)
     sanitized_deployer_context = (
@@ -5965,8 +6004,12 @@ def run_run(
                 experiment_storage,
                 shared_experiment_dir,
                 deployment["deployment"]["connectors"],
-                adapter=type(adapter).__name__,
-                baseline=baseline,
+                **_experiment_metadata_context(
+                    adapter_name=resolved_deployer_name,
+                    topology=topology,
+                    adapter=type(adapter).__name__,
+                    baseline=baseline,
+                ),
             )
             validation = run_validate(
                 adapter,
@@ -6610,6 +6653,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print("H - Plan/apply hosts entries")
     print("U - Show available access URLs")
     print("G - Validate target")
+    print("E - View experiment reports")
     print("M - Run metrics / benchmarks")
     print("X - Recreate dataspace")
     print()
@@ -6660,6 +6704,8 @@ def _print_interactive_help():
     print("    Useful after Levels 2-5 when you want portal, connector, component or MinIO access details without searching files manually.")
     print("G - Use to inspect an external INESData validation target without deploying PIONERA resources.")
     print("    The current runner validates the target YAML and can run enabled read-only Playwright project specs.")
+    print("E - Use to open a local, read-only dashboard for previous validation experiments.")
+    print("    It lists experiments, summarizes long JSON artifacts, and serves reports only on 127.0.0.1.")
     print(
         "M - Use when you only need metrics or standalone benchmarks. "
         "It does not replace Level 6 validation; Kafka E2E validation runs automatically in Level 6."
@@ -7563,6 +7609,179 @@ def _print_validation_target_run_result(result):
             print(f"  Evidence: {artifacts['output_dir']}")
 
 
+def _print_report_experiment_list(experiments):
+    print()
+    print("Available validation experiments:")
+    if not experiments:
+        print("No experiments found under experiments/.")
+        return
+    for index, experiment in enumerate(experiments, start=1):
+        lines = format_report_experiment_summary(experiment)
+        print(f"{index} - {lines[0]}")
+        for line in lines[1:]:
+            print(line)
+        print()
+    print("L - Open latest dashboard")
+    print("B - Back")
+
+
+def _select_report_experiment_interactive(experiments):
+    _print_report_experiment_list(experiments)
+    if not experiments:
+        return None
+    choice = _interactive_read("\nSelection: ").strip().upper()
+    if not choice or choice == "B":
+        return None
+    if choice == "L":
+        latest = dict(experiments[0])
+        latest["_open_dashboard"] = True
+        return latest
+    try:
+        selected_index = int(choice)
+    except ValueError:
+        print("Invalid experiment selection.")
+        return None
+    if selected_index < 1 or selected_index > len(experiments):
+        print("Invalid experiment selection.")
+        return None
+    return experiments[selected_index - 1]
+
+
+def _print_report_experiment_menu(experiment):
+    reports = ", ".join(experiment.get("reports") or []) or "none detected"
+    print()
+    print("=" * 50)
+    print("VALIDATION REPORTS")
+    print("=" * 50)
+    print(f"Experiment: {experiment.get('name')}")
+    print(f"Adapter: {experiment.get('adapter')}")
+    print(f"Topology: {experiment.get('topology')}")
+    print(f"Cluster runtime: {experiment.get('cluster_runtime')}")
+    print(f"Dashboard status: {experiment.get('result')}")
+    print(f"Reports: {reports}")
+    print()
+    print("1 - Open experiment dashboard")
+    print("2 - Open Playwright report")
+    print("3 - Show artifact paths")
+    print("B - Back")
+    print("=" * 50)
+
+
+def _select_playwright_report_interactive(experiment):
+    reports = experiment.get("playwright_reports") or []
+    if not reports:
+        print("No Playwright HTML reports found for this experiment.")
+        return None
+    if len(reports) == 1:
+        return reports[0]
+
+    print()
+    print("Available Playwright reports:")
+    for index, report in enumerate(reports, start=1):
+        print(f"{index} - {report.get('title')}")
+        print(f"    {report.get('path')}")
+    print("B - Back")
+
+    choice = _interactive_read("\nSelection: ").strip().upper()
+    if not choice or choice == "B":
+        return None
+    try:
+        selected_index = int(choice)
+    except ValueError:
+        print("Invalid Playwright report selection.")
+        return None
+    if selected_index < 1 or selected_index > len(reports):
+        print("Invalid Playwright report selection.")
+        return None
+    return reports[selected_index - 1]
+
+
+def _print_report_artifact_paths(experiment):
+    print()
+    print("Artifact paths:")
+    artifacts = experiment.get("artifacts") or []
+    if not artifacts:
+        print("No standard artifacts detected for this experiment.")
+        return
+    for artifact in artifacts:
+        print(f"- {artifact.get('path')}")
+
+
+def _open_experiment_dashboard_interactive(experiment):
+    try:
+        dashboard_path = build_experiment_dashboard(experiment)
+        server = launch_static_report_server(experiment["path"])
+    except Exception as exc:
+        print(f"Could not open experiment dashboard: {exc}")
+        return
+
+    url = f"{server['url']}/framework-report/index.html"
+    print()
+    print("Experiment dashboard available at:")
+    print(url)
+    print(f"Dashboard file: {dashboard_path}")
+    print("The local server is bound to 127.0.0.1 and stays alive while this framework process is running.")
+    if not server.get("ready"):
+        print("The dashboard server is still starting. If the browser does not open, use the URL above.")
+    if server.get("ready"):
+        open_result = open_local_url(url)
+        if open_result.get("opened"):
+            print(f"Opened in the default browser through {open_result.get('method')}.")
+        else:
+            print(f"Could not open the browser automatically: {open_result.get('reason')}")
+
+
+def _open_playwright_report_interactive(experiment):
+    report = _select_playwright_report_interactive(experiment)
+    if not report:
+        return
+    report_dir = os.path.join(experiment["path"], report["path"])
+    try:
+        server = launch_playwright_report(report_dir)
+    except Exception as exc:
+        print(f"Could not open Playwright report: {exc}")
+        return
+
+    print()
+    print("Playwright report available at:")
+    print(server["url"])
+    print(f"Report directory: {report_dir}")
+    print("The Playwright report server is bound to 127.0.0.1.")
+    if not server.get("ready"):
+        print("The Playwright report server is still starting. If the browser does not open, use the URL above.")
+    if server.get("ready"):
+        open_result = open_local_url(server["url"])
+        if open_result.get("opened"):
+            print(f"Opened in the default browser through {open_result.get('method')}.")
+        else:
+            print(f"Could not open the browser automatically: {open_result.get('reason')}")
+
+
+def _run_validation_reports_menu_interactive():
+    experiments = discover_report_experiments()
+    selected_experiment = _select_report_experiment_interactive(experiments)
+    if not selected_experiment:
+        return
+    if selected_experiment.pop("_open_dashboard", False):
+        _open_experiment_dashboard_interactive(selected_experiment)
+
+    while True:
+        _print_report_experiment_menu(selected_experiment)
+        choice = _interactive_read("\nSelection: ").strip().upper()
+        if not choice or choice == "B":
+            return
+        if choice == "1":
+            _open_experiment_dashboard_interactive(selected_experiment)
+            continue
+        if choice == "2":
+            _open_playwright_report_interactive(selected_experiment)
+            continue
+        if choice == "3":
+            _print_report_artifact_paths(selected_experiment)
+            continue
+        print("Invalid report action.")
+
+
 def _run_validation_target_menu_interactive(current_adapter=None, adapter_registry=None):
     registry = adapter_registry or ADAPTER_REGISTRY
     validation_project = "inesdata"
@@ -7900,6 +8119,10 @@ def run_interactive_menu(
                         current_adapter=current_adapter,
                         adapter_registry=registry,
                     )
+                    continue
+
+                if choice == "E":
+                    _run_validation_reports_menu_interactive()
                     continue
 
                 if choice == "M":

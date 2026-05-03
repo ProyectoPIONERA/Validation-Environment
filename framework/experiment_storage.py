@@ -47,23 +47,30 @@ class ExperimentStorage:
         experiment_dir,
         connectors,
         adapter=None,
+        adapter_name=None,
         iterations=1,
         baseline=False,
         cluster="minikube",
+        cluster_runtime=None,
+        topology=None,
         environment=None,
     ):
         """Save normalized experiment metadata to metadata.json."""
         connectors = list(connectors or [])
         experiment_id = os.path.basename(os.path.normpath(experiment_dir))
+        runtime = cluster_runtime or cluster
         metadata = {
             "experiment_id": experiment_id,
             "timestamp": datetime.now().isoformat(),
             "adapter": adapter,
+            "adapter_name": adapter_name,
             "iterations": iterations,
             "baseline": bool(baseline),
-            "cluster": cluster,
+            "topology": topology,
+            "cluster": runtime,
+            "cluster_runtime": runtime,
             "connectors": connectors,
-            "environment": environment or "minikube",
+            "environment": environment or runtime or "minikube",
             "num_connectors": len(connectors),
             "measurement_type": "connector_latency",
         }

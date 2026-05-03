@@ -92,8 +92,19 @@ class ExperimentRunner:
         if len(parameters) <= 2:
             return save_method(experiment_dir, connectors)
 
+        cluster_runtime = getattr(self.adapter, "cluster_runtime", None)
+        if callable(cluster_runtime):
+            try:
+                runtime_payload = cluster_runtime()
+                cluster_runtime = runtime_payload.get("cluster_type") if isinstance(runtime_payload, dict) else runtime_payload
+            except Exception:
+                cluster_runtime = None
+
         kwargs = {
             "adapter": type(self.adapter).__name__ if self.adapter is not None else None,
+            "adapter_name": getattr(self.adapter, "adapter_name", None) or getattr(self.adapter, "name", None),
+            "topology": getattr(self.adapter, "topology", None),
+            "cluster_runtime": cluster_runtime,
             "iterations": self.iterations,
             "baseline": self.baseline,
         }
