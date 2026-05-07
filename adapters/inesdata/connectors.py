@@ -233,7 +233,8 @@ class INESDataConnectorsAdapter:
         return self._role_aligned_connector_port_forward_fallback_implicit()
 
     def _ensure_local_runtime_access_if_required(self):
-        if not self._is_local_topology():
+        topology = self._normalized_topology()
+        if topology not in (LOCAL_TOPOLOGY, VM_SINGLE_TOPOLOGY):
             return True
         ensure_local_access = getattr(self.infrastructure, "ensure_local_infra_access", None)
         if not callable(ensure_local_access):
@@ -401,6 +402,16 @@ class INESDataConnectorsAdapter:
             return True
         return bool({"create", "update"}.intersection(capability_set)) and "deny" not in capability_set
 
+    def _resolve_vault_host_url(self, vault_url):
+        if not vault_url:
+            return vault_url
+        # k8s-internal service DNS (.svc, .cluster.local) not reachable from host process;
+        # use localhost port-forward address instead
+        if ".svc" in vault_url or ".cluster.local" in vault_url:
+            port = getattr(self.config, "PORT_VAULT", 8200)
+            return f"http://localhost:{port}"
+        return vault_url
+
     def _verify_vault_management_token(self, ds_name=None):
         deployer_config = self.config_adapter.load_deployer_config() or {}
         vault_url = str(
@@ -411,6 +422,7 @@ class INESDataConnectorsAdapter:
             print("Vault token validation failed: VT_URL/VT_TOKEN are not defined in deployer.config")
             return False
 
+        vault_url = self._resolve_vault_host_url(vault_url)
         headers = {"X-Vault-Token": vault_token}
         try:
             response = requests.get(

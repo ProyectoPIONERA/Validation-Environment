@@ -1,31 +1,32 @@
 {
-  "prefix": "s4grid",
-  "title": "SAREF4GRID Vocabulary",
+  "prefix": "s4grid-fw-20260504135458",
+  "title": "SAREF4GRID Vocabulary (s4grid-fw-20260504135458)",
   "source": "created",
-  "creationMethod": "uri",
-  "creationUri": "https://saref.etsi.org/saref4grid/",
-  "creationRepositoryUri": "",
-  "creationNamespace": "https://saref.etsi.org/saref4grid/",
+  "creationMethod": "repository",
+  "creationUri": "https://auroral.iot.linkeddata.es/def/priv#",
+  "creationRepositoryUri": "https://github.com/ProyectoPIONERA/Ontology-Development-Repository-Example",
+  "creationNamespace": "https://auroral.iot.linkeddata.es/def/priv#",
   "creationPrimaryLanguage": "en",
   "creationSecondaryLanguage": "es",
   "creationTag": "Catalogs",
   "creationOutcome": {
     "created": true,
     "duplicateByPrefix": false,
-    "url": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/dataset/vocabs/s4grid",
+    "url": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/dataset/vocabs/s4grid-fw-20260504135458",
     "responseStatus": 200,
     "redirectTarget": "",
     "errorMessage": "",
-    "creationUri": "https://saref.etsi.org/saref4grid/",
-    "creationNamespace": "https://saref.etsi.org/saref4grid/",
-    "method": "uri"
+    "creationUri": "https://auroral.iot.linkeddata.es/def/priv#",
+    "creationNamespace": "https://auroral.iot.linkeddata.es/def/priv#",
+    "repositoryUri": "https://github.com/ProyectoPIONERA/Ontology-Development-Repository-Example",
+    "method": "repository"
   },
-  "editUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm/edition/vocabs/s4grid",
-  "managedVocabulary": false,
+  "editUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/edition/vocabs/s4grid-fw-20260504135458",
+  "managedVocabulary": true,
   "workflow": {
     "created": true,
-    "editCompleted": false,
-    "edited": false
+    "editCompleted": true,
+    "edited": true
   },
   "capabilities": {
     "publicVocabularyDetail": true,
@@ -35,12 +36,12 @@
     "publicTermsPage": true,
     "publicTermsPageReason": "",
     "publicVocabularyAutocomplete": false,
-    "publicVocabularyAutocompleteReason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid'.",
+    "publicVocabularyAutocompleteReason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid-fw-20260504135458'.",
     "publicTermSearchApi": true,
     "publicTermSearchApiReason": "",
     "detailProbe": {
       "available": true,
-      "prefix": "s4grid",
+      "prefix": "s4grid-fw-20260504135458",
       "reason": "",
       "versionHistory": true,
       "statistics": true
@@ -50,18 +51,48 @@
     },
     "autocompleteProbe": {
       "available": false,
-      "reason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid'."
+      "reason": "El autocomplete publico de vocabularios no devolvio resultados para 's4grid-fw-20260504135458'."
     },
     "termApiProbe": {
       "available": true,
       "query": "Person",
       "label": "Person",
-      "prefix": "s4grid",
-      "primaryTag": "Catalogs",
-      "prefixedName": "s4grid:Person",
+      "prefix": "saref4grid",
+      "primaryTag": "Services",
+      "prefixedName": "saref4grid:Person",
       "uri": "http://schema.org/Person"
     }
   },
-  "baseUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
-  "createdAt": "2026-04-06T14:31:31.445Z"
+  "baseUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es",
+  "createdAt": "2026-05-04T13:56:00.802Z",
+  "editOutcome": {
+    "edited": true,
+    "prefix": "s4grid-fw-20260504135458",
+    "title": "SAREF4GRID Vocabulary (s4grid-fw-20260504135458)",
+    "publicUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/dataset/vocabs/s4grid-fw-20260504135458",
+    "titleLanguages": [
+      "en",
+      "es"
+    ],
+    "descriptionLanguages": [
+      "en",
+      "es"
+    ],
+    "reviewText": "Validated through the Playwright ontology flow. [edit:2026-05-04T13:56:36.170Z]",
+    "saveOutcome": {
+      "redirected": true,
+      "responseStatus": 200,
+      "responseBody": "{\"redirect\":\"/dataset/vocabs/s4grid-fw-20260504135458\"}",
+      "redirectTarget": "/dataset/vocabs/s4grid-fw-20260504135458",
+      "finalUrl": "http://ontology-hub-demo.pionera.oeg.fi.upm.es/dataset/vocabs/s4grid-fw-20260504135458"
+    },
+    "detailCheck": {
+      "ok": true,
+      "bodyText": "<!DOCTYPE html> <html lang=\"en\"> <head> <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"> <meta charset=\"utf-8\"> <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\"> <meta http-equiv=\"Content-Language\" content=\"en-US\"> <meta property=\"og:title\" content=\"Ontology Hub (Pionera)\"> <meta propert",
+      "hasMetadata": true,
+      "hasPrefix": true,
+      "hasTitle": true,
+      "hasReview": true
+    }
+  }
 }
