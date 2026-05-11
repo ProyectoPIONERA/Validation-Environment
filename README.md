@@ -55,17 +55,32 @@ vm-single
 vm-distributed
 ```
 
-`local` es la ruta de despliegue normal y usa Minikube. Las topologías
-`vm-single` y `vm-distributed` ya forman parte del contexto del deployer y de la
-planificación de hosts. La ejecución real no-local queda protegida por guardas
-hasta que la ruta Kubernetes correspondiente esté implementada para cada nivel.
+| Topología | Descripción | Kubernetes |
+|-----------|-------------|------------|
+| `local` | Despliegue en máquina local | Minikube |
+| `vm-single` | Una VM con todos los servicios en un solo cluster k3s | k3s |
+| `vm-distributed` | 3 VMs con 3 clusters k3s independientes: shared services, citycouncil, company | k3s |
+
+La topología activa del entorno PIONERA es **`vm-distributed`**:
+
+```
+VM pionera40 (192.168.122.64)  → k3s: Keycloak, MinIO, PostgreSQL, Vault
+VM pionera20 (192.168.122.134) → k3s: conector conn-citycouncil-demo
+VM pionera3  (192.168.122.9)   → k3s: conector conn-company-demo
+```
+
+Los tres clusters son independientes (single-node cada uno). El framework los
+gestiona desde pionera40 usando kubeconfigs separados en `~/.kube/`.
 
 ## Inicio Rápido
+
+> Tutorial completo para topología `vm-distributed` (3 clusters k3s): [docs/tutorial-vm-distributed-setup.md](./docs/tutorial-vm-distributed-setup.md)
 
 1. Clona el repositorio:
 
 ```bash
-git clone --branch feature/new-pionera-automation-kubernetes --single-branch https://github.com/ProyectoPIONERA/Validation-Environment.git
+git clone --branch feature/new-pionera-automation-kubernetes --single-branch \
+  https://github.com/ProyectoPIONERA/Validation-Environment.git
 cd Validation-Environment
 ```
 
@@ -76,53 +91,57 @@ bash scripts/bootstrap_framework.sh
 source .venv/bin/activate
 ```
 
-En Linux/WSL, este comando instala también las dependencias del sistema que
-Playwright necesita para arrancar los navegadores. Si el entorno no permite
-instalar paquetes del sistema, usa `--without-system-deps`.
-
-3. Configura el entorno:
+3. Configura el entorno (topología `vm-distributed`):
 
 ```bash
 cp deployers/infrastructure/deployer.config.example deployers/infrastructure/deployer.config
 ```
 
-Edita `deployers/infrastructure/deployer.config` y ajusta al menos:
+Variables mínimas obligatorias en `deployers/infrastructure/deployer.config`:
 
 ```text
-CLUSTER_TYPE=k3s                              # k3s para VM, minikube para escritorio local
-KC_PASSWORD=change-me
-PG_PASSWORD=change-me
-MINIO_PASSWORD=change-me
-VT_TOKEN=<vault-token>
-PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es   # hostname público para acceso externo
-VM_COMMON_IP=192.168.122.64                   # IP de la VM host
+CLUSTER_TYPE=k3s
+TOPOLOGY=vm-distributed
+VM_COMMON_IP=192.168.122.64
+VM_PROVIDER_IP=192.168.122.134
+VM_CONSUMER_IP=192.168.122.9
+K3S_KUBECONFIG_PROVIDER=/home/pionera/.kube/k3s-pionera20.yaml
+K3S_KUBECONFIG_CONSUMER=/home/pionera/.kube/k3s-pionera3.yaml
+VM_PROVIDER_CONNECTORS=citycouncil
+VM_CONSUMER_CONNECTORS=company
+PUBLIC_HOSTNAME=org1.pionera.oeg.fi.upm.es
+KC_PASSWORD=<password>
+PG_PASSWORD=<password>
+MINIO_PASSWORD=<password>
 ```
 
-4. Ejecuta los niveles en orden desde el menú guiado:
+4. Prepara los kubeconfigs de los clusters remotos (ver tutorial completo):
+
+```bash
+ssh pionera@192.168.122.134 "sudo cat /etc/rancher/k3s/k3s.yaml" \
+  | sed 's|127.0.0.1|192.168.122.134|' > ~/.kube/k3s-pionera20.yaml
+ssh pionera@192.168.122.9 "sudo cat /etc/rancher/k3s/k3s.yaml" \
+  | sed 's|127.0.0.1|192.168.122.9|' > ~/.kube/k3s-pionera3.yaml
+```
+
+5. Ejecuta los niveles en orden desde el menú guiado:
 
 ```bash
 python3 main.py menu
 ```
 
-Ejecuta **1 → 2 → 3 → 4 → 5 → 6** en orden. El menú guiado es la entrada
-recomendada para usuarios que quieran ejecutar los niveles sin memorizar comandos.
+Ejecuta **1 → 2 → 3 → 4 → 5 → 6** en orden.
 
-5. Después de Level 4 — proxy nginx (acceso externo):
-
-Si Level 4 imprime `sudo requires a password — run manually:`, ejecuta el
-comando que aparece en pantalla una sola vez (requiere contraseña sudo de la VM).
-Si `sudo` es passwordless, el proxy se configura automáticamente.
-
-6. Accede a los conectores desde cualquier PC en red UPM o VPN:
+6. Accede a los conectores desde cualquier PC en red UPM o VPN (sin `/etc/hosts`):
 
 | URL | Usuario | Contraseña |
 |-----|---------|------------|
 | `https://org1.pionera.oeg.fi.upm.es/c/citycouncil/inesdata-connector-interface/` | `user-conn-citycouncil-demo` | ver `credentials-connector-conn-citycouncil-demo.json` |
 | `https://org1.pionera.oeg.fi.upm.es/c/company/inesdata-connector-interface/` | `user-conn-company-demo` | ver `credentials-connector-conn-company-demo.json` |
-| `https://org1.pionera.oeg.fi.upm.es/auth/admin/demo/console/` | `admin` | `change-me` |
-| `https://org1.pionera.oeg.fi.upm.es/s3-console/` | `admin` | `change-me` |
+| `https://org1.pionera.oeg.fi.upm.es/auth/admin/demo/console/` | `admin` | valor de `KC_PASSWORD` |
+| `https://org1.pionera.oeg.fi.upm.es/s3-console/` | `admin` | valor de `MINIO_PASSWORD` |
 
-Las contraseñas de los usuarios de conector se encuentran en:
+Las contraseñas de los conectores se generan en Level 3:
 
 ```text
 deployers/inesdata/deployments/DEV/demo/credentials-connector-conn-citycouncil-demo.json  → connector_user.passwd
@@ -311,23 +330,27 @@ por defecto y solo debe habilitarse temporalmente con
 
 ## Acceso Externo (entorno VM/PIONERA con k3s)
 
-En entornos desplegados en VM (topología `vm-single`), los servicios corren dentro
-de k3s. El acceso externo se realiza a través de un nginx reverse proxy en la VM
-que escucha en los puertos 80 y 443 y reenvía al ingress-nginx de k3s vía NodePort.
+En topología `vm-distributed`, los servicios corren en 3 clusters k3s separados.
+El acceso externo se realiza a través de un nginx reverse proxy en pionera40
+que enruta el tráfico a los clusters remotos según el path de la URL.
 
 ### Arquitectura de red
 
 ```
-[Browser] → HTTPS 443 → [Hypervisor 138.100.15.165]
-                              │ proxy
-                              ▼
-                    [VM nginx 192.168.122.64:443]
-                              │ proxy_pass NodePort 31667
-                              ▼
-                    [k3s ingress-nginx :31667]
-                              │
-                              ▼
-                    [Pods: Keycloak, MinIO, Conectores]
+[Browser HTTPS] → [Hypervisor KVM 138.100.15.165]
+                          │ proxy_pass http://192.168.49.2:80
+                          │ + X-Forwarded-Proto: https
+                          ▼
+              [VM nginx pionera40 :80/:443]
+              Termina TLS, sirve app.config https://
+              Cookie inesdata_connector → selecciona backend
+                          │
+             ┌────────────┼────────────┐
+             ▼            ▼            ▼
+    [k3s pionera40   [k3s pionera20  [k3s pionera3
+     :31667]          :31667]         :31667]
+    Keycloak,MinIO   citycouncil     company
+    PostgreSQL,Vault  connector       connector
 ```
 
 ### Configuración automática (recomendada)
@@ -369,10 +392,10 @@ En k3s, el ingress-nginx-controller se configura automáticamente como tipo
 a los puertos 80/443 antes de que llegue al nginx de la VM. El framework corrige
 esto en Level 1 cambiando el servicio a `NodePort`.
 
-La arquitectura y URLs de acceso están documentadas en
-[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md)
-y el tutorial completo en
-[docs/tutorial-k3s-vm-setup.md](./docs/tutorial-k3s-vm-setup.md).
+La arquitectura completa está en
+[docs/pionera-distributed-architecture.md](./docs/pionera-distributed-architecture.md)
+y el tutorial paso a paso en
+[docs/tutorial-vm-distributed-setup.md](./docs/tutorial-vm-distributed-setup.md).
 
 ## CLI Principal
 
@@ -615,7 +638,9 @@ Orden recomendado:
 
 - [Inicio rápido](./docs/getting-started.md)
 - [Referencia del menú](./docs/menu-reference.md)
-- [Arquitectura](./docs/architecture.md)
+- [Arquitectura distribuida PIONERA (3 clusters k3s)](./docs/pionera-distributed-architecture.md)
+- [Tutorial: Setup vm-distributed paso a paso](./docs/tutorial-vm-distributed-setup.md)
+- [Arquitectura general](./docs/architecture.md)
 - [Deployers y topologías](./docs/deployers-and-topologies.md)
 - [Adapters](./docs/adapters.md)
 - [Validación](./docs/validation.md)

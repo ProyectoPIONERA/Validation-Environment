@@ -6,6 +6,7 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: {{ default "800m" .Values.connector.ingress.proxyBodySize | quote }}
     nginx.org/client-max-body-size: {{ default "800m" .Values.connector.ingress.proxyBodySize | quote }}
 spec:
+  ingressClassName: nginx
   rules:
   - host: {{ .Values.connector.ingress.hostname }}
     http:

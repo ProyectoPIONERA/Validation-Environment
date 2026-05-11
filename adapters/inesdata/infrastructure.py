@@ -606,10 +606,7 @@ class INESDataInfrastructureAdapter:
                     if self._is_ignored_transient_hook_pod(namespace, name):
                         continue
 
-                    if status == "Completed":
-                        continue
-
-                    if status == "Terminating":
+                    if status in ("Completed", "Terminating", "Error"):
                         continue
 
                     observed_relevant_pod = True
@@ -1846,6 +1843,10 @@ class INESDataInfrastructureAdapter:
             )
         print("  Keycloak ingress cookie annotations applied.")
 
+    def _topology(self):
+        config = self.config_adapter.load_deployer_config()
+        return str(config.get("TOPOLOGY") or "local").strip().lower()
+
     def setup_cluster(self):
         self.announce_level(1, "CLUSTER SETUP")
         self.ensure_unix_environment()
@@ -1854,6 +1855,12 @@ class INESDataInfrastructureAdapter:
         if self.run("which helm", capture=True) is None:
             self.run("sudo snap install helm --classic", check=False)
         self.run("helm version")
+
+        topology = self._topology()
+        if topology == "vm-distributed":
+            self._setup_cluster_vm_distributed()
+            self.complete_level(1)
+            return
 
         cluster_type = self._cluster_type()
         print(f"\nCluster type: {cluster_type}")
@@ -1869,6 +1876,114 @@ class INESDataInfrastructureAdapter:
         if not cluster_ready:
             self._fail("Level 1 did not leave the cluster ready for Level 2", root_cause=root_cause)
         self.complete_level(1)
+
+    def _setup_cluster_vm_distributed(self):
+        """Level 1 for vm-distributed: verify remote clusters and patch ingress-nginx on each."""
+        config = self.config_adapter.load_deployer_config()
+
+        local_kubeconfig = config.get("K3S_KUBECONFIG") or "/etc/rancher/k3s/k3s.yaml"
+
+        # Ensure local k3s kubeconfig is readable by current user
+        if os.path.exists(local_kubeconfig) and not os.access(local_kubeconfig, os.R_OK):
+            print(f"  Fixing permissions on {local_kubeconfig}...")
+            self.run(f"sudo chmod 644 {local_kubeconfig}", check=False)
+
+        # Also set KUBECONFIG in current process so subsequent kubectl calls work
+        os.environ.setdefault("KUBECONFIG", local_kubeconfig)
+
+        clusters = [
+            ("common (pionera40)", local_kubeconfig),
+            ("provider", config.get("K3S_KUBECONFIG_PROVIDER")),
+            ("consumer", config.get("K3S_KUBECONFIG_CONSUMER")),
+        ]
+
+        for role, kubeconfig in clusters:
+            if not kubeconfig:
+                print(f"  [SKIP] {role}: no kubeconfig configured")
+                continue
+            print(f"\n[vm-distributed] Checking cluster: {role} ({kubeconfig})")
+            env = {**os.environ, "KUBECONFIG": kubeconfig}
+            result = self.run(
+                "kubectl get nodes --no-headers",
+                capture=True, check=False, env=env,
+            )
+            if not result:
+                self._fail(f"Cluster '{role}' not reachable with kubeconfig {kubeconfig}")
+            print(f"  Nodes: {result.strip()}")
+
+            # Patch ingress-nginx to NodePort on remote clusters
+            print(f"  Patching ingress-nginx to NodePort on {role}...")
+            patch_json = json.dumps({"spec": {"type": "NodePort"}})
+            self.run(
+                f"kubectl patch svc ingress-nginx-controller -n ingress-nginx "
+                f"--patch {shlex.quote(patch_json)}",
+                check=False, env=env,
+            )
+
+            # Allow nginx snippets (needed for Keycloak cookie fix)
+            patch_snippets = json.dumps({
+                "data": {
+                    "allow-snippet-annotations": "true",
+                    "annotations-risk-level": "Critical",
+                }
+            })
+            self.run(
+                f"kubectl patch configmap ingress-nginx-controller -n ingress-nginx "
+                f"--type merge -p {shlex.quote(patch_snippets)}",
+                check=False, env=env,
+            )
+
+        print("\n[vm-distributed] All clusters verified.")
+
+    def _run_nginx_proxy_vm_distributed(self):
+        """Run setup-nginx-proxy-connector.sh on provider and consumer VMs after Level 4."""
+        config = self.config_adapter.load_deployer_config()
+        scripts_dir = os.path.join(os.path.dirname(__file__), "..", "..", "deployers", "inesdata", "scripts")
+        connector_proxy_script = os.path.abspath(os.path.join(scripts_dir, "setup-nginx-proxy-connector.sh"))
+
+        if not os.path.exists(connector_proxy_script):
+            print(f"[WARNING] setup-nginx-proxy-connector.sh not found at {connector_proxy_script}, skipping nginx setup")
+            return
+
+        domain_base = config.get("DOMAIN_BASE") or "pionera.oeg.fi.upm.es"
+
+        vm_roles = [
+            {
+                "vm_ip": config.get("VM_PROVIDER_IP"),
+                "public_host": config.get("PUBLIC_HOSTNAME_PROVIDER"),
+                "connectors": [c.strip() for c in (config.get("VM_PROVIDER_CONNECTORS") or "citycouncil").split(",")],
+                "namespace": config.get("DS_1_NAMESPACE") or self._dataspace_name(),
+            },
+            {
+                "vm_ip": config.get("VM_CONSUMER_IP"),
+                "public_host": config.get("PUBLIC_HOSTNAME_CONSUMER"),
+                "connectors": [c.strip() for c in (config.get("VM_CONSUMER_CONNECTORS") or "company").split(",")],
+                "namespace": config.get("DS_1_NAMESPACE") or self._dataspace_name(),
+            },
+        ]
+
+        for role_cfg in vm_roles:
+            vm_ip = role_cfg["vm_ip"]
+            public_host = role_cfg["public_host"]
+            if not vm_ip or not public_host:
+                print(f"  [SKIP] Missing VM_IP or PUBLIC_HOSTNAME for role, skipping nginx setup")
+                continue
+
+            remote_script = "/tmp/setup-nginx-proxy-connector.sh"
+            print(f"\n[vm-distributed] Setting up nginx proxy on {vm_ip} ({public_host})...")
+            self.run(f"scp {shlex.quote(connector_proxy_script)} pionera@{vm_ip}:{remote_script}", check=False)
+
+            for connector_short in role_cfg["connectors"]:
+                ds_name = self._dataspace_name()
+                conn_full = f"conn-{connector_short}-{ds_name}"
+                self.run(
+                    f"ssh pionera@{vm_ip} "
+                    f"'bash {remote_script} "
+                    f"{vm_ip} {shlex.quote(public_host)} "
+                    f"{shlex.quote(connector_short)} {shlex.quote(conn_full)} "
+                    f"{shlex.quote(domain_base)}'",
+                    check=False,
+                )
 
 
     def deploy_infrastructure(self):

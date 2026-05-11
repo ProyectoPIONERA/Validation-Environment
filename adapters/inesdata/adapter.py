@@ -17,7 +17,7 @@ class InesdataAdapter:
     """Facade for all INESData-specific deployment and cluster operations."""
 
     @staticmethod
-    def _default_run(cmd, capture=False, silent=False, check=True, cwd=None):
+    def _default_run(cmd, capture=False, silent=False, check=True, cwd=None, env=None):
         if not silent:
             print(f"\nExecuting: {cmd}")
 
@@ -27,7 +27,8 @@ class InesdataAdapter:
                 shell=True,
                 text=True,
                 capture_output=capture,
-                cwd=cwd
+                cwd=cwd,
+                env=env,
             )
 
             if result.returncode != 0:

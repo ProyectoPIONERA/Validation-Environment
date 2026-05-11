@@ -1369,7 +1369,7 @@ class INESDataConnectorsAdapter:
                 print(f"Warning: could not remove stale values file {values_file}: {exc}")
         return values_file
 
-    def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec, namespace=None):
+    def _cleanup_connector_state(self, connector_name, repo_dir, ds_name, python_exec, namespace=None, remote_kubeconfig=None):
         values_file = self._remove_connector_values_file(connector_name)
         self.invalidate_management_api_token(connector_name)
 
@@ -1379,7 +1379,17 @@ class INESDataConnectorsAdapter:
 
         release_name = f"{connector_name}-{ds_name}"
         ns = namespace or self.config.namespace_demo()
-        self.run(f"helm uninstall {release_name} -n {ns}", check=False)
+        prev_kc = os.environ.get("KUBECONFIG")
+        if remote_kubeconfig:
+            os.environ["KUBECONFIG"] = remote_kubeconfig
+        try:
+            self.run(f"helm uninstall {release_name} -n {ns}", check=False)
+        finally:
+            if remote_kubeconfig:
+                if prev_kc is None:
+                    os.environ.pop("KUBECONFIG", None)
+                else:
+                    os.environ["KUBECONFIG"] = prev_kc
 
         connector_db = connector_name.replace("-", "_")
         self.force_clean_postgres_db(connector_db, connector_db)
@@ -1397,7 +1407,7 @@ class INESDataConnectorsAdapter:
 
         return values_file
 
-    def create_connector(self, connector_name, connector_hostnames=None):
+    def create_connector(self, connector_name, connector_hostnames=None, remote_kubeconfig=None):
         print("\n========================================")
         print("LEVEL 4 - CREATE CONNECTOR")
         print("========================================\n")
@@ -1421,7 +1431,8 @@ class INESDataConnectorsAdapter:
             print("Keycloak admin API not ready for connector cleanup")
             return False
 
-        values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec)
+        values_file = self._cleanup_connector_state(connector_name, repo_dir, ds_name, python_exec,
+                                                     remote_kubeconfig=remote_kubeconfig)
 
         if not self.wait_for_keycloak_admin_ready():
             print("Keycloak admin API not ready for connector provisioning")
@@ -1486,24 +1497,36 @@ class INESDataConnectorsAdapter:
         release_name = f"{connector_name}-{ds_name}"
         print(f"Deploying connector {connector_name}...")
         values_files = [os.path.basename(values_file)]
-        local_image_override = self._local_connector_image_override_path()
-        if local_image_override:
-            values_files.append(local_image_override)
-            print(f"Using local connector image overrides: {local_image_override}")
+        if not remote_kubeconfig:
+            local_image_override = self._local_connector_image_override_path()
+            if local_image_override:
+                values_files.append(local_image_override)
+                print(f"Using local connector image overrides: {local_image_override}")
 
-        if not self.infrastructure.deploy_helm_release(
-            release_name,
-            self.config.namespace_demo(),
-            values_files,
-            cwd=self.config.connector_dir()
-        ):
-            print("Error deploying connector")
-            return False
+        prev_kc = os.environ.get("KUBECONFIG")
+        if remote_kubeconfig:
+            print(f"  [vm-distributed] Deploying to cluster: {remote_kubeconfig}")
+            os.environ["KUBECONFIG"] = remote_kubeconfig
+        try:
+            if not self.infrastructure.deploy_helm_release(
+                release_name,
+                self.config.namespace_demo(),
+                values_files,
+                cwd=self.config.connector_dir()
+            ):
+                print("Error deploying connector")
+                return False
 
-        rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
-        if not self._wait_for_connector_deployments(connector_name, timeout=rollout_timeout):
-            print("Timeout waiting for connector deployment rollout")
-            return False
+            rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+            if not self._wait_for_connector_deployments(connector_name, timeout=rollout_timeout):
+                print("Timeout waiting for connector deployment rollout")
+                return False
+        finally:
+            if remote_kubeconfig:
+                if prev_kc is None:
+                    os.environ.pop("KUBECONFIG", None)
+                else:
+                    os.environ["KUBECONFIG"] = prev_kc
 
         print("\nCONNECTORS CREATED\n")
         return True
@@ -1693,6 +1716,7 @@ class INESDataConnectorsAdapter:
         all_connectors = set()
         infra_ready = False
         vault_ready = False
+        deployer_config = self.config_adapter.load_deployer_config() or {}
 
         for ds in dataspaces:
             ds_name = ds["name"]
@@ -1724,19 +1748,36 @@ class INESDataConnectorsAdapter:
             for connector in connectors:
                 all_connectors.add(connector)
 
-                if self.connector_already_exists(connector, namespace):
-                    if (
-                        self.connector_is_healthy(connector, namespace)
-                        and self.connector_database_credentials_valid(connector)
-                    ):
-                        print(f"Connector already running: {connector}")
-                        print("Recreating connector to ensure a clean Level 4 deployment")
-                    else:
-                        print(f"Connector exists but is unhealthy or stale. Recreating: {connector}")
+                remote_kubeconfig = self._connector_kubeconfig(connector, deployer_config)
+                if remote_kubeconfig:
+                    print(f"  [vm-distributed] Target kubeconfig: {remote_kubeconfig}")
+
+                # Check existing state on the TARGET cluster (use remote kubeconfig briefly)
+                prev_kubeconfig = os.environ.get("KUBECONFIG")
+                if remote_kubeconfig:
+                    os.environ["KUBECONFIG"] = remote_kubeconfig
+                try:
+                    already_exists = self.connector_already_exists(connector, namespace)
+                    if already_exists:
+                        if (
+                            self.connector_is_healthy(connector, namespace)
+                            and self.connector_database_credentials_valid(connector)
+                        ):
+                            print(f"Connector already running: {connector}")
+                            print("Recreating connector to ensure a clean Level 4 deployment")
+                        else:
+                            print(f"Connector exists but is unhealthy or stale. Recreating: {connector}")
+                finally:
+                    if remote_kubeconfig:
+                        if prev_kubeconfig is None:
+                            os.environ.pop("KUBECONFIG", None)
+                        else:
+                            os.environ["KUBECONFIG"] = prev_kubeconfig
 
                 print(f"Deploying connector: {connector}")
                 values_file = self.config.connector_values_file(connector)
-                if not self.create_connector(connector, connectors):
+                # Bootstrap/infra ops use LOCAL kubeconfig; only deploy/rollout use remote
+                if not self.create_connector(connector, connectors, remote_kubeconfig=remote_kubeconfig):
                     print(f"Aborting Level 4 because connector recreation failed: {connector}")
                     return []
 
@@ -1746,15 +1787,46 @@ class INESDataConnectorsAdapter:
 
         all_connectors = list(all_connectors)
         print("\nAll connectors deployed or already existing\n")
-        print("Configuring connector hosts...")
-        connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
-        self.infrastructure.manage_hosts_entries(connector_hosts)
-        self.wait_for_all_connectors(all_connectors)
+
+        topology = str(deployer_config.get("TOPOLOGY") or "local").strip().lower()
+        if topology != "vm-distributed":
+            print("Configuring connector hosts...")
+            connector_hosts = self.config_adapter.generate_connector_hosts(all_connectors)
+            self.infrastructure.manage_hosts_entries(connector_hosts)
+            self.wait_for_all_connectors(all_connectors)
+
         self._setup_nginx_proxy_if_configured()
         return all_connectors
 
+    def _connector_kubeconfig(self, connector_name, config):
+        """Return kubeconfig path for connector in vm-distributed topology, or None for local."""
+        topology = str(config.get("TOPOLOGY") or "local").strip().lower()
+        if topology != "vm-distributed":
+            return None
+
+        provider_connectors = [
+            c.strip() for c in (config.get("VM_PROVIDER_CONNECTORS") or "citycouncil").split(",")
+        ]
+        consumer_connectors = [
+            c.strip() for c in (config.get("VM_CONSUMER_CONNECTORS") or "company").split(",")
+        ]
+
+        for short_name in provider_connectors:
+            if short_name and short_name in connector_name:
+                return config.get("K3S_KUBECONFIG_PROVIDER")
+        for short_name in consumer_connectors:
+            if short_name and short_name in connector_name:
+                return config.get("K3S_KUBECONFIG_CONSUMER")
+        return None
+
     def _setup_nginx_proxy_if_configured(self):
         deployer_config = self.config_adapter.load_deployer_config() or {}
+        topology = str(deployer_config.get("TOPOLOGY") or "local").strip().lower()
+
+        if topology == "vm-distributed":
+            self.infrastructure._run_nginx_proxy_vm_distributed()
+            return
+
         public_hostname = str(deployer_config.get("PUBLIC_HOSTNAME", "")).strip()
         if not public_hostname:
             return

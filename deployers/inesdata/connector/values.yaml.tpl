@@ -54,8 +54,8 @@ services:
     password: {{ keys.database.passwd }}
   keycloak:
     # comsrv prefix comes from the Helm release of the common services
-    hostname: {% if keys.environment == 'PRO' and keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
-    external: {{ keys.keycloak_hostname }}
+    hostname: {% if keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
+    external: {% if keys.public_hostname %}{{ keys.public_hostname }}/auth{% else %}{{ keys.keycloak_hostname }}{% endif %}
     protocol: {% if keys.environment == 'PRO' %}https{% else %}http{% endif %}
   minio:
     # comsrv prefix comes from the Helm release of the common services
@@ -63,8 +63,7 @@ services:
     bucket: {{ keys.dataspace_name }}-{{ keys.connector_name }}
     protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
   registrationService:
-    hostname: {% if keys.environment == 'PRO' %}registration-service-{{ keys.dataspace_name }}.ds.dataspaceunit-project.eu{%
-                                         else %}{{ keys.dataspace_name }}-registration-service:8080{% endif %}
+    hostname: {% if keys.environment == 'PRO' %}registration-service-{{ keys.dataspace_name }}.ds.dataspaceunit-project.eu{% elif keys.registration_service_hostname %}{{ keys.registration_service_hostname }}{% else %}{{ keys.dataspace_name }}-registration-service:8080{% endif %}
     protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
   vault:
     url: {{ keys.vault_url }}
@@ -78,6 +77,8 @@ hostAliases:
   - {{ keys.minio_hostname | default('minio.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
   - {{ keys.minio_console_hostname | default('console.minio-s3.' + (keys.domain_base | default('pionera.oeg.fi.upm.es'))) }}
   - registration-service-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
+{% if keys.public_hostname %}  - {{ keys.public_hostname }}
+{% endif %}
   - ontology-hub-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
   - ai-model-hub-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
 {% for c in (keys.ds_1_connectors | default('')).split(',') %}{% if c.strip() %}  - conn-{{ c.strip() }}-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}

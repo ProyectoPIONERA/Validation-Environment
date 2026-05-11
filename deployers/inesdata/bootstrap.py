@@ -783,13 +783,15 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
     # Both the dataspace realm and master realm need this so the Keycloak admin console works externally.
     config = load_effective_deployer_config()
     public_hostname = str(config.get("PUBLIC_HOSTNAME", "")).strip()
+    _environment = str(config.get("ENVIRONMENT", "DEV")).strip().upper()
+    _proto = "https" if _environment == "PRO" else "http"
     if public_hostname:
         for realm_to_patch in ["master", realm_name]:
-            click.echo(f'  + Setting frontendUrl for realm "{realm_to_patch}" to https://{public_hostname}/auth')
+            click.echo(f'  + Setting frontendUrl for realm "{realm_to_patch}" to {_proto}://{public_hostname}/auth')
             try:
                 keycloak_admin.change_current_realm("master")
                 realm_rep = keycloak_admin.get_realm(realm_to_patch)
-                realm_rep.setdefault("attributes", {})["frontendUrl"] = f"https://{public_hostname}/auth"
+                realm_rep.setdefault("attributes", {})["frontendUrl"] = f"{_proto}://{public_hostname}/auth"
                 keycloak_admin.update_realm(realm_to_patch, payload=realm_rep)
             except Exception as e:
                 click.echo(f'  ! Warning: could not set frontendUrl for realm "{realm_to_patch}": {e}')
@@ -802,7 +804,7 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
             if clients:
                 client = clients[0]
                 redirect_uris = client.get("redirectUris", [])
-                to_add = [f"https://{public_hostname}/auth/admin/*", f"https://{public_hostname}/*", "*"]
+                to_add = [f"{_proto}://{public_hostname}/auth/admin/*", f"{_proto}://{public_hostname}/*", "*"]
                 changed = False
                 for uri in to_add:
                     if uri not in redirect_uris:
@@ -816,6 +818,16 @@ def create_realm(username, password, server_url, realm_name, dataspace_name, key
         except Exception as e:
             click.echo(f'  ! Warning: could not update security-admin-console redirectUris: {e}')
             keycloak_admin.change_current_realm(realm_name)
+
+        # Re-authenticate: frontendUrl change invalidates the current token's issuer claim.
+        # user_realm_name="master" ensures token fetch stays in master even after change_current_realm.
+        click.echo(f'  + Re-authenticating after frontendUrl change')
+        keycloak_admin = KeycloakAdmin(server_url=server_url,
+                                        username=username,
+                                        password=password,
+                                        realm_name=realm_name,
+                                        user_realm_name="master",
+                                        verify=False)
 
     # Compute the correct audience URL.
     # Use internal KC URL unless in PRO environment (connectors must reach this URL directly).

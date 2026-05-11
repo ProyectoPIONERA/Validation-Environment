@@ -2572,7 +2572,7 @@ def run_level(
     resolved_deployer_name = deployer_name or _infer_deployer_name_from_adapter(adapter)
     level_name = LEVEL_DESCRIPTIONS[level_id]
     normalized_topology = str(topology or "local").strip().lower()
-    if normalized_topology != "local" and level_id in {1, 2, 3, 4, 5}:
+    if normalized_topology not in ("local", "vm-distributed") and level_id in {1, 2, 3, 4, 5}:
         raise RuntimeError(
             f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
             "Use the deployer dry-run/hosts plan first, then enable VM execution once the topology-specific "
