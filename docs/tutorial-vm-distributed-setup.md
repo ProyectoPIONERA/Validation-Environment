@@ -170,7 +170,7 @@ ssh pionera@192.168.122.9   "sudo ufw allow 6443/tcp" 2>/dev/null || true
 **En pionera40:**
 
 ```bash
-git clone --branch feature/new-pionera-automation-kubernetes --single-branch \
+git clone --branch feature/pionera-vm-distributed --single-branch \
   https://github.com/ProyectoPIONERA/Validation-Environment.git
 cd Validation-Environment
 ```
