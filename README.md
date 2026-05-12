@@ -79,7 +79,7 @@ gestiona desde pionera40 usando kubeconfigs separados en `~/.kube/`.
 1. Clona el repositorio:
 
 ```bash
-git clone --branch feature/new-pionera-automation-kubernetes --single-branch \
+git clone --branch feature/pionera-vm-distributed --single-branch \
   https://github.com/ProyectoPIONERA/Validation-Environment.git
 cd Validation-Environment
 ```
