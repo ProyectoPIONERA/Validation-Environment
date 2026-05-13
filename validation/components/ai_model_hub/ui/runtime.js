@@ -26,9 +26,13 @@ function parseKeyValueFile(filePath) {
 }
 
 function resolveAIModelHubRuntime() {
-  const deployerConfig = parseKeyValueFile(
+  const infraConfig = parseKeyValueFile(
+    path.join(projectRoot(), "deployers", "infrastructure", "deployer.config"),
+  );
+  const adapterConfig = parseKeyValueFile(
     path.join(projectRoot(), "deployers", "inesdata", "deployer.config"),
   );
+  const deployerConfig = { ...infraConfig, ...adapterConfig };
   const dataspace = (process.env.UI_DATASPACE || deployerConfig.DS_1_NAME || "demo").trim();
   const dsDomain = (process.env.UI_DS_DOMAIN || deployerConfig.DS_DOMAIN_BASE || "dev.ds.dataspaceunit.upm").trim();
   const keycloakBaseUrl = (

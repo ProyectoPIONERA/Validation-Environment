@@ -154,7 +154,7 @@ function resolveConnectorRuntime(
   const host = `${connectorName}.${dsDomain}`;
   const deployerConfigPath = path.join(projectRoot(), "deployers", "inesdata", "deployer.config");
   const deployerConfig = parseKeyValueFile(deployerConfigPath);
-  const minioHost = process.env.UI_MINIO_HOST || deployerConfig.MINIO_HOSTNAME || `minio.${deployerConfig.DOMAIN_BASE || "dev.ed.dataspaceunit.upm"}`;
+  const minioHost = process.env.UI_MINIO_HOST || deployerConfig.MINIO_HOSTNAME || `minio.${deployerConfig.DOMAIN_BASE || deployerConfig.DS_DOMAIN_BASE || "dev.ed.dataspaceunit.upm"}`;
   const minioProtocol = process.env.UI_MINIO_PROTOCOL || "http";
   const transferRegion = process.env.UI_TRANSFER_REGION || "us-east-1";
   const endpointOverride = `${minioProtocol}://${minioHost}`;
