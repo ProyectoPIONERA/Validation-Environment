@@ -1234,7 +1234,7 @@ def _positive_int_env(name, default):
         return int(default)
 
 
-def _kubectl_endpoint_ready(namespace, service_name):
+def _kubectl_endpoint_ready(namespace, service_name, kubeconfig=None):
     command = [
         "kubectl",
         "get",
@@ -1245,12 +1245,16 @@ def _kubectl_endpoint_ready(namespace, service_name):
         "-o",
         "json",
     ]
+    env = None
+    if kubeconfig:
+        env = {**os.environ, "KUBECONFIG": kubeconfig}
     try:
         result = subprocess.run(
             command,
             check=False,
             capture_output=True,
             text=True,
+            env=env,
         )
     except FileNotFoundError:
         return False, "kubectl is not available"
@@ -1695,6 +1699,29 @@ def _edc_dashboard_readiness_failure_message(readiness):
     )
 
 
+def _build_connector_kubeconfig_map(connectors, kubeconfig_map, namespace_roles):
+    """Map each connector to its cluster kubeconfig based on namespace role."""
+    if not kubeconfig_map:
+        return {}
+    provider_ns = str(getattr(namespace_roles, "provider_namespace", "") or "").strip()
+    consumer_ns = str(getattr(namespace_roles, "consumer_namespace", "") or "").strip()
+    provider_kc = kubeconfig_map.get("provider", "")
+    consumer_kc = kubeconfig_map.get("consumer", "")
+    result = {}
+    for connector in connectors or []:
+        # Heuristic: connectors with "citycouncil" or explicit provider role → provider cluster.
+        # connectors with "company" or explicit consumer role → consumer cluster.
+        # Falls back to namespace_roles if configured.
+        name = str(connector or "").lower()
+        if provider_kc and ("citycouncil" in name or "provider" in name):
+            result[connector] = provider_kc
+        elif consumer_kc and ("company" in name or "consumer" in name):
+            result[connector] = consumer_kc
+        elif provider_kc and provider_ns:
+            result[connector] = provider_kc
+    return result
+
+
 def _probe_inesdata_portal_readiness(deployer_context):
     connectors = list(getattr(deployer_context, "connectors", []) or [])
     connector_namespaces = _inesdata_interface_connector_namespaces(deployer_context)
@@ -1741,12 +1768,19 @@ def _probe_inesdata_portal_readiness(deployer_context):
             }
         )
 
+    kubeconfig_map = dict(getattr(deployer_context, "kubeconfig_map", None) or {})
+    connector_kubeconfig_map = _build_connector_kubeconfig_map(
+        connectors, kubeconfig_map, getattr(deployer_context, "namespace_roles", None)
+    )
+
     for connector in connectors:
         service_name = f"{connector}-interface"
         connector_namespace = connector_namespaces.get(connector)
+        connector_kubeconfig = connector_kubeconfig_map.get(connector)
         service_ready, service_detail = _kubectl_endpoint_ready(
             connector_namespace,
             service_name,
+            kubeconfig=connector_kubeconfig,
         )
         gates.append(
             {
@@ -6295,17 +6329,8 @@ def run_level(
                 )
     level_context = None
     level_local_capacity = None
-    if normalized_topology != "local" and not (
-        normalized_topology == "vm-single" and level_id in {1, 2, 3, 4, 5}
-    ) and level_id in {1, 2, 3, 4, 5}:
-        raise RuntimeError(
-            f"Real Level {level_id} execution is not enabled for topology '{normalized_topology}' yet. "
-            "Use the deployer dry-run/hosts plan first, then enable VM execution once the topology-specific "
-            "deployment path is implemented."
-        )
-
     if level_id == 1:
-        if normalized_topology == "vm-single":
+        if normalized_topology in ("vm-single", "vm-distributed"):
             setup_cluster_preflight = _resolve_adapter_callable(adapter, "infrastructure.setup_cluster_preflight")
             if not callable(setup_cluster_preflight):
                 raise RuntimeError(
@@ -6319,7 +6344,7 @@ def run_level(
                 raise RuntimeError(f"Adapter '{resolved_deployer_name}' does not expose Level 1 setup_cluster()")
             result = setup_cluster()
     elif level_id == 2:
-        if normalized_topology == "vm-single":
+        if normalized_topology in ("vm-single", "vm-distributed"):
             deploy_infrastructure = _resolve_adapter_callable(
                 adapter,
                 "infrastructure.deploy_infrastructure_for_topology",
@@ -6338,7 +6363,7 @@ def run_level(
                 )
             result = deploy_infrastructure()
     elif level_id == 3:
-        if normalized_topology == "vm-single":
+        if normalized_topology in ("vm-single", "vm-distributed"):
             deploy_dataspace = _resolve_adapter_callable(
                 adapter,
                 "deployment.deploy_dataspace_for_topology",

@@ -571,6 +571,7 @@ class INESDataInfrastructureAdapter:
         cwd=None,
         wait=True,
         timeout_seconds=None,
+        kubeconfig=None,
     ):
         print("Executing helm upgrade --install...")
 
@@ -587,8 +588,9 @@ class INESDataInfrastructureAdapter:
             for path in values_files
         )
 
+        kc_prefix = f"KUBECONFIG={shlex.quote(str(kubeconfig))} " if kubeconfig else ""
         cmd = (
-            f"helm upgrade --install {shlex.quote(str(release_name))} . "
+            f"{kc_prefix}helm upgrade --install {shlex.quote(str(release_name))} . "
             f"-n {shlex.quote(str(namespace))} "
             f"--create-namespace "
             f"{values_args} "
@@ -3238,7 +3240,7 @@ class INESDataInfrastructureAdapter:
             check=False,
         )
 
-    def _deploy_infrastructure_runtime(self, *, skip_hosts=False, host_sync_message=None):
+    def _deploy_infrastructure_runtime(self, *, skip_hosts=False, host_sync_message=None, ingress_ip=None):
         self.announce_level(2, "DEPLOY COMMON SERVICES")
 
         if not self.ensure_wsl_docker_config():
@@ -3270,7 +3272,7 @@ class INESDataInfrastructureAdapter:
             print(f"\n{host_sync_message or 'Skipping hosts synchronization for this topology.'}")
         else:
             print("\nConfiguring hosts...")
-            hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name())
+            hosts_entries = self.config_adapter.generate_hosts(self._dataspace_name(), ingress_ip=ingress_ip)
             self.manage_hosts_entries(hosts_entries)
 
         self.add_helm_repos()

@@ -6,6 +6,7 @@ from deployers.infrastructure.lib.config_loader import (
     INFRASTRUCTURE_MANAGED_KEYS,
     load_layered_deployer_config,
 )
+from deployers.shared.lib.topology import VM_DISTRIBUTED_TOPOLOGY, normalize_topology
 from deployers.shared.lib.cluster_runtime import build_cluster_runtime
 from deployers.infrastructure.lib.public_hostnames import (
     clean_public_hostname,
@@ -607,6 +608,12 @@ class INESDataConfigAdapter:
             or runtime_roles.provider_namespace
             or resolved_namespace
         ).strip() or resolved_namespace
+        # vm-distributed: registration service lives on a different cluster;
+        # cluster-local DNS won't resolve cross-cluster. Use the ingress FQDN.
+        if normalize_topology(self.topology) == VM_DISTRIBUTED_TOPOLOGY:
+            ds_domain = self.ds_domain_base()
+            if ds_domain:
+                return f"registration-service-{resolved_name}.{ds_domain}"
         service_name = self.registration_service_service_name(resolved_name)
         if registration_namespace and registration_namespace != active_connector_namespace:
             hostname = f"{service_name}.{registration_namespace}.svc.cluster.local"
@@ -649,20 +656,21 @@ class INESDataConfigAdapter:
             components_default="components",
         )
 
-    def generate_hosts(self, ds_name=None):
+    def generate_hosts(self, ds_name=None, ingress_ip=None):
         config = self.load_deployer_config()
         ds_name = ds_name or self.primary_dataspace_name()
+        ip = ingress_ip or "127.0.0.1"
         hosts = []
 
         for hostname in self._common_service_host_alias_domains(config):
-            hosts.append(f"127.0.0.1 {hostname}")
+            hosts.append(f"{ip} {hostname}")
 
         ds_domain = config.get("DS_DOMAIN_BASE")
 
         if ds_domain and ds_name:
-            hosts.append(f"127.0.0.1 {ds_name}.{ds_domain}")
-            hosts.append(f"127.0.0.1 backend-{ds_name}.{ds_domain}")
-            hosts.append(f"127.0.0.1 registration-service-{ds_name}.{ds_domain}")
+            hosts.append(f"{ip} {ds_name}.{ds_domain}")
+            hosts.append(f"{ip} backend-{ds_name}.{ds_domain}")
+            hosts.append(f"{ip} registration-service-{ds_name}.{ds_domain}")
 
         return hosts
 
@@ -688,7 +696,7 @@ class INESDataConfigAdapter:
                 deduped.append(hostname)
         return deduped
 
-    def generate_connector_hosts(self, connectors):
+    def generate_connector_hosts(self, connectors, connector_ip_map=None):
         config = self.load_deployer_config()
         ds_domain = config.get("DS_DOMAIN_BASE")
         if not ds_domain:
@@ -696,7 +704,8 @@ class INESDataConfigAdapter:
 
         hosts = []
         for connector in connectors or []:
-            hosts.append(f"127.0.0.1 {connector}.{ds_domain}")
+            ip = (connector_ip_map or {}).get(connector) or "127.0.0.1"
+            hosts.append(f"{ip} {connector}.{ds_domain}")
         return hosts
 
     def ds_domain_base(self):

@@ -130,6 +130,7 @@ class DeploymentContext:
     topology_profile: TopologyProfile = field(default_factory=TopologyProfile)
     runtime_dir: str = ""
     config: dict[str, Any] = field(default_factory=dict)
+    kubeconfig_map: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None = None, **overrides: Any) -> "DeploymentContext":
@@ -166,6 +167,7 @@ class DeploymentContext:
             topology_profile=resolved_topology_profile,
             runtime_dir=str(payload.get("runtime_dir", "") or ""),
             config=dict(payload.get("config") or {}),
+            kubeconfig_map=dict(payload.get("kubeconfig_map") or {}),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -183,4 +185,5 @@ class DeploymentContext:
             "topology_profile": self.topology_profile.as_dict(),
             "runtime_dir": self.runtime_dir,
             "config": dict(self.config),
+            "kubeconfig_map": dict(self.kubeconfig_map),
         }

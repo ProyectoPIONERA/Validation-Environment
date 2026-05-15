@@ -15,8 +15,11 @@ from adapters.inesdata.config import InesdataConfig
 def _kubectl_env():
     env = os.environ.copy()
     if not env.get("KUBECONFIG"):
+        user_default = os.path.expanduser("~/.kube/config")
         k3s_default = "/etc/rancher/k3s/k3s.yaml"
-        if os.path.exists(k3s_default):
+        if os.path.exists(user_default) and os.access(user_default, os.R_OK):
+            env["KUBECONFIG"] = user_default
+        elif os.path.exists(k3s_default) and os.access(k3s_default, os.R_OK):
             env["KUBECONFIG"] = k3s_default
     return env
 

@@ -11,6 +11,7 @@ from adapters.shared.config import resolve_shared_level3_bootstrap_runtime
 from deployers.shared.lib.cluster_runtime import build_cluster_runtime
 from deployers.shared.lib.topology import (
     LOCAL_TOPOLOGY,
+    VM_DISTRIBUTED_TOPOLOGY,
     VM_SINGLE_TOPOLOGY,
     build_topology_profile,
     normalize_topology,
@@ -385,6 +386,12 @@ class SharedDataspaceDeploymentAdapter:
         if normalized_topology == VM_SINGLE_TOPOLOGY and cluster_type == "k3s":
             profile = build_topology_profile(VM_SINGLE_TOPOLOGY, self._deployer_config())
             return str(profile.ingress_external_ip or profile.default_address or "").strip()
+
+        if normalized_topology == VM_DISTRIBUTED_TOPOLOGY:
+            profile = build_topology_profile(VM_DISTRIBUTED_TOPOLOGY, self._deployer_config())
+            from deployers.shared.lib.topology import ROLE_COMMON
+            common_ip = str(profile.role_addresses.get(ROLE_COMMON) or profile.default_address or "").strip()
+            return common_ip
 
         return ""
 
@@ -952,6 +959,12 @@ class SharedDataspaceDeploymentAdapter:
             self._fail("Error deploying registration-service")
 
         self.restart_registration_service()
+
+        if normalized_topology == VM_DISTRIBUTED_TOPOLOGY:
+            sync_nginx = getattr(self.infrastructure, "_sync_nginx_http_proxy_vm_distributed", None)
+            if callable(sync_nginx):
+                sync_nginx()
+
         public_portal_deployed = self.deploy_public_portal_if_configured(
             topology=normalized_topology,
             update_minikube_host_aliases=update_minikube_host_aliases,
@@ -978,7 +991,7 @@ class SharedDataspaceDeploymentAdapter:
         normalized_topology = normalize_topology(topology)
         if normalized_topology == LOCAL_TOPOLOGY:
             return self.deploy_dataspace()
-        if normalized_topology != VM_SINGLE_TOPOLOGY:
+        if normalized_topology not in (VM_SINGLE_TOPOLOGY, VM_DISTRIBUTED_TOPOLOGY):
             raise RuntimeError(
                 f"Level 3 deploy_dataspace_for_topology() is not implemented for topology "
                 f"'{normalized_topology}' yet."
@@ -986,5 +999,5 @@ class SharedDataspaceDeploymentAdapter:
         return self._deploy_dataspace_runtime(
             topology=normalized_topology,
             require_tunnel_prompt=False,
-            update_minikube_host_aliases=True,
+            update_minikube_host_aliases=(normalized_topology in (VM_SINGLE_TOPOLOGY, VM_DISTRIBUTED_TOPOLOGY)),
         )
