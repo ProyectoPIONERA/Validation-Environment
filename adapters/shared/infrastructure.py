@@ -426,6 +426,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
         self._patch_dataspace_nginx_for_vm_distributed(deployer_config, ds_name, ds_domain)
         self._ensure_ingress_ssl_redirect_disabled_vm_distributed(deployer_config, ds_name)
         self._sync_connector_routing_conf_vm_distributed(deployer_config, ds_name, ds_domain)
+        self._patch_keycloak_admin_console_vm_distributed(deployer_config, ds_domain)
 
     def _sync_remote_nginx_vm_distributed(self, remote_ip, connector_shorts, ds_name, ds_domain, nodeport, listen_ip):
         """Write connector nginx server blocks on a remote VM via SSH and reload nginx."""
@@ -472,80 +473,271 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             print(f"Warning: remote nginx sync on {remote_ip} skipped: {exc}")
 
     def _patch_dataspace_nginx_for_vm_distributed(self, deployer_config, ds_name, ds_domain):
-        """Patch /etc/nginx/sites-enabled/pionera-dataspace.conf connector locations for vm-distributed.
+        """Generate complete /etc/nginx/sites-enabled/pionera-dataspace.conf for vm-distributed.
 
-        Updates /c/{short}/ proxy targets from local NodePort to remote VM ingress NodePorts
-        and from demo connector hostnames to vm-distributed connector hostnames.
-        This is idempotent — re-running overwrites previous patches.
+        Writes the full server blocks with SSL termination, Keycloak sub_filter rewrites,
+        MinIO WebSocket proxy, and correct proxy_pass targets per provider/consumer VM.
+        Also patches app.config realm references on the common VM.
+        Idempotent — safe to re-run at any level.
         """
-        import re as _re
-
         DATASPACE_CONF = "/etc/nginx/sites-enabled/pionera-dataspace.conf"
+        CERT_PATH = "/etc/nginx/pionera-selfsigned.crt"
+        KEY_PATH  = "/etc/nginx/pionera-selfsigned.key"
+
         nodeport_default = str(deployer_config.get("K3S_INGRESS_HTTP_NODEPORT") or "31667").strip()
-        provider_ip = str(deployer_config.get("VM_PROVIDER_IP") or "").strip()
-        consumer_ip = str(deployer_config.get("VM_CONSUMER_IP") or "").strip()
+        common_ip        = str(deployer_config.get("VM_COMMON_IP") or "").strip()
+        minikube_ip      = str(deployer_config.get("MINIKUBE_IP") or "192.168.49.2").strip()
+        provider_ip      = str(deployer_config.get("VM_PROVIDER_IP") or "").strip()
+        consumer_ip      = str(deployer_config.get("VM_CONSUMER_IP") or "").strip()
         provider_nodeport = str(deployer_config.get("VM_PROVIDER_INGRESS_NODEPORT") or nodeport_default).strip()
         consumer_nodeport = str(deployer_config.get("VM_CONSUMER_INGRESS_NODEPORT") or nodeport_default).strip()
-        provider_shorts = [n.strip() for n in str(deployer_config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
-        consumer_shorts = [n.strip() for n in str(deployer_config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
+        provider_shorts  = [n.strip() for n in str(deployer_config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
+        consumer_shorts  = [n.strip() for n in str(deployer_config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
 
-        if not provider_ip or not consumer_ip:
+        if not common_ip or not provider_ip or not consumer_ip:
             return
 
-        try:
-            result = subprocess.run(["sudo", "cat", DATASPACE_CONF], capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Warning: cannot read {DATASPACE_CONF} for patching.")
-                return
-            conf = result.stdout
-        except Exception as exc:
-            print(f"Warning: dataspace conf patch skipped: {exc}")
-            return
+        # Ensure self-signed TLS cert exists for nginx SSL block
+        cert_missing = subprocess.run(["sudo", "test", "-f", CERT_PATH], capture_output=True).returncode != 0
+        if cert_missing:
+            print("Generating self-signed TLS certificate for nginx...")
+            subprocess.run([
+                "sudo", "openssl", "req", "-x509", "-nodes", "-days", "3650",
+                "-newkey", "rsa:2048", "-keyout", KEY_PATH, "-out", CERT_PATH,
+                "-subj", f"/CN=org1.{ds_domain}/O=Pionera",
+                "-addext", f"subjectAltName=DNS:org1.{ds_domain},DNS:*.{ds_domain}",
+            ], capture_output=True)
+            subprocess.run(["sudo", "chmod", "600", KEY_PATH], capture_output=True)
 
-        original = conf
+        all_shorts = provider_shorts + consumer_shorts
+        org1       = f"org1.{ds_domain}"
+        auth_host  = f"auth.{ds_domain}"
+        admin_host = f"admin.auth.{ds_domain}"
+        nodeport   = nodeport_default  # local common-VM k3s NodePort for shared services
 
-        for short in provider_shorts:
-            conn_host_new = f"conn-{short}-{ds_name}.{ds_domain}"
-            # Replace any existing Host for this connector and update proxy_pass target
-            conf = _re.sub(
-                r'(location /c/' + short + r'/[^\{]*\{[^\}]*?)proxy_pass http://[^;]+;([^\}]*?)'
-                r'proxy_set_header Host [^;]+;',
-                lambda m, s=short, ip=provider_ip, np=provider_nodeport, ch=conn_host_new: (
-                    m.group(0)
-                    .replace(
-                        _re.search(r'proxy_pass http://[^;]+;', m.group(0)).group(0),
-                        f'proxy_pass http://{ip}:{np};'
-                    )
-                    .replace(
-                        _re.search(r'proxy_set_header Host [^;]+;', m.group(0)).group(0),
-                        f'proxy_set_header Host {ch};'
-                    )
-                ),
-                conf, flags=_re.DOTALL,
+        # --- App config locations ---
+        app_cfg = (
+            "    location = /inesdata-connector-interface/assets/config/app.config.json {\n"
+            "        rewrite ^ /internal-connector-config/$connector_config_name last;\n"
+            "    }\n"
+        )
+        for short in all_shorts:
+            app_cfg += (
+                f"    location = /internal-connector-config/{short} {{\n"
+                f"        internal;\n"
+                f"        alias /var/www/connector-configs/app.config.{short}.https.json;\n"
+                f"        default_type application/json;\n"
+                f'        add_header Cache-Control "no-store, no-cache, must-revalidate" always;\n'
+                f"    }}\n"
+                f"    location = /c/{short}/inesdata-connector-interface/assets/config/app.config.json {{\n"
+                f"        alias /var/www/connector-configs/app.config.{short}.https.json;\n"
+                f"        default_type application/json;\n"
+                f'        add_header Cache-Control "no-store, no-cache, must-revalidate";\n'
+                f"    }}\n"
             )
 
-        for short in consumer_shorts:
-            conn_host_new = f"conn-{short}-{ds_name}.{ds_domain}"
-            conf = _re.sub(
-                r'(location /c/' + short + r'/[^\{]*\{[^\}]*?)proxy_pass http://[^;]+;([^\}]*?)'
-                r'proxy_set_header Host [^;]+;',
-                lambda m, s=short, ip=consumer_ip, np=consumer_nodeport, ch=conn_host_new: (
-                    m.group(0)
-                    .replace(
-                        _re.search(r'proxy_pass http://[^;]+;', m.group(0)).group(0),
-                        f'proxy_pass http://{ip}:{np};'
-                    )
-                    .replace(
-                        _re.search(r'proxy_set_header Host [^;]+;', m.group(0)).group(0),
-                        f'proxy_set_header Host {ch};'
-                    )
-                ),
-                conf, flags=_re.DOTALL,
-            )
+        # --- Connector locations ---
+        conn_links = "".join(
+            f'<li><a href=\\\"/c/{s}/inesdata-connector-interface/\\\">{s.capitalize()} Connector</a></li>'
+            for s in all_shorts
+        )
 
-        # Fix oauth2 realm in app.config files on pioneer40
+        def _connector_locations(shorts, backend_ip, backend_port):
+            out = ""
+            for short in shorts:
+                conn_host = f"conn-{short}-{ds_name}.{ds_domain}"
+                out += (
+                    f"    location /c/{short}/management/ {{\n"
+                    f"        rewrite ^/c/{short}/management/(.*) /management/$1 break;\n"
+                    f"        proxy_pass http://{backend_ip}:{backend_port};\n"
+                    f"        proxy_set_header Host {conn_host};\n"
+                    f"        proxy_set_header X-Real-IP $remote_addr;\n"
+                    f"        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                    f"        proxy_set_header X-Forwarded-Proto $scheme;\n"
+                    f"        client_max_body_size 0;\n"
+                    f"    }}\n"
+                    f"    location /c/{short}/shared/ {{\n"
+                    f"        rewrite ^/c/{short}/shared/(.*) /shared/$1 break;\n"
+                    f"        proxy_pass http://{backend_ip}:{backend_port};\n"
+                    f"        proxy_set_header Host {conn_host};\n"
+                    f"        proxy_set_header X-Real-IP $remote_addr;\n"
+                    f"    }}\n"
+                    f"    location /c/{short}/federatedcatalog/ {{\n"
+                    f"        rewrite ^/c/{short}/federatedcatalog/(.*) /management/federatedcatalog/$1 break;\n"
+                    f"        proxy_pass http://{backend_ip}:{backend_port};\n"
+                    f"        proxy_set_header Host {conn_host};\n"
+                    f"        proxy_set_header X-Real-IP $remote_addr;\n"
+                    f"    }}\n"
+                    f"    location /c/{short}/ {{\n"
+                    f'        add_header Set-Cookie "inesdata_connector={short}; Path=/; SameSite=Lax" always;\n'
+                    f"        rewrite ^/c/{short}/(.*) /$1 break;\n"
+                    f"        proxy_pass http://{backend_ip}:{backend_port};\n"
+                    f"        proxy_set_header Host {conn_host};\n"
+                    f"        proxy_set_header X-Real-IP $remote_addr;\n"
+                    f"        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                    f"        proxy_set_header X-Forwarded-Proto $scheme;\n"
+                    f"    }}\n"
+                )
+            return out
+
+        connector_locs  = _connector_locations(provider_shorts, provider_ip, provider_nodeport)
+        connector_locs += _connector_locations(consumer_shorts, consumer_ip, consumer_nodeport)
+
+        conf = (
+            "# Generated by framework — vm-distributed full nginx proxy\n"
+            "server {\n"
+            f"    listen {common_ip}:80;\n"
+            f"    listen {minikube_ip}:80;\n"
+            f"    listen {common_ip}:443 ssl;\n"
+            f"    ssl_certificate     {CERT_PATH};\n"
+            f"    ssl_certificate_key {KEY_PATH};\n"
+            "    ssl_protocols       TLSv1.2 TLSv1.3;\n"
+            "    ssl_ciphers         HIGH:!aNULL:!MD5;\n"
+            f"    server_name {org1};\n\n"
+            + app_cfg + "\n"
+            "    location = / {\n"
+            "        default_type text/html;\n"
+            f'        return 200 "<html><body><h1>INESData Environment</h1><ul>{conn_links}'
+            '<li><a href=\\\"/auth/\\\">Keycloak</a></li>'
+            '<li><a href=\\\"/s3-console/\\\">MinIO Console</a></li>'
+            '</ul></body></html>";\n'
+            "    }\n\n"
+            # Keycloak — full sub_filter set to survive behind nginx SSL termination
+            "    location /auth/ {\n"
+            "        rewrite ^/auth/(.*) /$1 break;\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            f"        proxy_set_header Host {auth_host};\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto https;\n"
+            "        proxy_set_header X-Forwarded-Port 443;\n"
+            "        proxy_set_header Accept-Encoding \"\";\n"
+            f"        proxy_redirect http://{admin_host}/admin/ https://{org1}/auth/admin/;\n"
+            f"        proxy_redirect http://{auth_host}/ https://{org1}/auth/;\n"
+            "        proxy_cookie_path /realms/ /auth/realms/;\n"
+            "        sub_filter_types application/json text/html;\n"
+            "        sub_filter_once off;\n"
+            f'        sub_filter "http://{auth_host}/realms/"    "https://{org1}/auth/realms/";\n'
+            f'        sub_filter "https://{auth_host}/realms/"  "https://{org1}/auth/realms/";\n'
+            f'        sub_filter "https://{auth_host}/"         "https://{org1}/auth/";\n'
+            f'        sub_filter "http://{auth_host}/resources/" "https://{org1}/auth/resources/";\n'
+            f'        sub_filter "http://{auth_host}/js/"        "https://{org1}/auth/js/";\n'
+            f'        sub_filter "http://{org1}/auth/"           "https://{org1}/auth/";\n'
+            f'        sub_filter \'"auth-server-url":"http://{admin_host}"\' \'"auth-server-url":"https://{org1}/auth"\';\n'
+            f'        sub_filter \'"auth-server-url": "http://{admin_host}"\' \'"auth-server-url": "https://{org1}/auth"\';\n'
+            f"        sub_filter 'http://{admin_host}' 'https://{org1}/auth';\n"
+            "    }\n\n"
+            "    location /s3/ {\n"
+            "        rewrite ^/s3/(.*) /$1 break;\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            f"        proxy_set_header Host minio.{ds_domain};\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "    }\n\n"
+            "    location /resources/ {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            f"        proxy_set_header Host {auth_host};\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "    }\n\n"
+            # MinIO WebSocket — browser uses absolute /ws/ path (ignores <base href>)
+            "    location /ws/ {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport}/ws/;\n"
+            f"        proxy_set_header Host console.minio-s3.{ds_domain};\n"
+            f"        proxy_set_header Origin https://console.minio-s3.{ds_domain};\n"
+            "        proxy_set_header Upgrade $http_upgrade;\n"
+            '        proxy_set_header Connection "upgrade";\n'
+            "        proxy_http_version 1.1;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto https;\n"
+            "        proxy_set_header X-Forwarded-Port 443;\n"
+            "        proxy_read_timeout 3600s;\n"
+            "    }\n"
+            "    location /s3-console/ws/ {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport}/ws/;\n"
+            f"        proxy_set_header Host console.minio-s3.{ds_domain};\n"
+            f"        proxy_set_header Origin https://console.minio-s3.{ds_domain};\n"
+            "        proxy_set_header Upgrade $http_upgrade;\n"
+            '        proxy_set_header Connection "upgrade";\n'
+            "        proxy_http_version 1.1;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto https;\n"
+            "        proxy_set_header X-Forwarded-Port 443;\n"
+            "        proxy_read_timeout 3600s;\n"
+            "    }\n"
+            "    location /s3-console/ {\n"
+            "        rewrite ^/s3-console/(.*) /$1 break;\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            f"        proxy_set_header Host console.minio-s3.{ds_domain};\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto https;\n"
+            "        proxy_set_header X-Forwarded-Port 443;\n"
+            "        proxy_http_version 1.1;\n"
+            '        proxy_set_header Accept-Encoding "";\n'
+            "        proxy_cookie_path / /s3-console/;\n"
+            "        gunzip on;\n"
+            "        sub_filter '<base href=\"/\"/>' '<base href=\"/s3-console/\"/>';\n"
+            "        sub_filter_once on;\n"
+            "    }\n\n"
+            "    location /rs-demo/ {\n"
+            "        rewrite ^/rs-demo/(.*) /$1 break;\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            f"        proxy_set_header Host registration-service-demo.{ds_domain};\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "    }\n\n"
+            + connector_locs
+            + "\n"
+            "    location /inesdata-connector-interface/ {\n"
+            "        proxy_pass http://$connector_backend;\n"
+            "        proxy_set_header Host $connector_host;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "    }\n"
+            "}\n\n"
+            "server {\n"
+            f"    listen {common_ip}:80;\n"
+            f"    listen {minikube_ip}:80;\n"
+            f"    listen {common_ip}:443 ssl;\n"
+            f"    ssl_certificate     {CERT_PATH};\n"
+            f"    ssl_certificate_key {KEY_PATH};\n"
+            "    ssl_protocols       TLSv1.2 TLSv1.3;\n"
+            "    ssl_ciphers         HIGH:!aNULL:!MD5;\n"
+            f"    server_name *.{org1};\n\n"
+            "    location / {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            "        proxy_set_header Host $host;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "        proxy_http_version 1.1;\n"
+            "        proxy_set_header Upgrade $http_upgrade;\n"
+            '        proxy_set_header Connection "upgrade";\n'
+            "        client_max_body_size 0;\n"
+            "    }\n"
+            "}\n\n"
+            "# Direct passthrough server blocks for internal service hostnames\n"
+            "server {\n"
+            f"    listen {common_ip}:80;\n"
+            f"    server_name {auth_host} {admin_host};\n"
+            "    location / {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            "        proxy_set_header Host $host;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "        proxy_connect_timeout 10s;\n"
+            "        client_max_body_size 0;\n"
+            "    }\n"
+            "}\n"
+        )
+
+        # Patch oauth2 realm in app.config files on the common VM
         app_config_dir = "/var/www/connector-configs"
-        for short in provider_shorts + consumer_shorts:
+        for short in all_shorts:
             for suffix in (".https.json", ".json"):
                 cfg = f"{app_config_dir}/app.config.{short}{suffix}"
                 try:
@@ -557,10 +749,6 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 except Exception:
                     pass
 
-        if conf == original:
-            print(f"pionera-dataspace.conf: no changes needed.")
-            return
-
         try:
             proc = subprocess.run(
                 ["sudo", "tee", DATASPACE_CONF],
@@ -571,11 +759,11 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 return
             reload = subprocess.run(["sudo", "nginx", "-s", "reload"], capture_output=True, text=True)
             if reload.returncode == 0:
-                print(f"pionera-dataspace.conf patched and nginx reloaded.")
+                print(f"pionera-dataspace.conf generated and nginx reloaded.")
             else:
-                print(f"Warning: nginx reload failed after patching {DATASPACE_CONF}: {reload.stderr.strip()}")
+                print(f"Warning: nginx reload failed after writing {DATASPACE_CONF}: {reload.stderr.strip()}")
         except Exception as exc:
-            print(f"Warning: dataspace conf patch write failed: {exc}")
+            print(f"Warning: dataspace conf write failed: {exc}")
 
     def _sync_connector_routing_conf_vm_distributed(self, deployer_config, ds_name, ds_domain):
         """Write /etc/nginx/conf.d/connector-routing.conf with cookie-based connector routing maps."""
@@ -627,6 +815,76 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 print(f"Warning: nginx reload failed after writing {conf_path}: {reload.stderr.strip()}")
         except Exception as exc:
             print(f"Warning: connector-routing.conf sync skipped: {exc}")
+
+    def _patch_keycloak_admin_console_vm_distributed(self, deployer_config, ds_domain):
+        """Register org1 HTTPS redirect URI on security-admin-console client in master realm.
+
+        Keycloak's built-in security-admin-console client only lists relative redirect URIs by
+        default.  When Keycloak is accessed via the org1 HTTPS proxy the absolute URI must also
+        be registered or the admin console login flow fails with 'invalid_redirect_uri'.
+        Also sets ssl-required=none on master realm so that Keycloak (which receives plain HTTP
+        from nginx) does not reject admin console requests with "HTTPS required".
+        """
+        import json as _json
+        try:
+            import requests as _requests
+        except ImportError:
+            print("Warning: requests not available — skipping Keycloak admin console patch")
+            return
+
+        kc_url  = str(deployer_config.get("KC_URL") or "").rstrip("/")
+        kc_user = str(deployer_config.get("KC_USER") or "admin").strip()
+        kc_pass = str(deployer_config.get("KC_PASSWORD") or "").strip()
+        if not kc_url or not kc_pass:
+            print("Keycloak admin console patch skipped: KC_URL/KC_PASSWORD not set")
+            return
+
+        org1_redirect = f"https://org1.{ds_domain}/auth/admin/master/console/*"
+
+        try:
+            token_resp = _requests.post(
+                f"{kc_url}/realms/master/protocol/openid-connect/token",
+                data={"grant_type": "password", "client_id": "admin-cli",
+                      "username": kc_user, "password": kc_pass},
+                timeout=10,
+            )
+            if token_resp.status_code != 200:
+                print(f"Warning: Keycloak token fetch failed ({token_resp.status_code}) — skipping admin console patch")
+                return
+            token = token_resp.json()["access_token"]
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+            # ssl-required=none so Keycloak does not reject HTTP requests from nginx
+            realm_resp = _requests.get(f"{kc_url}/admin/realms/master", headers=headers, timeout=10)
+            if realm_resp.status_code == 200:
+                realm = realm_resp.json()
+                if realm.get("sslRequired") != "none":
+                    realm["sslRequired"] = "none"
+                    _requests.put(f"{kc_url}/admin/realms/master", headers=headers,
+                                  data=_json.dumps(realm), timeout=10)
+                    print("Keycloak master realm: ssl-required set to none")
+
+            # Add org1 redirect URI to security-admin-console client
+            clients_resp = _requests.get(
+                f"{kc_url}/admin/realms/master/clients?clientId=security-admin-console",
+                headers=headers, timeout=10,
+            )
+            if clients_resp.status_code == 200 and clients_resp.json():
+                client = clients_resp.json()[0]
+                redirect_uris = client.get("redirectUris") or []
+                if org1_redirect not in redirect_uris:
+                    redirect_uris.append(org1_redirect)
+                    client["redirectUris"] = redirect_uris
+                    r = _requests.put(
+                        f"{kc_url}/admin/realms/master/clients/{client['id']}",
+                        headers=headers, data=_json.dumps(client), timeout=10,
+                    )
+                    if r.status_code in (200, 204):
+                        print(f"Keycloak security-admin-console: added redirect URI {org1_redirect}")
+                    else:
+                        print(f"Warning: could not update security-admin-console redirectUris: {r.status_code}")
+        except Exception as exc:
+            print(f"Warning: Keycloak admin console patch failed: {exc}")
 
     def _sync_nginx_stream_proxy_vm_distributed(self):
         """Update /etc/nginx/pionera-stream.conf with current k8s ClusterIPs and reload nginx."""

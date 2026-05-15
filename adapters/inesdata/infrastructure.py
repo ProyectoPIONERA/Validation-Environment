@@ -2042,14 +2042,22 @@ class INESDataInfrastructureAdapter:
             
             master_json_str = values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"]
             try:
-                import json
-                master_json_data = json.loads(master_json_str)
+                import json as _json
+                master_json_data = _json.loads(master_json_str)
                 if "attributes" not in master_json_data:
                     master_json_data["attributes"] = {}
-                master_json_data["attributes"]["frontendUrl"] = (
-                    f"http://{common_hostnames['keycloak_admin_hostname']}"
-                )
-                values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"] = json.dumps(master_json_data, indent=2)
+                topology = str(getattr(self.config_adapter, "topology", "local") or "local").strip().lower()
+                if topology == "vm-distributed" and domain_base:
+                    # vm-distributed: Keycloak is behind nginx SSL termination; must use HTTPS
+                    # org1 URL so admin console redirect_uri validation passes. ssl-required=none
+                    # because Keycloak sees plain HTTP from nginx and would reject with "HTTPS required".
+                    master_json_data["attributes"]["frontendUrl"] = f"https://org1.{domain_base}/auth"
+                    master_json_data["sslRequired"] = "none"
+                else:
+                    master_json_data["attributes"]["frontendUrl"] = (
+                        f"http://{common_hostnames['keycloak_admin_hostname']}"
+                    )
+                values["keycloak"]["keycloakConfigCli"]["configuration"]["master.json"] = _json.dumps(master_json_data, indent=2)
             except Exception as e:
                 print(f"Warning: Could not update frontendUrl in master.json: {e}")
 
