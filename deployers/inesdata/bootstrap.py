@@ -710,13 +710,29 @@ def build_connector_access_urls(connector, dataspace, environment, config, dashb
     connector_interface_base_href = normalize_base_href(
         config.get("INESDATA_CONNECTOR_INTERFACE_BASE_HREF", "/inesdata-connector-interface/")
     )
-    urls = {
-        "connector_ingress": connector_base,
-        "connector_interface_login": f"{connector_base}{connector_interface_base_href}",
-        "connector_management_api": f"{connector_base}/management",
-        "connector_protocol_api": f"{connector_base}/protocol",
-        "connector_shared_api": f"{connector_base}/shared",
-    }
+
+    vm_distributed = bool(str(config.get("VM_COMMON_IP") or "").strip())
+    if vm_distributed:
+        cn = connector.lower()
+        short = cn[len("conn-"):] if cn.startswith("conn-") else cn
+        if short.endswith(f"-{dataspace.lower()}"):
+            short = short[: -len(f"-{dataspace.lower()}")]
+        org1_base = f"https://org1.{ds_domain}/c/{short}"
+        urls = {
+            "connector_ingress": org1_base,
+            "connector_interface_login": f"{org1_base}/inesdata-connector-interface/",
+            "connector_management_api": f"{org1_base}/management",
+            "connector_protocol_api": f"{org1_base}/protocol",
+            "connector_shared_api": f"{org1_base}/shared",
+        }
+    else:
+        urls = {
+            "connector_ingress": connector_base,
+            "connector_interface_login": f"{connector_base}{connector_interface_base_href}",
+            "connector_management_api": f"{connector_base}/management",
+            "connector_protocol_api": f"{connector_base}/protocol",
+            "connector_shared_api": f"{connector_base}/shared",
+        }
     if dashboard:
         dashboard_base_href = normalize_base_href(config.get("EDC_DASHBOARD_BASE_HREF", "/edc-dashboard/"))
         urls["edc_dashboard_login"] = f"{connector_base}{dashboard_base_href}"

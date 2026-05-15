@@ -205,6 +205,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             self._fail("One or more vm-distributed clusters are unreachable. Fix kubeconfig paths before proceeding.")
 
         self._ensure_k3s_kubelet_config_vm_distributed(deployer_config)
+        self._ensure_ingress_nginx_forwarded_headers_vm_distributed(deployer_config)
 
         self.complete_level(1)
         return {"status": "ready", "topology": VM_DISTRIBUTED_TOPOLOGY, "checks": checks}
@@ -254,6 +255,71 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             except Exception as exc:
                 print(f"[WARN] {ip}: kubelet config write skipped: {exc}")
 
+    def _ensure_ingress_nginx_forwarded_headers_vm_distributed(self, deployer_config=None):
+        """Patch ingress-nginx configmap on provider and consumer clusters to trust X-Forwarded-Proto.
+
+        Without use-forwarded-headers=true, ingress-nginx ignores X-Forwarded-Proto: https sent by
+        the common VM's nginx reverse proxy, sees plain HTTP on the NodePort, and force-redirects to
+        https://<connector-hostname> — which resolves directly to the remote VM from LAN clients,
+        creating an ssl-redirect loop (ERR_TOO_MANY_REDIRECTS).
+        """
+        config = deployer_config or {}
+        kubeconfigs = []
+        for key in ("K3S_KUBECONFIG_PROVIDER", "K3S_KUBECONFIG_CONSUMER"):
+            kc = str(config.get(key) or "").strip()
+            if kc:
+                kubeconfigs.append(kc)
+
+        cm_patch = '{"data":{"use-forwarded-headers":"true","compute-full-forwarded-for":"true"}}'
+        for kc in kubeconfigs:
+            try:
+                proc = subprocess.run(
+                    ["kubectl", "--kubeconfig", kc, "patch", "configmap",
+                     "ingress-nginx-controller", "-n", "ingress-nginx",
+                     "--type=merge", "-p", cm_patch],
+                    capture_output=True, text=True,
+                )
+                if proc.returncode == 0:
+                    print(f"[OK]   ingress-nginx configmap patched ({kc})")
+                else:
+                    print(f"[WARN] ingress-nginx configmap patch failed ({kc}): {proc.stderr.strip()}")
+            except Exception as exc:
+                print(f"[WARN] ingress-nginx configmap patch skipped ({kc}): {exc}")
+
+    def _ensure_ingress_ssl_redirect_disabled_vm_distributed(self, deployer_config, ds_name):
+        """Disable ssl-redirect on connector ingresses to prevent redirect loops from LAN clients.
+
+        ingress-nginx default ssl_redirect=true redirects HTTP connections to https://<connector-host>.
+        Connector hostnames resolve to the remote VM's private IP (accessible from LAN), which has no
+        public SSL cert — creating a loop when clients reach the connector ingress via the common VM's
+        nginx reverse proxy. Setting ssl-redirect=false on each connector ingress prevents this.
+        """
+        config = deployer_config or {}
+        annotation_patch = '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/ssl-redirect":"false"}}}'
+        entries = [
+            (config.get("K3S_KUBECONFIG_PROVIDER") or "", "provider",
+             [n.strip() for n in str(config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]),
+            (config.get("K3S_KUBECONFIG_CONSUMER") or "", "consumer",
+             [n.strip() for n in str(config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]),
+        ]
+        for kc, namespace, shorts in entries:
+            if not kc:
+                continue
+            for short in shorts:
+                ingress_name = f"conn-{short}-{ds_name}-ingress"
+                try:
+                    proc = subprocess.run(
+                        ["kubectl", "--kubeconfig", kc, "patch", "ingress", ingress_name,
+                         "-n", namespace, "--type=merge", "-p", annotation_patch],
+                        capture_output=True, text=True,
+                    )
+                    if proc.returncode == 0:
+                        print(f"[OK]   ssl-redirect disabled on {ingress_name} ({namespace})")
+                    else:
+                        print(f"[WARN] ssl-redirect patch failed on {ingress_name}: {proc.stderr.strip()}")
+                except Exception as exc:
+                    print(f"[WARN] ssl-redirect patch skipped ({ingress_name}): {exc}")
+
     def _sync_nginx_http_proxy_vm_distributed(self):
         """Write nginx HTTP server blocks for vm-distributed dataspace and connector hostnames.
 
@@ -269,6 +335,8 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
         provider_ip = str(deployer_config.get("VM_PROVIDER_IP") or "").strip()
         consumer_ip = str(deployer_config.get("VM_CONSUMER_IP") or "").strip()
         nodeport = str(deployer_config.get("K3S_INGRESS_HTTP_NODEPORT") or "31667").strip()
+        provider_port = str(deployer_config.get("VM_PROVIDER_INGRESS_HTTP_PORT") or nodeport).strip()
+        consumer_port = str(deployer_config.get("VM_CONSUMER_INGRESS_HTTP_PORT") or nodeport).strip()
         ds_domain = str(deployer_config.get("DS_DOMAIN_BASE") or "").strip()
 
         if not common_ip or not ds_domain:
@@ -317,13 +385,13 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
         for short in provider_shorts:
             conn_name = f"conn-{short}-{ds_name}"
             conn_hostname = f"{conn_name}.{ds_domain}"
-            target = f"{provider_ip}:{nodeport}" if provider_ip else f"{common_ip}:{nodeport}"
+            target = f"{provider_ip}:{provider_port}" if provider_ip else f"{common_ip}:{nodeport}"
             blocks.append(_server_block(common_ip, conn_hostname, target))
 
         for short in consumer_shorts:
             conn_name = f"conn-{short}-{ds_name}"
             conn_hostname = f"{conn_name}.{ds_domain}"
-            target = f"{consumer_ip}:{nodeport}" if consumer_ip else f"{common_ip}:{nodeport}"
+            target = f"{consumer_ip}:{consumer_port}" if consumer_ip else f"{common_ip}:{nodeport}"
             blocks.append(_server_block(common_ip, conn_hostname, target))
 
         conf_path = f"/etc/nginx/sites-enabled/pionera-vm-distributed-{ds_name}.conf"
@@ -348,12 +416,16 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
 
         if provider_ip and provider_shorts:
             self._sync_remote_nginx_vm_distributed(
-                provider_ip, provider_shorts, ds_name, ds_domain, nodeport, provider_ip,
+                provider_ip, provider_shorts, ds_name, ds_domain, provider_port, provider_ip,
             )
         if consumer_ip and consumer_shorts:
             self._sync_remote_nginx_vm_distributed(
-                consumer_ip, consumer_shorts, ds_name, ds_domain, nodeport, consumer_ip,
+                consumer_ip, consumer_shorts, ds_name, ds_domain, consumer_port, consumer_ip,
             )
+
+        self._patch_dataspace_nginx_for_vm_distributed(deployer_config, ds_name, ds_domain)
+        self._ensure_ingress_ssl_redirect_disabled_vm_distributed(deployer_config, ds_name)
+        self._sync_connector_routing_conf_vm_distributed(deployer_config, ds_name, ds_domain)
 
     def _sync_remote_nginx_vm_distributed(self, remote_ip, connector_shorts, ds_name, ds_domain, nodeport, listen_ip):
         """Write connector nginx server blocks on a remote VM via SSH and reload nginx."""
@@ -398,6 +470,163 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 print(f"Warning: remote nginx reload failed on {remote_ip}: {reload.stderr.strip()}")
         except Exception as exc:
             print(f"Warning: remote nginx sync on {remote_ip} skipped: {exc}")
+
+    def _patch_dataspace_nginx_for_vm_distributed(self, deployer_config, ds_name, ds_domain):
+        """Patch /etc/nginx/sites-enabled/pionera-dataspace.conf connector locations for vm-distributed.
+
+        Updates /c/{short}/ proxy targets from local NodePort to remote VM ingress NodePorts
+        and from demo connector hostnames to vm-distributed connector hostnames.
+        This is idempotent — re-running overwrites previous patches.
+        """
+        import re as _re
+
+        DATASPACE_CONF = "/etc/nginx/sites-enabled/pionera-dataspace.conf"
+        nodeport_default = str(deployer_config.get("K3S_INGRESS_HTTP_NODEPORT") or "31667").strip()
+        provider_ip = str(deployer_config.get("VM_PROVIDER_IP") or "").strip()
+        consumer_ip = str(deployer_config.get("VM_CONSUMER_IP") or "").strip()
+        provider_nodeport = str(deployer_config.get("VM_PROVIDER_INGRESS_NODEPORT") or nodeport_default).strip()
+        consumer_nodeport = str(deployer_config.get("VM_CONSUMER_INGRESS_NODEPORT") or nodeport_default).strip()
+        provider_shorts = [n.strip() for n in str(deployer_config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
+        consumer_shorts = [n.strip() for n in str(deployer_config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
+
+        if not provider_ip or not consumer_ip:
+            return
+
+        try:
+            result = subprocess.run(["sudo", "cat", DATASPACE_CONF], capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: cannot read {DATASPACE_CONF} for patching.")
+                return
+            conf = result.stdout
+        except Exception as exc:
+            print(f"Warning: dataspace conf patch skipped: {exc}")
+            return
+
+        original = conf
+
+        for short in provider_shorts:
+            conn_host_new = f"conn-{short}-{ds_name}.{ds_domain}"
+            # Replace any existing Host for this connector and update proxy_pass target
+            conf = _re.sub(
+                r'(location /c/' + short + r'/[^\{]*\{[^\}]*?)proxy_pass http://[^;]+;([^\}]*?)'
+                r'proxy_set_header Host [^;]+;',
+                lambda m, s=short, ip=provider_ip, np=provider_nodeport, ch=conn_host_new: (
+                    m.group(0)
+                    .replace(
+                        _re.search(r'proxy_pass http://[^;]+;', m.group(0)).group(0),
+                        f'proxy_pass http://{ip}:{np};'
+                    )
+                    .replace(
+                        _re.search(r'proxy_set_header Host [^;]+;', m.group(0)).group(0),
+                        f'proxy_set_header Host {ch};'
+                    )
+                ),
+                conf, flags=_re.DOTALL,
+            )
+
+        for short in consumer_shorts:
+            conn_host_new = f"conn-{short}-{ds_name}.{ds_domain}"
+            conf = _re.sub(
+                r'(location /c/' + short + r'/[^\{]*\{[^\}]*?)proxy_pass http://[^;]+;([^\}]*?)'
+                r'proxy_set_header Host [^;]+;',
+                lambda m, s=short, ip=consumer_ip, np=consumer_nodeport, ch=conn_host_new: (
+                    m.group(0)
+                    .replace(
+                        _re.search(r'proxy_pass http://[^;]+;', m.group(0)).group(0),
+                        f'proxy_pass http://{ip}:{np};'
+                    )
+                    .replace(
+                        _re.search(r'proxy_set_header Host [^;]+;', m.group(0)).group(0),
+                        f'proxy_set_header Host {ch};'
+                    )
+                ),
+                conf, flags=_re.DOTALL,
+            )
+
+        # Fix oauth2 realm in app.config files on pioneer40
+        app_config_dir = "/var/www/connector-configs"
+        for short in provider_shorts + consumer_shorts:
+            for suffix in (".https.json", ".json"):
+                cfg = f"{app_config_dir}/app.config.{short}{suffix}"
+                try:
+                    r = subprocess.run(["sudo", "cat", cfg], capture_output=True, text=True)
+                    if r.returncode == 0 and "/realms/demo" in r.stdout:
+                        patched = r.stdout.replace("/realms/demo", f"/realms/{ds_name}")
+                        subprocess.run(["sudo", "tee", cfg], input=patched, text=True, capture_output=True)
+                        print(f"Patched realm in {cfg}")
+                except Exception:
+                    pass
+
+        if conf == original:
+            print(f"pionera-dataspace.conf: no changes needed.")
+            return
+
+        try:
+            proc = subprocess.run(
+                ["sudo", "tee", DATASPACE_CONF],
+                input=conf, text=True, capture_output=True,
+            )
+            if proc.returncode != 0:
+                print(f"Warning: could not write {DATASPACE_CONF}: {proc.stderr.strip()}")
+                return
+            reload = subprocess.run(["sudo", "nginx", "-s", "reload"], capture_output=True, text=True)
+            if reload.returncode == 0:
+                print(f"pionera-dataspace.conf patched and nginx reloaded.")
+            else:
+                print(f"Warning: nginx reload failed after patching {DATASPACE_CONF}: {reload.stderr.strip()}")
+        except Exception as exc:
+            print(f"Warning: dataspace conf patch write failed: {exc}")
+
+    def _sync_connector_routing_conf_vm_distributed(self, deployer_config, ds_name, ds_domain):
+        """Write /etc/nginx/conf.d/connector-routing.conf with cookie-based connector routing maps."""
+        nodeport_default = str(deployer_config.get("K3S_INGRESS_HTTP_NODEPORT") or "31667").strip()
+        provider_ip = str(deployer_config.get("VM_PROVIDER_IP") or "").strip()
+        consumer_ip = str(deployer_config.get("VM_CONSUMER_IP") or "").strip()
+        provider_nodeport = str(deployer_config.get("VM_PROVIDER_INGRESS_NODEPORT") or nodeport_default).strip()
+        consumer_nodeport = str(deployer_config.get("VM_CONSUMER_INGRESS_NODEPORT") or nodeport_default).strip()
+        provider_shorts = [n.strip() for n in str(deployer_config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
+        consumer_shorts = [n.strip() for n in str(deployer_config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
+
+        if not provider_shorts or not consumer_shorts:
+            return
+
+        provider_short = provider_shorts[0]
+        consumer_short = consumer_shorts[0]
+        provider_host = f"conn-{provider_short}-{ds_name}.{ds_domain}"
+        consumer_host = f"conn-{consumer_short}-{ds_name}.{ds_domain}"
+
+        conf = (
+            f"# Generated by framework — vm-distributed connector cookie routing maps\n"
+            f"map $cookie_inesdata_connector $connector_host {{\n"
+            f'    "{consumer_short}"    {consumer_host};\n'
+            f"    default      {provider_host};\n"
+            f"}}\n"
+            f"map $cookie_inesdata_connector $connector_config_name {{\n"
+            f'    "{consumer_short}"    {consumer_short};\n'
+            f"    default      {provider_short};\n"
+            f"}}\n"
+            f"map $cookie_inesdata_connector $connector_backend {{\n"
+            f'    "{consumer_short}"    {consumer_ip}:{consumer_nodeport};\n'
+            f"    default      {provider_ip}:{provider_nodeport};\n"
+            f"}}\n"
+        )
+
+        conf_path = "/etc/nginx/conf.d/connector-routing.conf"
+        try:
+            proc = subprocess.run(
+                ["sudo", "tee", conf_path],
+                input=conf, text=True, capture_output=True,
+            )
+            if proc.returncode != 0:
+                print(f"Warning: could not write {conf_path}: {proc.stderr.strip()}")
+                return
+            reload = subprocess.run(["sudo", "nginx", "-s", "reload"], capture_output=True, text=True)
+            if reload.returncode == 0:
+                print(f"connector-routing.conf updated ({conf_path}) and nginx reloaded.")
+            else:
+                print(f"Warning: nginx reload failed after writing {conf_path}: {reload.stderr.strip()}")
+        except Exception as exc:
+            print(f"Warning: connector-routing.conf sync skipped: {exc}")
 
     def _sync_nginx_stream_proxy_vm_distributed(self):
         """Update /etc/nginx/pionera-stream.conf with current k8s ClusterIPs and reload nginx."""

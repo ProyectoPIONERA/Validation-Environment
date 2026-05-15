@@ -1450,11 +1450,27 @@ class INESDataConnectorsAdapter:
         ds_domain = self.config_adapter.ds_domain_base()
         if not ds_domain:
             raise ValueError("DS_DOMAIN_BASE not defined in deployer.config")
+        if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+            try:
+                ds_name = self.config_adapter.primary_dataspace_name()
+            except Exception:
+                ds_name = None
+            cn_lower = connector_name.lower()
+            short = cn_lower.replace("conn-", "").split("-")[0] if "conn-" in cn_lower else cn_lower
+            org_host = f"org1.{ds_domain}"
+            return f"https://{org_host}/c/{short}/inesdata-connector-interface/"
+        return f"http://{connector_name}.{ds_domain}/inesdata-connector-interface/"
+
+    def _build_connector_health_check_url(self, connector_name):
+        """Return a direct HTTP URL for health checks (bypasses org1 HTTPS proxy in vm-distributed)."""
+        ds_domain = self.config_adapter.ds_domain_base()
+        if not ds_domain:
+            raise ValueError("DS_DOMAIN_BASE not defined in deployer.config")
         return f"http://{connector_name}.{ds_domain}/inesdata-connector-interface/"
 
     def wait_for_connector_ready(self, connector_name, timeout=300):
         print(f"Waiting for connector to be ready: {connector_name}")
-        url = self.build_connector_url(connector_name)
+        url = self._build_connector_health_check_url(connector_name)
         host = urlparse(url).hostname
         local_fallback = None
         allow_local_fallback = self._allow_connector_port_forward_fallback()
@@ -1993,8 +2009,14 @@ class INESDataConnectorsAdapter:
         if not ds_domain:
             return
 
-        connector_root_url = f"http://{connector_name}.{ds_domain}"
+        direct_root_url = f"http://{connector_name}.{ds_domain}"
         connector_interface_url = self.build_connector_url(connector_name)
+        cn_lower = connector_name.lower()
+        short = cn_lower.replace("conn-", "").split("-")[0] if "conn-" in cn_lower else cn_lower
+        if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+            connector_root_url = f"https://org1.{ds_domain}/c/{short}"
+        else:
+            connector_root_url = direct_root_url
         management_api_url = f"{connector_root_url}/management/v3"
         protocol_api_url = f"{connector_root_url}/protocol"
         creds = self.load_connector_credentials(connector_name)
@@ -2012,7 +2034,7 @@ class INESDataConnectorsAdapter:
             print("\nConnector Credentials:")
             connector_user = creds.get("connector_user", {})
             print(f"  User: {connector_user.get('user', 'N/A')}")
-            print(f"  Password: {'***REDACTED***' if connector_user.get('passwd') else 'N/A'}")
+            print(f"  Password: {connector_user.get('passwd', 'N/A')}")
 
             print("\nDatabase Credentials:")
             db_creds = creds.get("database", {})
