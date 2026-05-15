@@ -287,15 +287,20 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                 print(f"[WARN] ingress-nginx configmap patch skipped ({kc}): {exc}")
 
     def _ensure_ingress_ssl_redirect_disabled_vm_distributed(self, deployer_config, ds_name):
-        """Disable ssl-redirect on connector ingresses to prevent redirect loops from LAN clients.
+        """Disable ssl-redirect on connector and common-service ingresses for vm-distributed.
 
-        ingress-nginx default ssl_redirect=true redirects HTTP connections to https://<connector-host>.
-        Connector hostnames resolve to the remote VM's private IP (accessible from LAN), which has no
-        public SSL cert — creating a loop when clients reach the connector ingress via the common VM's
-        nginx reverse proxy. Setting ssl-redirect=false on each connector ingress prevents this.
+        ingress-nginx default ssl_redirect=true redirects HTTP → https://<hostname>. For vm-distributed
+        all traffic arrives via the pioneer40 nginx proxy over the LAN using plain HTTP — there is no
+        HTTPS listener on the internal hostname, so the redirect creates a dead-end (SSL cert missing or
+        self-signed). Disabled on:
+          - connector ingresses on provider/consumer clusters (prevent loop when LAN clients hit NodePort)
+          - Keycloak/MinIO ingresses on common cluster (prevent 301 redirect that causes SSL verify failure
+            when the framework calls KC_INTERNAL_URL from pioneer40)
         """
         config = deployer_config or {}
         annotation_patch = '{"metadata":{"annotations":{"nginx.ingress.kubernetes.io/ssl-redirect":"false"}}}'
+
+        # Connector ingresses on remote clusters
         entries = [
             (config.get("K3S_KUBECONFIG_PROVIDER") or "", "provider",
              [n.strip() for n in str(config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]),
@@ -319,6 +324,27 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                         print(f"[WARN] ssl-redirect patch failed on {ingress_name}: {proc.stderr.strip()}")
                 except Exception as exc:
                     print(f"[WARN] ssl-redirect patch skipped ({ingress_name}): {exc}")
+
+        # Common-service ingresses on the common cluster (Keycloak, MinIO)
+        common_ingresses = [
+            ("common-srvs", "common-srvs-keycloak"),
+            ("common-srvs", "common-srvs-keycloak-admin"),
+            ("common-srvs", "common-srvs-minio"),
+            ("common-srvs", "common-srvs-minio-console"),
+        ]
+        for namespace, ingress_name in common_ingresses:
+            try:
+                proc = subprocess.run(
+                    ["kubectl", "patch", "ingress", ingress_name,
+                     "-n", namespace, "--type=merge", "-p", annotation_patch],
+                    capture_output=True, text=True,
+                )
+                if proc.returncode == 0:
+                    print(f"[OK]   ssl-redirect disabled on {ingress_name} ({namespace})")
+                else:
+                    print(f"[WARN] ssl-redirect patch failed on {ingress_name}: {proc.stderr.strip()}")
+            except Exception as exc:
+                print(f"[WARN] ssl-redirect patch skipped ({ingress_name}): {exc}")
 
     def _sync_nginx_http_proxy_vm_distributed(self):
         """Write nginx HTTP server blocks for vm-distributed dataspace and connector hostnames.
@@ -615,7 +641,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             f"        proxy_redirect http://{admin_host}/admin/ https://{org1}/auth/admin/;\n"
             f"        proxy_redirect http://{auth_host}/ https://{org1}/auth/;\n"
             "        proxy_cookie_path /realms/ /auth/realms/;\n"
-            "        sub_filter_types application/json text/html;\n"
+            "        sub_filter_types application/json;\n"
             "        sub_filter_once off;\n"
             f'        sub_filter "http://{auth_host}/realms/"    "https://{org1}/auth/realms/";\n'
             f'        sub_filter "https://{auth_host}/realms/"  "https://{org1}/auth/realms/";\n'
