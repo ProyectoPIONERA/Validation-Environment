@@ -318,6 +318,26 @@ def run_ontology_hub_ui_tests_interactive():
             print("\nInvalid selection. Please try again.\n")
 
 
+def _inject_vm_distributed_portal_urls(adapter, env: dict) -> None:
+    """For vm-distributed: set UI_CONN_{prefix}_PORTAL_URL via org1 nginx so
+    app.config.json is served from the pioneer40 pre-patched files."""
+    topology = str(getattr(adapter, "topology", "") or os.environ.get("PIONERA_TOPOLOGY") or "").strip().lower()
+    if topology != "vm-distributed":
+        return
+    try:
+        connectors = adapter.get_cluster_connectors()
+    except Exception:
+        connectors = []
+    for connector in connectors:
+        env_prefix = connector.upper().replace("-", "_")
+        portal_url_key = f"UI_{env_prefix}_PORTAL_URL"
+        if not env.get(portal_url_key):
+            try:
+                env[portal_url_key] = adapter.build_connector_url(connector).rstrip("/")
+            except Exception:
+                pass
+
+
 def _run_ontology_hub_ui_integration_with_inesdata(mode):
     experiment_id = f"experiment_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     base_dir = str(project_root() / "experiments" / experiment_id / "components" / "ontology-hub" / "inesdata-ui")
@@ -331,22 +351,7 @@ def _run_ontology_hub_ui_integration_with_inesdata(mode):
 
     adapter = _default_inesdata_adapter()
     env = _ui_runtime_env_from_adapter(adapter)
-    # For vm-distributed, route connector UI tests through pioneer40 nginx (org1 URL)
-    # so that app.config.json is served with properly substituted ontologyUrl.
-    topology = str(getattr(adapter, "topology", "") or os.environ.get("PIONERA_TOPOLOGY") or "").strip().lower()
-    if topology == "vm-distributed":
-        try:
-            connectors = adapter.get_cluster_connectors()
-        except Exception:
-            connectors = []
-        for connector in connectors:
-            env_prefix = connector.upper().replace("-", "_")
-            portal_url_key = f"UI_{env_prefix}_PORTAL_URL"
-            if not env.get(portal_url_key):
-                try:
-                    env[portal_url_key] = adapter.build_connector_url(connector).rstrip("/")
-                except Exception:
-                    pass
+    _inject_vm_distributed_portal_urls(adapter, env)
     env.update(
         {
             "UI_ONTOLOGY_HUB_INESDATA_DEMO": "1",
@@ -530,7 +535,9 @@ def _run_semantic_virtualization_ui_integration_with_inesdata(mode):
     os.makedirs(html_report_dir, exist_ok=True)
     os.makedirs(blob_report_dir, exist_ok=True)
 
-    env = _ui_runtime_env_from_adapter(_default_inesdata_adapter())
+    adapter = _default_inesdata_adapter()
+    env = _ui_runtime_env_from_adapter(adapter)
+    _inject_vm_distributed_portal_urls(adapter, env)
     env.update(
         {
             "UI_SEMANTIC_VIRTUALIZATION_HTTPDATA_DEMO": "1",
@@ -616,7 +623,9 @@ def _run_ai_model_hub_ui_integration(mode):
     os.makedirs(html_report_dir, exist_ok=True)
     os.makedirs(blob_report_dir, exist_ok=True)
 
-    env = _ui_runtime_env_from_adapter(_default_inesdata_adapter())
+    adapter = _default_inesdata_adapter()
+    env = _ui_runtime_env_from_adapter(adapter)
+    _inject_vm_distributed_portal_urls(adapter, env)
     env.update(
         {
             "UI_AI_MODEL_HUB_HTTPDATA_DEMO": "1",
@@ -658,7 +667,9 @@ def _run_ai_model_observer_ui_integration(mode):
     os.makedirs(html_report_dir, exist_ok=True)
     os.makedirs(blob_report_dir, exist_ok=True)
 
-    env = _ui_runtime_env_from_adapter(_default_inesdata_adapter())
+    adapter = _default_inesdata_adapter()
+    env = _ui_runtime_env_from_adapter(adapter)
+    _inject_vm_distributed_portal_urls(adapter, env)
     env.update(
         {
             "UI_AI_MODEL_OBSERVER_DEMO": "1",

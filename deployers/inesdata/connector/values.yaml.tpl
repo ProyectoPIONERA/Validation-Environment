@@ -60,6 +60,8 @@ services:
     hostname: {{ keys.keycloak_hostname }}
     external: {{ keys.keycloak_hostname }}
     protocol: {{ 'https' if keys.environment == 'PRO' else 'http' }}
+{% if keys.keycloak_audience_url is defined %}    audienceUrl: {{ keys.keycloak_audience_url }}/realms/{{ keys.dataspace_name }}
+{% endif %}
   minio:
     # comsrv prefix comes from the Helm release of the common services
     hostname: {{ keys.minio_hostname }}
