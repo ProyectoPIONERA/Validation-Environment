@@ -28,7 +28,8 @@ def project_root():
 
 
 def _default_inesdata_adapter():
-    return InesdataAdapter()
+    topology = os.environ.get("PIONERA_TOPOLOGY") or "local"
+    return InesdataAdapter(topology=topology)
 
 
 def _ui_runtime_env_from_adapter(adapter):
@@ -41,6 +42,12 @@ def _ui_runtime_env_from_adapter(adapter):
     keycloak_url = str(config.get("KC_INTERNAL_URL") or config.get("KC_URL") or "").strip()
     if keycloak_url:
         env.setdefault("UI_KEYCLOAK_URL", keycloak_url)
+
+    topology = str(getattr(adapter, "topology", "") or os.environ.get("PIONERA_TOPOLOGY") or "").strip().lower()
+    if topology == "vm-distributed":
+        domain_base = str(config.get("DOMAIN_BASE") or config.get("DS_DOMAIN_BASE") or "").strip()
+        if domain_base:
+            env.setdefault("UI_MINIO_CONSOLE_URL", f"https://org1.{domain_base}/s3-console")
 
     return env
 
@@ -322,7 +329,24 @@ def _run_ontology_hub_ui_integration_with_inesdata(mode):
     os.makedirs(html_report_dir, exist_ok=True)
     os.makedirs(blob_report_dir, exist_ok=True)
 
-    env = _ui_runtime_env_from_adapter(_default_inesdata_adapter())
+    adapter = _default_inesdata_adapter()
+    env = _ui_runtime_env_from_adapter(adapter)
+    # For vm-distributed, route connector UI tests through pioneer40 nginx (org1 URL)
+    # so that app.config.json is served with properly substituted ontologyUrl.
+    topology = str(getattr(adapter, "topology", "") or os.environ.get("PIONERA_TOPOLOGY") or "").strip().lower()
+    if topology == "vm-distributed":
+        try:
+            connectors = adapter.get_cluster_connectors()
+        except Exception:
+            connectors = []
+        for connector in connectors:
+            env_prefix = connector.upper().replace("-", "_")
+            portal_url_key = f"UI_{env_prefix}_PORTAL_URL"
+            if not env.get(portal_url_key):
+                try:
+                    env[portal_url_key] = adapter.build_connector_url(connector).rstrip("/")
+                except Exception:
+                    pass
     env.update(
         {
             "UI_ONTOLOGY_HUB_INESDATA_DEMO": "1",
@@ -894,6 +918,10 @@ def _run_core_ui_tests(mode, adapter=None):
     runtime_extra_env = {}
     if runtime_env.get("UI_KEYCLOAK_URL"):
         runtime_extra_env["UI_KEYCLOAK_URL"] = runtime_env["UI_KEYCLOAK_URL"]
+        os.environ.setdefault("UI_KEYCLOAK_URL", runtime_extra_env["UI_KEYCLOAK_URL"])
+    if runtime_env.get("UI_MINIO_CONSOLE_URL"):
+        runtime_extra_env["UI_MINIO_CONSOLE_URL"] = runtime_env["UI_MINIO_CONSOLE_URL"]
+        os.environ["UI_MINIO_CONSOLE_URL"] = runtime_extra_env["UI_MINIO_CONSOLE_URL"]
     mode = {
         **mode,
         "env": {

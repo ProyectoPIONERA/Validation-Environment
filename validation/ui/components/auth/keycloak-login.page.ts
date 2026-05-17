@@ -27,6 +27,27 @@ export class KeycloakLoginPage {
       return;
     }
 
+    // Angular SPAs may trigger the OAuth2 redirect asynchronously after initial
+    // page load. Wait for a recognizable UI state before checking for inputs.
+    await this.page
+      .waitForSelector(
+        [
+          "#username",
+          'input[name="username"]',
+          'input[autocomplete="username"]',
+          'a:has-text("Sign In")',
+          'button:has-text("Sign In")',
+          'a:has-text("Log in")',
+          'button:has-text("Log in")',
+        ].join(", "),
+        { timeout: 30_000 },
+      )
+      .catch(() => {});
+
+    if ((await this.logoutControl().count()) > 0) {
+      return;
+    }
+
     const signInButton = this.page
       .locator("a, button")
       .filter({ hasText: /sign in|login/i })

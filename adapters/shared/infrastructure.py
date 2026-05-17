@@ -573,6 +573,10 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             for short in shorts:
                 conn_host = f"conn-{short}-{ds_name}.{ds_domain}"
                 out += (
+                    f"    location ~* ^/c/{short}/inesdata-connector-interface/(.+)$ {{\n"
+                    f'        add_header Set-Cookie "inesdata_connector={short}; Path=/; SameSite=Lax" always;\n'
+                    f"        return 301 /inesdata-connector-interface/$1;\n"
+                    f"    }}\n"
                     f"    location /c/{short}/management/ {{\n"
                     f"        rewrite ^/c/{short}/management/(.*) /management/$1 break;\n"
                     f"        proxy_pass http://{backend_ip}:{backend_port};\n"
@@ -761,19 +765,44 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             "}\n"
         )
 
-        # Patch oauth2 realm in app.config files on the common VM
+        # Patch app.config files on the common VM: substitute unresolved template vars
+        import json as _json
         app_config_dir = "/var/www/connector-configs"
+        ontology_url = f"https://ontology-hub-{ds_name}.{ds_domain}"
         for short in all_shorts:
             for suffix in (".https.json", ".json"):
-                cfg = f"{app_config_dir}/app.config.{short}{suffix}"
+                cfg_path = f"{app_config_dir}/app.config.{short}{suffix}"
                 try:
-                    r = subprocess.run(["sudo", "cat", cfg], capture_output=True, text=True)
-                    if r.returncode == 0 and "/realms/demo" in r.stdout:
-                        patched = r.stdout.replace("/realms/demo", f"/realms/{ds_name}")
-                        subprocess.run(["sudo", "tee", cfg], input=patched, text=True, capture_output=True)
-                        print(f"Patched realm in {cfg}")
-                except Exception:
-                    pass
+                    r = subprocess.run(["sudo", "cat", cfg_path], capture_output=True, text=True)
+                    if r.returncode != 0:
+                        continue
+                    try:
+                        cfg = _json.loads(r.stdout)
+                    except _json.JSONDecodeError:
+                        continue
+                    changed = False
+                    # Substitute unresolved $VAR placeholders and stale realm references
+                    for key, replacement in [
+                        ("ontologyUrl", ontology_url),
+                        ("ontologyAdminUser", ""),
+                        ("ontologyAdminPassword", ""),
+                        ("participantId", f"conn-{short}-{ds_name}"),
+                        ("storageAccount", ""),
+                        ("storageExplorerLinkTemplate", ""),
+                    ]:
+                        if isinstance(cfg.get(key), str) and cfg[key].startswith("$"):
+                            cfg[key] = replacement
+                            changed = True
+                    oauth2 = cfg.get("oauth2") or {}
+                    if isinstance(oauth2.get("issuer"), str) and "/realms/demo" in oauth2["issuer"]:
+                        oauth2["issuer"] = oauth2["issuer"].replace("/realms/demo", f"/realms/{ds_name}")
+                        changed = True
+                    if changed:
+                        patched = _json.dumps(cfg, indent=2)
+                        subprocess.run(["sudo", "tee", cfg_path], input=patched, text=True, capture_output=True)
+                        print(f"Patched app.config {cfg_path}")
+                except Exception as exc:
+                    print(f"Warning: could not patch {cfg_path}: {exc}")
 
         try:
             proc = subprocess.run(
