@@ -3015,6 +3015,24 @@ class INESDataConnectorsAdapter:
 
     def get_cluster_connectors(self):
         connectors = set()
+
+        # vm-distributed: connectors live on separate clusters — read directly from config
+        # instead of helm-scanning the common cluster (which has no connectors).
+        if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+            try:
+                config = self.config_adapter.load_deployer_config() or {}
+                ds_name = self.config_adapter.primary_dataspace_name() or ""
+                provider_shorts = [n.strip() for n in str(config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
+                consumer_shorts = [n.strip() for n in str(config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
+                for short in provider_shorts + consumer_shorts:
+                    if ds_name:
+                        connectors.add(f"conn-{short}-{ds_name}")
+                    else:
+                        connectors.add(f"conn-{short}")
+            except Exception:
+                pass
+            return sorted(connectors)
+
         dataspaces = self.load_dataspace_connectors() or []
 
         for dataspace in dataspaces:
