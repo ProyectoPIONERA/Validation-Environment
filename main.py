@@ -8092,12 +8092,23 @@ def run_interactive_menu(
 
     original_cluster_type_env_present = "PIONERA_CLUSTER_TYPE" in os.environ
     original_cluster_type_env = os.environ.get("PIONERA_CLUSTER_TYPE")
+    original_topology_env_present = "PIONERA_TOPOLOGY" in os.environ
+    original_topology_env = os.environ.get("PIONERA_TOPOLOGY")
 
     def restore_cluster_type_env():
         if original_cluster_type_env_present:
             os.environ["PIONERA_CLUSTER_TYPE"] = original_cluster_type_env
         else:
             os.environ.pop("PIONERA_CLUSTER_TYPE", None)
+        if original_topology_env_present:
+            os.environ["PIONERA_TOPOLOGY"] = original_topology_env
+        else:
+            os.environ.pop("PIONERA_TOPOLOGY", None)
+
+    def _set_active_topology(t):
+        os.environ["PIONERA_TOPOLOGY"] = str(t or "local").strip().lower() or "local"
+
+    _set_active_topology(topology)
 
     try:
         if prompt_initial_topology:
@@ -8117,6 +8128,7 @@ def run_interactive_menu(
                 )
             else:
                 topology = selected_topology
+                _set_active_topology(topology)
                 print(f"Active topology set to {topology}.")
                 if normalize_topology(topology) == "vm-single":
                     previous_runtime = _interactive_cluster_runtime_label(topology)
@@ -8161,6 +8173,7 @@ def run_interactive_menu(
                     )
                     if selected_topology != topology:
                         topology = selected_topology
+                        _set_active_topology(topology)
                         print(f"Active topology set to {topology}.")
                         if normalize_topology(topology) == "vm-single":
                             previous_runtime = _interactive_cluster_runtime_label(topology)
