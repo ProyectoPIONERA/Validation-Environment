@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List
 
+from validation.components.artifact_contract import attach_component_artifact_manifest
 from validation.components.ontology_hub.functional.component_runner import (
     run_ontology_hub_component_validation as run_ontology_hub_functional_component_validation,
 )
@@ -141,6 +142,7 @@ def run_ontology_hub_component_validation(base_url: str, experiment_dir: str | N
         ("integration", run_ontology_hub_integration_component_validation),
     ]
     for phase, runner in phase_runners:
+        print(f"\nComponent suite: Ontology Hub {phase}\n")
         try:
             phases[phase] = runner(normalized_base_url, experiment_dir=experiment_dir)
         except Exception as exc:  # pragma: no cover - defensive integration guard
@@ -244,6 +246,7 @@ def run_ontology_hub_component_validation(base_url: str, experiment_dir: str | N
                 "path": catalog_alignment_path,
             },
         ]
+        attach_component_artifact_manifest(component_result, component_dir)
 
         _write_json(pt5_cases_path, {"pt5_case_results": pt5_case_results, "summary": component_result["pt5_summary"]})
         _write_json(support_checks_path, {"support_checks": support_checks, "summary": component_result["support_summary"]})

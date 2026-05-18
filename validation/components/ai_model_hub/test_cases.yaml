@@ -66,7 +66,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: access
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - AI Model Hub is deployed and reachable
@@ -77,7 +77,7 @@ test_cases:
     expected_result: The catalog loads correctly
     traceability:
       - MH-01
-    notes: Priority candidate for the first UI automation wave in the framework.
+    notes: Automated UI validation slice for QA evidence. It validates component access and catalog shell readiness; deeper catalog semantics remain covered by integration and governance flows.
     automation:
       status: automated
       mode: ui_partial
@@ -92,7 +92,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: publication
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - A provider user with adequate permissions is available
@@ -112,7 +112,7 @@ test_cases:
       - MH-11
       - MH-12
       - MH-13
-    notes: The AIModelHub repository already provides a clear UI baseline for this flow, but it is not yet integrated into Validation-Environment.
+    notes: Automated UI validation slice for local model registration. It validates component-side publication behavior; federated publication is tracked separately in PT5-MH-03.
     automation:
       status: automated
       mode: ui_partial
@@ -127,8 +127,8 @@ test_cases:
     validation_type: integration
     dataspace_dimension: publication
     execution_mode: api_ui
-    coverage_status: partial
-    mapping_status: partial
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
       - A local model has already been registered
       - The connector federated catalog is available
@@ -139,7 +139,7 @@ test_cases:
     traceability:
       - MH-14
       - MH-15
-    notes: Key case to validate the alignment between the component UI and the connector APIs.
+    notes: Automated integration flow validating alignment between the component UI and connector APIs. It has INESData evidence with visual markers.
     automation:
       status: automated
       mode: api_ui
@@ -157,7 +157,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: discovery
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - Published or visible models exist in the catalog
@@ -167,7 +167,7 @@ test_cases:
     expected_result: Models are listed correctly
     traceability:
       - MH-16
-    notes: Priority candidate for the first framework UI suite.
+    notes: Automated UI validation slice for listing readiness. It verifies the discovery shell and guards against application error states.
     automation:
       status: automated
       mode: ui_partial
@@ -182,7 +182,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: discovery
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - Models are indexed in the catalog
@@ -193,7 +193,7 @@ test_cases:
     expected_result: Search results are coherent with the query
     traceability:
       - MH-17
-    notes: Priority candidate for UI automation because the flow is well defined in the E4.1 user manual.
+    notes: Automated UI validation slice for search readiness. It verifies that the discovery search surface accepts user input.
     automation:
       status: automated
       mode: ui_partial
@@ -208,7 +208,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: discovery
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - The catalog shows a filter panel
@@ -225,7 +225,7 @@ test_cases:
       - MH-22
       - MH-23
       - MH-24
-    notes: Priority candidate for UI automation; it should rely on controlled demo data and stable filters.
+    notes: Automated UI validation slice for filter readiness. It verifies filter-shell availability and controlled interaction when dynamic filters exist.
     automation:
       status: automated
       mode: ui_partial
@@ -240,7 +240,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: visualization
     execution_mode: ui
-    coverage_status: partial
+    coverage_status: automated_partial_ui
     mapping_status: partial
     preconditions:
       - At least one model is visible in the catalog
@@ -251,7 +251,7 @@ test_cases:
     traceability:
       - MH-25
       - MH-26
-    notes: Priority case to complete the first discovery coverage slice.
+    notes: Automated UI/API validation slice for model details. It bootstraps controlled metadata and validates the details view.
     automation:
       status: automated
       mode: api_ui
@@ -266,8 +266,8 @@ test_cases:
     validation_type: integration
     dataspace_dimension: contracts
     execution_mode: api_ui
-    coverage_status: manual
-    mapping_status: partial
+    coverage_status: automated
+    mapping_status: mapped
     preconditions:
       - A model with an available contract offer exists
       - The connector contract cycle is operational
@@ -282,7 +282,7 @@ test_cases:
       - MH-30
       - MH-31
       - MH-32
-    notes: Last recommended case in the first wave. It already requires a minimal integration with EDC APIs in the environment.
+    notes: Automated integration flow. It publishes a controlled provider asset, negotiates it from the consumer catalog UI and verifies the resulting agreement.
     automation:
       status: automated
       mode: api_ui
@@ -299,8 +299,8 @@ test_cases:
     type: api
     validation_type: integration
     dataspace_dimension: execution
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - A valid agreement exists for the remote model
@@ -312,8 +312,8 @@ test_cases:
     traceability:
       - MH-33
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/connector_governance_api.py
       evidence_case: PT5-MH-09
       enable_with: AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE=1
@@ -329,8 +329,8 @@ test_cases:
     type: api
     validation_type: integration
     dataspace_dimension: execution
-    execution_mode: api_opt_in
-    coverage_status: api_smoke_opt_in
+    execution_mode: api
+    coverage_status: api_smoke
     mapping_status: partial
     preconditions:
       - A controlled executable model endpoint exists as HttpData
@@ -346,8 +346,8 @@ test_cases:
       - MH-35
     notes: A connector-side API smoke is available for controlled HttpData model endpoints; the full FLARES functional inference path remains pending.
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/model_execution_api.py
       latest_inesdata_ui_evidence: experiments/ai-model-hub-inesdata-ui-marked-20260506/components/ai-model-hub/inesdata-ui/results.json
       latest_dashboard: experiments/ai-model-hub-inesdata-ui-marked-20260506/framework-report/index.html
@@ -361,8 +361,8 @@ test_cases:
     type: api
     validation_type: integration
     dataspace_dimension: execution
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - Active agreements exist for consumable models
@@ -373,8 +373,8 @@ test_cases:
     traceability:
       - MH-36
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/connector_governance_api.py
       evidence_case: PT5-MH-11
       enable_with: AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE=1
@@ -388,7 +388,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: comparison
     execution_mode: api_fixture_ui_ready
-    coverage_status: automated_opt_in
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - Multiple comparable models exist
@@ -400,7 +400,7 @@ test_cases:
     traceability:
       - MH-37
     automation:
-      status: automated_opt_in
+      status: automated
       mode: api_fixture
       runner: validation/components/ai_model_hub/model_benchmarking_api.py
       ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_12_15_model_benchmarking_demo.spec.js
@@ -409,7 +409,7 @@ test_cases:
       ui_demo_enable_with: AI_MODEL_HUB_ENABLE_BENCHMARKING_UI_DEMO=1
       latest_ui_evidence: experiments/ai-model-hub-benchmarking-ui-marked-20260506/components/ai-model-hub/ui/results.json
       visual_markers: PLAYWRIGHT_INTERACTION_MARKERS=1
-      notes: The runner selects two controlled FLARES-mini compatible model assets and records the benchmark-ready dataset mapping. The Playwright UI demo reuses the same fixture and controlled infer route without touching AIModelHub sources.
+      notes: The runner selects two controlled FLARES compatible model assets and records the benchmark-ready dataset mapping. The Playwright UI demo reuses the same fixture and controlled infer route without touching AIModelHub sources.
 
   - id: PT5-MH-13
     component: ai_model_hub
@@ -419,7 +419,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: comparison
     execution_mode: api_fixture
-    coverage_status: automated_opt_in
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - Multiple comparable and executable models exist
@@ -431,7 +431,7 @@ test_cases:
     traceability:
       - MH-38
     automation:
-      status: automated_opt_in
+      status: automated
       mode: api_fixture
       runner: validation/components/ai_model_hub/model_benchmarking_api.py
       ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_12_15_model_benchmarking_demo.spec.js
@@ -440,7 +440,7 @@ test_cases:
       ui_demo_enable_with: AI_MODEL_HUB_ENABLE_BENCHMARKING_UI_DEMO=1
       latest_ui_evidence: experiments/ai-model-hub-benchmarking-ui-marked-20260506/components/ai-model-hub/ui/results.json
       visual_markers: PLAYWRIGHT_INTERACTION_MARKERS=1
-      notes: The runner executes both controlled models over the same FLARES-mini input fingerprints and stores per-model execution evidence. The Playwright demo clicks Run Benchmark and shows those executions in the UI.
+      notes: The runner executes both controlled models over the same FLARES input fingerprints and stores per-model execution evidence. The Playwright demo clicks Run Benchmark and shows those executions in the UI.
 
   - id: PT5-MH-14
     component: ai_model_hub
@@ -450,7 +450,7 @@ test_cases:
     validation_type: functional
     dataspace_dimension: comparison
     execution_mode: api_fixture
-    coverage_status: automated_opt_in
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - The comparison module produces aggregated metrics
@@ -461,7 +461,7 @@ test_cases:
     traceability:
       - MH-39
     automation:
-      status: automated_opt_in
+      status: automated
       mode: api_fixture
       runner: validation/components/ai_model_hub/model_benchmarking_api.py
       ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_12_15_model_benchmarking_demo.spec.js
@@ -493,7 +493,7 @@ test_cases:
       - MH-41
       - MH-42
     automation:
-      status: automated_opt_in
+      status: automated
       mode: api_fixture_ui_ready
       runner: validation/components/ai_model_hub/model_benchmarking_api.py
       ui_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_12_15_model_benchmarking_demo.spec.js
@@ -511,8 +511,8 @@ test_cases:
     type: api
     validation_type: integration
     dataspace_dimension: identity
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - A working OIDC/OAuth2 integration exists in the final environment
@@ -524,8 +524,8 @@ test_cases:
       - MH-45
     notes: Automated through the connector OIDC flow used by the current INESData deployment; tokens and Bearer headers are intentionally excluded from evidence.
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/connector_governance_api.py
       evidence_case: PT5-MH-16
       enable_with: AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE=1
@@ -537,8 +537,8 @@ test_cases:
     type: api
     validation_type: non_functional
     dataspace_dimension: governance
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - The system exposes verifiable operational traceability
@@ -549,8 +549,8 @@ test_cases:
     traceability:
       - MH-46
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/connector_governance_api.py
       evidence_case: PT5-MH-17
       enable_with: AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE=1
@@ -563,8 +563,8 @@ test_cases:
     type: api
     validation_type: integration
     dataspace_dimension: integration
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: phase_3
     preconditions:
       - The component is integrated with EDC APIs and the PT5 environment connectors
@@ -575,8 +575,8 @@ test_cases:
     traceability:
       - MH-47
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/connector_governance_api.py
       evidence_case: PT5-MH-18
       enable_with: AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE=1
@@ -593,11 +593,11 @@ observer_cases:
     type: ui
     validation_type: non_functional
     dataspace_dimension: governance
-    execution_mode: ui_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: ui
+    coverage_status: automated
     mapping_status: planned_observer
     preconditions:
-      - Edmundo's AI Model Observer UI is integrated in INESData
+      - AI Model Observer UI is integrated in INESData
       - INESData login credentials are available
     steps:
       - Sign in to the INESData connector interface
@@ -609,9 +609,9 @@ observer_cases:
       - PT5-MH-17
       - Model Clearing House
     automation:
-      status: automated_opt_in
-      mode: ui_opt_in
-      ui_spec: validation/ui/core/10-ai-model-observer.spec.ts
+      status: automated
+      mode: ui
+      ui_spec: validation/ui/adapters/inesdata/specs/10-ai-model-observer.spec.ts
       evidence_case: MH-OBS-01
       enable_with: UI_AI_MODEL_OBSERVER_DEMO=1
       visual_markers: PLAYWRIGHT_INTERACTION_MARKERS=1
@@ -624,11 +624,11 @@ observer_cases:
     type: api
     validation_type: non_functional
     dataspace_dimension: governance
-    execution_mode: api_opt_in
-    coverage_status: automated_opt_in
+    execution_mode: api
+    coverage_status: automated
     mapping_status: planned_observer
     preconditions:
-      - Edmundo's Model Observer backend API is integrated and reachable
+      - Model Observer backend API is integrated and reachable
       - A controlled QA event batch can be written without storing sensitive payloads
     steps:
       - POST a controlled event batch to /api/model-observer/events/bulk
@@ -643,8 +643,8 @@ observer_cases:
       - MH-46
       - Model Clearing House
     automation:
-      status: automated_opt_in
-      mode: api_opt_in
+      status: automated
+      mode: api
       runner: validation/components/ai_model_hub/model_observer_api.py
       evidence_case: MH-OBS-02
       enable_with: AI_MODEL_HUB_ENABLE_MODEL_OBSERVER=1
@@ -659,7 +659,7 @@ observer_cases:
     type: ui_api
     validation_type: integration
     dataspace_dimension: governance
-    execution_mode: ui_api_opt_in
+    execution_mode: ui_api
     coverage_status: planned
     mapping_status: planned_observer
     preconditions:
@@ -676,7 +676,7 @@ observer_cases:
       - PT5-MH-17
     automation:
       status: planned
-      mode: ui_api_opt_in
+      mode: ui_api
       suggested_spec: validation/components/ai_model_hub/ui/specs/mh_obs_03_browser_observer.spec.js
       enable_with: AI_MODEL_HUB_ENABLE_MODEL_OBSERVER_UI=1
       notes: Planned after Browser-to-Observer event emission is integrated.
@@ -688,7 +688,7 @@ observer_cases:
     type: api
     validation_type: integration
     dataspace_dimension: governance
-    execution_mode: api_opt_in
+    execution_mode: api
     coverage_status: planned
     mapping_status: planned_observer
     preconditions:
@@ -705,7 +705,7 @@ observer_cases:
       - PT5-MH-17
     automation:
       status: planned
-      mode: api_opt_in
+      mode: api
       suggested_runner: validation/components/ai_model_hub/model_observer_api.py
       related_runner: validation/components/ai_model_hub/model_execution_api.py
       enable_with: AI_MODEL_HUB_ENABLE_MODEL_OBSERVER=1
@@ -718,7 +718,7 @@ observer_cases:
     type: ui_api
     validation_type: integration
     dataspace_dimension: governance
-    execution_mode: ui_api_opt_in
+    execution_mode: ui_api
     coverage_status: planned
     mapping_status: planned_observer
     preconditions:
@@ -738,7 +738,7 @@ observer_cases:
       - PT5-MH-17
     automation:
       status: planned
-      mode: ui_api_opt_in
+      mode: ui_api
       suggested_spec: validation/components/ai_model_hub/ui/specs/mh_obs_05_benchmark_observer.spec.js
       related_spec: validation/components/ai_model_hub/ui/specs/pt5_mh_12_15_model_benchmarking_demo.spec.js
       enable_with: AI_MODEL_HUB_ENABLE_MODEL_OBSERVER_UI=1
@@ -752,7 +752,7 @@ observer_cases:
     type: api_ui
     validation_type: non_functional
     dataspace_dimension: governance
-    execution_mode: api_ui_opt_in
+    execution_mode: api_ui
     coverage_status: planned
     mapping_status: planned_observer
     preconditions:
@@ -769,7 +769,7 @@ observer_cases:
       - Model Clearing House
     automation:
       status: planned
-      mode: api_ui_opt_in
+      mode: api_ui
       suggested_runner: validation/components/ai_model_hub/model_observer_api.py
       suggested_spec: validation/components/ai_model_hub/ui/specs/mh_obs_06_participant_summary.spec.js
       enable_with: AI_MODEL_HUB_ENABLE_MODEL_OBSERVER=1
@@ -779,68 +779,68 @@ functional_use_cases:
   - id: MH-LING-01
     component: ai_model_hub
     case_group: functional
-    description: Linguistic domain use case with FLARES-mini
+    description: Linguistic domain use case with FLARES
     type: api_ui
     validation_type: functional
     dataspace_dimension: linguistic
-    execution_mode: api_ui_opt_in
+    execution_mode: api_ui
     coverage_status: partial
     mapping_status: phase_3
     preconditions:
       - AI Model Hub, provider connector and consumer connector are deployed
-      - FLARES-mini fixture is available in the framework
+      - FLARES source repository was synchronized by Level 5
     steps:
-      - Publish FLARES-mini on demand as a provider dataset asset
+      - Publish FLARES on demand as a provider dataset asset
       - Discover the published dataset from the consumer catalog
       - Negotiate the corresponding contract agreement from the consumer side
       - Bootstrap benchmark-ready linguistic models in the consumer
       - Load the FLARES benchmark dataset inside Model Benchmarking
-      - Execute a FLARES-mini record through the connector-side model execution API
-      - Link the execution evidence to expected_outputs.json for the future reliability-label assertion
-    expected_result: FLARES-mini can populate the dataspace on demand, reach a negotiated agreement, prepare the linguistic benchmarking flow and execute a FLARES payload through the connector API without requiring global seeding
+      - Execute a FLARES record through the connector-side model execution API
+      - Link the execution evidence to expected labels derived from the source dataset
+    expected_result: FLARES can populate the dataspace on demand, reach a negotiated agreement, prepare the linguistic benchmarking flow and execute a FLARES payload through the connector API without requiring global seeding
     traceability:
       - MH-LING-01
-    notes: Opt-in scaffold for Phase 3. The current automated slice covers provider publication, consumer negotiation and benchmark-ready dataset/model linkage; connector-side model execution is validated through the PT5-MH-10 runner with --flares-mini. The semantic FLARES reliability-label comparison remains pending until a FLARES-compatible model endpoint is available.
+    notes: Phase 3 scaffold executed from Level 6. The current automated slice covers provider publication, consumer negotiation and benchmark-ready dataset/model linkage; connector-side model execution is validated through the PT5-MH-10 runner with --flares-dataset. The semantic FLARES reliability-label comparison remains pending until a FLARES-compatible model endpoint is available.
     automation:
       status: automated
-      mode: api_ui_opt_in
+      mode: api_ui
       ui_spec: validation/components/ai_model_hub/functional/specs/mh_ling_01_flares_reliability.spec.js
-      api_runner: validation/components/ai_model_hub/model_execution_api.py --flares-mini
-      notes: Suite-specific bootstrap publishes FLARES-mini only when the linguistic functional suite is explicitly enabled, while the API runner validates connector-side execution with a FLARES-mini payload and records the remaining model-specific semantic comparison gap.
+      api_runner: validation/components/ai_model_hub/model_execution_api.py --flares-dataset
+      notes: Suite-specific bootstrap publishes FLARES during Level 6, while the API runner validates connector-side execution with a FLARES payload and records the remaining model-specific semantic comparison gap.
 
   - id: MH-MOB-01
     component: ai_model_hub
     case_group: functional
-    description: Mobility domain use case with GTFS-Madrid-Bench-mini
-    type: fixture_api
+    description: Mobility domain use case with GTFS-Madrid-Bench
+    type: source_api
     validation_type: functional
     dataspace_dimension: mobility
-    execution_mode: api_fixture_opt_in
-    coverage_status: automated_fixture
+    execution_mode: api_source
+    coverage_status: automated_source
     mapping_status: phase_3
     preconditions:
-      - GTFS-Madrid-Bench-mini fixture is available in the framework
+      - GTFS-Madrid-Bench source repository was synchronized by Level 5
       - At least two controlled mobility benchmark models are selected by the suite
     steps:
-      - Load GTFS-Madrid-Bench-mini metadata, schema, sample and expected outputs
+      - Load GTFS-Madrid-Bench source metadata and derive runtime benchmark rows
       - Validate GTFS-like join keys for stops, routes, trips and stop times
       - Build deterministic mobility benchmark rows from transfer_benchmark_cases
       - Execute controlled mobility route-estimation models against the benchmark rows
-      - Compare route sequence and travel-time outputs against expected_outputs.json
+      - Compare route sequence and travel-time outputs against dataset-derived expectations
       - Generate UI-ready ranking, table and chart data for a future Model Benchmarking demo
-    expected_result: GTFS-Madrid-Bench-mini produces a reproducible mobility benchmark evidence package with validated GTFS-like joins, expected route/duration outputs and ranked model metrics
+    expected_result: GTFS-Madrid-Bench produces a reproducible mobility benchmark evidence package with validated GTFS-like joins, expected route/duration outputs and ranked model metrics
     traceability:
       - MH-MOB-01
       - GTFS-Madrid-Bench
-    notes: Safe Phase 3 slice for A5.2. The suite does not call a live mobility inference endpoint or mutate INESData; it validates the functional mobility benchmark contract with deterministic fixture evidence until the stable UI/API route is selected.
+    notes: Safe Phase 3 slice for A5.2. The suite does not call a live mobility inference endpoint or mutate INESData; it validates the functional mobility benchmark contract with dataset-derived evidence until the stable UI/API route is selected.
     automation:
-      status: automated_opt_in
-      mode: api_fixture
+      status: automated
+      mode: api_source
       runner: validation/components/ai_model_hub/mobility_benchmarking_api.py
       enable_with: AI_MODEL_HUB_ENABLE_MOBILITY_BENCHMARKING=1
-      fixture: validation/components/ai_model_hub/fixtures/datasets/mobility/gtfs-madrid-bench-mini
-      unit_test: tests/test_ai_model_hub_gtfs_fixture.py
+      dataset_source: validation/datasets/sources/gtfs-bench
+      unit_test: tests/test_ai_model_hub_gtfs_dataset.py
       suite_test: tests/test_ai_model_hub_mobility_benchmarking_api.py
       integration_runner: validation/components/ai_model_hub/virtualization_traceability.py
       integration_case: INT-VS-AMH-01
-      notes: Runner is opt-in and writes JSON evidence under experiments without changing component sources or cluster state.
+      notes: Runner writes JSON evidence under experiments without changing component sources or cluster state.

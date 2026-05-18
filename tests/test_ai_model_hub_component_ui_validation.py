@@ -18,7 +18,7 @@ def _build_playwright_results_payload():
         "PT5-MH-06: model discovery filter shell is available in the ML assets view",
         "PT5-MH-07: model details view exposes functional and technical metadata",
         "PT5-MH-08: contract negotiation from catalog registers an agreement in the consumer connector",
-        "PT5-MH-12: benchmarking UI selects multiple FLARES-mini models",
+        "PT5-MH-12: benchmarking UI selects multiple FLARES models",
         "PT5-MH-13: benchmarking UI executes selected models with the same input",
         "PT5-MH-14: benchmarking UI renders calculated comparison metrics",
         "PT5-MH-15: benchmarking UI shows comparative table and best model summary",
@@ -84,6 +84,8 @@ class AIModelHubComponentUIValidationTests(unittest.TestCase):
 
             def fake_subprocess_run(command, cwd=None, env=None):
                 self.assertEqual(env["AI_MODEL_HUB_ENABLE_UI_VALIDATION"], "1")
+                self.assertEqual(env["AI_MODEL_HUB_ENABLE_BENCHMARKING_UI_DEMO"], "1")
+                self.assertEqual(env["PIONERA_PLAYWRIGHT_SUITE_NAME"], "AI Model Hub functional")
                 self.assertIn("PLAYWRIGHT_JSON_REPORT_FILE", env)
                 with open(env["PLAYWRIGHT_JSON_REPORT_FILE"], "w", encoding="utf-8") as handle:
                     json.dump(payload, handle)

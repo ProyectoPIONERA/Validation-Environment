@@ -87,22 +87,35 @@ Por tanto, `Level 6` ya no debe entenderse como “solo Newman”, sino como el 
 
 `Level 5` y `Level 6` siguen teniendo responsabilidades distintas, pero ya no están aislados entre sí:
 
-- `Level 5` despliega componentes opcionales
+- `Level 5` despliega componentes configurados
 - `Level 6` valida automáticamente los componentes configurados cuando existe runner registrado
 
 En la práctica:
 
 - `COMPONENTS=ontology-hub` hace que `Level 5` lo despliegue
-- `COMPONENTS=ai-model-hub` hace que `Level 5` lo despliegue para `inesdata`
-  cuando el adapter tiene soporte real
+- `COMPONENTS=ai-model-hub` hace que `Level 5` lo despliegue cuando el adapter
+  tiene soporte real
+- en `edc`, `Level 5` valida primero que el conector registre las extensiones
+  requeridas por los componentes configurados
 - en el layout `role-aligned`, los componentes se publican en
   `components_namespace`, no en el namespace compacto del dataspace
+- `Level 5` sincroniza las fuentes oficiales de datasets requeridas por los
+  componentes configurados bajo `validation/datasets/sources/`. Por ejemplo,
+  `ai-model-hub` prepara FLARES y GTFS-Bench, y `semantic-virtualization`
+  prepara GTFS-Bench.
+- si la sincronización de datasets no puede completarse por falta de red,
+  `Level 5` lo reporta como warning por defecto para no romper despliegues
+  existentes; puede hacerse estricta con `PIONERA_LEVEL5_DATASET_SYNC_STRICT=true`
 - para `ontology-hub`, `Level 5` usa un checkout local en `adapters/inesdata/sources/Ontology-Hub`; si no existe, lo clona automáticamente
 - `Level 5` reconstruye esa imagen en el host y la carga en minikube antes del despliegue
 - ese flujo es deliberadamente estricto: no usa overrides de `source dir` ni de imagen para `ontology-hub`
 - y hace que `Level 6` intente validarlo automáticamente
-- para `ai-model-hub`, `Level 6` ejecuta siempre el bootstrap del componente y
-  solo lanza la UI PT5 si `AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`
+- para `ai-model-hub`, `Level 6` ejecuta por defecto bootstrap, UI funcional,
+  suite lingüística, benchmarking, movilidad, ejecución de modelo, gobernanza de
+  conectores y Observer API cuando el componente está configurado
+- para `semantic-virtualization`, `Level 6` ejecuta por defecto API, fixtures de
+  mappings, trazabilidad GTFS-Bench, materialización y UI funcional antes de sus
+  comprobaciones de integración
 - si el componente no tiene runner o no puede inferirse su URL, queda como `skipped` en vez de romper toda la ejecución
 
 ## Qué papel tiene cada capa de validación

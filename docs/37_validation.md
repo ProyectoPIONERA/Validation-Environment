@@ -1,5 +1,35 @@
 # Validación
 
+## Nivel 5 y Datasets
+
+`Level 5` prepara los componentes configurados y también sincroniza las fuentes
+de datasets que esos componentes necesitan para sus validaciones. Los
+clones se ubican en una ruta neutral del framework:
+
+```text
+validation/datasets/sources/
+```
+
+Actualmente se registran estas fuentes:
+
+| Dataset | Componentes que lo usan | Repositorio |
+| --- | --- | --- |
+| `FLARES` | `ai-model-hub` | `https://github.com/rsepulveda911112/Flares-dataset` |
+| `GTFS-Madrid-Bench` | `ai-model-hub`, `semantic-virtualization` | `https://github.com/oeg-upm/gtfs-bench` |
+
+Si el entorno no tiene acceso a GitHub, `Level 5` deja warning por defecto y no
+rompe despliegues existentes. Para exigir que la sincronización falle de forma
+estricta, usa:
+
+```bash
+PIONERA_LEVEL5_DATASET_SYNC_STRICT=true python3 main.py inesdata run --topology local
+```
+
+`Level 6` no clona repositorios: valida y consume las fuentes ya preparadas por
+`Level 5`. Cuando una suite necesita una muestra controlada, la deriva durante
+la ejecución y la guarda como evidencia del experimento, no como dataset
+reducido versionado.
+
 ## Nivel 6
 
 El nivel 6 es el nivel de validación. Debe validar el dataspace desplegado y los componentes habilitados sin requerir un nivel adicional de validación de servicios.
@@ -26,10 +56,16 @@ Según el adapter y el perfil del deployer, el nivel 6 puede ejecutar:
 Cuando hay componentes configurados con runner registrado, `Level 6` ejecuta su
 validación después de las suites del dataspace. En el estado actual:
 
-- `ontology-hub` corre por defecto como validación de componente;
-- `ai-model-hub` corre su bootstrap por defecto;
-- la UI PT5 de `ai-model-hub` sigue siendo opt-in con
-  `AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`.
+- `ontology-hub` ejecuta sus suites funcionales y de integración;
+- `ai-model-hub` ejecuta bootstrap, UI funcional, suite lingüística,
+  benchmarking, movilidad, ejecución de modelo, gobernanza de conectores y
+  Observer API;
+- `semantic-virtualization` ejecuta API, mappings, trazabilidad GTFS-Bench,
+  materialización y UI funcional antes de sus comprobaciones de integración.
+
+Kafka/streaming transfer es la única suite A5.2 que permanece desactivada por
+defecto por coste temporal. Se activa de forma explícita con
+`PIONERA_LEVEL6_RUN_KAFKA=true`.
 
 En topología `local`, antes de limpiar datos o ejecutar suites, `Level 6`
 comprueba que los hostnames públicos del entorno sean accesibles desde la
@@ -132,9 +168,14 @@ La limpieza debe ser segura por defecto y reportar qué eliminó o qué omitió.
 ## Kafka en Nivel 6
 
 La validación funcional EDC+Kafka no es el mismo flujo que el benchmark opcional
-de broker. En `Level 6`, se ejecuta automáticamente después de Newman para los
-adapters compatibles y valida el recorrido `asset -> catálogo -> negociación ->
-transferencia Kafka -> consumo del topic destino`.
+de broker. En `Level 6`, está desactivada por defecto para ahorrar tiempo en
+validaciones rutinarias. En ejecuciones interactivas, `Level 6` pregunta
+`Run Kafka validation suites too?` como primera acción visible antes de lanzar
+Newman, para poder preparar Kafka en paralelo cuando el modo lo permite.
+En ejecuciones no interactivas, se activa con `PIONERA_LEVEL6_RUN_KAFKA=true`.
+Cuando está activa, se ejecuta después de Newman para los adapters compatibles
+y valida el recorrido `asset -> catálogo -> negociación -> transferencia Kafka
+-> consumo del topic destino`.
 
 En modo `fast`, la preparación del broker Kafka puede empezar al inicio de
 `Level 6` mientras Newman sigue ejecutándose en primer plano. En modo `stable`

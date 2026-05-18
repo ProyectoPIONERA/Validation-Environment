@@ -5,13 +5,16 @@ from typing import Any, Dict, List
 
 import yaml
 
+from validation.components.artifact_contract import attach_component_artifact_manifest
 from validation.components.ai_model_hub.runner import run_ai_model_hub_validation
+from validation.components.ai_model_hub.functional_runner import run_ai_model_hub_functional_validation
 from validation.components.ai_model_hub.ui_runner import run_ai_model_hub_ui_validation
 
 
 COMPONENT_KEY = "ai-model-hub"
 CATALOG_PATH = Path(__file__).resolve().parent / "test_cases.yaml"
 CONNECTOR_GOVERNANCE_ENV = "AI_MODEL_HUB_ENABLE_CONNECTOR_GOVERNANCE"
+MODEL_EXECUTION_ENV = "AI_MODEL_HUB_ENABLE_MODEL_EXECUTION"
 MODEL_BENCHMARKING_ENV = "AI_MODEL_HUB_ENABLE_MODEL_BENCHMARKING"
 MOBILITY_BENCHMARKING_ENV = "AI_MODEL_HUB_ENABLE_MOBILITY_BENCHMARKING"
 MODEL_OBSERVER_ENV = "AI_MODEL_HUB_ENABLE_MODEL_OBSERVER"
@@ -257,6 +260,10 @@ def _connector_governance_enabled() -> bool:
     return _suite_enabled(CONNECTOR_GOVERNANCE_ENV)
 
 
+def _model_execution_enabled() -> bool:
+    return _suite_enabled(MODEL_EXECUTION_ENV)
+
+
 def _model_benchmarking_enabled() -> bool:
     return _suite_enabled(MODEL_BENCHMARKING_ENV)
 
@@ -269,14 +276,30 @@ def _model_observer_enabled() -> bool:
     return _suite_enabled(MODEL_OBSERVER_ENV)
 
 
+def _component_adapter_name() -> str:
+    return (
+        os.environ.get("AI_MODEL_HUB_COMPONENT_ADAPTER")
+        or os.environ.get("PIONERA_ADAPTER")
+        or "inesdata"
+    ).strip().lower() or "inesdata"
+
+
 def run_ai_model_hub_connector_governance_validation(experiment_dir: str | None = None) -> Dict[str, Any]:
     from validation.components.ai_model_hub.connector_governance_api import (
-        build_inesdata_ai_model_hub_connector_governance_suite,
+        build_ai_model_hub_connector_governance_suite,
         default_model_url,
     )
 
-    topology = os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_TOPOLOGY") or os.environ.get("INESDATA_TOPOLOGY") or "local"
-    suite, adapter = build_inesdata_ai_model_hub_connector_governance_suite(topology=topology)
+    topology = (
+        os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_TOPOLOGY")
+        or os.environ.get("PIONERA_TOPOLOGY")
+        or os.environ.get("INESDATA_TOPOLOGY")
+        or "local"
+    )
+    suite, adapter = build_ai_model_hub_connector_governance_suite(
+        adapter_name=_component_adapter_name(),
+        topology=topology,
+    )
     connectors = list(adapter.get_cluster_connectors() or [])
     provider = os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_PROVIDER") or (connectors[0] if connectors else "")
     consumer = os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_CONSUMER") or (
@@ -314,14 +337,58 @@ def run_ai_model_hub_connector_governance_validation(experiment_dir: str | None 
     )
 
 
+def run_ai_model_hub_model_execution_validation(experiment_dir: str | None = None) -> Dict[str, Any]:
+    from validation.components.ai_model_hub.model_execution_api import (
+        DEFAULT_EXPECTED_MODEL,
+        build_ai_model_hub_model_execution_suite,
+        default_model_url,
+    )
+
+    topology = (
+        os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_TOPOLOGY")
+        or os.environ.get("PIONERA_TOPOLOGY")
+        or os.environ.get("INESDATA_TOPOLOGY")
+        or "local"
+    )
+    suite, adapter = build_ai_model_hub_model_execution_suite(
+        adapter_name=_component_adapter_name(),
+        topology=topology,
+    )
+    connectors = list(adapter.get_cluster_connectors() or [])
+    provider = os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_PROVIDER") or (connectors[0] if connectors else "")
+    if not provider:
+        return {
+            "component": COMPONENT_KEY,
+            "suite": "model-execution-api",
+            "status": "skipped",
+            "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            "executed_cases": [],
+            "evidence_index": [],
+            "artifacts": {},
+            "skip_reason": "Provider connector is not discoverable",
+        }
+
+    model_path = os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_MODEL_PATH") or None
+    model_url = os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_MODEL_URL") or (
+        default_model_url(adapter, model_path) if model_path else default_model_url(adapter)
+    )
+    expected_model = os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_EXPECTED_MODEL", DEFAULT_EXPECTED_MODEL)
+    return suite.run(
+        provider=provider,
+        model_url=model_url,
+        expected_model=expected_model or None,
+        experiment_dir=experiment_dir,
+    )
+
+
 def run_ai_model_hub_model_benchmarking_validation(experiment_dir: str | None = None) -> Dict[str, Any]:
     from validation.components.ai_model_hub.model_benchmarking_api import (
         run_ai_model_hub_model_benchmarking_validation as run_benchmarking_suite,
     )
 
-    fixture_dir = os.environ.get("AI_MODEL_HUB_BENCHMARKING_FIXTURE_DIR") or None
+    source_dir = os.environ.get("AI_MODEL_HUB_BENCHMARKING_SOURCE_DIR") or None
     return run_benchmarking_suite(
-        fixture_dir=fixture_dir,
+        source_dir=source_dir,
         experiment_dir=experiment_dir,
     )
 
@@ -331,9 +398,9 @@ def run_ai_model_hub_mobility_benchmarking_validation(experiment_dir: str | None
         run_ai_model_hub_mobility_benchmarking_validation as run_mobility_suite,
     )
 
-    fixture_dir = os.environ.get("AI_MODEL_HUB_MOBILITY_FIXTURE_DIR") or None
+    source_dir = os.environ.get("AI_MODEL_HUB_MOBILITY_SOURCE_DIR") or None
     return run_mobility_suite(
-        fixture_dir=fixture_dir,
+        source_dir=source_dir,
         experiment_dir=experiment_dir,
     )
 
@@ -357,19 +424,36 @@ def run_ai_model_hub_component_validation(base_url: str, experiment_dir: str | N
     normalized_base_url = (base_url or "").rstrip("/")
 
     bootstrap_result = run_ai_model_hub_validation(normalized_base_url, experiment_dir=experiment_dir)
+    print("\nComponent suite: AI Model Hub functional\n")
     ui_result = run_ai_model_hub_ui_validation(normalized_base_url, experiment_dir=experiment_dir)
+    functional_result = run_ai_model_hub_functional_validation(normalized_base_url, experiment_dir=experiment_dir)
     preflight_suite_results = [
         ("bootstrap", bootstrap_result),
     ]
     functional_suite_results = [
         ("ui", ui_result),
+        ("linguistic_functional", functional_result),
     ]
     integration_suite_results: List[tuple[str, Dict[str, Any]]] = []
+    integration_started = False
     if _connector_governance_enabled():
+        if not integration_started:
+            print("\nComponent suite: AI Model Hub integration\n")
+            integration_started = True
         integration_suite_results.append(
             (
                 "connector_governance",
                 run_ai_model_hub_connector_governance_validation(experiment_dir=experiment_dir),
+            )
+        )
+    if _model_execution_enabled():
+        if not integration_started:
+            print("\nComponent suite: AI Model Hub integration\n")
+            integration_started = True
+        integration_suite_results.append(
+            (
+                "model_execution",
+                run_ai_model_hub_model_execution_validation(experiment_dir=experiment_dir),
             )
         )
     if _model_benchmarking_enabled():
@@ -387,6 +471,9 @@ def run_ai_model_hub_component_validation(base_url: str, experiment_dir: str | N
             )
         )
     if _model_observer_enabled():
+        if not integration_started:
+            print("\nComponent suite: AI Model Hub integration\n")
+            integration_started = True
         integration_suite_results.append(
             (
                 "model_observer",
@@ -545,6 +632,11 @@ def run_ai_model_hub_component_validation(base_url: str, experiment_dir: str | N
             "ui_html_report_dir": (ui_result.get("artifacts") or {}).get("html_report_dir"),
             "ui_blob_report_dir": (ui_result.get("artifacts") or {}).get("blob_report_dir"),
             "ui_json_report_file": (ui_result.get("artifacts") or {}).get("json_report_file"),
+            "functional_report_json": (functional_result.get("artifacts") or {}).get("report_json"),
+            "functional_test_results_dir": (functional_result.get("artifacts") or {}).get("test_results_dir"),
+            "functional_html_report_dir": (functional_result.get("artifacts") or {}).get("html_report_dir"),
+            "functional_blob_report_dir": (functional_result.get("artifacts") or {}).get("blob_report_dir"),
+            "functional_json_report_file": (functional_result.get("artifacts") or {}).get("json_report_file"),
             "pt5_case_results_json": pt5_cases_path,
             "functional_use_case_results_json": functional_use_case_results_path,
             "observer_case_results_json": observer_case_results_path,
@@ -603,6 +695,7 @@ def run_ai_model_hub_component_validation(base_url: str, experiment_dir: str | N
                 "path": catalog_alignment_path,
             },
         ]
+        attach_component_artifact_manifest(component_result, component_dir)
         _write_json(evidence_index_path, {"evidence_index": component_result["evidence_index"]})
         _write_json(report_path, component_result)
 

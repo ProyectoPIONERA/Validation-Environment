@@ -1,16 +1,16 @@
-# Validacion UI con Playwright
+# Validación UI con Playwright
 
-Esta carpeta contiene la capa UI de validacion con Playwright.
+Esta carpeta contiene la capa UI de validación con Playwright.
 
 Actualmente existen dos modos:
 
 - `inesdata`: suite estable heredada del portal INESData
-- `edc`: suite inicial del portal EDC con autenticacion `oidc-bff`
+- `edc`: suite inicial del portal EDC con autenticación `oidc-bff`
 
 La suite `inesdata` sigue siendo la referencia principal y actualmente cubre:
 
 - `01 login readiness`
-- `03 provider setup` con creacion de asset y subida de fichero
+- `03 provider setup` con creación de asset y subida de fichero
 - `03b provider policy creation`
 - `03c provider contract definition creation`
 - `04 consumer catalog` con listado y detalle
@@ -19,17 +19,21 @@ La suite `inesdata` sigue siendo la referencia principal y actualmente cubre:
 
 ## Estructura
 
-- `core/`: specs principales que definen los flujos estables.
-- `components/`: page objects reutilizables.
-- `shared/fixtures/`: resolucion de runtime, autenticacion y evidencias.
-- `tests/`: referencias legacy; la ejecucion activa se hace desde `core/`.
-- `test_cases.yaml`: catalogo estable para los checks `support`, los casos de evidencia del dataspace y la suite ops.
+- `adapters/inesdata/specs/`: specs principales de la UI INESData.
+- `adapters/inesdata/components/`: page objects propios de la UI INESData.
+- `adapters/edc/specs/`: specs principales del dashboard EDC.
+- `adapters/edc/components/`: page objects propios del dashboard EDC.
+- `shared/components/`: page objects compartidos entre adapters, como Keycloak y MinIO.
+- `shared/fixtures/`: resolución de runtime, autenticación y evidencias.
+- `tests/`: referencias legacy; la ejecución activa se hace desde `adapters/<adapter>/specs/`.
+- `test_cases.yaml`: catálogo técnico para checks `support` y `ops`.
+- `../projects/inesdata/integration/test_cases.yaml`: catálogo canónico de los flujos de integración INESData `DS-UI-*`.
 - `reporting.py`: agregador que transforma el `results.json` de Playwright en un reporte enriquecido para `Level 6`.
-- `playwright.config.ts`: configuracion de ejecucion y reporters.
-- `playwright.edc.config.ts`: configuracion separada para la suite inicial del portal EDC.
-- `playwright.ops.config.ts`: configuracion separada para suites opcionales de operaciones.
+- `playwright.inesdata.config.ts`: configuración de ejecución y reporters.
+- `playwright.edc.config.ts`: configuración separada para la suite inicial del portal EDC.
+- `playwright.ops.config.ts`: configuración separada para suites opcionales de operaciones.
 
-## Preparacion
+## Preparación
 
 1. Copia `.env.example` a `.env`.
 2. Elige uno de estos modos de runtime:
@@ -51,7 +55,7 @@ npx playwright install
 
 ## Ejecucion
 
-Suite core completa:
+Suite INESData completa:
 
 ```bash
 cd validation/ui
@@ -82,13 +86,16 @@ La suite actual de `edc` cubre:
 - `02 navigation smoke`
 - `03 consumer negotiation`
 - `04 consumer transfer`
-- `05 consumer transfer storage` con validacion del objeto transferido en MinIO
+- `05 consumer transfer storage` con validación del objeto transferido en MinIO
 
 Smoke usado por `main.py menu` Level 6:
 
 ```bash
 cd validation/ui
-npx playwright test core/01-login-readiness.spec.ts core/04-consumer-catalog.spec.ts
+npx playwright test \
+  adapters/inesdata/specs/01-login-readiness.spec.ts \
+  adapters/inesdata/specs/04-consumer-catalog.spec.ts \
+  --config=playwright.inesdata.config.ts
 ```
 
 Suite dataspace usada por `main.py menu` Level 6 por defecto:
@@ -96,11 +103,12 @@ Suite dataspace usada por `main.py menu` Level 6 por defecto:
 ```bash
 cd validation/ui
 npx playwright test \
-  core/03-provider-setup.spec.ts \
-  core/03b-provider-policy-create.spec.ts \
-  core/03c-provider-contract-definition-create.spec.ts \
-  core/05-consumer-negotiation.spec.ts \
-  core/06-consumer-transfer.spec.ts
+  adapters/inesdata/specs/03-provider-setup.spec.ts \
+  adapters/inesdata/specs/03b-provider-policy-create.spec.ts \
+  adapters/inesdata/specs/03c-provider-contract-definition-create.spec.ts \
+  adapters/inesdata/specs/05-consumer-negotiation.spec.ts \
+  adapters/inesdata/specs/06-consumer-transfer.spec.ts \
+  --config=playwright.inesdata.config.ts
 ```
 
 Suite ops opcional para visibilidad de buckets en MinIO Console:
@@ -132,14 +140,14 @@ Solo provider setup:
 
 ```bash
 cd validation/ui
-npx playwright test core/03-provider-setup.spec.ts
+npx playwright test adapters/inesdata/specs/03-provider-setup.spec.ts --config=playwright.inesdata.config.ts
 ```
 
-Negociacion y transferencia:
+Negociación y transferencia:
 
 ```bash
 cd validation/ui
-npx playwright test core/05-consumer-negotiation.spec.ts core/06-consumer-transfer.spec.ts
+npx playwright test adapters/inesdata/specs/05-consumer-negotiation.spec.ts adapters/inesdata/specs/06-consumer-transfer.spec.ts --config=playwright.inesdata.config.ts
 ```
 
 Modo visible:
@@ -183,19 +191,19 @@ Las ejecuciones integradas usan una pausa corta de `150` ms por marcador para op
 Si ejecutas Playwright manualmente con `npx`, puedes activarlos así:
 
 ```bash
-PLAYWRIGHT_INTERACTION_MARKERS=1 npx playwright test
+PLAYWRIGHT_INTERACTION_MARKERS=1 npx playwright test --config=playwright.inesdata.config.ts
 ```
 
 Para desactivarlos explícitamente:
 
 ```bash
-PLAYWRIGHT_INTERACTION_MARKERS=0 npx playwright test
+PLAYWRIGHT_INTERACTION_MARKERS=0 npx playwright test --config=playwright.inesdata.config.ts
 ```
 
 Para ajustar la pausa del resaltado:
 
 ```bash
-PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS=500 npx playwright test
+PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS=500 npx playwright test --config=playwright.inesdata.config.ts
 ```
 
 Por defecto los artefactos se guardan en:
@@ -212,7 +220,7 @@ Ademas, tanto `Level 6` como la opcion interactiva `I > Core` guardan un JSON en
 - `ui_validation_summary.json` en la raiz del experimento
 - `experiment_results.json` en la raiz del experimento
 
-Estos artefactos separan `support_checks`, `dataspace_cases`, `ops_checks`, `evidence_index` y `catalog_alignment` sin cambiar la ejecucion nativa de Playwright.
+Estos artefactos separan `support_checks`, `dataspace_cases`, `ops_checks`, `evidence_index` y `catalog_alignment` sin cambiar la ejecucion nativa de Playwright. Los `dataspace_cases` se enriquecen desde `validation/projects/inesdata/integration/test_cases.yaml`.
 
 ## Variables de entorno
 
@@ -283,7 +291,7 @@ Catalog Browser e impiden mostrar el asset temporal de la demo.
 `UI_AI_MODEL_HUB_CATALOG_CLEANUP=1` aplica la misma idea solo sobre artefactos
 de validacion con prefijos `qa-ui-*`, `asset-e2e-*`, `policy-ui-*` y
 `contract-ui-*`. No elimina datasets funcionales con nombres estables, por
-ejemplo `dataset-flares-mini-subtask2`.
+ejemplo `dataset-flares-subtask2`.
 
 `PLAYWRIGHT_DNS_HOST_MAP` permite resolver hosts de ingress solo dentro del
 proceso Node de Playwright, sin editar `/etc/hosts`. Su formato es

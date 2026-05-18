@@ -16,6 +16,23 @@ from validation.components.semantic_virtualization.runner import (
 
 
 class SemanticVirtualizationComponentValidationTests(unittest.TestCase):
+    def _suite_result(self, suite, case_id, case_group="pt5"):
+        return {
+            "component": "semantic-virtualization",
+            "suite": suite,
+            "status": "passed",
+            "summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+            "test_cases": [
+                {
+                    "test_case_id": case_id,
+                    "case_group": case_group,
+                    "evaluation": {"status": "passed", "assertions": []},
+                }
+            ],
+            "evidence_index": [],
+            "artifacts": {},
+        }
+
     def test_evaluate_http_response_accepts_json_capabilities_payload(self):
         result = evaluate_http_response(
             200,
@@ -76,6 +93,22 @@ class SemanticVirtualizationComponentValidationTests(unittest.TestCase):
             with mock.patch(
                 "validation.components.semantic_virtualization.runner._http_get",
                 side_effect=fake_http_get,
+            ), mock.patch.dict(
+                os.environ,
+                {"SEMANTIC_VIRTUALIZATION_ENABLE_UI_VALIDATION": ""},
+                clear=False,
+            ), mock.patch(
+                "validation.components.semantic_virtualization.runner.run_semantic_virtualization_mapping_validation",
+                return_value=self._suite_result("mapping-fixtures", "PT5-VS-01"),
+            ), mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_source_validation",
+                return_value=self._suite_result("gtfs-bench-official-source", "SV-GTFS-BENCH-01", "support"),
+            ), mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_dataset_validation",
+                return_value=self._suite_result("gtfs-bench-official-dataset", "SV-GTFS-BENCH-02", "support"),
+            ), mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_materialization_validation",
+                return_value=self._suite_result("gtfs-bench-official-materialization", "SV-GTFS-BENCH-03", "support"),
             ):
                 result = run_semantic_virtualization_validation(
                     "http://semantic.example.local",
@@ -85,22 +118,104 @@ class SemanticVirtualizationComponentValidationTests(unittest.TestCase):
             self.assertEqual(result["component"], "semantic-virtualization")
             self.assertEqual(result["suite"], "api")
             self.assertEqual(result["status"], "passed")
-            self.assertEqual(result["summary"]["total"], 5)
-            self.assertEqual(result["summary"]["passed"], 5)
+            self.assertEqual(result["summary"]["total"], 9)
+            self.assertEqual(result["summary"]["passed"], 9)
             self.assertEqual(result["phase_order"], ["preflight", "functional", "integration"])
             self.assertEqual(result["executed_cases"][1]["test_case_id"], "SV-API-04")
-            self.assertEqual(result["phases"]["functional"]["summary"]["total"], 1)
+            self.assertEqual(result["phases"]["functional"]["summary"]["total"], 5)
             self.assertEqual(result["phases"]["integration"]["summary"]["total"], 3)
-            self.assertEqual(result["pt5_summary"]["total"], 4)
-            self.assertEqual(result["support_summary"]["total"], 1)
-            self.assertEqual(len(result["evidence_index"]), 6)
+            self.assertEqual(result["pt5_summary"]["total"], 5)
+            self.assertEqual(result["support_summary"]["total"], 4)
+            self.assertGreaterEqual(len(result["evidence_index"]), 12)
+            self.assertIn("mapping_fixtures", result["phases"]["functional"]["suites"])
+            self.assertIn("gtfs_bench_source", result["phases"]["functional"]["suites"])
+            self.assertIn("gtfs_bench_dataset", result["phases"]["functional"]["suites"])
+            self.assertIn("gtfs_bench_materialization", result["phases"]["functional"]["suites"])
             self.assertTrue(result["artifacts"]["report_json"].endswith("semantic_virtualization_component_validation.json"))
             self.assertTrue(os.path.exists(result["artifacts"]["report_json"]))
+            self.assertTrue(os.path.exists(result["artifacts"]["artifact_manifest_json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["sv-bootstrap-01-response.json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["sv-api-01-response.json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["sv-api-02-response.json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["sv-api-03-response.json"]))
             self.assertTrue(os.path.exists(result["artifacts"]["sv-api-04-response.json"]))
+
+    def test_run_semantic_virtualization_validation_runs_ui_functional_before_integration(self):
+        calls = []
+
+        def fake_http_get(url, timeout=20, headers=None):
+            if url == "http://semantic.example.local":
+                calls.append("preflight" if "preflight" not in calls else "integration-health")
+                return 200, "text/html", "<html><body>Semantic Virtualization</body></html>"
+            if url == "http://semantic.example.local/?query=SELECT%20WHERE%20%7B":
+                calls.append("functional-api")
+                return 400, "application/json", json.dumps({"message": "Expected SelectQuery"})
+            if url == "http://semantic.example.local/openapi.json":
+                calls.append("integration-openapi")
+                return 200, "application/json", json.dumps({"paths": {"/": {"get": {}}}})
+            if url.startswith("http://semantic.example.local/?query="):
+                calls.append("integration-query")
+                return 200, "application/sparql-results+json", json.dumps({"head": {}, "results": {}})
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        def fake_ui_runner(base_url, experiment_dir=None):
+            calls.append("functional-ui")
+            return {
+                "component": "semantic-virtualization",
+                "suite": "ui",
+                "status": "passed",
+                "summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+                "executed_cases": [
+                    {
+                        "test_case_id": "PT5-VS-07",
+                        "case_group": "pt5",
+                        "evaluation": {"status": "passed"},
+                    }
+                ],
+                "pt5_case_results": [],
+                "support_checks": [],
+                "evidence_index": [],
+                "artifacts": {},
+            }
+
+        def fake_functional_suite(name, case_id):
+            def _run(experiment_dir=None):
+                calls.append(name)
+                return self._suite_result(name, case_id)
+
+            return _run
+
+        with (
+            mock.patch("validation.components.semantic_virtualization.runner._http_get", side_effect=fake_http_get),
+            mock.patch(
+                "validation.components.semantic_virtualization.runner.run_semantic_virtualization_mapping_validation",
+                side_effect=fake_functional_suite("functional-mapping", "PT5-VS-01"),
+            ),
+            mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_source_validation",
+                side_effect=fake_functional_suite("functional-gtfs-source", "SV-GTFS-BENCH-01"),
+            ),
+            mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_dataset_validation",
+                side_effect=fake_functional_suite("functional-gtfs-dataset", "SV-GTFS-BENCH-02"),
+            ),
+            mock.patch(
+                "validation.components.semantic_virtualization.runner.run_gtfs_bench_official_materialization_validation",
+                side_effect=fake_functional_suite("functional-gtfs-materialization", "SV-GTFS-BENCH-03"),
+            ),
+            mock.patch(
+                "validation.components.semantic_virtualization.runner.run_semantic_virtualization_ui_validation",
+                side_effect=fake_ui_runner,
+            ),
+        ):
+            result = run_semantic_virtualization_validation("http://semantic.example.local")
+
+        self.assertLess(calls.index("functional-api"), calls.index("functional-ui"))
+        self.assertLess(calls.index("functional-mapping"), calls.index("functional-ui"))
+        self.assertLess(calls.index("functional-ui"), calls.index("integration-health"))
+        self.assertIn("ui", result["phases"]["functional"]["suites"])
+        self.assertEqual(result["summary"]["total"], 10)
+        self.assertEqual(result["pt5_summary"]["total"], 9)
 
     def test_semantic_virtualization_is_registered_for_component_level6(self):
         registration = get_component_registration("semantic_virtualization")

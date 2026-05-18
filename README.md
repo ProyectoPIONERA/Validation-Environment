@@ -5,6 +5,10 @@ validación de espacios de datos PIONERA. Se utiliza para desplegar dataspaces,
 validar conectores, ejecutar pruebas funcionales, recoger métricas y generar
 evidencias experimentales de forma trazable.
 
+![PIONERA local validation environment](./docs/pionera_local_validation_environment.png)
+
+_Referencia inicial de la topología `local` del framework._
+
 El punto de entrada principal es `main.py`. El framework está organizado para
 trabajar con distintos adapters y topologías sin duplicar la lógica común de
 validación.
@@ -603,11 +607,12 @@ python3 main.py inesdata validate --topology local --validation-mode fast
 
 También puede declararse con `PIONERA_VALIDATION_MODE=fast`.
 
-En el layout `role-aligned`, `Level 5` publica componentes opcionales en
+En el layout `role-aligned`, `Level 5` publica componentes configurados en
 `components_namespace`. `Level 6` valida esos componentes después de las suites
-del dataspace. Hoy `ontology-hub` se valida por defecto cuando está
-configurado, mientras que la UI PT5 de `ai-model-hub` sigue siendo opt-in con
-`AI_MODEL_HUB_ENABLE_UI_VALIDATION=1`.
+del dataspace y ejecuta por defecto las suites automatizadas A5.2 registradas
+para `ontology-hub`, `ai-model-hub` y `semantic-virtualization`. La única suite
+de validación A5.2 desactivada por defecto es Kafka/streaming transfer, por su
+coste temporal.
 
 Colecciones Newman principales:
 
@@ -623,7 +628,7 @@ Colecciones Newman principales:
 Playwright se resuelve por adapter:
 
 ```text
-validation/ui/playwright.config.ts
+validation/ui/playwright.inesdata.config.ts
 validation/ui/playwright.edc.config.ts
 ```
 
@@ -654,9 +659,12 @@ bash scripts/run_kafka_benchmark.sh --teardown-only
 ```
 
 El benchmark standalone puede generar `kafka_metrics.json` y mide el broker
-Kafka, no el flujo E2E del dataspace. Además, `Level 6` ejecuta la validación
-funcional EDC+Kafka después de Newman para adapters compatibles y puede generar
-`kafka_transfer_results.json`.
+Kafka, no el flujo E2E del dataspace. Además, `Level 6` puede ejecutar la
+validación funcional EDC+Kafka después de Newman para adapters compatibles y
+generar `kafka_transfer_results.json`. Esa suite está desactivada por defecto
+para ahorrar tiempo. En ejecuciones interactivas, `Level 6` pregunta
+`Run Kafka validation suites too?`; en ejecuciones no interactivas, usa
+`PIONERA_LEVEL6_RUN_KAFKA=true`.
 
 En local, esa validación usa por defecto un broker Kafka temporal dentro de
 Kubernetes. Los conectores acceden al broker por DNS de cluster y el proceso
@@ -779,7 +787,7 @@ ejecutan desde `Level 6`.
 | `deployers/shared/` | Charts y artefactos reutilizables. |
 | `validation/` | Suites Newman, Playwright y validaciones de componentes. |
 | `tests/` | Pruebas unitarias del framework. |
-| `docs/` | Documentación pública estable. |
+| `docs/` | Documentación estable del framework. |
 
 ## Tests
 
@@ -804,7 +812,7 @@ Ontology, métricas o componentes que dependan del entorno local disponible.
 
 ## Documentación
 
-La documentación pública está en [docs/](./docs/README.md).
+La documentación está en [docs/](./docs/README.md).
 
 Orden recomendado:
 

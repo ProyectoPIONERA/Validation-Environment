@@ -50,6 +50,27 @@ En cambio, `deployer.config` conserva claves internas sin prefijo, por ejemplo
 exportar esas variables legacy: el loader convierte automáticamente los
 overrides `PIONERA_*` a las claves internas de configuración.
 
+### Nombres Públicos y Recursos SQL
+
+Los nombres públicos de dataspace, namespaces, hostnames y realms de Keycloak
+deben mantenerse en minúsculas. Pueden usar guiones cuando el recurso lo
+permite; por ejemplo, `pionera-edc` es un nombre válido para un dataspace EDC y
+su realm de Keycloak.
+
+Los recursos SQL derivados del dataspace no usan guiones. El framework
+normaliza internamente `-` a `_` al generar nombres de bases de datos y roles de
+PostgreSQL. Por ejemplo, el dataspace `pionera-edc` genera:
+
+```text
+pionera_edc_rs
+pionera_edc_rsusr
+pionera_edc_wp
+pionera_edc_wpusr
+```
+
+Estos nombres SQL deben derivarse de `DS_1_NAME`. No deben editarse
+manualmente en los artefactos generados de despliegue.
+
 ## Capas de Configuración
 
 La configuración compartida de infraestructura se resuelve ahora por capas:
@@ -259,8 +280,7 @@ checks de acceso, ingress, storage y permisos.
 Estado actual del framework:
 
 - `inesdata`: `Level 1` a `Level 6` operativos, con `Level 5` compartido para componentes configurados
-- `edc`: `Level 1` a `Level 4` y `Level 6` operativos
-- `edc Level 5`: pendiente de soporte real de componentes
+- `edc`: `Level 1` a `Level 6` operativos, con `Level 5` compartido para componentes configurados y guarda de extensiones del conector
 
 La topología necesita una dirección externa, suministrada mediante una de estas variables:
 

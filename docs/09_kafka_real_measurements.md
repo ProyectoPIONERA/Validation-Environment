@@ -13,9 +13,9 @@ Esta fase mantiene el benchmark de broker Kafka como opcional, pero hace que su 
 - `python main.py inesdata run --kafka`
 - `python main.py menu` -> `M - Run metrics / benchmarks`
 
-La activación del benchmark de broker para usuarios debe hacerse desde el CLI o el menú, no desde `deployer.config`. En el menú, la pregunta `Enable standalone Kafka broker benchmark?` se refiere solo a este benchmark independiente del broker. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y se ejecuta automáticamente en `Level 6`, después de Newman, para los adaptadores `inesdata` y `edc`.
+La activación del benchmark de broker para usuarios debe hacerse desde el CLI o el menú, no desde `deployer.config`. En el menú, la pregunta `Enable standalone Kafka broker benchmark?` se refiere solo a este benchmark independiente del broker. La suite funcional avanzada `EDC+Kafka`, inspirada en el sample oficial `Transfer06KafkaBrokerTest` de EDC, queda separada del benchmark de broker y puede ejecutarse en `Level 6`, después de Newman, para los adaptadores `inesdata` y `edc`. Por defecto queda desactivada para ahorrar tiempo durante las validaciones rutinarias.
 
-En la implementación actual de `Level 6`, la preparación del broker Kafka
+Cuando se activa en `Level 6`, la preparación del broker Kafka
 arranca en segundo plano al comenzar el nivel, mientras Newman sigue en primer
 plano. Esto reduce espera total sin alterar el flujo de Newman.
 
@@ -132,8 +132,20 @@ El broker Kafka puede configurarse con:
 - `KAFKA_EDC_AGREEMENT_VISIBILITY_TIMEOUT_SECONDS` cuando el runtime EDC necesita unos segundos para que el acuerdo contractual ya finalizado sea visible en proveedor y consumidor antes de iniciar `Kafka-PUSH`. El valor por defecto actual es `30` segundos y evita carreras transitorias con errores `404 Not found` al arrancar la transferencia.
 - `KAFKA_EDC_MESSAGE_SAMPLE_LIMIT`, por defecto `5`, para limitar cuántos IDs de mensajes quedan como muestra en los artefactos y pueden imprimirse en consola cuando se habilita el modo verbose.
 
-Para iteraciones rápidas de `Level 6`, Kafka puede omitirse temporalmente sin
-desactivar el resto de pruebas:
+La suite funcional Kafka de `Level 6` es opt-in. Para ejecutarla junto con el
+resto de pruebas, usa:
+
+```bash
+PIONERA_LEVEL6_RUN_KAFKA=true
+```
+
+En una ejecución interactiva de `Level 6`, el framework pregunta
+`Run Kafka validation suites too?` como primera acción visible para activar
+esta suite. La variable anterior queda como mecanismo explícito para
+automatización, CI o ejecuciones no interactivas.
+
+Para asegurar que Kafka se omite temporalmente aunque exista una configuración
+previa de ejecución, usa:
 
 ```bash
 PIONERA_LEVEL6_SKIP_KAFKA=true
@@ -141,8 +153,9 @@ PIONERA_LEVEL6_SKIP_KAFKA=true
 
 Con esa variable, el framework no prepara el broker Kafka ni ejecuta la suite
 `EDC+Kafka`, y deja `kafka_transfer_results.json` con estado `skipped`. Para
-volver a ejecutar la validación completa, elimina la variable o asígnala a
-`false`. La suite Kafka sigue formando parte del alcance final de `Level 6`.
+volver a ejecutar Kafka, elimina la variable o asígnala a `false`, y define
+`PIONERA_LEVEL6_RUN_KAFKA=true`. La suite Kafka sigue formando parte del alcance
+final de `Level 6`, pero no bloquea las iteraciones rápidas por defecto.
 
 El modo `docker` sigue disponible para desarrollo avanzado mediante
 `KAFKA_PROVISIONER=docker`, pero no es el default de `Level 6`. En local, usar
@@ -203,8 +216,8 @@ Eso significa:
 
 - el benchmark persistido sigue siendo de broker
 - la imagen local del conector ya queda preparada para construir un runtime con soporte Kafka
-- el validador `EDC+Kafka` puede ya ejercer un flujo completo `asset -> catalogo -> negociacion -> transfer Kafka-PUSH -> consumo del topic destino`
-- ese flujo se ejecuta como suite automatica de `Level 6`, independiente del benchmark, para no mezclar latencia del broker con latencia del intercambio mediado por EDC
+- el validador `EDC+Kafka` puede ya ejercer un flujo completo `asset -> catálogo -> negociación -> transfer Kafka-PUSH -> consumo del topic destino`
+- ese flujo se ejecuta como suite opt-in de `Level 6`, independiente del benchmark, para no mezclar latencia del broker con latencia del intercambio mediado por EDC
 
 ## Broker Autoaprovisionado
 
@@ -213,7 +226,7 @@ Cuando la suite `EDC+Kafka` no recibe un broker accesible y el framework lo auto
 - listener de host para el productor, consumidor y admin client locales
 - listener de cluster para el dataplane del conector dentro de Kubernetes
 
-Eso evita que el dataplane reciba `localhost:<puerto>` como metadato del broker, que era la causa principal de los fallos cuando la transferencia entraba en `STARTED` pero no movia mensajes reales.
+Eso evita que el dataplane reciba `localhost:<puerto>` como metadato del broker, que era la causa principal de los fallos cuando la transferencia entraba en `STARTED` pero no movía mensajes reales.
 
 Al terminar, el framework debe eliminar el `Deployment`, los `Service` y el
 `port-forward` temporal asociados al broker gestionado.
