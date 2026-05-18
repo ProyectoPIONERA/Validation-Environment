@@ -8,3 +8,4 @@ COMMON_SERVICES_NAMESPACE=common-srvs
 COMPONENTS_NAMESPACE=components
 DS_1_CONNECTORS=citycouncil,company
 COMPONENTS=ontology-hub,ai-model-hub,semantic-virtualization
+DS_DOMAIN_BASE=pionera.oeg.fi.upm.es
