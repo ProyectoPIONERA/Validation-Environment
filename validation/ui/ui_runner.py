@@ -79,6 +79,21 @@ def _build_playwright_environment(
     if len(connectors) > 1:
         env["UI_CONSUMER_CONNECTOR"] = connectors[1]
 
+    if str(context.topology or "").strip().lower() == "vm-distributed":
+        ds_domain = str(context.ds_domain_base or "").strip()
+        if ds_domain:
+            for connector in connectors:
+                env_prefix = connector.upper().replace("-", "_")
+                portal_url_key = f"UI_{env_prefix}_PORTAL_URL"
+                if not env.get(portal_url_key):
+                    cn_lower = connector.lower()
+                    short = (
+                        cn_lower.replace("conn-", "").split("-")[0]
+                        if "conn-" in cn_lower
+                        else cn_lower
+                    )
+                    env[portal_url_key] = f"https://org1.{ds_domain}/c/{short}/inesdata-connector-interface/"
+
     env["PLAYWRIGHT_OUTPUT_DIR"] = artifact_paths["output_dir"]
     env["PLAYWRIGHT_HTML_REPORT_DIR"] = artifact_paths["html_report_dir"]
     env["PLAYWRIGHT_BLOB_REPORT_DIR"] = artifact_paths["blob_report_dir"]
