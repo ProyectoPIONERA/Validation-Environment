@@ -1,0 +1,25 @@
+FROM nginx:alpine
+
+ENV NGINX_HOME=/usr/share/nginx
+RUN mkdir -p ${NGINX_HOME}/html/inesdata-connector-interface
+RUN chmod 755 ${NGINX_HOME}/html/inesdata-connector-interface
+ENV DOCUMENT_ROOT=${NGINX_HOME}/html/inesdata-connector-interface
+
+COPY dist/inesdata-connector-interface ${DOCUMENT_ROOT}
+COPY docker/assets/scripts/docker-entrypoint.sh ${NGINX_HOME}/
+COPY src/assets/config/app.config.template.json ${DOCUMENT_ROOT}/assets/config/app.config.template.json
+COPY src/assets/config/app.config.template.json ${DOCUMENT_ROOT}/assets/config/app.config.json
+COPY docker/default.conf /etc/nginx/conf.d/default.conf.template
+
+ENV ENVIRONMENT_CFG=${DOCUMENT_ROOT}/assets/config/app.config.json \
+    ENVIRONMENT_CFG_TPL=${DOCUMENT_ROOT}/assets/config/app.config.template.json \
+    ENVIRONMENT_CFG_TMP=/tmp/app.config.temp.json \
+    NGINX_DEFAULT_CONF=/etc/nginx/conf.d/default.conf \
+    NGINX_DEFAULT_CONF_TPL=/etc/nginx/conf.d/default.conf.template
+
+RUN chmod ug+w ${DOCUMENT_ROOT}/assets/config/app.config.json \
+    && chmod ug+x ${NGINX_HOME}/docker-entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT [ "sh", "-c", "${NGINX_HOME}/docker-entrypoint.sh"]

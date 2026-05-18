@@ -101,6 +101,9 @@ spec:
             - name: OAUTH2_SHOW_DEBUG_INFO
               value: "false"
           image: {{ .Values.connectorInterface.image.name }}:{{ .Values.connectorInterface.image.tag }}
+          {{- with .Values.connectorInterface.image.pullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
           name: {{ .Values.connector.name }}-interface
           ports:
             - containerPort: 8080
