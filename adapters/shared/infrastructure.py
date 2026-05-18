@@ -573,9 +573,9 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             for short in shorts:
                 conn_host = f"conn-{short}-{ds_name}.{ds_domain}"
                 out += (
-                    f"    location ~* ^/c/{short}/inesdata-connector-interface/(.+)$ {{\n"
+                    f"    location ~* ^/c/{short}/inesdata-connector-interface(.*)$ {{\n"
                     f'        add_header Set-Cookie "inesdata_connector={short}; Path=/; SameSite=Lax" always;\n'
-                    f"        return 301 /inesdata-connector-interface/$1;\n"
+                    f"        return 301 /inesdata-connector-interface$1$is_args$args;\n"
                     f"    }}\n"
                     f"    location /c/{short}/management/ {{\n"
                     f"        rewrite ^/c/{short}/management/(.*) /management/$1 break;\n"

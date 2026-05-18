@@ -933,6 +933,7 @@ def _run_core_ui_tests(mode, adapter=None):
     if runtime_env.get("UI_MINIO_CONSOLE_URL"):
         runtime_extra_env["UI_MINIO_CONSOLE_URL"] = runtime_env["UI_MINIO_CONSOLE_URL"]
         os.environ["UI_MINIO_CONSOLE_URL"] = runtime_extra_env["UI_MINIO_CONSOLE_URL"]
+    _inject_vm_distributed_portal_urls(adapter, runtime_extra_env)
     mode = {
         **mode,
         "env": {
