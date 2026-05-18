@@ -31,8 +31,10 @@ connector:
 
 connectorInterface:
   image:
-    name: ghcr.io/proyectopionera/inesdata-connector-interface
-    tag: 20260309-2e7b345
+    name: {{ keys.connector_interface_image_name | default('ghcr.io/proyectopionera/inesdata-connector-interface') }}
+    tag: {{ keys.connector_interface_image_tag | default('20260309-2e7b345') }}
+{% if keys.connector_interface_pull_policy is defined %}    pullPolicy: {{ keys.connector_interface_pull_policy }}
+{% endif %}
   ontologyHub:
     url: {{ 'https' if keys.environment == 'PRO' else 'http' }}://ontology-hub-{{ keys.dataspace_name }}.{% if keys.environment == 'PRO' %}ds.dataspaceunit-project.eu{% else %}{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}{% endif %}
   modelObserver:
@@ -85,5 +87,6 @@ hostAliases:
   - registration-service-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
   - ontology-hub-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
   - ai-model-hub-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
+  - backend-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
 {% for c in (keys.ds_1_connectors | default('')).split(',') %}{% if c.strip() %}  - conn-{{ c.strip() }}-{{ keys.dataspace_name }}.{{ keys.ds_domain_base | default('pionera.oeg.fi.upm.es') }}
 {% endif %}{% endfor %}
