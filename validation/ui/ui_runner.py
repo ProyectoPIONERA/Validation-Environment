@@ -61,6 +61,7 @@ def _build_playwright_environment(
     env["UI_DATASPACE"] = context.dataspace_name
     env["UI_ENVIRONMENT"] = context.environment
     env["UI_DS_DOMAIN"] = context.ds_domain_base
+    env["UI_DOMAIN_BASE"] = context.ds_domain_base
     env["UI_KEYCLOAK_URL"] = str(
         config.get("KC_INTERNAL_URL")
         or config.get("KC_URL")
