@@ -39,7 +39,6 @@ export class MinioBucketBrowserPage {
       }
 
       await this.page.reload({ waitUntil: "domcontentloaded" });
-      await this.page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => undefined);
       await waitForEventualConsistencyPoll(this.page);
     }
 
