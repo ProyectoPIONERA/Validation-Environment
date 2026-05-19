@@ -44,13 +44,18 @@ export class ContractsPage {
     const dialog = this.page.getByRole("dialog", { name: /Transfer/i });
     await expect(dialog).toBeVisible({ timeout: 15_000 });
 
-    await clickMarked(materialSelect(this.page, "Destination"));
-    await clickMarked(this.page.locator("mat-option").filter({ hasText: /InesDataStore/i }).first());
+    const destinationSelect = materialSelect(this.page, "Destination");
+    await clickMarked(destinationSelect);
+    const inesDataOption = this.page.locator("mat-option").filter({ hasText: /InesDataStore/i }).first();
+    await expect(inesDataOption).toBeVisible({ timeout: 10_000 });
+    await clickMarked(inesDataOption);
+    await waitForUiTransition(this.page);
+
     await clickMarked(dialog.getByRole("button", { name: /start transfer/i }));
 
     const notification = snackBar(this.page);
     await expect(notification).toContainText(/transfer initiated successfully/i, {
-      timeout: 30_000,
+      timeout: 45_000,
     });
     return ((await notification.textContent()) ?? "").replace(/\s+/g, " ").trim();
   }

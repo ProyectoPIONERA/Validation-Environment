@@ -16,7 +16,11 @@ const FLARES_TRIAL_FILE = "5w1h_subtask_2_trial.json";
 const FLARES_TEST_FILE = "5w1h_subtarea_2_test.json";
 
 function readJson(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const content = fs.readFileSync(filePath, "utf8").trim();
+  if (content.startsWith("[") || content.startsWith("{") && !content.includes("\n{")) {
+    return JSON.parse(content);
+  }
+  return content.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
 }
 
 function ensureFile(filePath) {

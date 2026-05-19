@@ -5,7 +5,7 @@ const {
   buildFlaresBenchmarkRows,
   ensureFlaresLinguisticModelsPublished,
   ensureLocalFlaresBenchmarkDatasetPublished,
-  loadFlaresMiniFixture,
+  loadFlaresDataset: loadFlaresMiniFixture,
 } = require("../../functional/linguistic/bootstrap");
 
 const DEMO_ENV = "AI_MODEL_HUB_ENABLE_BENCHMARKING_UI_DEMO";

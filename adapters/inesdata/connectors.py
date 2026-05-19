@@ -2082,7 +2082,32 @@ class INESDataConnectorsAdapter:
             else:
                 print(f"  Could not delete asset: {asset_id}")
 
+        self._reset_federated_catalog(connector)
+
         print(f"Cleanup completed for {connector}\n")
+
+    def _reset_federated_catalog(self, connector_name):
+        pg_host, pg_user, pg_password = self.config_adapter.get_pg_credentials()
+        pg_port = self._pg_port()
+        db_name = connector_name.replace("-", "_")
+        sql = (
+            "TRUNCATE TABLE edc_distribution CASCADE; "
+            "TRUNCATE TABLE edc_catalog_data_service CASCADE; "
+            "TRUNCATE TABLE edc_dataset CASCADE; "
+            "TRUNCATE TABLE edc_data_service CASCADE; "
+            "TRUNCATE TABLE edc_catalog CASCADE;"
+        )
+        result = self.run(
+            f"PGPASSWORD={shlex.quote(str(pg_password))} psql "
+            f"-h {shlex.quote(str(pg_host))} "
+            f"-p {shlex.quote(str(pg_port))} "
+            f"-U {shlex.quote(str(pg_user))} "
+            f"-d {db_name} -c \"{sql}\"",
+            check=False,
+            silent=True,
+        )
+        if result is not None:
+            print(f"  Federated catalog reset for {connector_name}")
 
     def validation_test_entities_absent(self, connector):
         """Return True only if the fixed validation entities are absent."""
