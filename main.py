@@ -1972,11 +1972,17 @@ def _probe_edc_dashboard_readiness(deployer_context):
             "gates": [{"gate": "connectors", "ready": False, "detail": "no connectors resolved"}],
         }
 
+    kubeconfig_map = dict(getattr(deployer_context, "kubeconfig_map", None) or {})
+    connector_kubeconfig_map = _build_connector_kubeconfig_map(
+        connectors, kubeconfig_map, getattr(deployer_context, "namespace_roles", None)
+    )
+
     for connector in connectors:
         connector_namespace = connector_namespaces.get(connector) or namespace
+        connector_kubeconfig = connector_kubeconfig_map.get(connector)
         for suffix in ("dashboard", "dashboard-proxy"):
             service_name = f"{connector}-{suffix}"
-            ready, detail = _kubectl_endpoint_ready(connector_namespace, service_name)
+            ready, detail = _kubectl_endpoint_ready(connector_namespace, service_name, kubeconfig=connector_kubeconfig)
             gates.append({
                 "gate": f"{suffix}:{connector}",
                 "namespace": connector_namespace,

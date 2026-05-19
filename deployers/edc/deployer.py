@@ -14,7 +14,7 @@ from deployers.shared.lib.components import (
 )
 from deployers.infrastructure.lib.contracts import DeploymentContext, ValidationProfile
 from deployers.infrastructure.lib.namespaces import resolve_namespace_profile_plan
-from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, build_topology_profile
+from deployers.infrastructure.lib.topology import SUPPORTED_TOPOLOGIES, VM_DISTRIBUTED_TOPOLOGY, build_topology_profile
 
 
 class EdcDeployer:
@@ -90,8 +90,21 @@ class EdcDeployer:
             planned_namespace_roles=namespace_plan["planned_namespace_roles"],
             topology_profile=topology_profile,
             runtime_dir=runtime_dir,
+            kubeconfig_map=self._build_kubeconfig_map(topology, config),
             config=config,
         )
+
+    def _build_kubeconfig_map(self, topology: str, config: dict[str, Any]) -> dict[str, str]:
+        if topology != VM_DISTRIBUTED_TOPOLOGY:
+            return {}
+        result = {}
+        provider_kc = str(config.get("K3S_KUBECONFIG_PROVIDER") or "").strip()
+        consumer_kc = str(config.get("K3S_KUBECONFIG_CONSUMER") or "").strip()
+        if provider_kc:
+            result["provider"] = provider_kc
+        if consumer_kc:
+            result["consumer"] = consumer_kc
+        return result
 
     def deploy_infrastructure(self, context: DeploymentContext) -> Any:
         return self.adapter.deploy_infrastructure()
