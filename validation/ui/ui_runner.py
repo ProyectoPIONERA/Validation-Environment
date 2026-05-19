@@ -80,7 +80,7 @@ def _build_playwright_environment(
     if len(connectors) > 1:
         env["UI_CONSUMER_CONNECTOR"] = connectors[1]
 
-    if str(context.topology or "").strip().lower() == "vm-distributed":
+    if str(context.topology or "").strip().lower() == "vm-distributed" and adapter.lower() != "edc":
         ds_domain = str(context.ds_domain_base or "").strip()
         if ds_domain:
             for connector in connectors:
