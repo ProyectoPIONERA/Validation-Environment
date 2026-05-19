@@ -1838,37 +1838,48 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
                     dataspace=dataspace,
                     dataspaces=dataspaces,
                 )
-                values_file = self._render_values_file(
-                    connector,
-                    ds_name,
-                    connectors,
-                    connector_namespace=target_namespace,
-                )
-                release_name = f"{connector}-{ds_name}"
-                print(f"Deploying generic EDC connector: {connector}")
-                if not self.infrastructure.deploy_helm_release(
-                    release_name,
-                    target_namespace,
-                    values_file,
-                    cwd=self._edc_connector_dir(),
-                ):
-                    print(f"Error deploying generic EDC connector: {connector}")
-                    return []
+                connector_kubeconfig = self._connector_kubeconfig(connector)
+                _prev_kubeconfig = os.environ.get("KUBECONFIG")
+                if connector_kubeconfig:
+                    os.environ["KUBECONFIG"] = connector_kubeconfig
+                try:
+                    values_file = self._render_values_file(
+                        connector,
+                        ds_name,
+                        connectors,
+                        connector_namespace=target_namespace,
+                    )
+                    release_name = f"{connector}-{ds_name}"
+                    print(f"Deploying generic EDC connector: {connector}")
+                    if not self.infrastructure.deploy_helm_release(
+                        release_name,
+                        target_namespace,
+                        values_file,
+                        cwd=self._edc_connector_dir(),
+                    ):
+                        print(f"Error deploying generic EDC connector: {connector}")
+                        return []
 
-                rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
-                if not self._wait_for_edc_deployment_rollout(
-                    connector,
-                    target_namespace,
-                    timeout=rollout_timeout,
-                ):
-                    print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
-                    return []
-                if not self._restart_local_edc_deployments_if_needed(
-                    connector,
-                    target_namespace,
-                    rollout_timeout=rollout_timeout,
-                ):
-                    return []
+                    rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+                    if not self._wait_for_edc_deployment_rollout(
+                        connector,
+                        target_namespace,
+                        timeout=rollout_timeout,
+                    ):
+                        print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
+                        return []
+                    if not self._restart_local_edc_deployments_if_needed(
+                        connector,
+                        target_namespace,
+                        rollout_timeout=rollout_timeout,
+                    ):
+                        return []
+                finally:
+                    if connector_kubeconfig:
+                        if _prev_kubeconfig is None:
+                            os.environ.pop("KUBECONFIG", None)
+                        else:
+                            os.environ["KUBECONFIG"] = _prev_kubeconfig
 
                 all_connectors.append(connector)
 
