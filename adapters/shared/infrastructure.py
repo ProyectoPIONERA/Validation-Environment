@@ -206,6 +206,7 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
 
         self._ensure_k3s_kubelet_config_vm_distributed(deployer_config)
         self._ensure_ingress_nginx_forwarded_headers_vm_distributed(deployer_config)
+        self._ensure_remote_nginx_server_names_hash_bucket_vm_distributed(deployer_config)
 
         self.complete_level(1)
         return {"status": "ready", "topology": VM_DISTRIBUTED_TOPOLOGY, "checks": checks}
@@ -254,6 +255,39 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
                     print(f"[WARN] {ip}: could not write {K3S_CONFIG}: {proc.stderr.strip()}")
             except Exception as exc:
                 print(f"[WARN] {ip}: kubelet config write skipped: {exc}")
+
+    def _ensure_remote_nginx_server_names_hash_bucket_vm_distributed(self, deployer_config=None):
+        """Ensure server_names_hash_bucket_size 128 in /etc/nginx/nginx.conf on provider/consumer VMs.
+
+        Long dataspace hostnames (e.g. conn-citycounciledc-pionera-edc.pionera.oeg.fi.upm.es) exceed
+        nginx's default 64-byte hash bucket size, causing nginx to reject server_name directives on
+        the remote VMs. This sets the value to 128 idempotently via SSH.
+        """
+        config = deployer_config or {}
+        provider_ip = str(config.get("VM_PROVIDER_IP") or "").strip()
+        consumer_ip = str(config.get("VM_CONSUMER_IP") or "").strip()
+
+        for ip in filter(None, [provider_ip, consumer_ip]):
+            try:
+                # Idempotent: replace commented-out default OR already-present 64 value with 128.
+                # Noop if 128 is already set.
+                sed_cmd = (
+                    "grep -q 'server_names_hash_bucket_size 128' /etc/nginx/nginx.conf && exit 0; "
+                    "sudo sed -i "
+                    "'s/# server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/g; "
+                    "s/server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/g' "
+                    "/etc/nginx/nginx.conf && sudo nginx -s reload"
+                )
+                proc = subprocess.run(
+                    ["ssh", f"pionera@{ip}", sed_cmd],
+                    capture_output=True, text=True,
+                )
+                if proc.returncode == 0:
+                    print(f"[OK]   nginx server_names_hash_bucket_size 128 set on {ip}")
+                else:
+                    print(f"[WARN] nginx hash bucket patch failed on {ip}: {proc.stderr.strip()}")
+            except Exception as exc:
+                print(f"[WARN] nginx hash bucket patch skipped on {ip}: {exc}")
 
     def _ensure_ingress_nginx_forwarded_headers_vm_distributed(self, deployer_config=None):
         """Patch ingress-nginx configmap on provider and consumer clusters to trust X-Forwarded-Proto.

@@ -12,6 +12,7 @@ import yaml
 
 from deployers.shared.lib.topology import (
     LOCAL_TOPOLOGY,
+    VM_DISTRIBUTED_TOPOLOGY,
     VM_SINGLE_TOPOLOGY,
     build_topology_profile,
 )
@@ -1889,11 +1890,113 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
             print("Configuring connector hosts...")
             connector_hosts = self.config_adapter.generate_connector_hosts(deduplicated)
             self.infrastructure.manage_hosts_entries(connector_hosts)
+        elif self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+            self._post_deploy_vm_distributed(deduplicated)
         else:
             print(f"Skipping connector hosts synchronization for topology '{self.config_adapter.topology}'.")
         if not self.wait_for_all_connectors(deduplicated):
             return []
         return deduplicated
+
+    def _post_deploy_vm_distributed(self, connectors):
+        """Apply all vm-distributed post-deploy fixups after EDC connectors are up."""
+        config = self.config_adapter.load_deployer_config() or {}
+        common_ip = str(config.get("VM_COMMON_IP") or "").strip()
+
+        print("Configuring connector hosts for vm-distributed topology...")
+        connector_ip_map = {c: common_ip for c in connectors if common_ip}
+        connector_hosts = self.config_adapter.generate_connector_hosts(connectors, connector_ip_map=connector_ip_map)
+        self.infrastructure.manage_hosts_entries(connector_hosts)
+
+        sync_nginx = getattr(self.infrastructure, "_sync_nginx_http_proxy_vm_distributed", None)
+        if callable(sync_nginx):
+            sync_nginx()
+
+        self._patch_coredns_for_vm_distributed(config, connectors)
+
+    def _patch_coredns_for_vm_distributed(self, config, connectors):
+        """Patch CoreDNS NodeHosts on provider/consumer clusters so EDC pods resolve cross-cluster hostnames.
+
+        Without this, consumer pods on pioneer3 cannot resolve the provider connector hostname and
+        vice versa, because the external DNS has no record for these dataspace-scoped hostnames.
+        Both hostnames resolve to VM_COMMON_IP (pioneer40) whose nginx routes to the right cluster.
+        """
+        import subprocess as _sp
+
+        provider_kc = str(config.get("K3S_KUBECONFIG_PROVIDER") or "").strip()
+        consumer_kc = str(config.get("K3S_KUBECONFIG_CONSUMER") or "").strip()
+        common_ip = str(config.get("VM_COMMON_IP") or "").strip()
+        provider_ip = str(config.get("VM_PROVIDER_IP") or "").strip()
+        consumer_ip = str(config.get("VM_CONSUMER_IP") or "").strip()
+        ds_domain = str(config.get("DS_DOMAIN_BASE") or "").strip()
+
+        if not common_ip or not ds_domain:
+            print("[WARN] CoreDNS patch skipped: VM_COMMON_IP or DS_DOMAIN_BASE not set")
+            return
+
+        try:
+            ds_name = self.config_adapter.primary_dataspace_name()
+        except Exception:
+            return
+
+        provider_shorts = [n.strip() for n in str(config.get("VM_PROVIDER_CONNECTORS") or "").split(",") if n.strip()]
+        consumer_shorts = [n.strip() for n in str(config.get("VM_CONSUMER_CONNECTORS") or "").split(",") if n.strip()]
+
+        auth_hostname = f"auth.{ds_domain}"
+        rs_hostname = f"registration-service-{ds_name}.{ds_domain}"
+
+        # Provider cluster needs to resolve consumer connector hostnames + auth + registration
+        provider_node_host = provider_ip or common_ip
+        provider_hosts_extra = "\n".join(
+            f"{common_ip} conn-{short}-{ds_name}.{ds_domain}"
+            for short in consumer_shorts
+        )
+        provider_hosts_extra += f"\n{common_ip} {auth_hostname}\n{common_ip} {rs_hostname}"
+
+        # Consumer cluster needs to resolve provider connector hostnames + auth + registration
+        consumer_node_host = consumer_ip or common_ip
+        consumer_hosts_extra = "\n".join(
+            f"{common_ip} conn-{short}-{ds_name}.{ds_domain}"
+            for short in provider_shorts
+        )
+        consumer_hosts_extra += f"\n{common_ip} {auth_hostname}\n{common_ip} {rs_hostname}"
+
+        patches = [
+            (provider_kc, provider_node_host, provider_hosts_extra, "provider"),
+            (consumer_kc, consumer_node_host, consumer_hosts_extra, "consumer"),
+        ]
+
+        for kc, node_host, extra_hosts, role in patches:
+            if not kc or not node_host:
+                print(f"[WARN] CoreDNS patch skipped for {role}: kubeconfig or node IP not set")
+                continue
+            try:
+                get = _sp.run(
+                    ["kubectl", "--kubeconfig", kc, "get", "configmap", "coredns",
+                     "-n", "kube-system", "-o", "jsonpath={.data.NodeHosts}"],
+                    capture_output=True, text=True,
+                )
+                existing = get.stdout.strip() if get.returncode == 0 else ""
+                new_lines = []
+                for line in extra_hosts.strip().splitlines():
+                    if line.strip() and line.strip() not in existing:
+                        new_lines.append(line.strip())
+                if not new_lines:
+                    print(f"[OK]   CoreDNS NodeHosts already up to date on {role} cluster")
+                    continue
+                updated = existing.rstrip("\n") + "\n" + "\n".join(new_lines) + "\n"
+                patch_json = json.dumps({"data": {"NodeHosts": updated}})
+                proc = _sp.run(
+                    ["kubectl", "--kubeconfig", kc, "patch", "configmap", "coredns",
+                     "-n", "kube-system", "--type=merge", "-p", patch_json],
+                    capture_output=True, text=True,
+                )
+                if proc.returncode == 0:
+                    print(f"[OK]   CoreDNS NodeHosts patched on {role} cluster (+{len(new_lines)} entries)")
+                else:
+                    print(f"[WARN] CoreDNS patch failed on {role} cluster: {proc.stderr.strip()}")
+            except Exception as exc:
+                print(f"[WARN] CoreDNS patch skipped on {role} cluster: {exc}")
 
     def describe(self) -> str:
         return "EDCConnectorsAdapter provides the generic EDC connector contract for the framework."
