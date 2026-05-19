@@ -5,11 +5,12 @@ import os
 import shlex
 import socket
 import subprocess
+from types import SimpleNamespace
 
 from .config import INESDataConfigAdapter, InesdataConfig
 from .connectors import INESDataConnectorsAdapter
 from .deployment import INESDataDeploymentAdapter
-from deployers.shared.lib.components import build_component_preview
+from deployers.shared.lib.components import build_component_preview, patch_ontology_validator_source
 
 
 class InesdataAdapter:
@@ -118,6 +119,13 @@ class InesdataAdapter:
         return self.deployment.recreate_dataspace(confirm_dataspace=confirm_dataspace)
 
     def deploy_connectors(self):
+        patch_ontology_validator_source(
+            SimpleNamespace(
+                dataspace_name=self.config_adapter.primary_dataspace_name(),
+                config=self.config_adapter.load_deployer_config() or {},
+            ),
+            self.config.script_dir(),
+        )
         return self.connectors.deploy_connectors()
 
     def wait_for_all_connectors(self, connectors):

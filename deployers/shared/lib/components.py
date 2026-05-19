@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -361,3 +363,88 @@ def build_component_preview(
         "unsupported": unsupported_values,
         "unknown": unknown_values,
     }
+
+
+def patch_ontology_validator_source(context: Any, project_root: str) -> bool:
+    """
+    Replaces URL placeholders in JenaValidationService.java with values
+    derived from the current deployment context.
+    """
+    ds_name = getattr(context, "dataspace_name", "unknown")
+    print(f"--> [ONTOLOGY-VALIDATOR-PATCH] Starting patch process for dataspace: {ds_name}...")
+    
+    # 1. Resolve External URL (e.g. http://ontology-hub-demo.dev.ds.dataspaceunit.upm)
+    config = dict(getattr(context, "config", {}) or {})
+    external_host = configured_component_host(
+        "ontology-hub",
+        config,
+        dataspace_name=ds_name
+    )
+    if not external_host:
+        print("    [ONTOLOGY-VALIDATOR-PATCH] Skip: External host could not be resolved.")
+        return False
+
+    raw_url = str(config.get("ONTOLOGY_HUB_URL") or config.get("ONTOLOGY_HUB_HOST") or "")
+    protocol = "https" if str(raw_url).startswith("https://") else "http"
+    external_url = f"{protocol}://{external_host}"
+
+    # 2. Resolve Internal URL (e.g. demo-ontology-hub.components:3333)
+    release_name = resolve_component_release_name("ontology-hub", dataspace_name=ds_name)
+    namespace = "components"
+    if hasattr(context, "namespace_roles"):
+        namespace = context.namespace_roles.components_namespace
+    internal_url = f"http://{release_name}.{namespace}:3333"
+
+    # 3. Path to the file
+    relative_path = os.path.join(
+        "adapters", "inesdata", "sources", "inesdata-connector", 
+        "extensions", "ontology-validator", "src", "main", "java", 
+        "org", "upm", "inesdata", "validator", "services", "impl", 
+        "JenaValidationService.java"
+    )
+
+    repo_root = os.path.abspath(str(project_root or ""))
+    if repo_root.endswith(os.path.join("deployers", "inesdata")):
+        repo_root = os.path.abspath(os.path.join(repo_root, "..", ".."))
+
+    file_path = os.path.abspath(os.path.join(repo_root, relative_path))
+    if not os.path.exists(file_path):
+        alt_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+        file_path = os.path.abspath(os.path.join(alt_root, relative_path))
+
+    if not os.path.exists(file_path):
+        # Fall back to searching upward from project_root for the repository root
+        candidate_roots = [
+            repo_root,
+            os.path.abspath(os.path.join(repo_root, "..")),
+            os.path.abspath(os.path.join(repo_root, "..", "..")),
+            alt_root,
+        ]
+        for candidate_root in candidate_roots:
+            candidate_path = os.path.abspath(os.path.join(candidate_root, relative_path))
+            if os.path.exists(candidate_path):
+                file_path = candidate_path
+                break
+
+    if not os.path.exists(file_path):
+        print(f"    [ONTOLOGY-VALIDATOR-PATCH] Error: Source file not found at {file_path}")
+        return False
+
+    print(f"    [ONTOLOGY-VALIDATOR-PATCH] Target file: {file_path}")
+
+    with open(file_path, "r", encoding="utf-8") as handle:
+        content = handle.read()
+
+    # 4. Perform replacement using regex to be idempotent
+    # This looks for: return url.replace("...", "...");
+    pattern = r'(return\s+url\.replace\(")(.*?)(",\s*")(.*?)("\);)'
+    replacement = rf'\1{external_url}\3{internal_url}\5'
+    
+    updated = re.sub(pattern, replacement, content)
+
+    with open(file_path, "w", encoding="utf-8", newline='\n') as handle:
+        handle.write(updated)
+    
+    print(f"    [ONTOLOGY-VALIDATOR-PATCH] Success: Applied configuration for {ds_name}")
+    print(f"    [ONTOLOGY-VALIDATOR-PATCH] Result: {external_url} -> {internal_url}")
+    return True
