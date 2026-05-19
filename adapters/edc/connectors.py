@@ -1203,6 +1203,11 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
                 "DATABASE_HOSTNAME, KEYCLOAK_HOSTNAME and MINIO_HOSTNAME must be defined in deployer.config"
             )
 
+        if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+            nodeport = str(deployer_config.get("K3S_INGRESS_HTTP_NODEPORT") or "31667").strip()
+            if ":" not in str(minio_hostname):
+                minio_hostname = f"{minio_hostname}:{nodeport}"
+
         dashboard_runtime = self._dashboard_runtime_payload(connector_name, connector_hostnames)
         dashboard_proxy_config = self._dashboard_proxy_config_payload(ds_name, connector_hostnames)
         dashboard_proxy_auth = self._dashboard_proxy_auth_payload(connector_hostnames)
@@ -1944,22 +1949,24 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
 
         auth_hostname = f"auth.{ds_domain}"
         rs_hostname = f"registration-service-{ds_name}.{ds_domain}"
+        minio_hostname_bare = f"minio.{ds_domain}"
+        common_hostnames = f"{common_ip} {auth_hostname}\n{common_ip} {rs_hostname}\n{common_ip} {minio_hostname_bare}"
 
-        # Provider cluster needs to resolve consumer connector hostnames + auth + registration
+        # Provider cluster needs to resolve consumer connector hostnames + shared services
         provider_node_host = provider_ip or common_ip
         provider_hosts_extra = "\n".join(
             f"{common_ip} conn-{short}-{ds_name}.{ds_domain}"
             for short in consumer_shorts
         )
-        provider_hosts_extra += f"\n{common_ip} {auth_hostname}\n{common_ip} {rs_hostname}"
+        provider_hosts_extra += f"\n{common_hostnames}"
 
-        # Consumer cluster needs to resolve provider connector hostnames + auth + registration
+        # Consumer cluster needs to resolve provider connector hostnames + shared services
         consumer_node_host = consumer_ip or common_ip
         consumer_hosts_extra = "\n".join(
             f"{common_ip} conn-{short}-{ds_name}.{ds_domain}"
             for short in provider_shorts
         )
-        consumer_hosts_extra += f"\n{common_ip} {auth_hostname}\n{common_ip} {rs_hostname}"
+        consumer_hosts_extra += f"\n{common_hostnames}"
 
         patches = [
             (provider_kc, provider_node_host, provider_hosts_extra, "provider"),
