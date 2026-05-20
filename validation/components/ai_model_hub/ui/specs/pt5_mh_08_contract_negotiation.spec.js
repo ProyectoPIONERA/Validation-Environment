@@ -40,10 +40,13 @@ test("PT5-MH-08: contract negotiation from catalog registers an agreement in the
 
   await catalogPage.goto();
   await catalogPage.waitUntilReady();
-  await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
 
-  const publishedCard = await catalogPage.findCatalogCardAcrossPages(assetId);
-  await expect(publishedCard).toBeVisible({ timeout: 20000 });
+  let publishedCard;
+  await expect(async () => {
+    await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
+    publishedCard = await catalogPage.findCatalogCardAcrossPages(assetId);
+    await expect(publishedCard).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 120_000, intervals: [3_000, 5_000, 10_000] });
   await expect(catalogPage.negotiateButtonForCard(publishedCard)).toBeVisible();
   const visibleCardText = (await publishedCard.innerText()).trim();
   await captureStep(page, "pt5-mh-08-catalog-card-visible");

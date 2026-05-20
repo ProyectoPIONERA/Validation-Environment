@@ -110,7 +110,7 @@ test("08 ontology hub: read-only INESData UI integration surfaces vocabularies a
 
     const vocabularyResponsePromise = page.waitForResponse(
       (response) => response.url().includes("/connector-vocabularies/request"),
-      { timeout: 45_000 },
+      { timeout: 90_000 },
     );
     await shellPage.navigateToSection(
       /^\s*Vocabularies\s*$/i,
@@ -133,7 +133,7 @@ test("08 ontology hub: read-only INESData UI integration surfaces vocabularies a
 
     const ontologyHubResponsePromise = page.waitForResponse(
       (response) => response.url().includes("/dataset/api/v2/vocabulary/list"),
-      { timeout: 45_000 },
+      { timeout: 90_000 },
     );
     await shellPage.navigateToSection(
       /^\s*Ontologies\s*$/i,

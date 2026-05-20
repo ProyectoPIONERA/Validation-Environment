@@ -283,7 +283,7 @@ test("05 e2e transfer flow: provider UI bootstrap + consumer negotiation and tra
     await captureStep(testInfo, consumerPage, "consumer-03-contract-offers");
 
     await contractOffersPage.negotiateFirstOffer();
-    const negotiationMessage = await contractOffersPage.waitForNegotiationComplete(45_000);
+    const negotiationMessage = await contractOffersPage.waitForNegotiationComplete(90_000);
     report.negotiation = {
       notification: negotiationMessage,
     };

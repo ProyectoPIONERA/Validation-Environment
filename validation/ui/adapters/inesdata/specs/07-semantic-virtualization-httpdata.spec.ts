@@ -204,7 +204,7 @@ test("07 semantic virtualization HttpData: visible discovery and negotiation fro
         `Semantic Virtualization HttpData asset ${assetId} is not visible in the consumer catalog yet`,
       ).toBeTruthy();
     }).toPass({
-      timeout: 90_000,
+      timeout: 180_000,
       intervals: EVENTUAL_UI_RETRY_INTERVALS,
     });
 

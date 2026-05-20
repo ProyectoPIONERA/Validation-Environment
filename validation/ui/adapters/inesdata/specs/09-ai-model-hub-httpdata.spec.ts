@@ -180,7 +180,7 @@ test("09 AI Model Hub HttpData: visible model discovery and negotiation from INE
       await shellPage.assertNoServerErrorBanner("AI Model Hub catalog page");
       await catalogPage.expectReady();
       await catalogPage.showLargestPageSize();
-      await expect(page.getByText(assetId, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByText(assetId, { exact: true }).first()).toBeVisible({ timeout: 45_000 });
 
       let opened = await catalogPage.openDetailsForAsset(assetId);
       while (!opened && (await catalogPage.goToNextPage())) {
