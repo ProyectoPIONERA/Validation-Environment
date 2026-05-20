@@ -683,30 +683,20 @@ También puede declararse con `PIONERA_VALIDATION_MODE=fast`.
 En el layout `role-aligned`, `Level 5` publica componentes configurados en
 `components_namespace`. `Level 6` valida esos componentes después de las suites
 del dataspace y ejecuta por defecto las suites automatizadas A5.2 registradas
-para `ontology-hub`, `ai-model-hub` y `semantic-virtualization`. Cada suite
-verifica el comportamiento funcional de su componente: búsquedas y consultas
-SPARQL para Ontology Hub, gestión de modelos y flujos de inferencia para AI
-Model Hub, y mappings semánticos y virtualización SPARQL para Semantic
-Virtualization. La única suite de validación A5.2 desactivada por defecto es
-Kafka/streaming transfer, por su coste temporal.
+para `ontology-hub`, `ai-model-hub` y `semantic-virtualization`. La única suite
+de validación A5.2 desactivada por defecto es Kafka/streaming transfer, por su
+coste temporal.
 
-Newman verifica el flujo API completo del dataspace: salud del entorno,
-Management API de conectores, setup del provider, descubrimiento de catálogo,
-negociación contractual y transferencia de datos. Kafka verifica el flujo
-de transferencia E2E sobre un broker Kafka. Playwright verifica los flujos
-de usuario sobre la UI de conectores y portales, incluyendo login, negociación
-y comprobación de storage en MinIO.
+Colecciones Newman principales:
 
-Colecciones Newman:
-
-```text
-01_environment_health.json
-02_connector_management_api.json
-03_provider_setup.json
-04_consumer_catalog.json
-05_consumer_negotiation.json
-06_consumer_transfer.json
-```
+| Colección | Uso |
+| --- | --- |
+| `01_environment_health.json` | Salud básica, reachability y autenticación. |
+| `02_connector_management_api.json` | CRUD aislado del Management API. |
+| `03_provider_setup.json` | Preparación del escenario E2E del provider. |
+| `04_consumer_catalog.json` | Descubrimiento de catálogo. |
+| `05_consumer_negotiation.json` | Negociación contractual. |
+| `06_consumer_transfer.json` | Transferencia y recuperación de datos. |
 
 Playwright se resuelve por adapter:
 
