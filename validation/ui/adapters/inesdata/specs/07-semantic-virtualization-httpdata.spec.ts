@@ -192,7 +192,7 @@ test("07 semantic virtualization HttpData: visible discovery and negotiation fro
       await shellPage.assertNoServerErrorBanner("Semantic Virtualization catalog page");
       await catalogPage.expectReady();
       await catalogPage.showLargestPageSize();
-      await expect(page.getByText(assetId, { exact: true })).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByText(assetId, { exact: true })).toBeVisible({ timeout: 5_000 });
 
       let opened = await catalogPage.openDetailsForAsset(assetId);
       while (!opened && (await catalogPage.goToNextPage())) {

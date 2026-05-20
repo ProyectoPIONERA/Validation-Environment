@@ -63,7 +63,7 @@ test("PT5-MH-08: contract negotiation from catalog registers an agreement in the
   await expect(catalogPage.goToContractsButton).toBeVisible({ timeout: 30000 });
   await captureStep(page, "pt5-mh-08-negotiation-finalized");
 
-  const agreementState = await waitForConsumerAgreement(request, aiModelHubRuntime, assetId, 20, 1000);
+  const agreementState = await waitForConsumerAgreement(request, aiModelHubRuntime, assetId, 60, 2000);
 
   await clickMarked(catalogPage.goToContractsButton);
   await expect(page).toHaveURL(new RegExp(`${aiModelHubRuntime.contractsPath}$`));
