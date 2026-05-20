@@ -578,32 +578,17 @@ generadas para Keycloak, MinIO y conectores viven bajo
 
 ## Acceso Externo (entorno VM/PIONERA)
 
-En entornos desplegados en VM, los conectores y servicios pueden requerir un
-proxy externo para quedar accesibles desde fuera de la máquina host. El
-framework ya soporta `PUBLIC_HOSTNAME` para ajustar el `frontendUrl` de
-Keycloak, y además incluye un script operativo para preparar el acceso público
-vía nginx en la VM:
+En la topología `vm-distributed`, el proxy nginx de pioneer40 se genera y recarga
+automáticamente por el framework durante **Level 2**. No se requiere intervención
+manual ni scripts externos: los ficheros
+`/etc/nginx/sites-enabled/pionera-dataspace.conf` y
+`/etc/nginx/conf.d/connector-routing.conf` son sobreescritos cada vez que se
+ejecuta Level 2 con cualquier adapter. El framework genera siempre las rutas de
+ambos adapters (INESData y EDC) simultáneamente para evitar conflictos.
 
-```bash
-cd deployers/inesdata/scripts
-bash setup-nginx-proxy.sh [cluster_ip] [vm_ip] [public_hostname] [internal_domain]
-```
-
-Ejemplo:
-
-```bash
-bash setup-nginx-proxy.sh 192.168.49.2 <vm_ip> <public_hostname> <internal_domain>
-```
-
-El script:
-
-1. instala nginx e iptables persistentes en la VM;
-2. configura reglas de redirección hacia el clúster;
-3. ajusta el acceso a UIs de conectores, `/auth/` y `/s3-console/`;
-4. ayuda a publicar un hostname externo coherente para browser, Keycloak y MinIO.
-
-La arquitectura y las URLs de referencia están documentadas en
-[docs/acceso_externo_conectores_pionera.md](./docs/acceso_externo_conectores_pionera.md).
+Para topologías distintas de `vm-distributed` o configuraciones manuales, existe
+el script legacy `deployers/inesdata/scripts/setup-nginx-proxy.sh`; no es
+necesario en PIONERA vm-distributed.
 
 ## CLI Principal
 
