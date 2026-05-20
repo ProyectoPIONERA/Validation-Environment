@@ -3,6 +3,7 @@ import { Component, OnInit } from '@angular/core';
 import { TransferProcessService } from "../../shared/services/transferProcess.service";
 import { QuerySpec, TransferProcess } from "../../shared/models/edc-connector-entities";
 import { ConfirmationDialogComponent, ConfirmDialogModel } from "../../shared/components/confirmation-dialog/confirmation-dialog.component";
+import { TransferDetailsDialogComponent } from './transfer-details-dialog.component';
 import { MatDialog } from "@angular/material/dialog";
 import { PageEvent } from '@angular/material/paginator';
 
@@ -155,5 +156,19 @@ export class TransferHistoryViewerComponent implements OnInit {
       return 'validation-skipped';
     }
     return 'validation-failed';
+  }
+
+  openValidationDetails(item: any) {
+    const display = this.getValidationDisplay(item);
+    if (!display || display === 'N/A') {
+      return;
+    }
+    this.dialog.open(TransferDetailsDialogComponent, {
+      width: '600px',
+      data: {
+        title: 'Validation details',
+        content: display
+      }
+    });
   }
 }
