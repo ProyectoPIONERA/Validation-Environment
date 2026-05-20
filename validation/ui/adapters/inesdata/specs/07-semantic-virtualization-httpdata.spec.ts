@@ -103,8 +103,8 @@ test("07 semantic virtualization HttpData: visible discovery and negotiation fro
 
   const isTolerableCatalogRetry = (url: string, status: number): boolean =>
     (status === 401 || status === 500 || status === 503) &&
-    (url.includes("/management/pagination/count?type=federatedCatalog") ||
-      url.includes("/management/federatedcatalog/request"));
+    (url.includes("/pagination/count?type=federatedCatalog") ||
+      url.includes("/federatedcatalog/request"));
 
   page.on("response", (response) => {
     const url = response.url();
