@@ -919,6 +919,27 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             "        proxy_set_header Upgrade $http_upgrade;\n"
             '        proxy_set_header Connection "upgrade";\n'
             "    }\n"
+            "}\n\n"
+            "# Wildcard HTTPS catch-all for component subdomains — browser cross-origin requests\n"
+            "# (e.g. INESData portal at org1.* calling OH/SV/AMH APIs at their subdomains)\n"
+            "server {\n"
+            f"    listen {common_ip}:443 ssl;\n"
+            f"    ssl_certificate     {CERT_PATH};\n"
+            f"    ssl_certificate_key {KEY_PATH};\n"
+            "    ssl_protocols       TLSv1.2 TLSv1.3;\n"
+            "    ssl_ciphers         HIGH:!aNULL:!MD5;\n"
+            f"    server_name *.{ds_domain};\n"
+            "    client_max_body_size 0;\n"
+            "    location / {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            "        proxy_set_header Host $host;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "        proxy_http_version 1.1;\n"
+            "        proxy_set_header Upgrade $http_upgrade;\n"
+            '        proxy_set_header Connection "upgrade";\n'
+            "    }\n"
             "}\n"
         )
 
