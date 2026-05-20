@@ -59,11 +59,11 @@ vm-single
 vm-distributed
 ```
 
-`local` es la ruta de despliegue normal y usa Minikube. `vm-single` ya dispone
-de ejecución real para la ruta base del dataspace en `inesdata` y `edc`, y usa
-el mismo modelo `role-aligned` de namespaces. `vm-distributed` sigue formando
-parte del contexto del deployer y de la planificación de hosts, pero todavía
-permanece como topología planificada.
+`local` es la ruta de despliegue normal y usa Minikube. `vm-single` usa el
+modelo `role-aligned` de namespaces con una única VM. `vm-distributed` está
+operativa: despliega los servicios comunes y componentes en una VM dedicada
+(pioneer40) y los conectores provider/consumer en dos VMs independientes
+(pioneer20 y pioneer3), todas bajo k3s.
 
 ## Inicio Rápido
 
@@ -249,6 +249,79 @@ kubectl get ingress -A
 
 ```bash
 python3 main.py menu --topology vm-single
+```
+
+### Inicio Rápido Para `vm-distributed` En Tres VMs
+
+`vm-distributed` requiere tres máquinas accesibles entre sí:
+
+| VM | IP de ejemplo | Rol |
+|----|---------------|-----|
+| pioneer40 | `192.168.122.64` | Servicios comunes (Keycloak, MinIO, PostgreSQL, Vault) + componentes (OntologyHub, AI Model Hub) |
+| pioneer20 | `192.168.122.134` | Conector provider (k3s) |
+| pioneer3 | `192.168.122.9` | Conector consumer (k3s) |
+
+Los kubeconfig de los tres clusters deben estar disponibles localmente. Las
+rutas predeterminadas son las que el framework espera en
+`deployers/infrastructure/topologies/vm-distributed.config`:
+
+```ini
+K3S_KUBECONFIG=/home/pionera/.kube/config
+K3S_KUBECONFIG_PROVIDER=/home/pionera/.kube/k3s-pionera20.yaml
+K3S_KUBECONFIG_CONSUMER=/home/pionera/.kube/k3s-pionera3.yaml
+```
+
+Para arrancar:
+
+```bash
+cd ~/Validation-Environment
+cp deployers/infrastructure/deployer.config.example deployers/infrastructure/deployer.config
+cp deployers/infrastructure/topologies/vm-distributed.config.example \
+  deployers/infrastructure/topologies/vm-distributed.config
+nano deployers/infrastructure/deployer.config
+nano deployers/infrastructure/topologies/vm-distributed.config
+```
+
+Bloque mínimo en `vm-distributed.config`:
+
+```ini
+VM_COMMON_IP=<IP de pioneer40>
+VM_PROVIDER_IP=<IP de pioneer20>
+VM_CONSUMER_IP=<IP de pioneer3>
+VAULT_URL=http://<IP de pioneer40>:8200
+VT_URL=http://<IP de pioneer40>:8200
+DATABASE_HOSTNAME=<IP de pioneer40>
+INGRESS_EXTERNAL_IP=<IP de pioneer40>
+```
+
+El framework también necesita que los hostnames públicos del dataspace resuelvan
+a las IPs correctas. En entornos PIONERA con DNS público, esto ya viene dado; en
+entornos privados, añade las entradas correspondientes en `/etc/hosts` o usa la
+opción `H` del menú para planificarlas.
+
+**Proxy nginx en pioneer40 para la consola MinIO**
+
+La consola MinIO usa WebSockets para listar objetos. El bloque nginx del servidor
+`console.minio-s3.<dominio>` necesita las cabeceras de upgrade:
+
+```nginx
+location / {
+    proxy_pass http://<IP pioneer40>:<nodeport>;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+}
+```
+
+Sin estas cabeceras, el handshake WebSocket falla con HTTP 400 y el listado de
+objetos queda bloqueado en "Loading...". El framework aplica esta configuración
+automáticamente al ejecutar el nivel correspondiente de infraestructura.
+
+Para entrar al menú con esta topología:
+
+```bash
+python3 main.py menu --topology vm-distributed
 ```
 
 ## Hosts Locales
@@ -610,20 +683,30 @@ También puede declararse con `PIONERA_VALIDATION_MODE=fast`.
 En el layout `role-aligned`, `Level 5` publica componentes configurados en
 `components_namespace`. `Level 6` valida esos componentes después de las suites
 del dataspace y ejecuta por defecto las suites automatizadas A5.2 registradas
-para `ontology-hub`, `ai-model-hub` y `semantic-virtualization`. La única suite
-de validación A5.2 desactivada por defecto es Kafka/streaming transfer, por su
-coste temporal.
+para `ontology-hub`, `ai-model-hub` y `semantic-virtualization`. Cada suite
+verifica el comportamiento funcional de su componente: búsquedas y consultas
+SPARQL para Ontology Hub, gestión de modelos y flujos de inferencia para AI
+Model Hub, y mappings semánticos y virtualización SPARQL para Semantic
+Virtualization. La única suite de validación A5.2 desactivada por defecto es
+Kafka/streaming transfer, por su coste temporal.
 
-Colecciones Newman principales:
+Newman verifica el flujo API completo del dataspace: salud del entorno,
+Management API de conectores, setup del provider, descubrimiento de catálogo,
+negociación contractual y transferencia de datos. Kafka verifica el flujo
+de transferencia E2E sobre un broker Kafka. Playwright verifica los flujos
+de usuario sobre la UI de conectores y portales, incluyendo login, negociación
+y comprobación de storage en MinIO.
 
-| Colección | Uso |
-| --- | --- |
-| `01_environment_health.json` | Salud básica, reachability y autenticación. |
-| `02_connector_management_api.json` | CRUD aislado del Management API. |
-| `03_provider_setup.json` | Preparación del escenario E2E del provider. |
-| `04_consumer_catalog.json` | Descubrimiento de catálogo. |
-| `05_consumer_negotiation.json` | Negociación contractual. |
-| `06_consumer_transfer.json` | Transferencia y recuperación de datos. |
+Colecciones Newman:
+
+```text
+01_environment_health.json
+02_connector_management_api.json
+03_provider_setup.json
+04_consumer_catalog.json
+05_consumer_negotiation.json
+06_consumer_transfer.json
+```
 
 Playwright se resuelve por adapter:
 
@@ -659,10 +742,10 @@ bash scripts/run_kafka_benchmark.sh --teardown-only
 ```
 
 El benchmark standalone puede generar `kafka_metrics.json` y mide el broker
-Kafka, no el flujo E2E del dataspace. Además, `Level 6` puede ejecutar la
-validación funcional EDC+Kafka después de Newman para adapters compatibles y
-generar `kafka_transfer_results.json`. Esa suite está desactivada por defecto
-para ahorrar tiempo. En ejecuciones interactivas, `Level 6` pregunta
+Kafka, no el flujo E2E del dataspace. Además, `Level 6` ejecuta la validación
+funcional EDC+Kafka después de Newman para adapters compatibles y genera
+`kafka_transfer_results.json`. Esta suite está validada en `vm-distributed`
+con el adapter `edc`. En ejecuciones interactivas, `Level 6` pregunta
 `Run Kafka validation suites too?`; en ejecuciones no interactivas, usa
 `PIONERA_LEVEL6_RUN_KAFKA=true`.
 
