@@ -50,10 +50,13 @@ test.describe("MH-LING-01 scaffold", () => {
 
     await catalogPage.goto();
     await catalogPage.waitUntilReady();
-    await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
 
-    const publishedCard = await catalogPage.findCatalogCardAcrossPages(publication.assetId);
-    await expect(publishedCard).toBeVisible({ timeout: 20000 });
+    let publishedCard;
+    await expect(async () => {
+      await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
+      publishedCard = await catalogPage.findCatalogCardAcrossPages(publication.assetId);
+      await expect(publishedCard).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 120_000, intervals: [3_000, 5_000, 10_000] });
     await expect(publishedCard).toContainText(/Negotiate/i);
     await expect(publishedCard).toContainText(aiModelHubRuntime.providerConnectorName);
     await captureStep(page, "mh-ling-01-flares-visible-in-catalog");

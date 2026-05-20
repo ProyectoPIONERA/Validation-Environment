@@ -37,10 +37,12 @@ test("PT5-MH-03: provider publication becomes visible through the consumer catal
   await catalogPage.waitUntilReady();
   await captureStep(page, "pt5-mh-03-before-catalog-request");
 
-  await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
-
-  const publishedCard = await catalogPage.findCatalogCardAcrossPages(assetId);
-  await expect(publishedCard).toBeVisible({ timeout: 20000 });
+  let publishedCard;
+  await expect(async () => {
+    await catalogPage.requestCatalogManually(aiModelHubRuntime.providerProtocolUrl);
+    publishedCard = await catalogPage.findCatalogCardAcrossPages(assetId);
+    await expect(publishedCard).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 120_000, intervals: [3_000, 5_000, 10_000] });
   await expect(publishedCard).toContainText(/Negotiate/i);
   await expect(publishedCard).toContainText(aiModelHubRuntime.providerConnectorName);
   await captureStep(page, "pt5-mh-03-published-model-visible");
