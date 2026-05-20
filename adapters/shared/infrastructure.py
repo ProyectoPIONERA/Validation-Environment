@@ -902,6 +902,23 @@ class SharedFoundationInfrastructureAdapter(INESDataInfrastructureAdapter):
             "        proxy_set_header Connection \"upgrade\";\n"
             "        proxy_read_timeout 300s;\n"
             "    }\n"
+            "}\n\n"
+            "# Wildcard catch-all for component subdomains (AI Model Hub, OH, SV, etc.)\n"
+            "# Specific connector blocks in vm-distributed-<ds>.conf take precedence (exact match wins).\n"
+            "server {\n"
+            f"    listen {common_ip}:80;\n"
+            f"    server_name *.{ds_domain};\n"
+            "    client_max_body_size 0;\n"
+            "    location / {\n"
+            f"        proxy_pass http://{common_ip}:{nodeport};\n"
+            "        proxy_set_header Host $host;\n"
+            "        proxy_set_header X-Real-IP $remote_addr;\n"
+            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
+            "        proxy_http_version 1.1;\n"
+            "        proxy_set_header Upgrade $http_upgrade;\n"
+            '        proxy_set_header Connection "upgrade";\n'
+            "    }\n"
             "}\n"
         )
 
