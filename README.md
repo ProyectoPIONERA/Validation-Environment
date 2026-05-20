@@ -586,10 +586,6 @@ manual ni scripts externos: los ficheros
 ejecuta Level 2 con cualquier adapter. El framework genera siempre las rutas de
 ambos adapters (INESData y EDC) simultáneamente para evitar conflictos.
 
-Para topologías distintas de `vm-distributed` o configuraciones manuales, existe
-el script legacy `deployers/inesdata/scripts/setup-nginx-proxy.sh`; no es
-necesario en PIONERA vm-distributed.
-
 ## CLI Principal
 
 Listar adapters:
