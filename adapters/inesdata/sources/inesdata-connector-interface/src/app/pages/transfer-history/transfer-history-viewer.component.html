@@ -46,7 +46,11 @@
             [class]="getValidationCssClass(item)"
             [matTooltip]="getValidationDisplay(item)"
             matTooltipClass="validation-tooltip">
-          {{ getValidationDisplay(item) }}
+          <button mat-button color="primary" class="validation-details-button"
+                  *ngIf="getValidationDisplay(item) && getValidationDisplay(item) !== 'N/A'"
+                  (click)="openValidationDetails(item)">
+            Details
+          </button>
         </td>
       </ng-container>
 

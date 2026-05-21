@@ -35,6 +35,7 @@ import { MatCheckboxModule } from '@angular/material/checkbox';
 import { FooterComponent } from './components/footer/footer.component';
 import { SpinnerComponent } from './components/spinner/spinner.component';
 import { SnackBarAnimationDirective } from './directives/snackbar-animation.directive';
+import { TransferDetailsDialogComponent } from '../pages/transfer-history/transfer-details-dialog.component';
 
 
 @NgModule({
@@ -71,6 +72,7 @@ import { SnackBarAnimationDirective } from './directives/snackbar-animation.dire
   declarations: [
     NavigationComponent,
     ConfirmationDialogComponent,
+    TransferDetailsDialogComponent,
     UploaderFileComponent,
     DndDirective,
     FooterComponent,
@@ -80,6 +82,7 @@ import { SnackBarAnimationDirective } from './directives/snackbar-animation.dire
   exports: [
     NavigationComponent,
     ConfirmationDialogComponent,
+    TransferDetailsDialogComponent,
     UploaderFileComponent,
     DndDirective,
     MatIconModule,
