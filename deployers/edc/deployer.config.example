@@ -5,11 +5,28 @@ DS_1_REGISTRATION_NAMESPACE=edc-control
 DS_1_PROVIDER_NAMESPACE=edc-provider
 DS_1_CONSUMER_NAMESPACE=edc-consumer
 COMMON_SERVICES_NAMESPACE=common-srvs
-COMPONENTS_NAMESPACE=components
 DS_1_CONNECTORS=citycounciledc,companyedc
-COMPONENTS=ontology-hub,ai-model-hub,semantic-virtualization
+DS_DOMAIN_BASE=pionera.oeg.fi.upm.es
+
 EDC_DASHBOARD_ENABLED=true
 EDC_DASHBOARD_PROXY_AUTH_MODE=oidc-bff
 EDC_DASHBOARD_PROXY_CLIENT_ID=dataspace-users
 EDC_DASHBOARD_PROXY_SCOPE=openid profile email
 EDC_DASHBOARD_BASE_HREF=/edc-dashboard/
+
+# Kafka — broker reachable from the framework host
+KAFKA_K8S_NAMESPACE=core-control
+KAFKA_K8S_PROBE_NAMESPACES=core-control
+KAFKA_BOOTSTRAP_SERVERS=
+KAFKA_CLUSTER_BOOTSTRAP_SERVERS=
+
+# MinIO endpoint for EDC data-plane transfer validation
+MINIO_ENDPOINT=
+
+# Container image overrides (leave empty to use chart defaults)
+EDC_CONNECTOR_IMAGE_NAME=
+EDC_CONNECTOR_IMAGE_TAG=
+EDC_DASHBOARD_IMAGE_NAME=
+EDC_DASHBOARD_IMAGE_TAG=
+EDC_DASHBOARD_PROXY_IMAGE_NAME=
+EDC_DASHBOARD_PROXY_IMAGE_TAG=

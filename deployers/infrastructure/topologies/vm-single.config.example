@@ -1,9 +1,12 @@
+# VM addresses — single VM hosts everything; VM_EXTERNAL_IP as shared fallback
 VM_EXTERNAL_IP=
 VM_COMMON_IP=
 VM_DATASPACE_IP=
 VM_CONNECTORS_IP=
 VM_COMPONENTS_IP=
 INGRESS_EXTERNAL_IP=
+
+# Cluster runtime — vm-single supports either minikube or k3s
 CLUSTER_TYPE=minikube
 MINIKUBE_DRIVER=docker
 MINIKUBE_CPUS=8
