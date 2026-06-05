@@ -20,7 +20,7 @@ en `experiments/` y no forman parte de la documentación estable de `docs/`.
 7. [Visor de reportes](./40_report_viewer.md)
 8. [Preparación de conectores externos](./45_external_connector_readiness.md)
 9. [Guía operativa de vm-distributed](./46_vm_distributed_runbook.md)
-10. [Trazabilidad del snapshot vm-distributed](./47_vm_distributed_snapshot_traceability.md)
+10. [Registro de versión validada vm-distributed](./47_vm_distributed_snapshot_traceability.md)
 11. [Troubleshooting](./39_troubleshooting.md)
 
 Esta ruta separa la documentación vigente de la trazabilidad histórica. Los
@@ -39,7 +39,7 @@ evolución técnica, pero no deben sustituir a la documentación operativa actua
 8. [Colecciones Newman y Postman](./31_postman_newman_collections.md)
 9. [Preparación de conectores externos](./45_external_connector_readiness.md)
 10. [Guía operativa de vm-distributed](./46_vm_distributed_runbook.md)
-11. [Trazabilidad del snapshot vm-distributed](./47_vm_distributed_snapshot_traceability.md)
+11. [Registro de versión validada vm-distributed](./47_vm_distributed_snapshot_traceability.md)
 12. [Desarrollo y testing](./38_development_and_testing.md)
 13. [Troubleshooting](./39_troubleshooting.md)
 
@@ -74,7 +74,7 @@ la entrada recomendada para automatización y ejecuciones reproducibles.
 | [Visor de reportes](./40_report_viewer.md) | Revisión local de experimentos generados |
 | [Preparación de conectores externos](./45_external_connector_readiness.md) | Datos, límites y checklist para topología distribuida y conectores externos |
 | [Guía operativa de vm-distributed](./46_vm_distributed_runbook.md) | Procedimiento guiado para operar, auditar, ampliar y validar una topología distribuida |
-| [Trazabilidad del snapshot vm-distributed](./47_vm_distributed_snapshot_traceability.md) | Rama, tag, alcance validado y límites de auditoría de la versión distribuida funcional |
+| [Registro de versión validada vm-distributed](./47_vm_distributed_snapshot_traceability.md) | Rama, tag, alcance validado y límites de la versión distribuida funcional |
 | [Targets externos](./29_inesdata_external_validation_targets.md) | Validación read-only de targets no desplegados por el framework |
 | [Flujo manual histórico INESData](./legacy_inesdata_manual/00_historical_inesdata_manual_flow.md) | Flujo manual histórico de INESData, conservado solo para trazabilidad |
 
@@ -130,7 +130,7 @@ operativa anteriores.
 | [44](./44_audit_navigation_guide.md) | Guía de navegación para auditoría |
 | [45](./45_external_connector_readiness.md) | Preparación de conectores externos |
 | [46](./46_vm_distributed_runbook.md) | Guía operativa de vm-distributed |
-| [47](./47_vm_distributed_snapshot_traceability.md) | Trazabilidad del snapshot vm-distributed |
+| [47](./47_vm_distributed_snapshot_traceability.md) | Registro de versión validada vm-distributed |
 | [Inventario de entorno de pruebas](./test_environment_inventory.pdf) | Inventario público del entorno de pruebas |
 
 ## Diagramas

@@ -67,8 +67,9 @@ en la rama `snapshot/pionera40-vm-distributed` y en el tag
 como validación automática de `local` ni de `vm-single`; esas topologías deben
 revalidarse en la misma línea antes de declararlas estables.
 
-Consulta [la trazabilidad del snapshot vm-distributed](./docs/47_vm_distributed_snapshot_traceability.md)
-para usar la versión correcta en demos o revisión de auditoría.
+Consulta el
+[registro de versión validada vm-distributed](./docs/47_vm_distributed_snapshot_traceability.md)
+para revisar el alcance y la referencia versionada de esa topología.
 
 ## Inicio Rápido
 

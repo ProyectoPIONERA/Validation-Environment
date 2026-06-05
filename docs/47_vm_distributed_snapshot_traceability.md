@@ -1,57 +1,60 @@
-# Trazabilidad del Snapshot `vm-distributed`
+# Registro de Versión Validada `vm-distributed`
 
-## Objetivo
+## Propósito
 
-Este documento fija la referencia técnica que debe usarse para explicar y
-reproducir la versión funcional de la topología `vm-distributed` durante demos,
-revisión interna y auditoría.
-
-La finalidad es evitar mezclar una rama general de desarrollo con la versión que
-sí fue identificada a partir de un entorno distribuido real y operativo.
+Este documento registra una referencia versionada de la topología
+`vm-distributed` del framework. Su objetivo es ofrecer trazabilidad técnica
+sobre una versión identificada a partir de un entorno distribuido operativo, sin
+confundir ese alcance con la estabilidad global de todas las topologías del
+repositorio.
 
 ## Referencia Versionada
 
 | Campo | Valor |
 | --- | --- |
-| Rama de referencia | `snapshot/pionera40-vm-distributed` |
-| Tag de demo/auditoría | `vm-distributed-pionera40-demo-2026-06-05` |
-| Commit | `0255bff` |
-| Alcance confirmado | Topología `vm-distributed` |
-| Estado de `local` | Pendiente de revalidación en esta línea |
-| Estado de `vm-single` | Pendiente de revalidación en esta línea |
+| Rama | `snapshot/pionera40-vm-distributed` |
+| Tag | `vm-distributed-pionera40-demo-2026-06-05` |
+| Commit base de la referencia funcional | `0255bff` |
+| Topología cubierta | `vm-distributed` |
+| Topologías no cubiertas por esta referencia | `local`, `vm-single` |
 
-El tag es la referencia más estable para demos y auditoría porque apunta a un
-commit concreto. La rama snapshot permite revisar la evolución documental o
-correcciones posteriores sin perder esa referencia fija.
+El tag apunta a un commit concreto y debe usarse como referencia fija cuando se
+necesite revisar la versión validada. La rama snapshot puede contener
+documentación o ajustes posteriores relacionados con la trazabilidad, sin mover
+el tag.
 
-## Criterio de Auditoría
+## Alcance
 
-La versión de `vm-distributed` se considera defendible porque:
+La referencia cubre la topología `vm-distributed` del framework. No constituye
+una declaración de estabilidad para `main`, ni certifica automáticamente el
+estado de `local` o `vm-single`.
 
-- se identificó a partir de un entorno distribuido real que estaba operativo;
-- se reconstruyó en una rama separada para preservar trazabilidad;
-- se revisó antes de subirla al repositorio remoto;
-- no se versionaron artefactos auxiliares de diagnóstico;
-- no se versionaron contraseñas, tokens, claves privadas, cookies ni
-  kubeconfigs reales;
-- los valores sensibles encontrados durante la revisión se sustituyeron por
-  marcadores seguros;
-- no se fusionó con `main` sin una revalidación previa de todas las topologías.
+Antes de promover cambios desde esta rama hacia una rama principal de desarrollo,
+se recomienda ejecutar una matriz de revalidación por topología.
 
-Este criterio no afirma que todas las topologías del framework estén validadas
-en el mismo commit. Afirma que la topología `vm-distributed` tiene una
-referencia trazable y separada.
+## Criterios de Trazabilidad
 
-## Uso Recomendado Para Demo
+La referencia se conserva separada porque cumple estos criterios:
 
-Para revisar exactamente la versión etiquetada:
+- procede de una versión reconstruida desde un entorno distribuido operativo;
+- está identificada mediante rama, tag y commit;
+- separa el alcance validado de las topologías pendientes de revalidación;
+- conserva la trazabilidad sin publicar artefactos auxiliares de diagnóstico;
+- evita versionar contraseñas, tokens, claves privadas, cookies o kubeconfigs
+  reales;
+- documenta explícitamente que la estabilidad de una topología no implica la
+  estabilidad automática de las demás.
+
+## Uso de la Referencia
+
+Para revisar el commit etiquetado:
 
 ```bash
 git fetch --all --tags
-git checkout tags/vm-distributed-pionera40-demo-2026-06-05 -b demo/vm-distributed-pionera40
+git checkout tags/vm-distributed-pionera40-demo-2026-06-05 -b review/vm-distributed
 ```
 
-Para trabajar sobre la rama snapshot:
+Para revisar la rama snapshot:
 
 ```bash
 git fetch origin
@@ -59,43 +62,17 @@ git checkout snapshot/pionera40-vm-distributed
 git pull
 ```
 
-Usa esta referencia para demos de `vm-distributed`. No uses `main` como prueba de
-estabilidad de esta topología mientras no exista una matriz de revalidación
-actualizada.
+## Matriz Mínima Antes de Fusionar
 
-## Redacción Recomendada Para Entregable
+Antes de fusionar cambios hacia una rama principal, se recomienda registrar una
+matriz de validación como la siguiente:
 
-Texto breve defendible:
-
-```text
-La topología distribuida se validó sobre una versión snapshot reconstruida desde
-un entorno real funcional. La versión fue preservada en una rama separada y en
-un tag fijo para asegurar trazabilidad, reproducibilidad de demo y revisión de
-auditoría. Antes de versionarla se realizó una revisión de seguridad para evitar
-subir secretos o artefactos auxiliares. Las topologías local y vm-single no se
-declaran estables en esa misma línea hasta completar su revalidación específica.
-```
-
-## Qué No Debe Interpretarse
-
-Esta referencia no debe interpretarse como:
-
-- una declaración de estabilidad global de `main`;
-- una certificación automática de `local` o `vm-single`;
-- una autorización para publicar secretos, kubeconfigs o logs privados;
-- una obligación de fusionar la rama snapshot a `main`.
-
-## Siguiente Paso Antes de Fusionar
-
-Antes de mover cambios hacia `main`, debe existir una matriz mínima de
-validación:
-
-| Topología | Evidencia mínima esperada |
+| Topología | Estado esperado antes de fusionar |
 | --- | --- |
-| `local` | Niveles críticos ejecutados y validación funcional sin contaminación de hosts ni recursos |
-| `vm-single` | Despliegue con su runtime esperado y validación funcional de conectores/componentes |
-| `vm-distributed` | Referencia snapshot, evidencia de despliegue distribuido y resultados de validación asociados |
+| `local` | Revalidación de niveles críticos y validación funcional |
+| `vm-single` | Revalidación con el runtime configurado para esa topología |
+| `vm-distributed` | Evidencia de despliegue distribuido y validación asociada |
 
-La fusión a `main` debe hacerse por bloques pequeños y revisables, evitando
-mezclar cambios de infraestructura, componentes, tests y documentación en una
-única operación grande.
+La fusión debe realizarse por bloques pequeños y revisables para mantener
+separadas las decisiones de infraestructura, despliegue, validación y
+documentación.
