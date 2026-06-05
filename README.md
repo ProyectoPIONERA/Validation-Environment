@@ -59,12 +59,16 @@ vm-single
 vm-distributed
 ```
 
-`local` es la ruta de despliegue normal y usa Minikube. `vm-single` ya dispone
-de ejecución real para la ruta base del dataspace en `inesdata` y `edc`, y usa
-el mismo modelo `role-aligned` de namespaces. `vm-distributed` sigue formando
-parte del contexto del deployer y de la planificación de hosts; el menú incluye
-un asistente para preparar sus `.config` locales, aunque la ejecución completa de
-la topología se mantiene como evolución controlada.
+`local` es la ruta de despliegue normal del framework. `vm-single` y
+`vm-distributed` cubren escenarios con máquinas virtuales. Para cierre de demo y
+auditoría, la referencia funcional confirmada de `vm-distributed` está separada
+en la rama `snapshot/pionera40-vm-distributed` y en el tag
+`vm-distributed-pionera40-demo-2026-06-05`. Esa referencia no debe interpretarse
+como validación automática de `local` ni de `vm-single`; esas topologías deben
+revalidarse en la misma línea antes de declararlas estables.
+
+Consulta [la trazabilidad del snapshot vm-distributed](./docs/47_vm_distributed_snapshot_traceability.md)
+para usar la versión correcta en demos o revisión de auditoría.
 
 ## Inicio Rápido
 
