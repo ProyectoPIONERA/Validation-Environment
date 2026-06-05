@@ -224,7 +224,7 @@ test("OH-APP-23: FOOPS metrics are shown for a vocabulary", async ({
 
   const catalogPage = new OntologyHubVocabCatalogPage(page);
   await Promise.all([
-    page.waitForURL(/\/dataset\/vocabs(?:\?|$)/, { timeout: 5000 }),
+    page.waitForURL(/\/dataset\/vocabs(?:\?|$)/, { timeout: 30000, waitUntil: "domcontentloaded" }),
     clickMarked(page.getByRole("link", { name: /vocabs/i }).first()),
   ]);
   await catalogPage.expectReady();

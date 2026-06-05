@@ -79,7 +79,9 @@ class AIModelHubModelExecutionApiSuite:
         self.ds_name_loader = ds_name_loader or (lambda: "demo")
         self.management_url_resolver = management_url_resolver
         self.keycloak_url_resolver = keycloak_url_resolver
-        self.session = session or requests.Session()
+        _default_session = requests.Session()
+        _default_session.verify = False
+        self.session = session or _default_session
         self.uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
 
     @staticmethod
@@ -299,8 +301,10 @@ class AIModelHubModelExecutionApiSuite:
         runtime: dict[str, Any],
     ) -> tuple[int, Any, str]:
         if runtime.get("adapter") == "edc":
-            path = f"/{str(runtime.get('inference_api_path') or '/api/infer').lstrip('/')}"
-            url = self._management_url(provider, path)
+            path = str(runtime.get('inference_api_path') or '/api/infer').lstrip('/')
+            mgmt = _env_first("AI_MODEL_HUB_PROVIDER_MANAGEMENT_URL").rstrip("/")
+            base = mgmt[: -len("/management")] if mgmt.endswith("/management") else mgmt
+            url = f"{base}/{path}"
             request_payload = {
                 "assetId": asset_id,
                 "method": "POST",
@@ -498,6 +502,68 @@ class AIModelHubModelExecutionApiSuite:
             },
         }
 
+    def _wait_for_provider_management_ready(
+        self,
+        provider: str,
+        provider_jwt: str,
+        runtime: dict[str, Any] | None = None,
+        max_wait_seconds: int = 300,
+        poll_interval_seconds: int = 5,
+        token_refresh_interval_seconds: int = 240,
+    ) -> tuple[int, int, str]:
+        """Wait until the provider management API accepts asset write operations.
+
+        After a connector restart, this probe waits up to 300s for the management
+        API to become ready. Keycloak tokens expire after ~300s, so the token
+        refresh interval is set conservatively.
+        """
+        probe_id = f"__probe-asset-ready-{int(time.time())}"
+        create_url = self._management_url(provider, "/management/v3/assets")
+        delete_url = self._management_url(provider, f"/management/v3/assets/{probe_id}")
+        probe_payload = {
+            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+            "@id": probe_id,
+            "properties": {"name": "readiness-probe"},
+            "dataAddress": {"type": "HttpData", "baseUrl": "http://localhost/probe"},
+        }
+        current_jwt = provider_jwt
+        headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+        start = time.time()
+        last_token_refresh = start
+        deadline = start + max_wait_seconds
+        attempts = 0
+        while time.time() < deadline:
+            if runtime and (time.time() - last_token_refresh) >= token_refresh_interval_seconds:
+                try:
+                    current_jwt = self._login(provider, "provider", runtime)
+                    headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+                    last_token_refresh = time.time()
+                except Exception:
+                    pass
+            attempts += 1
+            try:
+                r = self.session.post(create_url, json=probe_payload, headers=headers, timeout=10)
+                if r.status_code in {200, 201, 409}:
+                    if r.status_code in {200, 201}:
+                        try:
+                            self.session.delete(
+                                delete_url,
+                                headers={"Authorization": f"Bearer {current_jwt}"},
+                                timeout=10,
+                            )
+                        except Exception:
+                            pass
+                    return attempts, round(time.time() - start), current_jwt
+            except requests.RequestException:
+                pass
+            time.sleep(poll_interval_seconds)
+        if runtime:
+            try:
+                current_jwt = self._login(provider, "provider", runtime)
+            except Exception:
+                pass
+        return attempts, round(time.time() - start), current_jwt
+
     def run(
         self,
         *,
@@ -526,6 +592,12 @@ class AIModelHubModelExecutionApiSuite:
         try:
             provider_jwt = self._login(provider, "provider", runtime)
             step("provider_login", connector=provider)
+
+            probe_attempts, probe_wait_s, provider_jwt = self._wait_for_provider_management_ready(
+                provider, provider_jwt, runtime=runtime
+            )
+            if probe_attempts > 1:
+                step("provider_management_ready_probe", probe_attempts=probe_attempts, waited_seconds=probe_wait_s)
 
             asset_id, created_asset_id, asset_status, asset_payload = self._create_asset(
                 provider,

@@ -42,6 +42,8 @@ ensure_runtime_dependencies(
 )
 
 from tabulate import tabulate
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
@@ -1661,6 +1663,27 @@ def _edc_dashboard_connector_namespaces(deployer_context):
     return connector_namespaces
 
 
+def _edc_dashboard_connector_kubeconfigs(deployer_context):
+    topology = normalize_topology(getattr(deployer_context, "topology", None) or LOCAL_TOPOLOGY)
+    if topology != "vm-distributed":
+        return {}
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return {}
+    try:
+        role_kubeconfigs = _configured_vm_distributed_role_kubeconfigs()
+    except Exception:
+        return {}
+    provider_kc = role_kubeconfigs.get("provider") or ""
+    consumer_kc = role_kubeconfigs.get("consumer") or ""
+    result = {}
+    if len(connectors) >= 1 and provider_kc:
+        result[connectors[0]] = provider_kc
+    if len(connectors) >= 2 and consumer_kc:
+        result[connectors[1]] = consumer_kc
+    return result
+
+
 def _inesdata_interface_connector_namespaces(deployer_context):
     connectors = list(getattr(deployer_context, "connectors", []) or [])
     default_namespace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
@@ -1767,7 +1790,7 @@ def _positive_int_env(name, default):
         return int(default)
 
 
-def _kubectl_endpoint_ready(namespace, service_name):
+def _kubectl_endpoint_ready(namespace, service_name, kubeconfig=None):
     command = [
         "kubectl",
         "get",
@@ -1778,12 +1801,17 @@ def _kubectl_endpoint_ready(namespace, service_name):
         "-o",
         "json",
     ]
+    run_env = None
+    if kubeconfig:
+        run_env = dict(os.environ)
+        run_env["KUBECONFIG"] = kubeconfig
     try:
         result = subprocess.run(
             command,
             check=False,
             capture_output=True,
             text=True,
+            env=run_env,
         )
     except FileNotFoundError:
         return False, "kubectl is not available"
@@ -1919,6 +1947,7 @@ def _http_readiness_gate(
             timeout=timeout_seconds,
             allow_redirects=False,
             headers={"Cache-Control": "no-store"},
+            verify=False,
         )
     except Exception as exc:
         return {
@@ -1961,6 +1990,7 @@ def _http_form_readiness_gate(label, url, form_data, expected_statuses, timeout_
             timeout=timeout_seconds,
             allow_redirects=False,
             headers={"Cache-Control": "no-store"},
+            verify=False,
         )
     except Exception as exc:
         return {
@@ -2206,11 +2236,102 @@ def _edc_dashboard_http_gates(deployer_context, connectors, timeout_seconds):
     return gates
 
 
+def _restart_edc_connector_deployments(deployer_context, timeout_seconds=300):
+    """Restart EDC connector pods after Playwright S3-PUSH transfers.
+
+    Playwright S3-PUSH transfers leave EDC deprovisioning processes running in
+    the background that cause POST /management/v3/assets to return HTTP 500 for
+    up to 20+ minutes. Restarting the connector pods clears this state immediately.
+    """
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return
+    connector_namespaces = _edc_dashboard_connector_namespaces(deployer_context)
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
+    for connector in connectors:
+        namespace = connector_namespaces.get(connector) or ""
+        kubeconfig = connector_kubeconfigs.get(connector) or None
+        if not namespace:
+            continue
+        run_env = dict(os.environ)
+        if kubeconfig:
+            run_env["KUBECONFIG"] = kubeconfig
+        print(f"Restarting EDC connector deployment: {connector} (namespace: {namespace})")
+        try:
+            subprocess.run(
+                ["kubectl", "rollout", "restart", f"deployment/{connector}", "-n", namespace],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            subprocess.run(
+                [
+                    "kubectl", "rollout", "status", f"deployment/{connector}",
+                    "-n", namespace, f"--timeout={timeout_seconds}s",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            print(f"Connector ready: {connector}")
+            time.sleep(15)
+        except subprocess.CalledProcessError as exc:
+            print(f"Warning: EDC connector restart failed for {connector}: {(exc.stderr or '').strip()}")
+        except FileNotFoundError:
+            print("Warning: kubectl not available — skipping EDC connector restart")
+            return
+
+
+def _restart_inesdata_connector_deployments(deployer_context, timeout_seconds=300):
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return
+    connector_namespaces = _inesdata_interface_connector_namespaces(deployer_context)
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
+    for connector in connectors:
+        namespace = connector_namespaces.get(connector) or ""
+        kubeconfig = connector_kubeconfigs.get(connector) or None
+        if not namespace:
+            continue
+        run_env = dict(os.environ)
+        if kubeconfig:
+            run_env["KUBECONFIG"] = kubeconfig
+        print(f"Restarting inesdata connector deployment: {connector} (namespace: {namespace})")
+        try:
+            subprocess.run(
+                ["kubectl", "rollout", "restart", f"deployment/{connector}", "-n", namespace],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            subprocess.run(
+                [
+                    "kubectl", "rollout", "status", f"deployment/{connector}",
+                    "-n", namespace, f"--timeout={timeout_seconds}s",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            print(f"Connector ready: {connector}")
+            time.sleep(15)
+        except subprocess.CalledProcessError as exc:
+            print(f"Warning: inesdata connector restart failed for {connector}: {(exc.stderr or '').strip()}")
+        except FileNotFoundError:
+            print("Warning: kubectl not available — skipping inesdata connector restart")
+            return
+
+
 def _probe_edc_dashboard_readiness(deployer_context):
     connectors = list(getattr(deployer_context, "connectors", []) or [])
     connector_namespaces = _edc_dashboard_connector_namespaces(deployer_context)
     namespaces = sorted({namespace for namespace in connector_namespaces.values() if namespace})
     namespace = namespaces[0] if len(namespaces) == 1 else ""
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
     gates = []
     http_timeout = _positive_float_env("PIONERA_EDC_DASHBOARD_HTTP_TIMEOUT_SECONDS", 5)
 
@@ -2236,9 +2357,10 @@ def _probe_edc_dashboard_readiness(deployer_context):
 
     for connector in connectors:
         connector_namespace = connector_namespaces.get(connector) or namespace
+        connector_kubeconfig = connector_kubeconfigs.get(connector) or None
         for suffix in ("dashboard", "dashboard-proxy"):
             service_name = f"{connector}-{suffix}"
-            ready, detail = _kubectl_endpoint_ready(connector_namespace, service_name)
+            ready, detail = _kubectl_endpoint_ready(connector_namespace, service_name, kubeconfig=connector_kubeconfig)
             gates.append({
                 "gate": f"{suffix}:{connector}",
                 "namespace": connector_namespace,
@@ -4618,6 +4740,31 @@ def _temporary_environment(overrides):
                 os.environ[key] = value
 
 
+def _discover_component_release_names(components_namespace: str) -> dict:
+    """Discover actual component release names from the cluster for the given namespace."""
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "deployments", "-n", components_namespace,
+             "--no-headers", "-o", "custom-columns=NAME:.metadata.name"],
+            check=False, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return {}
+        names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return {}
+
+    overrides = {}
+    for name in names:
+        if name.endswith("-ontology-hub"):
+            overrides["ONTOLOGY_HUB_RELEASE_NAME"] = name
+        elif name.endswith("-semantic-virtualization"):
+            overrides["SEMANTIC_VIRTUALIZATION_RELEASE_NAME"] = name
+        elif name.endswith("-ai-model-hub"):
+            overrides["AI_MODEL_HUB_RELEASE_NAME"] = name
+    return overrides
+
+
 def _level6_component_validation_environment(deployer_context, deployer_name):
     if deployer_context is None:
         return {}
@@ -4632,9 +4779,12 @@ def _level6_component_validation_environment(deployer_context, deployer_name):
     config = dict(getattr(deployer_context, "config", {}) or {})
 
     def _connector_base_url(connector, role):
-        configured = _configured_public_connector_base_url(connector, deployer_context)
-        if configured:
-            return configured.rstrip("/")
+        # EDC connectors each have a dedicated ingress hostname; skip shared
+        # role-based URLs (org2/org3) which may conflict with other adapters.
+        if adapter_name != "edc":
+            configured = _configured_public_connector_base_url(connector, deployer_context)
+            if configured:
+                return configured.rstrip("/")
         if connector and ds_domain:
             return f"http://{connector}.{ds_domain}"
         return ""
@@ -4662,6 +4812,10 @@ def _level6_component_validation_environment(deployer_context, deployer_name):
     if adapter_name == "edc":
         env["PIONERA_COMPONENT_VALIDATION_MODE"] = "api"
         env["LEVEL6_COMPONENT_VALIDATION_MODE"] = "api"
+        components_namespace = str(config.get("COMPONENTS_NAMESPACE") or "components").strip() or "components"
+        discovered_release_names = _discover_component_release_names(components_namespace)
+        for release_env_var, release_name in discovered_release_names.items():
+            env.setdefault(release_env_var, release_name)
     env.update(_topology_runtime_environment_overrides(topology=topology, level=5, role="components"))
     if provider:
         provider_base_url = _connector_base_url(provider, "provider")
@@ -8207,6 +8361,18 @@ def run_validate(
         component_results = []
         component_validation_summary = None
         une_0087_alignment = None
+
+        if (
+            resolved_deployer_name == "edc"
+            and deployer_context is not None
+        ):
+            _restart_edc_connector_deployments(deployer_context)
+
+        if (
+            resolved_deployer_name == "inesdata"
+            and deployer_context is not None
+        ):
+            _restart_inesdata_connector_deployments(deployer_context)
 
         print_interoperability_suite_header("Newman connector interoperability", "Newman")
         try:
@@ -13826,6 +13992,10 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
     if selected_topology != "vm-distributed":
         return "".join(f"{key}=\n" for key in _vm_distributed_profile_template_keys(topology, selected_adapter))
 
+    _meta_hints = {
+        "PROFILE_TOPOLOGY": selected_topology,
+        "PROFILE_ADAPTER": selected_adapter,
+    }
     sections = (
         (
             "Local validation-environment profile.\n"
@@ -13986,7 +14156,10 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
             if key in emitted:
                 continue
             emitted.add(key)
-            rendered.append(f"{key}=")
+            if key in _meta_hints:
+                rendered.append(f"# {key}={_meta_hints[key]}")
+            else:
+                rendered.append(f"{key}=")
         rendered.append("")
     if selected_adapter == "edc":
         rendered.append("# EDC adapter options")

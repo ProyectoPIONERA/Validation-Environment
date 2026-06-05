@@ -6,6 +6,7 @@ import os
 import shutil
 import shlex
 import sys
+import time
 
 import requests
 import yaml
@@ -63,10 +64,62 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
     def wait_for_connector_ready(self, connector_name, timeout=300):
         return self.wait_for_management_api_ready(connector_name, timeout=timeout)
 
+    def wait_for_management_api_ready(self, connector_name, timeout=180, poll_interval=3):
+        # For vm-distributed, the nginx ingress may return 500 for several minutes
+        # after a fresh deploy while it re-configures. Use a direct port-forward to
+        # the connector pod to bypass the ingress during the readiness check.
+        if self._normalized_topology() != "vm-distributed":
+            return super().wait_for_management_api_ready(
+                connector_name, timeout=timeout, poll_interval=poll_interval
+            )
+
+        print(f"Waiting for management API to be ready: {connector_name}")
+        namespace = self._connector_runtime_namespace(connector_name)
+        local_fallback = None
+        last_issue = None
+        start = time.time()
+
+        try:
+            with self._temporary_connector_kubeconfig(connector_name):
+                pod_name = self._connector_pod_name(connector_name, interface=False, namespace=namespace)
+                if pod_name:
+                    local_fallback = self._open_temporary_port_forward(
+                        namespace, pod_name, remote_port=19193
+                    )
+
+            if not local_fallback:
+                # Could not open port-forward; fall back to ingress with longer timeout
+                return super().wait_for_management_api_ready(
+                    connector_name, timeout=max(timeout, 600), poll_interval=poll_interval
+                )
+
+            url = f"http://127.0.0.1:{local_fallback['local_port']}/management/v3/assets/request"
+            payload = {
+                "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+                "offset": 0,
+                "limit": 1,
+            }
+            while time.time() - start <= timeout:
+                try:
+                    response = requests.post(url, json=payload, timeout=5)
+                    if response.status_code == 200:
+                        print(f"Management API ready: {connector_name}")
+                        return True
+                    last_issue = f"HTTP {response.status_code}"
+                except Exception as exc:
+                    last_issue = str(exc)
+                time.sleep(poll_interval)
+        finally:
+            self._close_temporary_port_forward(local_fallback)
+
+        print(f"Management API not ready for {connector_name}: {last_issue or 'timeout'}")
+        return False
+
     def wait_for_all_connectors(self, connectors):
         print("\nWaiting for all EDC connectors to expose their management API...\n")
+        timeout = int(getattr(self.config, "TIMEOUT_MANAGEMENT_API_WAIT", 360))
         for connector in connectors:
-            if not self.wait_for_management_api_ready(connector):
+            if not self.wait_for_management_api_ready(connector, timeout=timeout):
                 print(f"Connector management API not ready: {connector}")
                 return False
         return True
@@ -227,6 +280,25 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             ).strip(),
         }
 
+    def _edc_dashboard_image_override_configured(self, images=None):
+        if images is None:
+            images = self._edc_dashboard_image_values()
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        dashboard_name = str(
+            os.environ.get("PIONERA_EDC_DASHBOARD_IMAGE_NAME")
+            or deployer_config.get("EDC_DASHBOARD_IMAGE_NAME")
+            or ""
+        ).strip()
+        proxy_name = str(
+            os.environ.get("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or deployer_config.get("EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or ""
+        ).strip()
+        return bool(dashboard_name and proxy_name)
+
     def _run_level4_edc_image_script(self, script_path, args=None):
         root_dir = self._framework_root_dir()
         command = " ".join(
@@ -321,6 +393,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return True
 
         images = self._edc_dashboard_image_values()
+        if mode != "required" and self._edc_dashboard_image_override_configured(images):
+            print("Skipping Level 4 local EDC dashboard image preparation; explicit image override is configured.")
+            return True
         missing = [key for key, value in images.items() if not value]
         if missing:
             print("EDC dashboard local image values are incomplete: " + ", ".join(sorted(missing)))
@@ -432,24 +507,33 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return True
 
         deployer_config = config_loader() or {}
-        vault_url = str(
-            deployer_config.get("VT_URL") or deployer_config.get("VAULT_URL") or ""
-        ).strip().rstrip("/")
+        primary_url = str(deployer_config.get("VT_URL") or "").strip().rstrip("/")
+        fallback_url = str(deployer_config.get("VAULT_URL") or "").strip().rstrip("/")
         vault_token = str(deployer_config.get("VT_TOKEN") or "").strip()
-        if not vault_url or not vault_token:
+        if not (primary_url or fallback_url) or not vault_token:
             print("Vault token validation failed: VT_URL/VT_TOKEN are not defined in deployer.config")
             return False
 
         headers = {"X-Vault-Token": vault_token}
-        try:
-            response = requests.get(
-                f"{vault_url}/v1/auth/token/lookup-self",
-                headers=headers,
-                timeout=5,
-                verify=False,
-            )
-        except requests.RequestException as exc:
-            print(f"Vault token validation failed: Vault is not reachable ({exc})")
+
+        # VT_URL may be a cluster-internal DNS name (unreachable from host); fall back to VAULT_URL.
+        vault_url = None
+        for candidate in filter(None, [primary_url, fallback_url]):
+            try:
+                resp = requests.get(
+                    f"{candidate}/v1/auth/token/lookup-self",
+                    headers=headers,
+                    timeout=5,
+                    verify=False,
+                )
+                vault_url = candidate
+                response = resp
+                break
+            except requests.RequestException:
+                continue
+
+        if vault_url is None:
+            print(f"Vault token validation failed: Vault is not reachable ({primary_url or fallback_url})")
             return False
 
         if response.status_code != 200:
@@ -487,11 +571,17 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         if not callable(config_loader):
             return None, None
         deployer_config = config_loader() or {}
-        vault_url = str(
-            deployer_config.get("VT_URL") or deployer_config.get("VAULT_URL") or ""
-        ).strip().rstrip("/")
+        primary = str(deployer_config.get("VT_URL") or "").strip().rstrip("/")
+        fallback = str(deployer_config.get("VAULT_URL") or "").strip().rstrip("/")
         vault_token = str(deployer_config.get("VT_TOKEN") or "").strip()
-        return vault_url, vault_token
+        # VT_URL may be cluster-internal DNS; probe both and return the reachable one.
+        for candidate in filter(None, [primary, fallback]):
+            try:
+                requests.get(f"{candidate}/v1/sys/health", timeout=3, verify=False)
+                return candidate, vault_token
+            except requests.RequestException:
+                continue
+        return (primary or fallback), vault_token
 
     def _connector_credentials_file_path(self, connector_name, ds_name=None, for_write=False):
         resolver = getattr(self.config_adapter, "edc_connector_credentials_path", None)
@@ -991,16 +1081,29 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
             return None
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/token"
 
+    def _keycloak_frontend_base_url(self):
+        deployer_config = self.config_adapter.load_deployer_config()
+        frontend_url = str(deployer_config.get("KEYCLOAK_FRONTEND_URL") or "").strip().rstrip("/")
+        if frontend_url:
+            return frontend_url
+        return self._keycloak_base_url()
+
     def _keycloak_authorization_url_for_dataspace(self, ds_name):
-        keycloak_url = self._keycloak_base_url()
+        keycloak_url = self._keycloak_frontend_base_url()
         if not keycloak_url:
             return None
+        # KEYCLOAK_FRONTEND_URL includes the /auth path (e.g. https://host/auth).
+        # Append realm path only when the URL does not already end with the realm.
+        if f"/realms/{ds_name}" in keycloak_url:
+            return f"{keycloak_url}/protocol/openid-connect/auth"
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/auth"
 
     def _keycloak_logout_url_for_dataspace(self, ds_name):
-        keycloak_url = self._keycloak_base_url()
+        keycloak_url = self._keycloak_frontend_base_url()
         if not keycloak_url:
             return None
+        if f"/realms/{ds_name}" in keycloak_url:
+            return f"{keycloak_url}/protocol/openid-connect/logout"
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/logout"
 
     def _dashboard_proxy_connector_path(self, connector_name, service_name):
@@ -1657,33 +1760,34 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
                     if connector and self._connector_belongs_to_dataspace(connector, ds_name):
                         existing.add(connector)
 
-        releases = self.run_silent(f"helm list -n {namespace} --no-headers")
-        if releases:
-            suffix = f"-{ds_name}"
-            for line in releases.splitlines():
-                parts = line.split()
-                if not parts:
-                    continue
-                release = parts[0]
-                if release.startswith("conn-") and release.endswith(suffix):
-                    connector = release[:-len(suffix)]
-                    if connector and self._connector_belongs_to_dataspace(connector, ds_name):
-                        existing.add(connector)
+        with self._temporary_namespace_kubeconfig(namespace):
+            releases = self.run_silent(f"helm list -n {namespace} --no-headers")
+            if releases:
+                suffix = f"-{ds_name}"
+                for line in releases.splitlines():
+                    parts = line.split()
+                    if not parts:
+                        continue
+                    release = parts[0]
+                    if release.startswith("conn-") and release.endswith(suffix):
+                        connector = release[:-len(suffix)]
+                        if connector and self._connector_belongs_to_dataspace(connector, ds_name):
+                            existing.add(connector)
 
-        pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
-        if pods:
-            for line in pods.splitlines():
-                cols = line.split()
-                if not cols:
-                    continue
-                pod_name = cols[0]
-                if not pod_name.startswith("conn-"):
-                    continue
-                base = pod_name.rsplit("-", 1)[0]
-                if base.endswith("-inteface") or base.endswith("-interface"):
-                    base = base.rsplit("-", 1)[0]
-                if base and self._connector_belongs_to_dataspace(base, ds_name):
-                    existing.add(base)
+            pods = self.run_silent(f"kubectl get pods -n {namespace} --no-headers")
+            if pods:
+                for line in pods.splitlines():
+                    cols = line.split()
+                    if not cols:
+                        continue
+                    pod_name = cols[0]
+                    if not pod_name.startswith("conn-"):
+                        continue
+                    base = pod_name.rsplit("-", 1)[0]
+                    if base.endswith("-inteface") or base.endswith("-interface"):
+                        base = base.rsplit("-", 1)[0]
+                    if base and self._connector_belongs_to_dataspace(base, ds_name):
+                        existing.add(base)
 
         return existing
 
@@ -1858,29 +1962,30 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
                 )
                 release_name = f"{connector}-{ds_name}"
                 print(f"Deploying generic EDC connector: {connector}")
-                if not self.infrastructure.deploy_helm_release(
-                    release_name,
-                    target_namespace,
-                    values_file,
-                    cwd=self._edc_connector_dir(),
-                ):
-                    print(f"Error deploying generic EDC connector: {connector}")
-                    return []
+                with self._temporary_connector_kubeconfig(connector):
+                    if not self.infrastructure.deploy_helm_release(
+                        release_name,
+                        target_namespace,
+                        values_file,
+                        cwd=self._edc_connector_dir(),
+                    ):
+                        print(f"Error deploying generic EDC connector: {connector}")
+                        return []
 
-                rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
-                if not self._wait_for_edc_deployment_rollout(
-                    connector,
-                    target_namespace,
-                    timeout=rollout_timeout,
-                ):
-                    print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
-                    return []
-                if not self._restart_local_edc_deployments_if_needed(
-                    connector,
-                    target_namespace,
-                    rollout_timeout=rollout_timeout,
-                ):
-                    return []
+                    rollout_timeout = max(int(getattr(self.config, "TIMEOUT_POD_WAIT", 120)), 180)
+                    if not self._wait_for_edc_deployment_rollout(
+                        connector,
+                        target_namespace,
+                        timeout=rollout_timeout,
+                    ):
+                        print(f"Timeout waiting for EDC connector deployment rollout: {connector}")
+                        return []
+                    if not self._restart_local_edc_deployments_if_needed(
+                        connector,
+                        target_namespace,
+                        rollout_timeout=rollout_timeout,
+                    ):
+                        return []
 
                 all_connectors.append(connector)
 

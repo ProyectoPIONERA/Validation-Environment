@@ -215,6 +215,7 @@ def _build_playwright_environment(
         env.setdefault("PIONERA_PLAYWRIGHT_SUITE_NAME", f"{adapter} Playwright")
     env.setdefault("PLAYWRIGHT_INTERACTION_MARKERS", "1")
     env.setdefault("PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS", "150")
+    env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
 
     return env
 

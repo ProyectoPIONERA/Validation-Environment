@@ -1061,7 +1061,7 @@ class EdcDashboardReadinessTests(unittest.TestCase):
 
         endpoint_calls = []
 
-        def fake_endpoint_ready(namespace, service_name):
+        def fake_endpoint_ready(namespace, service_name, kubeconfig=None):
             endpoint_calls.append((namespace, service_name))
             return True, "1 endpoint address(es)"
 
@@ -1304,7 +1304,7 @@ class InesdataPortalReadinessTests(unittest.TestCase):
 
         endpoint_calls = []
 
-        def fake_endpoint_ready(namespace, service_name):
+        def fake_endpoint_ready(namespace, service_name, kubeconfig=None):
             endpoint_calls.append((namespace, service_name))
             return True, "1 endpoint address(es)"
 

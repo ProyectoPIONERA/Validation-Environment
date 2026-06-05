@@ -19,6 +19,8 @@ const aiModelHubHttpDataDemo = process.env.UI_AI_MODEL_HUB_HTTPDATA_DEMO === "1"
 const aiModelObserverDemo = process.env.UI_AI_MODEL_OBSERVER_DEMO === "1";
 const minioOpsDemo = process.env.UI_MINIO_OPS_DEMO !== "0";
 const launchArgs = [
+  "--ignore-certificate-errors",
+  "--disable-web-security",
   ...(headedGpuFix ? ["--disable-gpu"] : []),
   ...(hostResolverRules ? [`--host-resolver-rules=${hostResolverRules}`] : []),
 ];

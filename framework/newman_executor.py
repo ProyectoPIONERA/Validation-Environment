@@ -512,6 +512,7 @@ class NewmanExecutor:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data=payload,
                 timeout=15,
+                verify=False,
             ),
             f"{role} login",
             attempts,
@@ -544,6 +545,7 @@ class NewmanExecutor:
                 },
                 json=payload,
                 timeout=15,
+                verify=False,
             ),
             label,
             attempts,
@@ -861,6 +863,7 @@ class NewmanExecutor:
                     "Accept": "application/json",
                 },
                 timeout=10,
+                verify=False,
             )
         except requests.RequestException as exc:
             issues.append(f"direct lookup failed: {exc}")
@@ -894,6 +897,7 @@ class NewmanExecutor:
                 },
                 json=payload,
                 timeout=10,
+                verify=False,
             )
         except requests.RequestException as exc:
             issues.append(f"list lookup failed: {exc}")
@@ -1077,6 +1081,7 @@ class NewmanExecutor:
                 },
                 json=payload,
                 timeout=10,
+                verify=False,
             )
         except requests.RequestException as exc:
             return f"provider diagnostics request failed: {exc}"
@@ -1179,6 +1184,7 @@ class NewmanExecutor:
                         "Accept": "application/json",
                     },
                     timeout=10,
+                    verify=False,
                 )
             except requests.RequestException as exc:
                 last_issue = f"direct lookup failed: {exc}"
@@ -1205,6 +1211,7 @@ class NewmanExecutor:
                         },
                         json=payload,
                         timeout=10,
+                        verify=False,
                     )
                 except requests.RequestException as exc:
                     last_issue = f"{last_issue}; list lookup failed: {exc}" if last_issue else str(exc)
@@ -1290,6 +1297,7 @@ class NewmanExecutor:
             "cli,json",
             "--color",
             "on",
+            "--insecure",
         ]
 
         collection_name = os.path.basename(collection_path)

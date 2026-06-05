@@ -84,6 +84,21 @@ function connectorCredentialsPath(
   dataspace: string,
   environment: string,
 ): string {
+  const topology = (process.env.UI_TOPOLOGY || "").trim().toLowerCase();
+  if (topology) {
+    const scoped = path.join(
+      deploymentRoot(adapter),
+      environment,
+      topology,
+      dataspace,
+      "connectors",
+      connectorName,
+      "credentials.json",
+    );
+    if (fs.existsSync(scoped)) {
+      return scoped;
+    }
+  }
   return path.join(
     deploymentRoot(adapter),
     environment,
@@ -120,7 +135,7 @@ function publicMinioConsoleUrlFromCredentials(
   const credentials = readJsonIfExists(
     connectorCredentialsPath(adapter, connectorName, dataspace, environment),
   );
-  const value = credentials?.public_access_urls?.minio_console;
+  const value = credentials?.access_urls?.minio_console ?? credentials?.public_access_urls?.minio_console;
   if (typeof value !== "string" || value.trim().length === 0) {
     return undefined;
   }

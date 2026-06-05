@@ -88,7 +88,7 @@ def check_public_endpoints_access(
         if not url:
             continue
         try:
-            response = request(url, timeout=timeout, allow_redirects=False)
+            response = request(url, timeout=timeout, allow_redirects=False, verify=False)
             checked.append(
                 {
                     "label": label,

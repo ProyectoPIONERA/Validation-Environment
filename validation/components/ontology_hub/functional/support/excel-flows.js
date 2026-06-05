@@ -715,45 +715,54 @@ async function createVocabularyByUri(page, runtime) {
   };
 }
 
-async function createVocabularyFromRepository(page, runtime) {
-  await gotoEdition(page, runtime);
-  await clickMarked(page.locator(".createVocab"));
-  await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
-  await fillMarked(page
-    .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']"), runtime.creationRepositoryUri);
-  await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
-  await page.waitForLoadState("domcontentloaded");
+async function createVocabularyFromRepository(page, runtime, { maxRetries = 3, retryDelayMs = 10000 } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    await gotoEdition(page, runtime);
+    await clickMarked(page.locator(".createVocab"));
+    await page.locator("#dialogCreateVocab").waitFor({ state: "visible", timeout: readyTimeoutMs });
+    await fillMarked(page
+      .locator("#formDialogCreateVocabFromOntologyDevelopmentRepository input[name='repositoryUri']"), runtime.creationRepositoryUri);
+    await clickMarked(page.getByRole("button", { name: "Confirm", exact: true }));
+    await page.waitForLoadState("domcontentloaded");
 
-  const visibleError = normalizeText(
-    await page
-      .locator(".alert-error, #dialogCreateVocabError, #formErrors")
-      .first()
-      .textContent()
-      .catch(() => ""),
-  );
-  if (/already exists/i.test(visibleError)) {
-    await waitForPublicVocabularyDetail(page, runtime, runtime.creationPrefix, runtime.creationTitle);
+    const visibleError = normalizeText(
+      await page
+        .locator(".alert-error, #dialogCreateVocabError, #formErrors")
+        .first()
+        .textContent()
+        .catch(() => ""),
+    );
+    if (/already exists/i.test(visibleError)) {
+      await waitForPublicVocabularyDetail(page, runtime, runtime.creationPrefix, runtime.creationTitle);
+      return {
+        prefix: runtime.creationPrefix,
+        title: runtime.creationTitle,
+        url: page.url(),
+        method: "repository",
+        reusedExistingImport: true,
+      };
+    }
+    if (visibleError && !/create a new vocabulary/i.test((await page.content()).toLowerCase())) {
+      lastError = new Error(`Ontology Hub rejected the repository registration: ${visibleError}`);
+      if (attempt < maxRetries) {
+        await page.waitForTimeout(retryDelayMs);
+        continue;
+      }
+      throw lastError;
+    }
+
+    await fillVocabularyMetadata(page, runtime);
+    await saveVocabulary(page, runtime, runtime.creationPrefix, runtime.creationTitle);
+
     return {
       prefix: runtime.creationPrefix,
       title: runtime.creationTitle,
       url: page.url(),
       method: "repository",
-      reusedExistingImport: true,
     };
   }
-  if (visibleError && !/create a new vocabulary/i.test((await page.content()).toLowerCase())) {
-    throw new Error(`Ontology Hub rejected the repository registration: ${visibleError}`);
-  }
-
-  await fillVocabularyMetadata(page, runtime);
-  await saveVocabulary(page, runtime, runtime.creationPrefix, runtime.creationTitle);
-
-  return {
-    prefix: runtime.creationPrefix,
-    title: runtime.creationTitle,
-    url: page.url(),
-    method: "repository",
-  };
+  throw lastError || new Error("createVocabularyFromRepository exhausted retries");
 }
 
 async function createAgent(page, runtime, agent) {
@@ -1100,8 +1109,8 @@ async function createVersion(page, version, filePath) {
   const unhealthyHeading = page.locator("h1").filter({ hasText: /50[0-9]|bad gateway|oops/i }).first();
   try {
     const outcome = await Promise.race([
-      versionRow.waitFor({ state: "visible", timeout: 5000 }).then(() => "row"),
-      unhealthyHeading.waitFor({ state: "visible", timeout: 5000 }).then(() => "error-page").catch(() => null),
+      versionRow.waitFor({ state: "visible", timeout: readyTimeoutMs }).then(() => "row"),
+      unhealthyHeading.waitFor({ state: "visible", timeout: readyTimeoutMs }).then(() => "error-page").catch(() => null),
     ]);
     if (outcome === "error-page") {
       const headingText = normalizeText(await safeTextContent(unhealthyHeading));

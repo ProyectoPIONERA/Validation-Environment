@@ -11,6 +11,7 @@ const jsonReportFile =
   process.env.PLAYWRIGHT_JSON_REPORT_FILE || path.join(outputDir, "results.json");
 const consoleReporter = path.join(__dirname, "reporters", "console-test-name-reporter.cjs");
 const headedGpuFix = process.env.PLAYWRIGHT_HEADED_GPU_FIX === "1";
+const hostResolverRules = (process.env.PLAYWRIGHT_HOST_RESOLVER_RULES || "").trim();
 
 export default defineConfig({
   testDir: ".",
@@ -34,10 +35,13 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "on",
     ignoreHTTPSErrors: true,
-    launchOptions: headedGpuFix
-      ? {
-          args: ["--disable-gpu"],
-        }
-      : undefined,
+    launchOptions: {
+      args: [
+        "--ignore-certificate-errors",
+        "--disable-web-security",
+        ...(headedGpuFix ? ["--disable-gpu"] : []),
+        ...(hostResolverRules ? [`--host-resolver-rules=${hostResolverRules}`] : []),
+      ],
+    },
   },
 });

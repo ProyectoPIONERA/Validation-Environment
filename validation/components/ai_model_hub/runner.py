@@ -54,9 +54,13 @@ def _build_url(base_url: str, relative_path: str) -> str:
 
 
 def _http_get(url: str, timeout: int = 20) -> Tuple[int, str, str]:
+    import ssl as _ssl
+    _ctx = _ssl.create_default_context()
+    _ctx.check_hostname = False
+    _ctx.verify_mode = _ssl.CERT_NONE
     req = request.Request(url, method="GET")
     try:
-        with request.urlopen(req, timeout=timeout) as response:
+        with request.urlopen(req, timeout=timeout, context=_ctx) as response:
             body = response.read().decode("utf-8", errors="replace")
             return response.getcode(), response.headers.get("Content-Type", ""), body
     except error.HTTPError as exc:

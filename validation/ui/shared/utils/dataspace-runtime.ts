@@ -225,6 +225,21 @@ function connectorCredentialsPath(
   dataspace: string,
   connectorName: string,
 ): string {
+  const topology = (process.env.UI_TOPOLOGY || "").trim().toLowerCase();
+  if (topology) {
+    const scoped = path.join(
+      deploymentRoot(adapter),
+      environment,
+      topology,
+      dataspace,
+      "connectors",
+      connectorName,
+      "credentials.json",
+    );
+    if (fs.existsSync(scoped)) {
+      return scoped;
+    }
+  }
   return path.join(
     deploymentRoot(adapter),
     environment,

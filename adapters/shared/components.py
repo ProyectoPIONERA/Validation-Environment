@@ -879,6 +879,7 @@ class SharedComponentsAdapter(INESDataComponentsAdapter):
                 timeout=timeout_seconds,
                 allow_redirects=False,
                 headers={"Cache-Control": "no-store"},
+                verify=False,
             )
         except Exception as exc:
             return False, f"HTTP probe failed: {exc}"

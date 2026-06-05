@@ -93,7 +93,7 @@ class OntologyHubCleanupGuardsTests(unittest.TestCase):
         http_calls = []
         fake_session = mock.Mock()
 
-        def fake_get(url, timeout=10, allow_redirects=True):
+        def fake_get(url, timeout=10, allow_redirects=True, **kwargs):
             http_calls.append(url)
             return SimpleNamespace(status_code=200, text="<html>ok</html>", url=url)
 
@@ -308,8 +308,13 @@ function makeLocator(name, options = {{}}) {{
         throw new Error(`${{name}} is not visible`);
       }}
     }},
+    filter() {{
+      return makeLocator(`${{name}}-filtered`, {{ present: false }});
+    }},
   }};
 }}
+
+const notPresent = makeLocator("not-present", {{ present: false }});
 
 const page = {{
   _themisVisible: false,
@@ -329,12 +334,8 @@ const page = {{
       }});
     }}
     if (selector === ".ontology-tab[data-onto-target='themis']") {{
-      return makeLocator("themis-tab", {{
-        visible: true,
-        onClick() {{
-          page._themisVisible = true;
-        }},
-      }});
+      // Not present: simulating a page without the newer tab UI.
+      return notPresent;
     }}
     if (selector === "#themisVocabContainer") {{
       return makeLocator("themis-container", {{
@@ -351,7 +352,14 @@ const page = {{
         visible: () => page._themisVisible,
       }});
     }}
-    throw new Error(`Unexpected selector: ${{selector}}`);
+    // Complex compound selectors (text-themis-tab etc.) — return not-present.
+    return notPresent;
+  }},
+  getByRole(_role, _opts) {{
+    return notPresent;
+  }},
+  getByText(_text) {{
+    return notPresent;
   }},
   async waitForFunction() {{
     if (!page._themisVisible) {{
