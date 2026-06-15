@@ -442,7 +442,14 @@ function consumerModelSupportsInputSchema(asset) {
     properties.input_features ||
     properties.inputFeatures;
 
-  return inputSchema !== undefined || inputFeatures !== undefined;
+  // Require the TYPED array form (not a JSON string). Older assets stored
+  // input_features as a stringified value because of a JSON-LD key collision;
+  // dashboards that expect an array then see "no schema" and disable the model.
+  // Treating string-form as unsupported forces a delete+recreate with the
+  // corrected typed value.
+  // Only the typed array form is accepted; a JSON string (the old colliding
+  // form) returns false so the asset is recreated with the corrected value.
+  return Array.isArray(inputFeatures) && inputFeatures.length > 0;
 }
 
 async function deleteProviderResource(request, runtime, resourcePath, action) {
@@ -572,7 +579,15 @@ function buildLocalFlaresBenchmarkDatasetDocument(fixture, runtime) {
       "daimo:subtask": ["5w1h-reliability-classification"],
       "daimo:language": [fixture.metadata.language],
       "daimo:benchmark_dataset": benchmarkRows,
+      [`${DAIMO_NAMESPACE}benchmark_dataset`]: benchmarkRows,
+      // The deployed dashboard reads benchmark_dataset(_mapping) from the LEGACY
+      // namespace (https://pionera.ai/edc/daimo#...) — emit it too, otherwise
+      // "Load Selected Dataset" finds no rows/mapping, the input/expected paths
+      // stay empty and Run Benchmark is disabled (PT5-MH-13/14/15).
+      [`${LEGACY_DAIMO_NAMESPACE}benchmark_dataset`]: benchmarkRows,
       "daimo:benchmark_dataset_mapping": benchmarkMapping,
+      [`${DAIMO_NAMESPACE}benchmark_dataset_mapping`]: benchmarkMapping,
+      [`${LEGACY_DAIMO_NAMESPACE}benchmark_dataset_mapping`]: benchmarkMapping,
     },
   };
 }
@@ -648,28 +663,28 @@ function buildFlaresLinguisticModelPayload(fixture, runtime, spec) {
       "daimo:language": ["es"],
       "daimo:framework": ["flares"],
       "daimo:inference_path": spec.endpointPath || "/infer",
-      "daimo:input_schema": JSON.stringify(inputSchema),
+      // NOTE: do NOT also emit a "daimo:<x>": JSON.stringify(...) string form.
+      // The JSON-LD @context maps "daimo:" to DAIMO_NAMESPACE, so the string
+      // variant collides with the typed (object/array) variant on the same
+      // expanded URI and EDC keeps the STRING. Dashboards that expect an
+      // array/object for input_features/input_schema then read "no schema" and
+      // disable the model. Keep only typed values so they survive as-is.
       [`${DAIMO_NAMESPACE}input_schema`]: inputSchema,
       [`${LEGACY_DAIMO_NAMESPACE}input_schema`]: inputSchema,
       input_schema: inputSchema,
       inputSchema,
-      "daimo:input_schema_draft": "https://json-schema.org/draft/2020-12/schema",
       [`${DAIMO_NAMESPACE}input_schema_draft`]: "https://json-schema.org/draft/2020-12/schema",
       [`${LEGACY_DAIMO_NAMESPACE}input_schema_draft`]: "https://json-schema.org/draft/2020-12/schema",
-      "daimo:input_features": JSON.stringify(inputFeatures),
       [`${DAIMO_NAMESPACE}input_features`]: inputFeatures,
       [`${LEGACY_DAIMO_NAMESPACE}input_features`]: inputFeatures,
       input_features: inputFeatures,
       inputFeatures,
-      "daimo:input_example": JSON.stringify(inputExample),
       [`${DAIMO_NAMESPACE}input_example`]: inputExample,
       [`${LEGACY_DAIMO_NAMESPACE}input_example`]: inputExample,
       input_example: inputExample,
       inputExample,
-      "daimo:output_schema": JSON.stringify(outputSchema),
       [`${DAIMO_NAMESPACE}output_schema`]: outputSchema,
       [`${LEGACY_DAIMO_NAMESPACE}output_schema`]: outputSchema,
-      "daimo:output_example": JSON.stringify(outputExample),
       [`${DAIMO_NAMESPACE}output_example`]: outputExample,
       [`${LEGACY_DAIMO_NAMESPACE}output_example`]: outputExample,
     },
@@ -848,7 +863,11 @@ async function ensureProviderPolicyAndContract(request, runtime, fixture, assetD
       },
     },
   });
-  await ensureOk(policyResponse, "Create FLARES policy definition");
+  // 409 = already exists -> idempotent success (lets us (re)assert the offer
+  // when the asset exists but its contract definition was pruned).
+  if (policyResponse.status() !== 409) {
+    await ensureOk(policyResponse, "Create FLARES policy definition");
+  }
 
   const contractDefinitionResponse = await request.post(`${runtime.providerManagementUrl}/v3/contractdefinitions`, {
     headers: {
@@ -871,7 +890,9 @@ async function ensureProviderPolicyAndContract(request, runtime, fixture, assetD
       ],
     },
   });
-  await ensureOk(contractDefinitionResponse, "Create FLARES contract definition");
+  if (contractDefinitionResponse.status() !== 409) {
+    await ensureOk(contractDefinitionResponse, "Create FLARES contract definition");
+  }
 
   return {
     policyId,
@@ -886,6 +907,21 @@ async function ensureFlaresDatasetPublished(request, runtime, overrides = {}) {
   const existingAsset = await findProviderAssetById(request, runtime, assetId);
   if (existingAsset) {
     if (providerAssetSupportsBenchmarkMetadata(existingAsset)) {
+      // The asset exists, but its contract definition may have been pruned by
+      // catalog cleanup (only the asset survives). Without the offer the
+      // consumer never discovers dataset-flares-subtask2 and MH-LING-01 fails
+      // with "did not become visible". (Re)assert the policy + contract
+      // idempotently so the offer is always present.
+      await ensureProviderPolicyAndContract(
+        request,
+        runtime,
+        fixture,
+        buildFlaresDatasetAssetDocument(fixture, runtime, overrides),
+        {
+          policyId: overrides.policyId || publication.policyId,
+          contractDefinitionId: overrides.contractDefinitionId || publication.contractDefinitionId,
+        },
+      );
       return {
         fixture,
         assetId,

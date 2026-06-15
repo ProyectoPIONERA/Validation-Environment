@@ -653,10 +653,23 @@ connector_tag() {
     *citycouncil*) echo "city" ;;
     *company*)     echo "company" ;;
     *)
-      connector_short_name "$1" \
-        | tr -c '[:alnum:]' '_' \
-        | sed 's/^_*//; s/_*$//; s/__*/_/g' \
-        | cut -c1-32
+      # Topologies that do not use the demo connector names (e.g. vm-distributed
+      # conn-org2/org3-pionera) carry their provider/consumer role in the
+      # --connector-k8s-namespaces map. Map that role onto the demo tags so the
+      # role-keyed model/dataset placement (city=provider, company=consumer)
+      # still works: the consumer must receive the FLARES/mobility datasets.
+      local _role
+      _role="$(lookup_connector_map "$CONNECTOR_K8S_NAMESPACES" "$1" "")"
+      case "$_role" in
+        provider) echo "city" ;;
+        consumer) echo "company" ;;
+        *)
+          connector_short_name "$1" \
+            | tr -c '[:alnum:]' '_' \
+            | sed 's/^_*//; s/_*$//; s/__*/_/g' \
+            | cut -c1-32
+          ;;
+      esac
       ;;
   esac
 }
@@ -883,7 +896,11 @@ discover_use_case_model_specs() {
   local models_response="$WORK_DIR/use_case_models.response.json"
   local models_code
 
-  models_code="$(curl -s --max-time 45 -o "$models_response" -w '%{http_code}' \
+  # Follow redirects (-L): the connector-facing base URL is intentionally http
+  # (avoids cert validation for connector data transfers), but the external
+  # Apache proxy 301-redirects http->https. This is a read-only discovery GET,
+  # so following the redirect is safe and keeps the asset baseUrl unchanged.
+  models_code="$(curl -sL --max-time 45 -o "$models_response" -w '%{http_code}' \
     "$USE_CASE_MODEL_SERVER_BASE_URL/models")" || true
   if [[ "$models_code" != "200" ]]; then
     echo "Use-case model-server discovery failed at $USE_CASE_MODEL_SERVER_BASE_URL/models (HTTP ${models_code:-NA})" >&2
@@ -2133,7 +2150,7 @@ negotiate_one() {
   "protocol": "dataspace-protocol-http",
   "querySpec": {
     "offset": 0,
-    "limit": 50,
+    "limit": 5000,
     "filterExpression": []
   }
 }

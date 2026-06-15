@@ -566,22 +566,32 @@ def _build_playwright_environment(
     env["PLAYWRIGHT_HTML_REPORT_DIR"] = artifact_paths["html_report_dir"]
     env["PLAYWRIGHT_BLOB_REPORT_DIR"] = artifact_paths["blob_report_dir"]
     env["PLAYWRIGHT_JSON_REPORT_FILE"] = artifact_paths["json_report_file"]
+    raw_model_server_mode = str(
+        config.get("AI_MODEL_HUB_MODEL_SERVER_MODE")
+        or config.get("LEVEL5_AI_MODEL_HUB_MODEL_SERVER_MODE")
+        or config.get("MODEL_SERVER_MODE")
+        or os.environ.get("AI_MODEL_HUB_MODEL_SERVER_MODE")
+        or "mock"
+    ).strip().lower()
+    httpdata_demo = "0" if raw_model_server_mode == "use-cases" else "1"
+
     if adapter.lower() == "inesdata":
         env.setdefault("PIONERA_PLAYWRIGHT_SUITE_NAME", "INESData integration")
         env.setdefault("UI_SEMANTIC_VIRTUALIZATION_HTTPDATA_DEMO", "1")
         env.setdefault("UI_ONTOLOGY_HUB_INESDATA_DEMO", "1")
-        env.setdefault("UI_AI_MODEL_HUB_HTTPDATA_DEMO", "1")
+        env.setdefault("UI_AI_MODEL_HUB_HTTPDATA_DEMO", httpdata_demo)
         env.setdefault("UI_AI_MODEL_OBSERVER_DEMO", "1")
     elif adapter.lower() == "edc":
         env.setdefault("PIONERA_PLAYWRIGHT_SUITE_NAME", "EDC UI")
         env.setdefault("UI_SEMANTIC_VIRTUALIZATION_HTTPDATA_DEMO", "1")
         env.setdefault("UI_ONTOLOGY_HUB_EDC_DEMO", "1")
-        env.setdefault("UI_AI_MODEL_HUB_HTTPDATA_DEMO", "1")
+        env.setdefault("UI_AI_MODEL_HUB_HTTPDATA_DEMO", httpdata_demo)
         env.setdefault("UI_EDC_MODEL_OBSERVER_DEMO", "1")
     else:
         env.setdefault("PIONERA_PLAYWRIGHT_SUITE_NAME", f"{adapter} Playwright")
     env.setdefault("PLAYWRIGHT_INTERACTION_MARKERS", "1")
     env.setdefault("PLAYWRIGHT_INTERACTION_MARKER_DELAY_MS", "150")
+    env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
 
     return env
 

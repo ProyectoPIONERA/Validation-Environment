@@ -25,7 +25,7 @@ from validation.orchestration.suite_taxonomy import (
 
 EXPERIMENT_PREFIX = "experiment_"
 FRAMEWORK_REPORT_DIR = "framework-report"
-LOCAL_REPORT_HOST = "127.0.0.1"
+LOCAL_REPORT_HOST = "0.0.0.0"
 WINDOWS_CMD_EXE = Path("/mnt/c/Windows/System32/cmd.exe")
 WINDOWS_EXPLORER_EXE = Path("/mnt/c/Windows/explorer.exe")
 WINDOWS_POWERSHELL_EXE = Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
@@ -1278,7 +1278,7 @@ def _render_dashboard_html(experiment: dict[str, Any]) -> str:
     <h2>Raw artifacts</h2>
     {artifacts_html}
   </section>
-  <p class="small">Security note: this dashboard is generated from local artifacts and must be served on <code>127.0.0.1</code>.</p>
+  <p class="small">This dashboard is generated from local artifacts. Restrict network access to trusted users when serving on 0.0.0.0.</p>
 </main>
 </body>
 </html>
@@ -1471,12 +1471,57 @@ def _render_artifact_links(experiment: dict[str, Any]) -> str:
     return "<table><thead><tr><th>Artifact</th><th>Path</th></tr></thead><tbody>" + "\n".join(rows) + "</tbody></table>"
 
 
+def _local_ip_address() -> str:
+    """Return a best-effort LAN IP so dashboard URLs work across the network."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
 def find_free_local_port(host: str = LOCAL_REPORT_HOST) -> int:
-    if host != LOCAL_REPORT_HOST:
-        raise ValueError("Report servers must bind to 127.0.0.1.")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, 0))
         return int(sock.getsockname()[1])
+
+
+def _local_port_is_free(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, int(port)))
+            return True
+        except OSError:
+            return False
+
+
+def _configured_report_port(env_var: str, host: str = LOCAL_REPORT_HOST) -> int | None:
+    """Resolve a fixed report-server port from the environment.
+
+    Returns a usable fixed port (so it can be forwarded once in a remote IDE and
+    reused across runs), or None to fall back to an ephemeral free port. If the
+    configured port is currently busy (e.g. a stale report server still holds
+    it), fall back to a free port rather than failing to bind."""
+    raw_value = str(os.environ.get(env_var) or "").strip()
+    if not raw_value:
+        return None
+    try:
+        candidate = int(raw_value)
+    except ValueError:
+        print(f"Ignoring {env_var}={raw_value!r}: not an integer port.")
+        return None
+    if not (1 <= candidate <= 65535):
+        print(f"Ignoring {env_var}={candidate}: port out of range 1-65535.")
+        return None
+    if not _local_port_is_free(host, candidate):
+        print(
+            f"{env_var}={candidate} is busy; using an ephemeral port for this run. "
+            "Stop the stale report server (or forward the new port) to reuse the fixed one."
+        )
+        return None
+    return candidate
 
 
 def wait_for_local_server(host: str, port: int, *, timeout_seconds: float = 5.0) -> bool:
@@ -1504,6 +1549,48 @@ def _cleanup_report_processes() -> None:
 atexit.register(_cleanup_report_processes)
 
 
+_REPORT_ROOT_REDIRECT_MARKER = "<!-- pionera-report-root-redirect -->"
+
+
+def _ensure_report_root_redirect(directory_path: Path) -> None:
+    """Drop a root index.html that redirects to framework-report/index.html.
+
+    Remote editors (VS Code / antigravity) discard the path when opening a
+    forwarded localhost URL, so the browser hits "/" instead of the dashboard
+    path. Serving a redirect at "/" makes the dashboard open regardless."""
+    try:
+        target = directory_path / "framework-report" / "index.html"
+        if not target.is_file():
+            return
+        root_index = directory_path / "index.html"
+        if root_index.exists():
+            # Only overwrite a redirect we created ourselves; never clobber a
+            # real index.html.
+            try:
+                existing = root_index.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return
+            if _REPORT_ROOT_REDIRECT_MARKER not in existing:
+                return
+        dest = "framework-report/index.html"
+        root_index.write_text(
+            f"""<!doctype html>{_REPORT_ROOT_REDIRECT_MARKER}
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url={dest}">
+<title>Framework report</title>
+<script>location.replace({dest!r});</script>
+</head><body>
+<p>Opening the framework report… if it does not load, click
+<a href="{dest}">{dest}</a>.</p>
+</body></html>
+""",
+            encoding="utf-8",
+        )
+    except OSError:
+        # Redirect is a convenience; never block the server on it.
+        return
+
+
 def launch_static_report_server(
     directory: str | Path,
     *,
@@ -1513,12 +1600,21 @@ def launch_static_report_server(
     python_executable: str | None = None,
     wait_for_server=wait_for_local_server,
 ) -> dict[str, Any]:
-    if host != LOCAL_REPORT_HOST:
-        raise ValueError("Report servers must bind to 127.0.0.1.")
     directory_path = Path(directory)
     if not directory_path.is_dir():
         raise FileNotFoundError(f"Report directory not found: {directory_path}")
-    selected_port = port or find_free_local_port(host)
+    # Work around a VS Code / remote-editor behaviour where opening a forwarded
+    # localhost URL DISCARDS the path (microsoft/vscode-remote-release#10318):
+    # the browser lands on "/" instead of "/framework-report/index.html". Drop a
+    # root index.html that redirects to the dashboard so "/" still shows the
+    # report. Only added when an experiment dir exposes framework-report and has
+    # no index.html of its own.
+    _ensure_report_root_redirect(directory_path)
+    selected_port = (
+        port
+        or _configured_report_port("PIONERA_REPORT_PORT", host)
+        or find_free_local_port(host)
+    )
     command = [
         python_executable or sys.executable,
         "-m",
@@ -1531,12 +1627,16 @@ def launch_static_report_server(
     ]
     process = subprocess_module.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _register_report_process(process)
-    ready = bool(wait_for_server(host, selected_port))
+    # For health-checking, connect to localhost even when binding to 0.0.0.0
+    check_host = "127.0.0.1" if host == "0.0.0.0" else host
+    ready = bool(wait_for_server(check_host, selected_port))
+    # Build a URL that is reachable from outside the VM when binding to 0.0.0.0
+    url_host = _local_ip_address() if host == "0.0.0.0" else host
     return {
         "status": "started",
         "host": host,
         "port": selected_port,
-        "url": f"http://{host}:{selected_port}",
+        "url": f"http://{url_host}:{selected_port}",
         "directory": str(directory_path),
         "pid": getattr(process, "pid", None),
         "command": command,
@@ -1553,12 +1653,14 @@ def launch_playwright_report(
     subprocess_module=subprocess,
     wait_for_server=wait_for_local_server,
 ) -> dict[str, Any]:
-    if host != LOCAL_REPORT_HOST:
-        raise ValueError("Playwright reports must bind to 127.0.0.1.")
     report_path = Path(report_dir)
     if not report_path.is_dir() or not (report_path / "index.html").exists():
         raise FileNotFoundError(f"Playwright report not found: {report_path}")
-    selected_port = port or find_free_local_port(host)
+    selected_port = (
+        port
+        or _configured_report_port("PIONERA_PLAYWRIGHT_REPORT_PORT", host)
+        or find_free_local_port(host)
+    )
     cwd = Path(root or project_root()) / "validation" / "ui"
     command = [
         "npx",
@@ -1626,12 +1728,27 @@ def report_access_urls(
 ) -> list[dict[str, str]]:
     urls: list[dict[str, str]] = []
     if server_url:
+        base = str(server_url).rstrip("/")
         urls.append(
             {
-                "label": "Local server URL",
-                "url": f"{str(server_url).rstrip('/')}/framework-report/index.html",
+                "label": "Dashboard URL",
+                "url": f"{base}/framework-report/index.html",
             }
         )
+        # If the URL already uses a LAN IP, also show localhost for local access
+        lan_ip = _local_ip_address()
+        if lan_ip in base and lan_ip != "127.0.0.1":
+            # Extract port from the server_url
+            try:
+                port_part = base.rsplit(":", 1)[1]
+                urls.append(
+                    {
+                        "label": "Localhost URL",
+                        "url": f"http://127.0.0.1:{port_part}/framework-report/index.html",
+                    }
+                )
+            except (IndexError, ValueError):
+                pass
 
     wsl_url = wsl_file_url_for_path(dashboard_path)
     if wsl_url:

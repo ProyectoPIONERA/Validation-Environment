@@ -223,6 +223,7 @@ def _ontology_hub_session_login(runtime, timeout=20, quiet=False):
         return None
 
     session = requests.Session()
+    session.verify = False
     try:
         login_response = session.get(f"{base_url}/edition/login", timeout=timeout, allow_redirects=True)
     except requests.RequestException as exc:
@@ -576,7 +577,7 @@ def wait_for_ontology_hub_preflight(runtime, timeout_seconds=180, stable_success
         all_ready = True
         for label, url in targets:
             try:
-                response = requests.get(url, timeout=10, allow_redirects=True)
+                response = requests.get(url, timeout=10, allow_redirects=True, verify=False)
                 last_statuses[label] = str(response.status_code)
                 if ontology_hub_response_looks_broken(response):
                     all_ready = False
@@ -623,32 +624,102 @@ def wait_for_ontology_hub_preflight(runtime, timeout_seconds=180, stable_success
     return False
 
 
+def _check_github_rate_limit_from_oh_pod(runtime):
+    """Return (remaining, reset_epoch) from the OH pod, or None on error."""
+    namespace = _ontology_hub_components_namespace(runtime)
+    release_name = _ontology_hub_release_name(runtime)
+    label_selector = f"app.kubernetes.io/name=ontology-hub,app.kubernetes.io/instance={release_name}"
+    pod_name = _run_capture(
+        f"kubectl get pods -n {shlex.quote(namespace)} "
+        f"-l {shlex.quote(label_selector)} "
+        f"--field-selector=status.phase=Running "
+        f"-o jsonpath='{{.items[0].metadata.name}}'"
+    )
+    if not pod_name:
+        return None
+    output = _run_capture(
+        f"kubectl exec -n {shlex.quote(namespace)} {shlex.quote(pod_name)} "
+        f"-- curl -si https://api.github.com/rate_limit"
+    )
+    if not output:
+        return None
+    remaining_match = re.search(r"x-ratelimit-remaining:\s*(\d+)", output, re.IGNORECASE)
+    reset_match = re.search(r"x-ratelimit-reset:\s*(\d+)", output, re.IGNORECASE)
+    if not remaining_match:
+        return None
+    remaining = int(remaining_match.group(1))
+    reset_epoch = int(reset_match.group(1)) if reset_match else int(time.time()) + 3600
+    return remaining, reset_epoch
+
+
+def _wait_for_github_api_quota(runtime, min_remaining=5, check_interval=30):
+    """Block until OH pod has enough GitHub API quota for a repository registration."""
+    result = _check_github_rate_limit_from_oh_pod(runtime)
+    if result is None:
+        return
+    remaining, reset_epoch = result
+    if remaining >= min_remaining:
+        print(f"\nGitHub API rate limit OK: {remaining} requests remaining.\n")
+        return
+    deadline = reset_epoch + 15
+    wait_total = max(0, deadline - int(time.time()))
+    print(
+        f"\nGitHub API rate limit low on OH pod ({remaining} remaining). "
+        f"Waiting up to {wait_total}s for reset at epoch {reset_epoch}...\n"
+    )
+    while time.time() < deadline:
+        time.sleep(check_interval)
+        result = _check_github_rate_limit_from_oh_pod(runtime)
+        if result is None:
+            break
+        remaining, reset_epoch = result
+        if remaining >= min_remaining:
+            print(f"\nGitHub API rate limit recovered: {remaining} requests remaining.\n")
+            return
+        remaining_wait = max(0, reset_epoch + 15 - int(time.time()))
+        print(f"Still waiting for GitHub API rate limit: {remaining} remaining, ~{remaining_wait}s left...")
+    print("\nGitHub API rate limit wait completed. Proceeding.\n")
+
+
 def prepare_ontology_hub_for_functional(runtime):
     mode = ontology_hub_functional_reset_mode()
     preflight_timeout = int(runtime.get("preflightTimeout") or 180)
 
     if mode == "off":
         print("\nOntology Hub Functional cleanup skipped (ONTOLOGY_HUB_FUNCTIONAL_RESET_MODE=off).\n")
-        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=min(preflight_timeout, 60))
+        ready = wait_for_ontology_hub_preflight(runtime, timeout_seconds=min(preflight_timeout, 60))
+        if ready:
+            _wait_for_github_api_quota(runtime)
+        return ready
 
     if mode == "hard":
         if not reset_ontology_hub_for_functional(runtime):
             return False
-        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+        ready = wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+        if ready:
+            _wait_for_github_api_quota(runtime)
+        return ready
 
     if not soft_cleanup_ontology_hub_for_functional(runtime):
         print("\nOntology Hub soft cleanup failed. Falling back to hard reset...\n")
         if not reset_ontology_hub_for_functional(runtime):
             return False
-        return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+        ready = wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+        if ready:
+            _wait_for_github_api_quota(runtime)
+        return ready
 
     if wait_for_ontology_hub_preflight(runtime, timeout_seconds=min(preflight_timeout, 60)):
+        _wait_for_github_api_quota(runtime)
         return True
 
     print("\nOntology Hub soft cleanup left the app unhealthy. Falling back to hard reset...\n")
     if not reset_ontology_hub_for_functional(runtime):
         return False
-    return wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+    ready = wait_for_ontology_hub_preflight(runtime, timeout_seconds=preflight_timeout)
+    if ready:
+        _wait_for_github_api_quota(runtime)
+    return ready
 
 
 _prepare_ontology_hub_for_functional = prepare_ontology_hub_for_functional

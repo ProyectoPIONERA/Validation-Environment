@@ -70,7 +70,10 @@ async function openMappingEditor(page, semanticVirtualizationRuntime) {
   expect(status).toBe(200);
 
   const streamUrl = streamlitWebSocketUrl(url);
-  const streamProbe = await probeWebSocketHandshake(streamUrl);
+  const streamProbe = await probeWebSocketHandshake(
+    streamUrl,
+    semanticVirtualizationRuntime.ingressResolveIp,
+  );
   expect(
     streamProbe,
     `Expected Streamlit WebSocket ${streamUrl} to return HTTP 101 through the public route`,
@@ -87,18 +90,24 @@ function streamlitWebSocketUrl(editorUrl) {
   return streamUrl.toString();
 }
 
-function probeWebSocketHandshake(streamUrl) {
+function probeWebSocketHandshake(streamUrl, resolveIp = "") {
   return new Promise((resolve) => {
     const parsedUrl = new URL(streamUrl);
     const transport = parsedUrl.protocol === "wss:" ? https : http;
+    // When an internal ingress IP is provided, connect to it directly while
+    // preserving the public Host/SNI so the nginx ingress routes correctly.
+    // This bypasses an external proxy that does not tunnel WebSocket upgrades.
+    const connectIp = String(resolveIp || "").trim();
     const request = transport.request({
       protocol: parsedUrl.protocol === "wss:" ? "https:" : "http:",
-      hostname: parsedUrl.hostname,
+      hostname: connectIp || parsedUrl.hostname,
+      servername: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === "wss:" ? 443 : 80),
       path: `${parsedUrl.pathname}${parsedUrl.search}`,
       method: "GET",
       rejectUnauthorized: false,
       headers: {
+        Host: parsedUrl.host,
         Connection: "Upgrade",
         Upgrade: "websocket",
         "Sec-WebSocket-Key": Buffer.from("pionera-ws-probe").toString("base64"),
@@ -290,10 +299,7 @@ async function importOntologyFixture(page) {
 }
 
 test.describe("Mapping editor validation", () => {
-  test.skip(
-    process.env.SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_UI !== "1",
-    "Mapping editor validation was disabled explicitly for this execution.",
-  );
+
 
 test("PT5-VS-07: mapping editor graphical UI is reachable", async ({
   page,

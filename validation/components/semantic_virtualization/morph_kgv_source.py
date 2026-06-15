@@ -28,7 +28,10 @@ REQUIRED_FILES = {
 }
 
 README_CAPABILITY_MARKERS = {
-    "install": "pip install .",
+    # Relaxed from "pip install ." — upstream README now documents
+    # "pip install git+https://github.com/ProyectoPIONERA/morph-kgv.git".
+    # Match the stable "pip install" prefix so both forms satisfy the check.
+    "install": "pip install",
     "run_query": "run_query.py",
     "config": "config.ini",
     "serve": "morph-kgv serve config.ini",

@@ -1137,7 +1137,8 @@ def dataspace_public_access_urls(dataspace, config):
     if not _is_vm_distributed_public_common_mode(config):
         return {}
 
-    values = {**dict(config or {}), **resolve_vm_distributed_public_urls(config)}
+    original_config = dict(config or {})
+    values = {**original_config, **resolve_vm_distributed_public_urls(config)}
     urls = {}
 
     public_portal = normalize_public_url_with_trailing_slash(
@@ -1148,8 +1149,8 @@ def dataspace_public_access_urls(dataspace, config):
         urls["public_portal_login"] = public_portal
 
     public_portal_backend = normalize_url(
-        values.get("PUBLIC_PORTAL_BACKEND_PUBLIC_URL")
-        or values.get("DATASPACE_PUBLIC_PORTAL_BACKEND_URL")
+        original_config.get("PUBLIC_PORTAL_BACKEND_PUBLIC_URL")
+        or original_config.get("DATASPACE_PUBLIC_PORTAL_BACKEND_URL")
     )
     if public_portal_backend:
         urls["public_portal_backend_admin"] = (

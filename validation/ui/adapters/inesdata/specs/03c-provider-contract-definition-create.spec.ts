@@ -215,10 +215,14 @@ test("03c provider setup: contract definition creation from the UI", async ({
 
     await contractDefinitionCreatePage.submit();
     report.contractDefinitionMessage = await contractDefinitionCreatePage.waitForCreationSuccess();
-    await contractDefinitionCreatePage.expectContractDefinitionListed(contractDefinitionId, {
-      policyId,
-      assetId,
-    });
+    await contractDefinitionCreatePage.expectContractDefinitionListed(
+      contractDefinitionId,
+      {
+        policyId,
+        assetId,
+      },
+      portalBaseUrl,
+    );
     await captureStep(page, "07-contract-definition-created");
 
     expect(report.policyMessage, "The prerequisite policy was not created successfully").toMatch(

@@ -44,6 +44,8 @@ ensure_runtime_dependencies(
 )
 
 from tabulate import tabulate
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from framework.experiment_runner import ExperimentRunner
 from framework.experiment_storage import ExperimentStorage
@@ -1746,6 +1748,27 @@ def _edc_dashboard_connector_namespaces(deployer_context):
     return connector_namespaces
 
 
+def _edc_dashboard_connector_kubeconfigs(deployer_context):
+    topology = normalize_topology(getattr(deployer_context, "topology", None) or LOCAL_TOPOLOGY)
+    if topology != "vm-distributed":
+        return {}
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return {}
+    try:
+        role_kubeconfigs = _configured_vm_distributed_role_kubeconfigs()
+    except Exception:
+        return {}
+    provider_kc = role_kubeconfigs.get("provider") or ""
+    consumer_kc = role_kubeconfigs.get("consumer") or ""
+    result = {}
+    if len(connectors) >= 1 and provider_kc:
+        result[connectors[0]] = provider_kc
+    if len(connectors) >= 2 and consumer_kc:
+        result[connectors[1]] = consumer_kc
+    return result
+
+
 def _inesdata_interface_connector_namespaces(deployer_context):
     connectors = list(getattr(deployer_context, "connectors", []) or [])
     default_namespace = str(getattr(deployer_context, "dataspace_name", "") or "").strip()
@@ -1852,7 +1875,7 @@ def _positive_int_env(name, default):
         return int(default)
 
 
-def _kubectl_endpoint_ready(namespace, service_name):
+def _kubectl_endpoint_ready(namespace, service_name, kubeconfig=None):
     command = [
         "kubectl",
         "get",
@@ -1863,12 +1886,17 @@ def _kubectl_endpoint_ready(namespace, service_name):
         "-o",
         "json",
     ]
+    run_env = None
+    if kubeconfig:
+        run_env = dict(os.environ)
+        run_env["KUBECONFIG"] = kubeconfig
     try:
         result = subprocess.run(
             command,
             check=False,
             capture_output=True,
             text=True,
+            env=run_env,
         )
     except FileNotFoundError:
         return False, "kubectl is not available"
@@ -2106,6 +2134,7 @@ def _http_readiness_gate(
             timeout=timeout_seconds,
             allow_redirects=False,
             headers={"Cache-Control": "no-store"},
+            verify=False,
         )
     except Exception as exc:
         return {
@@ -2172,6 +2201,7 @@ def _http_form_readiness_gate(label, url, form_data, expected_statuses, timeout_
             timeout=timeout_seconds,
             allow_redirects=False,
             headers={"Cache-Control": "no-store"},
+            verify=False,
         )
     except Exception as exc:
         return {
@@ -2479,6 +2509,96 @@ def _edc_dashboard_http_gates(deployer_context, connectors, timeout_seconds):
     return gates
 
 
+def _restart_edc_connector_deployments(deployer_context, timeout_seconds=300):
+    """Restart EDC connector pods after Playwright S3-PUSH transfers.
+
+    Playwright S3-PUSH transfers leave EDC deprovisioning processes running in
+    the background that cause POST /management/v3/assets to return HTTP 500 for
+    up to 20+ minutes. Restarting the connector pods clears this state immediately.
+    """
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return
+    connector_namespaces = _edc_dashboard_connector_namespaces(deployer_context)
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
+    for connector in connectors:
+        namespace = connector_namespaces.get(connector) or ""
+        kubeconfig = connector_kubeconfigs.get(connector) or None
+        if not namespace:
+            continue
+        run_env = dict(os.environ)
+        if kubeconfig:
+            run_env["KUBECONFIG"] = kubeconfig
+        print(f"Restarting EDC connector deployment: {connector} (namespace: {namespace})")
+        try:
+            subprocess.run(
+                ["kubectl", "rollout", "restart", f"deployment/{connector}", "-n", namespace],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            subprocess.run(
+                [
+                    "kubectl", "rollout", "status", f"deployment/{connector}",
+                    "-n", namespace, f"--timeout={timeout_seconds}s",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            print(f"Connector ready: {connector}")
+            time.sleep(15)
+        except subprocess.CalledProcessError as exc:
+            print(f"Warning: EDC connector restart failed for {connector}: {(exc.stderr or '').strip()}")
+        except FileNotFoundError:
+            print("Warning: kubectl not available — skipping EDC connector restart")
+            return
+
+
+def _restart_inesdata_connector_deployments(deployer_context, timeout_seconds=300):
+    connectors = list(getattr(deployer_context, "connectors", []) or [])
+    if not connectors:
+        return
+    connector_namespaces = _inesdata_interface_connector_namespaces(deployer_context)
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
+    for connector in connectors:
+        namespace = connector_namespaces.get(connector) or ""
+        kubeconfig = connector_kubeconfigs.get(connector) or None
+        if not namespace:
+            continue
+        run_env = dict(os.environ)
+        if kubeconfig:
+            run_env["KUBECONFIG"] = kubeconfig
+        print(f"Restarting inesdata connector deployment: {connector} (namespace: {namespace})")
+        try:
+            subprocess.run(
+                ["kubectl", "rollout", "restart", f"deployment/{connector}", "-n", namespace],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            subprocess.run(
+                [
+                    "kubectl", "rollout", "status", f"deployment/{connector}",
+                    "-n", namespace, f"--timeout={timeout_seconds}s",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=run_env,
+            )
+            print(f"Connector ready: {connector}")
+            time.sleep(15)
+        except subprocess.CalledProcessError as exc:
+            print(f"Warning: inesdata connector restart failed for {connector}: {(exc.stderr or '').strip()}")
+        except FileNotFoundError:
+            print("Warning: kubectl not available — skipping inesdata connector restart")
+            return
+
+
 def _edc_dashboard_connector_kubeconfig_role(deployer_context, connector, connector_index):
     config = dict(getattr(deployer_context, "config", {}) or {})
     topology = normalize_topology(
@@ -2541,6 +2661,7 @@ def _probe_edc_dashboard_readiness(deployer_context):
     connector_namespaces = _edc_dashboard_connector_namespaces(deployer_context)
     namespaces = sorted({namespace for namespace in connector_namespaces.values() if namespace})
     namespace = namespaces[0] if len(namespaces) == 1 else ""
+    connector_kubeconfigs = _edc_dashboard_connector_kubeconfigs(deployer_context)
     gates = []
     http_timeout = _positive_float_env("PIONERA_EDC_DASHBOARD_HTTP_TIMEOUT_SECONDS", 5)
 
@@ -2566,6 +2687,7 @@ def _probe_edc_dashboard_readiness(deployer_context):
 
     for connector_index, connector in enumerate(connectors):
         connector_namespace = connector_namespaces.get(connector) or namespace
+        connector_kubeconfig = connector_kubeconfigs.get(connector) or None
         for suffix in ("dashboard", "dashboard-proxy"):
             service_name = f"{connector}-{suffix}"
             with _edc_dashboard_connector_kubeconfig_context(
@@ -5612,6 +5734,29 @@ def _temporary_environment(overrides):
                 os.environ[key] = value
 
 
+def _discover_component_release_names(components_namespace: str) -> dict:
+    """Discover actual component release names from the cluster for the given namespace."""
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "deployments", "-n", components_namespace,
+             "--no-headers", "-o", "custom-columns=NAME:.metadata.name"],
+            check=False, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return {}
+        names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return {}
+
+    overrides = {}
+    for name in names:
+        if name.endswith("-ontology-hub"):
+            overrides["ONTOLOGY_HUB_RELEASE_NAME"] = name
+        elif name.endswith("-semantic-virtualization"):
+            overrides["SEMANTIC_VIRTUALIZATION_RELEASE_NAME"] = name
+        elif name.endswith("-ai-model-hub"):
+            overrides["AI_MODEL_HUB_RELEASE_NAME"] = name
+    return overrides
 def _normalized_component_tokens(values):
     if values is None:
         return []
@@ -5742,9 +5887,12 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
     runtime_dir = str(getattr(deployer_context, "runtime_dir", "") or "").strip()
 
     def _connector_base_url(connector, role):
-        configured = _configured_public_connector_base_url(connector, deployer_context)
-        if configured:
-            return configured.rstrip("/")
+        # EDC connectors each have a dedicated ingress hostname; skip shared
+        # role-based URLs (org2/org3) which may conflict with other adapters.
+        if adapter_name != "edc":
+            configured = _configured_public_connector_base_url(connector, deployer_context)
+            if configured:
+                return configured.rstrip("/")
         if connector and ds_domain:
             return f"http://{connector}.{ds_domain}"
         return ""
@@ -5799,6 +5947,13 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
     if component_validation_mode:
         env["PIONERA_COMPONENT_VALIDATION_MODE"] = component_validation_mode
         env["LEVEL6_COMPONENT_VALIDATION_MODE"] = component_validation_mode
+    if adapter_name == "edc" and not component_validation_mode:
+        env["PIONERA_COMPONENT_VALIDATION_MODE"] = "api"
+        env["LEVEL6_COMPONENT_VALIDATION_MODE"] = "api"
+        components_namespace = str(config.get("COMPONENTS_NAMESPACE") or "components").strip() or "components"
+        discovered_release_names = _discover_component_release_names(components_namespace)
+        for release_env_var, release_name in discovered_release_names.items():
+            env.setdefault(release_env_var, release_name)
     for key in (
         "AI_MODEL_HUB_MODEL_SERVER_MODE",
         "AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL",
@@ -9772,6 +9927,18 @@ def run_validate(
         component_validation_summary = None
         une_0087_alignment = None
 
+        if (
+            resolved_deployer_name == "edc"
+            and deployer_context is not None
+        ):
+            _restart_edc_connector_deployments(deployer_context)
+
+        if (
+            resolved_deployer_name == "inesdata"
+            and deployer_context is not None
+        ):
+            _restart_inesdata_connector_deployments(deployer_context)
+
         print_interoperability_suite_header("Newman connector interoperability", "Newman")
         try:
             if "experiment_dir" in parameters:
@@ -10999,18 +11166,19 @@ def _vm_distributed_check_role_kubeconfigs(connector_values):
     return checks
 
 
-def _ensure_vm_distributed_level4_kubeconfig_supported():
+def _ensure_vm_distributed_level_kubeconfig_tunnels(level_id):
     config = _load_effective_infrastructure_deployer_config(topology="vm-distributed")
     kubeconfig_sync = _ensure_vm_distributed_local_kubeconfigs(
         config,
-        roles=_vm_distributed_level_kubeconfig_roles(4),
+        roles=_vm_distributed_level_kubeconfig_roles(level_id),
     )
     _raise_vm_distributed_kubeconfig_sync_failure(kubeconfig_sync)
     kubeconfigs = _configured_vm_distributed_role_kubeconfigs()
+    expected_roles = set(_vm_distributed_level_kubeconfig_roles(level_id))
     connector_values = {
         role: path
         for role, path in kubeconfigs.items()
-        if role in {"common", "provider", "consumer"} and path
+        if role in expected_roles and path
     }
     unique_values = sorted(set(connector_values.values()))
     tunnel_results = _ensure_vm_distributed_k3s_tunnels(connector_values, config)
@@ -11029,7 +11197,7 @@ def _ensure_vm_distributed_level4_kubeconfig_supported():
             suffix = f" Command: {command}" if command else ""
             details.append(f"{role}: {server}: {reason}.{suffix}")
         raise RuntimeError(
-            "Level 4 cannot continue because required vm-distributed Kubernetes API tunnels are not available. "
+            f"Level {level_id} cannot continue because required vm-distributed Kubernetes API tunnels are not available. "
             "The framework tried to prepare them before touching connector state. "
             + " ".join(details)
         )
@@ -11079,7 +11247,7 @@ def _ensure_vm_distributed_level4_kubeconfig_supported():
                 f"{item.get('server') or '(server not found)'}: {item.get('reason')}"
             )
         raise RuntimeError(
-            "Level 4 cannot continue because one or more vm-distributed Kubernetes contexts are not reachable. "
+            f"Level {level_id} cannot continue because one or more vm-distributed Kubernetes contexts are not reachable. "
             "This check runs before changing connector credentials or deploying Helm releases. "
             + " ".join(details)
         )
@@ -11307,7 +11475,7 @@ def run_level(
             result = deploy_dataspace()
     elif level_id == 4:
         if normalized_topology == "vm-distributed":
-            _ensure_vm_distributed_level4_kubeconfig_supported()
+            _ensure_vm_distributed_level_kubeconfig_tunnels(4)
         level_local_capacity = _run_local_adapter_install_capacity_preflight(
             resolved_deployer_name,
             topology,
@@ -11330,6 +11498,8 @@ def run_level(
             if callable(sync_routing):
                 sync_routing()
     elif level_id == 5:
+        if normalized_topology == "vm-distributed":
+            _ensure_vm_distributed_level_kubeconfig_tunnels(5)
         orchestrator = build_deployer_orchestrator(
             deployer_name=resolved_deployer_name,
             deployer_registry=deployer_registry,
@@ -11351,7 +11521,11 @@ def run_level(
         result = deploy_components(context)
         if isinstance(result, dict):
             result.setdefault("datasets", dataset_sync)
+        _run_ai_model_hub_post_deploy_seed(resolved_deployer_name, normalized_topology)
     else:
+        if normalized_topology == "vm-distributed":
+            _ensure_vm_distributed_level_kubeconfig_tunnels(6)
+        _run_connector_catalog_cleanup(resolved_deployer_name, normalized_topology)
         result = run_validate(
             adapter,
             deployer_name=resolved_deployer_name,
@@ -16793,6 +16967,10 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
     if selected_topology != "vm-distributed":
         return "".join(f"{key}=\n" for key in _vm_distributed_profile_template_keys(topology, selected_adapter))
 
+    _meta_hints = {
+        "PROFILE_TOPOLOGY": selected_topology,
+        "PROFILE_ADAPTER": selected_adapter,
+    }
     sections = (
         (
             "Local validation-environment profile.\n"
@@ -16984,7 +17162,10 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
             if key in emitted:
                 continue
             emitted.add(key)
-            rendered.append(f"{key}=")
+            if key in _meta_hints:
+                rendered.append(f"# {key}={_meta_hints[key]}")
+            else:
+                rendered.append(f"{key}=")
         rendered.append("")
     if selected_adapter == "edc":
         rendered.append("# EDC adapter options")
@@ -20061,6 +20242,104 @@ def _run_ai_model_hub_use_case_demo_seed_step(profile_values=None, adapter_name=
     return result
 
 
+def _run_connector_catalog_cleanup(deployer_name, normalized_topology):
+    """Prune accumulated test-junk offers from the connector catalog before
+    Level 6 runs. The federated catalog is capped (~100 datasets); junk assets
+    (qa-ui-*, pt5-mh-*, asset-e2e-*, contract-ui-*, kafka-edc-asset-*) pile up
+    across runs and push fresh test/model offers outside the cap, so discovery
+    and negotiation suites fail to find their own assets. This removes the junk
+    contract definitions (the catalog offers) while preserving the seeded AI
+    Model Hub assets. Connectors are untouched (management API deletes only).
+
+    Controlled by PIONERA_LEVEL6_CATALOG_CLEANUP (default on). Non-fatal."""
+    adapter = str(deployer_name or "").strip().lower()
+    if adapter != "inesdata" or normalized_topology != "vm-distributed":
+        return
+    if not _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_CLEANUP"), default=True):
+        return
+    script = os.path.join(os.path.dirname(__file__), "scripts", "clean_connector_catalog.py")
+    if not os.path.isfile(script):
+        return
+    print("\nPruning accumulated test-junk offers from the connector catalog (Level 6 pre-clean)...")
+    args = [sys.executable, script, "--apply"]
+    if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_CLEANUP_ASSETS"), default=False):
+        args.append("--assets")
+    try:
+        completed = subprocess.run(
+            args, cwd=os.path.dirname(__file__), check=False,
+            capture_output=True, text=True, timeout=600,
+        )
+        tail = "\n".join((completed.stdout or "").strip().splitlines()[-12:])
+        if tail:
+            print(tail)
+        if completed.returncode != 0:
+            print(f"  catalog cleanup exited {completed.returncode} (non-fatal); continuing.")
+    except Exception as exc:  # noqa: BLE001 - cleanup must not block validation
+        print(f"  catalog cleanup skipped ({exc}); continuing.")
+
+
+def _run_ai_model_hub_post_deploy_seed(deployer_name, normalized_topology):
+    """Seed AI Model Hub ML model + dataset assets into the connector catalog
+    after a Level 5 component deploy, so the benchmarking (PT5-MH-12..15) and
+    linguistic (MH-LING-01) validation flows can discover and negotiate FLARES
+    models and datasets from the dataspace catalog.
+
+    The same seed steps are exposed interactively via the use-case demo
+    assistant; this hook runs them automatically as part of the standard
+    pipeline. Non-fatal by default: the datasets step succeeds immediately,
+    while the models step only fully succeeds once trained FLARES/mobility
+    artifacts exist in AIModelHub-Use-Cases/models/ (until then the model
+    server's /models is empty and the step is skipped without blocking the
+    deploy). Controlled by AI_MODEL_HUB_SEED_ON_DEPLOY (default OFF) and
+    AI_MODEL_HUB_SEED_ON_DEPLOY_STRICT (default off).
+
+    NOTE: default is OFF. The broad seed publishes many model/dataset offers
+    that flood the federated catalog (capped ~100), which crowds out fresh test
+    assets and breaks the INESData consumer-catalog / negotiation / transfer and
+    Kafka suites. Enable explicitly only when validating the AI Model Hub
+    benchmarking/linguistic flow."""
+    adapter = str(deployer_name or "").strip().lower()
+    if adapter != "inesdata" or normalized_topology != "vm-distributed":
+        return
+    bundle = _load_vm_distributed_configuration_bundle(adapter_name=adapter)
+    values = {}
+    for section in ("infrastructure", "topology", "adapter"):
+        values.update(bundle.get(section) or {})
+    values.setdefault("PROFILE_TOPOLOGY", "vm-distributed")
+    if not _bool_value(values.get("AI_MODEL_HUB_SEED_ON_DEPLOY"), default=False):
+        print(
+            "AI Model Hub seed-on-deploy disabled "
+            "(AI_MODEL_HUB_SEED_ON_DEPLOY=false); skipping catalog seeding."
+        )
+        return
+    if not _bool_value(values.get("AI_MODEL_HUB_MODEL_SERVER_ENABLED"), default=False):
+        return
+    strict = _bool_value(values.get("AI_MODEL_HUB_SEED_ON_DEPLOY_STRICT"), default=False)
+    print("\nSeeding AI Model Hub ML assets into the connector catalog (Level 5 post-deploy)...")
+    for step in ("datasets", "models"):
+        try:
+            result = _run_ai_model_hub_use_case_demo_seed_step(
+                values, adapter_name=adapter, step=step
+            )
+        except Exception as exc:  # noqa: BLE001 - seeding must not abort the deploy
+            result = {"status": "failed", "error": str(exc)}
+        status = str((result or {}).get("status") or "unknown")
+        log_path = (result or {}).get("log_path") or ""
+        suffix = f" (log: {_framework_relative_path(log_path)})" if log_path else ""
+        print(f"  [seed-{step}] {status}{suffix}")
+        if status != "passed":
+            if strict:
+                raise RuntimeError(
+                    f"AI Model Hub seed step '{step}' failed during Level 5 post-deploy"
+                )
+            if step == "models":
+                print(
+                    "  note: model seeding needs trained FLARES/mobility artifacts in "
+                    "AIModelHub-Use-Cases/models/ (empty /models -> skipped). Datasets and "
+                    "wiring are in place; drop in the trained models and re-run Level 5."
+                )
+
+
 def _run_ai_model_hub_use_case_demo_flow(profile_path, profile_values=None, adapter_name="inesdata", run_level5=True):
     steps = []
     profile_result = _promote_ai_model_hub_use_case_demo_profile(
@@ -22724,7 +23003,7 @@ def _offer_open_level6_dashboard(framework_report):
     print("Level 6 dashboard available at:")
     _print_dashboard_access_urls(dashboard_path, server_url=server["url"])
     print(f"Dashboard file: {dashboard_path}")
-    print("The local server is bound to 127.0.0.1 and stays alive while this framework process is running.")
+    print("The dashboard server stays alive while this framework process is running.")
     if not server.get("ready"):
         print("The dashboard server is still starting. If the browser does not open, use the URL above.")
     _open_dashboard_url_with_wsl_file_fallback(url, dashboard_path, server_ready=bool(server.get("ready")))
@@ -22764,7 +23043,7 @@ def _open_experiment_dashboard_interactive(experiment):
     print("Experiment dashboard available at:")
     _print_dashboard_access_urls(dashboard_path, server_url=server["url"])
     print(f"Dashboard file: {dashboard_path}")
-    print("The local server is bound to 127.0.0.1 and stays alive while this framework process is running.")
+    print("The dashboard server stays alive while this framework process is running.")
     if not server.get("ready"):
         print("The dashboard server is still starting. If the browser does not open, use the URL above.")
     _open_dashboard_url_with_wsl_file_fallback(url, dashboard_path, server_ready=bool(server.get("ready")))

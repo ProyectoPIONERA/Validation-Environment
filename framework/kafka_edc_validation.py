@@ -1119,7 +1119,7 @@ class KafkaEdcValidationSuite:
             "protocol": "dataspace-protocol-http",
             "querySpec": {
                 "offset": 0,
-                "limit": 100,
+                "limit": 500,
                 "filterExpression": [],
             },
         }

@@ -1213,8 +1213,8 @@ async function createVersion(page, version, filePath, options = {}) {
   const unhealthyHeading = page.locator("h1").filter({ hasText: /50[0-9]|bad gateway|oops/i }).first();
   try {
     const outcome = await Promise.race([
-      versionRow.waitFor({ state: "visible", timeout: 5000 }).then(() => "row"),
-      unhealthyHeading.waitFor({ state: "visible", timeout: 5000 }).then(() => "error-page").catch(() => null),
+      versionRow.waitFor({ state: "visible", timeout: readyTimeoutMs }).then(() => "row"),
+      unhealthyHeading.waitFor({ state: "visible", timeout: readyTimeoutMs }).then(() => "error-page").catch(() => null),
     ]);
     if (outcome === "error-page") {
       const headingText = normalizeText(await safeTextContent(unhealthyHeading));

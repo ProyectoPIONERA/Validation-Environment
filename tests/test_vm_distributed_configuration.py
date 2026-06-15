@@ -962,7 +962,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
     def test_wizard_profile_message_shows_default_local_locations_when_missing(self):
         profile = {
             "status": "not-found",
-            "path": os.path.join(".profiles", "default.env"),
+            "path": os.path.join(".profiles", "pionera.env"),
             "values": {},
         }
         output = io.StringIO()
@@ -972,13 +972,13 @@ class VmDistributedConfigurationTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertIn("Configuration profile: not found.", rendered)
-        self.assertIn(".profiles/default.env", rendered.replace("\\", "/"))
+        self.assertIn(".profiles/pionera.env", rendered.replace("\\", "/"))
         self.assertNotIn("context", rendered)
 
     def test_wizard_profile_message_explains_created_template(self):
         profile = {
             "status": "created",
-            "path": os.path.join(".profiles", "default.env"),
+            "path": os.path.join(".profiles", "pionera.env"),
             "content": "# Local validation-environment profile\n",
             "values": {},
         }
@@ -989,7 +989,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertIn("Configuration profile created.", rendered)
-        self.assertIn(".profiles/default.env", rendered.replace("\\", "/"))
+        self.assertIn(".profiles/pionera.env", rendered.replace("\\", "/"))
         self.assertIn("Fill this file, then run W -> 1 again", rendered)
 
     def test_assistant_option_6_prints_needs_review_when_ssh_commands_are_missing(self):
@@ -1043,7 +1043,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
     def test_wizard_profile_message_shows_valid_content(self):
         profile = {
             "status": "loaded",
-            "path": os.path.join(".profiles", "default.env"),
+            "path": os.path.join(".profiles", "pionera.env"),
             "content": "DOMAIN_BASE=profile.example.test\nDS_1_NAME=dataspace\n",
             "values": {
                 "DOMAIN_BASE": "profile.example.test",
@@ -1090,7 +1090,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
             adapter_path = os.path.join(tmpdir, "inesdata", "deployer.config")
             adapter_example_path = os.path.join(tmpdir, "inesdata", "deployer.config.example")
             kubeconfig_path = os.path.join(tmpdir, "common.yaml")
-            profile_path = os.path.join(tmpdir, ".profiles", "default.env")
+            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
 
             for path in (
                 infra_path,
@@ -1533,7 +1533,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
             )
             adapter_path = os.path.join(tmpdir, "inesdata", "deployer.config")
             adapter_example_path = os.path.join(tmpdir, "inesdata", "deployer.config.example")
-            profile_path = os.path.join(tmpdir, ".profiles", "default.env")
+            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
             for path in (
                 infra_example_path,
                 topology_example_path,
@@ -1612,7 +1612,7 @@ class VmDistributedConfigurationTests(unittest.TestCase):
             infra_path = os.path.join(tmpdir, "infrastructure", "deployer.config")
             topology_path = os.path.join(tmpdir, "infrastructure", "topologies", "vm-distributed.config")
             adapter_path = os.path.join(tmpdir, "inesdata", "deployer.config")
-            profile_path = os.path.join(tmpdir, ".profiles", "default.env")
+            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
             for path in (infra_path, topology_path, adapter_path, profile_path):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(infra_path, "w", encoding="utf-8") as handle:

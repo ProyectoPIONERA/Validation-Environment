@@ -434,14 +434,22 @@ public class ModelExecutionApiController {
         if (negotiation != null) {
             if (!hasText(resolvedCounterPartyAddress)) {
                 resolvedCounterPartyAddress = firstNonBlank(textValue(negotiation,
-                        "counterPartyAddress", "protocolAddress", "edc:counterPartyAddress", "edc:protocolAddress"), null);
+                        "counterPartyAddress", "protocolAddress",
+                        "edc:counterPartyAddress", "edc:protocolAddress",
+                        "https://w3id.org/edc/v0.0.1/ns/counterPartyAddress",
+                        "https://w3id.org/edc/v0.0.1/ns/protocolAddress"), null);
             }
             if (!hasText(resolvedProtocol)) {
-                resolvedProtocol = firstNonBlank(textValue(negotiation, "protocol", "edc:protocol"), null);
+                resolvedProtocol = firstNonBlank(textValue(negotiation,
+                        "protocol", "edc:protocol",
+                        "https://w3id.org/edc/v0.0.1/ns/protocol"), null);
             }
             if (!hasText(resolvedConnectorId)) {
                 resolvedConnectorId = firstNonBlank(textValue(negotiation,
-                        "counterPartyId", "connectorId", "edc:counterPartyId", "edc:connectorId"), null);
+                        "counterPartyId", "connectorId",
+                        "edc:counterPartyId", "edc:connectorId",
+                        "https://w3id.org/edc/v0.0.1/ns/counterPartyId",
+                        "https://w3id.org/edc/v0.0.1/ns/connectorId"), null);
             }
         }
 
@@ -602,7 +610,10 @@ public class ModelExecutionApiController {
     }
 
     private String extractAgreementAssetId(JsonNode agreement) {
-        var assetId = firstNonBlank(textValue(agreement, "assetId", "edc:assetId", "https://w3id.org/edc/v0.0.1/ns/assetId"), null);
+        var assetId = firstNonBlank(textValue(agreement,
+                "assetId", "edc:assetId",
+                "https://w3id.org/edc/v0.0.1/ns/assetId",
+                "https://w3id.org/edc/v0.0.1/ns/asset"), null);
         if (hasText(assetId)) {
             return assetId;
         }
@@ -634,8 +645,12 @@ public class ModelExecutionApiController {
     }
 
     private String inferRemoteParticipantId(JsonNode agreement) {
-        var providerId = firstNonBlank(textValue(agreement, "providerId", "edc:providerId"), null);
-        var consumerId = firstNonBlank(textValue(agreement, "consumerId", "edc:consumerId"), null);
+        var providerId = firstNonBlank(textValue(agreement,
+                "providerId", "edc:providerId",
+                "https://w3id.org/edc/v0.0.1/ns/providerId"), null);
+        var consumerId = firstNonBlank(textValue(agreement,
+                "consumerId", "edc:consumerId",
+                "https://w3id.org/edc/v0.0.1/ns/consumerId"), null);
         if (!hasText(localParticipantId)) {
             return firstNonBlank(providerId, consumerId, null);
         }

@@ -143,8 +143,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
 
     def wait_for_all_connectors(self, connectors):
         print("\nWaiting for all EDC connectors to expose their management API...\n")
+        timeout = int(getattr(self.config, "TIMEOUT_MANAGEMENT_API_WAIT", 360))
         for connector in connectors:
-            if not self.wait_for_management_api_ready(connector):
+            if not self.wait_for_management_api_ready(connector, timeout=timeout):
                 print(f"Connector management API not ready: {connector}")
                 return False
         return True
@@ -322,6 +323,25 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
                 or "latest"
             ).strip(),
         }
+
+    def _edc_dashboard_image_override_configured(self, images=None):
+        if images is None:
+            images = self._edc_dashboard_image_values()
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+        dashboard_name = str(
+            os.environ.get("PIONERA_EDC_DASHBOARD_IMAGE_NAME")
+            or deployer_config.get("EDC_DASHBOARD_IMAGE_NAME")
+            or ""
+        ).strip()
+        proxy_name = str(
+            os.environ.get("PIONERA_EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or deployer_config.get("EDC_DASHBOARD_PROXY_IMAGE_NAME")
+            or ""
+        ).strip()
+        return bool(dashboard_name and proxy_name)
 
     def _run_level4_edc_image_script(self, script_path, args=None, env_prefix=""):
         root_dir = self._framework_root_dir()
@@ -525,6 +545,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return True
 
         images = self._edc_dashboard_image_values()
+        if mode != "required" and self._edc_dashboard_image_override_configured(images):
+            print("Skipping Level 4 local EDC dashboard image preparation; explicit image override is configured.")
+            return True
         missing = [key for key, value in images.items() if not value]
         if missing:
             print("EDC dashboard local image values are incomplete: " + ", ".join(sorted(missing)))
@@ -759,16 +782,15 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return True
 
         deployer_config = config_loader() or {}
-        vault_url = str(
-            deployer_config.get("VT_URL") or deployer_config.get("VAULT_URL") or ""
-        ).strip().rstrip("/")
+        primary_url = str(deployer_config.get("VT_URL") or "").strip().rstrip("/")
+        fallback_url = str(deployer_config.get("VAULT_URL") or "").strip().rstrip("/")
         vault_token = str(deployer_config.get("VT_TOKEN") or "").strip()
-        if not vault_url or not vault_token:
+        if not (primary_url or fallback_url) or not vault_token:
             print("Vault token validation failed: VT_URL/VT_TOKEN are not defined in deployer.config")
             return False
 
         validated, network_failure = self._verify_edc_vault_management_token_over_http(
-            vault_url,
+            primary_url or fallback_url,
             vault_token,
         )
         if validated:
@@ -796,11 +818,17 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
         if not callable(config_loader):
             return None, None
         deployer_config = config_loader() or {}
-        vault_url = str(
-            deployer_config.get("VT_URL") or deployer_config.get("VAULT_URL") or ""
-        ).strip().rstrip("/")
+        primary = str(deployer_config.get("VT_URL") or "").strip().rstrip("/")
+        fallback = str(deployer_config.get("VAULT_URL") or "").strip().rstrip("/")
         vault_token = str(deployer_config.get("VT_TOKEN") or "").strip()
-        return vault_url, vault_token
+        # VT_URL may be cluster-internal DNS; probe both and return the reachable one.
+        for candidate in filter(None, [primary, fallback]):
+            try:
+                requests.get(f"{candidate}/v1/sys/health", timeout=3, verify=False)
+                return candidate, vault_token
+            except requests.RequestException:
+                continue
+        return (primary or fallback), vault_token
 
     def _connector_credentials_file_path(self, connector_name, ds_name=None, for_write=False):
         resolver = getattr(self.config_adapter, "edc_connector_credentials_path", None)
@@ -2595,16 +2623,29 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
             return None
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/token"
 
+    def _keycloak_frontend_base_url(self):
+        deployer_config = self.config_adapter.load_deployer_config()
+        frontend_url = str(deployer_config.get("KEYCLOAK_FRONTEND_URL") or "").strip().rstrip("/")
+        if frontend_url:
+            return frontend_url
+        return self._keycloak_base_url()
+
     def _keycloak_authorization_url_for_dataspace(self, ds_name):
-        keycloak_url = self._keycloak_base_url()
+        keycloak_url = self._keycloak_frontend_base_url()
         if not keycloak_url:
             return None
+        # KEYCLOAK_FRONTEND_URL includes the /auth path (e.g. https://host/auth).
+        # Append realm path only when the URL does not already end with the realm.
+        if f"/realms/{ds_name}" in keycloak_url:
+            return f"{keycloak_url}/protocol/openid-connect/auth"
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/auth"
 
     def _keycloak_logout_url_for_dataspace(self, ds_name):
-        keycloak_url = self._keycloak_base_url()
+        keycloak_url = self._keycloak_frontend_base_url()
         if not keycloak_url:
             return None
+        if f"/realms/{ds_name}" in keycloak_url:
+            return f"{keycloak_url}/protocol/openid-connect/logout"
         return f"{keycloak_url}/realms/{ds_name}/protocol/openid-connect/logout"
 
     @staticmethod

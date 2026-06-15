@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import subprocess
+import tempfile
 from typing import Any
 from urllib.parse import urlparse
 
@@ -249,18 +250,28 @@ def apply_managed_blocks(
 
 
 def _write_hosts_file_with_sudo(hosts_file: str, content: str) -> None:
+    # Write to a temp file first so sudo cp inherits the real TTY stdin —
+    # subprocess.run(..., input=...) replaces stdin with a pipe, blocking sudo
+    # from prompting for the password when use_pty is set in sudoers.
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".hosts", delete=False, encoding="utf-8") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
         subprocess.run(
-            ["sudo", "tee", hosts_file],
-            input=content,
-            text=True,
-            stdout=subprocess.DEVNULL,
+            ["sudo", "cp", tmp_path, hosts_file],
             check=True,
         )
     except FileNotFoundError as exc:
         raise PermissionError("sudo is not available to update the hosts file") from exc
     except subprocess.CalledProcessError as exc:
         raise PermissionError("sudo could not update the hosts file") from exc
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def merge_missing_managed_blocks(

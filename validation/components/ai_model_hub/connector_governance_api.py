@@ -113,8 +113,8 @@ class AIModelHubConnectorGovernanceApiSuite:
     DEFAULT_NEGOTIATION_TIMEOUT_SECONDS = 60
     DEFAULT_TRANSFER_TIMEOUT_SECONDS = 180
     DEFAULT_POLL_INTERVAL_SECONDS = 3
-    DEFAULT_REQUEST_ATTEMPTS = 3
-    DEFAULT_REQUEST_RETRY_SECONDS = 2
+    DEFAULT_REQUEST_ATTEMPTS = 5
+    DEFAULT_REQUEST_RETRY_SECONDS = 4
 
     def __init__(
         self,
@@ -292,11 +292,127 @@ class AIModelHubConnectorGovernanceApiSuite:
                     raise
                 time.sleep(self.DEFAULT_REQUEST_RETRY_SECONDS)
                 continue
-            if response.status_code in {502, 503, 504} and attempt < self.DEFAULT_REQUEST_ATTEMPTS:
+            if response.status_code in {500, 502, 503, 504} and attempt < self.DEFAULT_REQUEST_ATTEMPTS:
                 time.sleep(self.DEFAULT_REQUEST_RETRY_SECONDS)
                 continue
             return response
         raise last_exc or RuntimeError(f"{label} did not produce a response")
+
+    def _wait_for_provider_management_ready(
+        self,
+        provider: str,
+        provider_jwt: str,
+        runtime: dict[str, Any] | None = None,
+        max_wait_seconds: int = 300,
+        poll_interval_seconds: int = 5,
+        token_refresh_interval_seconds: int = 240,
+    ) -> tuple[int, int, str]:
+        """Wait until the provider management API accepts asset write operations.
+
+        After a connector restart, this probe waits up to 300s for the management
+        API to become ready. Keycloak tokens expire after ~300s, so the token
+        refresh interval is set conservatively.
+        """
+        probe_id = f"__probe-asset-ready-{int(time.time())}"
+        create_url = self._management_url(provider, "/management/v3/assets")
+        delete_url = self._management_url(provider, f"/management/v3/assets/{probe_id}")
+        probe_payload = {
+            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
+            "@id": probe_id,
+            "properties": {"name": "readiness-probe"},
+            "dataAddress": {"type": "HttpData", "baseUrl": "http://localhost/probe"},
+        }
+        current_jwt = provider_jwt
+        headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+        start = time.time()
+        last_token_refresh = start
+        deadline = start + max_wait_seconds
+        attempts = 0
+        while time.time() < deadline:
+            # Refresh token before it expires (every token_refresh_interval_seconds)
+            if runtime and (time.time() - last_token_refresh) >= token_refresh_interval_seconds:
+                try:
+                    current_jwt = self._login(provider, "provider", runtime)
+                    headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+                    last_token_refresh = time.time()
+                except Exception:
+                    pass
+            attempts += 1
+            try:
+                r = self.session.post(create_url, json=probe_payload, headers=headers, timeout=10)
+                if r.status_code in {200, 201, 409}:
+                    if r.status_code in {200, 201}:
+                        try:
+                            self.session.delete(
+                                delete_url,
+                                headers={"Authorization": f"Bearer {current_jwt}"},
+                                timeout=10,
+                            )
+                        except Exception:
+                            pass
+                    return attempts, round(time.time() - start), current_jwt
+            except requests.RequestException:
+                pass
+            time.sleep(poll_interval_seconds)
+        # Best-effort: refresh token before proceeding in case it expired during the wait
+        if runtime:
+            try:
+                current_jwt = self._login(provider, "provider", runtime)
+            except Exception:
+                pass
+        return attempts, round(time.time() - start), current_jwt
+
+    def _wait_for_consumer_management_ready(
+        self,
+        consumer: str,
+        consumer_jwt: str,
+        runtime: dict[str, Any] | None = None,
+        max_wait_seconds: int = 120,
+        poll_interval_seconds: int = 5,
+        token_refresh_interval_seconds: int = 240,
+    ) -> tuple[int, int, str]:
+        """Wait until the consumer management API accepts authenticated requests.
+
+        After a connector restart the JWKS cache may not be populated yet, causing
+        the first few authenticated requests to return 401. This probe polls a
+        lightweight list endpoint until a non-401 response is received.
+        """
+        list_url = self._management_url(consumer, "/management/v3/assets/request")
+        list_payload = {
+            "@context": {"@vocab": EDC_NAMESPACE},
+            "@type": "QuerySpec",
+            "offset": 0,
+            "limit": 1,
+            "filterExpression": [],
+        }
+        current_jwt = consumer_jwt
+        headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+        start = time.time()
+        last_token_refresh = start
+        deadline = start + max_wait_seconds
+        attempts = 0
+        while time.time() < deadline:
+            if runtime and (time.time() - last_token_refresh) >= token_refresh_interval_seconds:
+                try:
+                    current_jwt = self._login(consumer, "consumer", runtime)
+                    headers = {"Authorization": f"Bearer {current_jwt}", "Content-Type": "application/json"}
+                    last_token_refresh = time.time()
+                except Exception:
+                    pass
+            attempts += 1
+            try:
+                r = self.session.post(list_url, json=list_payload, headers=headers, timeout=10)
+                if r.status_code != 401:
+                    return attempts, round(time.time() - start), current_jwt
+            except requests.RequestException:
+                pass
+            time.sleep(poll_interval_seconds)
+        if runtime:
+            try:
+                current_jwt = self._login(consumer, "consumer", runtime)
+            except Exception:
+                pass
+        return attempts, round(time.time() - start), current_jwt
 
     @staticmethod
     def _assert_status(response, expected_codes: set[int], label: str) -> None:
@@ -917,6 +1033,12 @@ class AIModelHubConnectorGovernanceApiSuite:
             consumer_jwt = self._login(consumer, "consumer", runtime)
             step("consumer_oidc_login", connector=consumer)
 
+            probe_attempts, probe_wait_s, provider_jwt = self._wait_for_provider_management_ready(
+                provider, provider_jwt, runtime=runtime
+            )
+            if probe_attempts > 1:
+                step("provider_management_ready_probe", probe_attempts=probe_attempts, waited_seconds=probe_wait_s)
+
             asset_id, created_asset_id, asset_status, asset_payload = self._create_model_asset(
                 provider,
                 provider_jwt,
@@ -940,6 +1062,12 @@ class AIModelHubConnectorGovernanceApiSuite:
             )
             created_entities["contract_definition_id"] = created_contract_id
             step("create_contract_definition", http_status=contract_status, contract_definition_id=created_contract_id)
+
+            con_probe_attempts, con_probe_wait_s, consumer_jwt = self._wait_for_consumer_management_ready(
+                consumer, consumer_jwt, runtime=runtime
+            )
+            if con_probe_attempts > 1:
+                step("consumer_management_ready_probe", probe_attempts=con_probe_attempts, waited_seconds=con_probe_wait_s)
 
             catalog_body, catalog_status = self._request_catalog(provider, consumer, consumer_jwt)
             catalog_info = self._select_catalog_dataset(catalog_body, asset_id, provider)

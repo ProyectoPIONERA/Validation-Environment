@@ -1339,6 +1339,20 @@ class SharedComponentsAdapter(INESDataComponentsAdapter):
         return model_server.uvicorn_app(deployer_config, mode)
 
     @staticmethod
+    def _ai_model_hub_model_server_combined_mock_count(deployer_config):
+        config = dict(deployer_config or {})
+        raw = (
+            config.get("AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT")
+            or config.get("COMBINED_MOCK_HTTP_COUNT")
+            or ""
+        )
+        try:
+            count = int(str(raw).strip())
+        except (TypeError, ValueError):
+            count = 15
+        return max(0, min(count, 15))
+
+    @staticmethod
     def _ai_model_hub_model_server_image_pull_policy(image_ref, deployer_config):
         return model_server.image_pull_policy(image_ref, deployer_config)
 
@@ -1398,6 +1412,26 @@ MOCK_MODELS: List[Dict[str, str]] = [
     {"slug": "ideal-weight", "endpoint": "/api/v1/health/ideal-weight", "group": "health"},
     {"slug": "health-risk", "endpoint": "/api/v1/health/risk-assessment", "group": "health"},
 ]
+
+# Display names match the original 25-model mock so the INESData execution UI
+# (specs 12/15) finds the expected model label in the rendered result.
+_MODEL_TITLES = {
+    "chest-xray": "Chest X-Ray Classifier",
+    "pneumonia": "Pneumonia Detector",
+    "covid19": "COVID-19 Screener",
+    "lung-nodule": "Lung Nodule Detector",
+    "tuberculosis": "Tuberculosis Classifier",
+    "ecommerce-sentiment": "E-commerce Sentiment Analyzer",
+    "twitter-sentiment": "Twitter Sentiment Analyzer",
+    "product-review": "Product Review Classifier",
+    "customer-feedback": "Customer Feedback Analyzer",
+    "social-media-sentiment": "Social Media Sentiment Analyzer",
+    "bmi": "BMI Calculator",
+    "body-fat": "Body Fat Estimator",
+    "bmr": "BMR Calculator",
+    "ideal-weight": "Ideal Weight Predictor",
+    "health-risk": "Health Risk Assessor",
+}
 
 
 def _use_case_server_dir() -> str:
@@ -1552,7 +1586,8 @@ def _register_mock_endpoint(model: Dict[str, str]) -> None:
             payload = {}
         records = _records_from_payload(payload)
         return {
-            "model": model["slug"],
+            "model": _MODEL_TITLES.get(model["slug"], model["slug"]),
+            "served_by": "local-rule-engine",
             "serverMode": "combined",
             "predictions": [_predict(model, record) for record in records],
         }
@@ -1638,6 +1673,11 @@ def combined_models() -> Dict[str, Any]:
         ]
         if mode == "combined":
             dockerfile_lines.append("COPY combined_model_server /app/combined_model_server")
+            # Register the deterministic mock HttpData endpoints (/api/v1/...).
+            # Default is 0, which leaves /combined-models empty and makes the
+            # connector model-execution proxy 404 (PT5-MH-10, INESData-12/15).
+            mock_count = self._ai_model_hub_model_server_combined_mock_count(deployer_config)
+            dockerfile_lines.append(f"ENV COMBINED_MOCK_HTTP_COUNT={mock_count}")
         dockerfile_lines.extend(
             [
                 f"EXPOSE {container_port}",
@@ -2155,6 +2195,7 @@ def combined_models() -> Dict[str, Any]:
                 timeout=timeout_seconds,
                 allow_redirects=bool(follow_redirects),
                 headers={"Cache-Control": "no-store"},
+                verify=False,
             )
         except Exception as exc:
             return False, f"HTTP probe failed: {exc}"
