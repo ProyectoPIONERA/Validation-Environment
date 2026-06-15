@@ -7890,8 +7890,8 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(env["PIONERA_ADAPTER"], "edc")
         self.assertEqual(env["UI_ADAPTER"], "edc")
         self.assertEqual(env["AI_MODEL_HUB_COMPONENT_ADAPTER"], "edc")
-        self.assertNotIn("PIONERA_COMPONENT_VALIDATION_MODE", env)
-        self.assertNotIn("LEVEL6_COMPONENT_VALIDATION_MODE", env)
+        self.assertEqual(env["PIONERA_COMPONENT_VALIDATION_MODE"], "api")
+        self.assertEqual(env["LEVEL6_COMPONENT_VALIDATION_MODE"], "api")
         self.assertEqual(env["UI_DATASPACE"], "pionera-edc")
         self.assertEqual(env["PIONERA_COMPONENT_DATASPACE_NAME"], "pionera")
         self.assertEqual(env["COMPONENT_DATASPACE_NAME"], "pionera")
@@ -7966,6 +7966,44 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(
             env["AI_MODEL_HUB_PROVIDER_PROTOCOL_URL"],
             "http://conn-org2-pionera.pionera.oeg.fi.upm.es/protocol",
+        )
+
+    def test_level6_component_validation_environment_uses_inesdata_integrated_ai_model_hub_mode(self):
+        context = DeploymentContext.from_mapping(
+            {
+                "deployer": "inesdata",
+                "topology": "vm-distributed",
+                "environment": "DEV",
+                "dataspace_name": "pionera",
+                "ds_domain_base": "pionera.oeg.fi.upm.es",
+                "connectors": [
+                    "conn-org2-pionera",
+                    "conn-org3-pionera",
+                ],
+                "config": {
+                    "DS_1_CONNECTORS": "org2,org3",
+                    "VM_PROVIDER_CONNECTORS": "org2",
+                    "VM_CONSUMER_CONNECTORS": "org3",
+                    "VM_PROVIDER_PUBLIC_URL": "https://org2.pionera.oeg.fi.upm.es",
+                    "VM_CONSUMER_PUBLIC_URL": "https://org3.pionera.oeg.fi.upm.es",
+                    "KEYCLOAK_FRONTEND_URL": "https://org1.pionera.oeg.fi.upm.es/auth",
+                },
+            }
+        )
+
+        env = main._level6_component_validation_environment(
+            context,
+            "inesdata",
+            components=["ontology-hub", "ai-model-hub"],
+        )
+
+        self.assertEqual(env["PIONERA_COMPONENT_VALIDATION_MODE"], "api")
+        self.assertEqual(env["LEVEL6_COMPONENT_VALIDATION_MODE"], "api")
+        self.assertEqual(env["AI_MODEL_HUB_DASHBOARD_PATH"], "/")
+        self.assertEqual(env["AI_MODEL_HUB_APP_CONFIG_PATH"], "assets/config/app.config.json")
+        self.assertEqual(
+            env["AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS"],
+            "managementApiUrl,participantId,service",
         )
 
     def test_level6_component_validation_environment_uses_edc_vm_distributed_public_prefix(self):

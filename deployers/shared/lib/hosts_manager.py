@@ -112,6 +112,7 @@ def build_context_host_blocks(
     deployer_name = _clean_token(getattr(context, "deployer", "deployer")) or "deployer"
     connectors = [_clean_token(connector) for connector in list(getattr(context, "connectors", []) or [])]
     components = [_clean_token(component) for component in list(getattr(context, "components", []) or [])]
+    integrated_components = _integrated_components_for_context(config, deployer_name)
 
     blocks: list[HostBlock] = []
     if include_common:
@@ -153,7 +154,7 @@ def build_context_host_blocks(
     component_entries = [
         HostEntry(component_address, f"{_component_hostname(component, dataspace_name)}.{ds_domain_base}")
         for component in components
-        if component and ds_domain_base
+        if component and ds_domain_base and _normalized_component_key(component) not in integrated_components
     ]
     if component_entries:
         blocks.append(
@@ -626,6 +627,33 @@ def _connector_short_name(connector: str, dataspace_name: str) -> str:
     if normalized_connector.startswith(prefix):
         return normalized_connector[len(prefix):]
     return normalized_connector
+
+
+def _integrated_components_for_context(config: dict[str, Any], deployer_name: str) -> set[str]:
+    try:
+        from .components import normalize_component_key, summarize_components_for_adapter
+    except Exception:
+        return set()
+
+    try:
+        summary = summarize_components_for_adapter(config, deployer_name)
+    except Exception:
+        return set()
+
+    return {
+        normalize_component_key(component)
+        for component in list(summary.get("integrated") or [])
+        if normalize_component_key(component)
+    }
+
+
+def _normalized_component_key(component: str) -> str:
+    try:
+        from .components import normalize_component_key
+
+        return normalize_component_key(component)
+    except Exception:
+        return _clean_token(component).lower().replace("_", "-")
 
 
 def _component_hostname(component: str, dataspace_name: str) -> str:

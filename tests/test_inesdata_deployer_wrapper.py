@@ -165,15 +165,16 @@ class InesdataDeployerWrapperTests(unittest.TestCase):
 
         result = deployer.deploy_components(context)
 
-        self.assertEqual(result["deployed"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(result["deployed"], ["ontology-hub"])
         self.assertEqual(result["configured"], ["ontology-hub", "ai-model-hub"])
-        self.assertEqual(result["deployable"], ["ontology-hub", "ai-model-hub"])
+        self.assertEqual(result["deployable"], ["ontology-hub"])
+        self.assertEqual(result["integrated"], ["ai-model-hub"])
         self.assertEqual(result["pending_support"], [])
         self.assertEqual(
             components_adapter.calls,
             [
                 {
-                    "components": ["ontology-hub", "ai-model-hub"],
+                    "components": ["ontology-hub"],
                     "kwargs": {
                         "ds_name": "demo",
                         "namespace": "components",

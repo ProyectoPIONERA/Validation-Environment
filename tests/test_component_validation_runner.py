@@ -51,7 +51,11 @@ class ComponentValidationRunnerTests(unittest.TestCase):
         self.assertEqual(ontology_registration.supported_adapters, ("inesdata", "edc"))
         self.assertEqual(ontology_registration.deployable_adapters, ("inesdata", "edc"))
         self.assertEqual(ai_model_registration.supported_adapters, ("inesdata", "edc"))
-        self.assertEqual(ai_model_registration.deployable_adapters, ("inesdata", "edc"))
+        self.assertEqual(ai_model_registration.deployable_adapters, ("edc",))
+        self.assertEqual(
+            ai_model_registration.deployment_strategy,
+            "integrated-in-inesdata-connector-interface",
+        )
         self.assertEqual(COMPONENT_REGISTRY["ai-model-hub"].validation_groups, ("ai-model-hub",))
 
     def test_component_execution_mode_defaults_to_mixed_for_edc(self):

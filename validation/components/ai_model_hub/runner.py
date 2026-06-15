@@ -6,8 +6,9 @@ from urllib import error, parse, request
 
 
 COMPONENT_KEY = "ai-model-hub"
-DASHBOARD_PATH = os.environ.get("AI_MODEL_HUB_DASHBOARD_PATH", "")
-APP_CONFIG_PATH = os.environ.get("AI_MODEL_HUB_APP_CONFIG_PATH", "config/app-config.json")
+DEFAULT_DASHBOARD_PATH = ""
+DEFAULT_APP_CONFIG_PATH = "config/app-config.json"
+DEFAULT_APP_CONFIG_REQUIRED_KEYS = ("menuItems",)
 
 SUPPORT_CASE_METADATA: Dict[str, Dict[str, str]] = {
     "MH-BOOTSTRAP-01": {
@@ -51,6 +52,21 @@ def _build_url(base_url: str, relative_path: str) -> str:
     if not relative_path or relative_path == "/":
         return normalized_base_url
     return parse.urljoin(f"{normalized_base_url}/", relative_path.lstrip("/"))
+
+
+def _dashboard_path() -> str:
+    return os.environ.get("AI_MODEL_HUB_DASHBOARD_PATH", DEFAULT_DASHBOARD_PATH)
+
+
+def _app_config_path() -> str:
+    return os.environ.get("AI_MODEL_HUB_APP_CONFIG_PATH", DEFAULT_APP_CONFIG_PATH)
+
+
+def _app_config_required_keys() -> list[str]:
+    raw_value = str(os.environ.get("AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS") or "").strip()
+    if not raw_value:
+        return list(DEFAULT_APP_CONFIG_REQUIRED_KEYS)
+    return [entry.strip() for entry in raw_value.replace(";", ",").split(",") if entry.strip()]
 
 
 def _http_get(url: str, timeout: int = 20) -> Tuple[int, str, str]:
@@ -255,7 +271,7 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
     started_at = datetime.now().isoformat()
     normalized_base_url = (base_url or "").rstrip("/")
 
-    shell_url = _build_url(normalized_base_url, DASHBOARD_PATH)
+    shell_url = _build_url(normalized_base_url, _dashboard_path())
     shell_status, shell_content_type, shell_body = _http_get(shell_url)
     shell_evaluation = evaluate_html_shell_response(
         shell_status,
@@ -280,13 +296,13 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
         assertions=list(shell_evaluation.get("assertions") or []),
     )
 
-    config_url = _build_url(normalized_base_url, APP_CONFIG_PATH)
+    config_url = _build_url(normalized_base_url, _app_config_path())
     config_status, config_content_type, config_body = _http_get(config_url)
     config_evaluation = evaluate_runtime_config_response(
         config_status,
         config_content_type,
         config_body,
-        required_keys=["menuItems"],
+        required_keys=_app_config_required_keys(),
     )
     config_case = _build_case_result(
         case_id="MH-BOOTSTRAP-02",

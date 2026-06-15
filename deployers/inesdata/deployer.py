@@ -182,7 +182,7 @@ class InesdataDeployer:
         return self._components_adapter
 
     def _configured_optional_components(self, config: dict[str, Any]) -> list[str]:
-        return components_for_adapter(config, self.name(), deployable_only=True)
+        return components_for_adapter(config, self.name(), deployable_only=False)
 
     def _resolve_primary_connectors(self, dataspace_name: str, config: dict[str, Any]) -> list[str]:
         loader = getattr(getattr(self.adapter, "connectors", None), "load_dataspace_connectors", None)

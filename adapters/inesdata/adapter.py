@@ -404,6 +404,7 @@ class InesdataAdapter:
         payload = build_component_preview(
             configured=configured,
             deployable=summary.get("deployable"),
+            integrated=summary.get("integrated"),
             pending_support=summary.get("pending_support"),
             unsupported=summary.get("unsupported"),
             unknown=summary.get("unknown"),

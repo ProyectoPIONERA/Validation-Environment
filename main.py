@@ -5887,9 +5887,11 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
     runtime_dir = str(getattr(deployer_context, "runtime_dir", "") or "").strip()
 
     def _connector_base_url(connector, role):
-        # EDC connectors each have a dedicated ingress hostname; skip shared
-        # role-based URLs (org2/org3) which may conflict with other adapters.
-        if adapter_name != "edc":
+        use_configured_public_url = adapter_name != "edc" or normalize_topology(topology) in {
+            VM_SINGLE_TOPOLOGY,
+            VM_DISTRIBUTED_TOPOLOGY,
+        }
+        if use_configured_public_url:
             configured = _configured_public_connector_base_url(connector, deployer_context)
             if configured:
                 return configured.rstrip("/")
@@ -5947,6 +5949,14 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
     if component_validation_mode:
         env["PIONERA_COMPONENT_VALIDATION_MODE"] = component_validation_mode
         env["LEVEL6_COMPONENT_VALIDATION_MODE"] = component_validation_mode
+    if adapter_name == "inesdata":
+        configured_components = set(_normalized_component_tokens(components))
+        if "ai-model-hub" in configured_components and not component_validation_mode:
+            env["PIONERA_COMPONENT_VALIDATION_MODE"] = "api"
+            env["LEVEL6_COMPONENT_VALIDATION_MODE"] = "api"
+        env.setdefault("AI_MODEL_HUB_DASHBOARD_PATH", "/")
+        env.setdefault("AI_MODEL_HUB_APP_CONFIG_PATH", "assets/config/app.config.json")
+        env.setdefault("AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS", "managementApiUrl,participantId,service")
     if adapter_name == "edc" and not component_validation_mode:
         env["PIONERA_COMPONENT_VALIDATION_MODE"] = "api"
         env["LEVEL6_COMPONENT_VALIDATION_MODE"] = "api"

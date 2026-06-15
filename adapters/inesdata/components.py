@@ -2760,6 +2760,34 @@ class INESDataComponentsAdapter:
 
         return self._connector_public_base_url(connector_id, config)
 
+    def _ai_model_hub_standalone_dashboard_enabled(self, deployer_config: dict) -> bool:
+        config = dict(deployer_config or {})
+        for key in (
+            "AI_MODEL_HUB_STANDALONE_DASHBOARD_ENABLED",
+            "AI_MODEL_HUB_DASHBOARD_ENABLED",
+            "LEVEL5_AI_MODEL_HUB_DASHBOARD_ENABLED",
+        ):
+            if key in config and str(config.get(key) or "").strip() != "":
+                return self._parse_bool(config.get(key), default=False)
+        return False
+
+    def _ai_model_hub_integrated_connector_interface_url(self, *, ds_name=None, deployer_config=None) -> str:
+        config = dict(deployer_config or {})
+        connector_ids = self._resolve_dataspace_connector_ids(
+            ds_name=ds_name or self._dataspace_name(),
+            deployer_config=config,
+        )
+        if not connector_ids:
+            return ""
+
+        connector_id = connector_ids[0]
+        base_url = self._connector_external_base_url(connector_id, config, role="provider")
+        if not base_url:
+            base_url = self._connector_public_base_url(connector_id, config)
+        if not base_url:
+            return ""
+        return f"{base_url.rstrip('/')}/inesdata-connector-interface/"
+
     def _connector_protocol_base_url(self, connector_id: str, deployer_config: dict, *, role: str = "") -> str:
         config = dict(deployer_config or {})
         mode = str(
@@ -3285,6 +3313,17 @@ class INESDataComponentsAdapter:
                 if metadata.get("excluded") or metadata.get("error"):
                     continue
                 normalized = metadata.get("normalized_component")
+                if (
+                    normalized == "ai-model-hub"
+                    and not self._ai_model_hub_standalone_dashboard_enabled(deployer_config)
+                ):
+                    public_url = self._ai_model_hub_integrated_connector_interface_url(
+                        ds_name=ds_name,
+                        deployer_config=deployer_config,
+                    )
+                    if public_url:
+                        inferred_urls[normalized] = public_url
+                        continue
                 host = metadata.get("host")
                 public_url = metadata.get("public_url") or (
                     self._configured_component_public_url(normalized, deployer_config) if normalized else ""
@@ -3314,7 +3353,16 @@ class INESDataComponentsAdapter:
                 except Exception:
                     host = None
 
-                public_url = self._configured_component_public_url(normalized, deployer_config)
+                if (
+                    normalized == "ai-model-hub"
+                    and not self._ai_model_hub_standalone_dashboard_enabled(deployer_config)
+                ):
+                    public_url = self._ai_model_hub_integrated_connector_interface_url(
+                        ds_name=ds_name,
+                        deployer_config=deployer_config,
+                    )
+                else:
+                    public_url = self._configured_component_public_url(normalized, deployer_config)
                 if public_url:
                     inferred_urls[normalized] = public_url
                 elif host:
@@ -3395,6 +3443,17 @@ class INESDataComponentsAdapter:
                     metadata_by_component[normalized] = metadata
                 if metadata.get("excluded") or metadata.get("error"):
                     continue
+                if (
+                    normalized == "ai-model-hub"
+                    and not self._ai_model_hub_standalone_dashboard_enabled(deployer_config)
+                ):
+                    public_url = self._ai_model_hub_integrated_connector_interface_url(
+                        ds_name=ds_name,
+                        deployer_config=deployer_config,
+                    )
+                    if public_url:
+                        inferred_urls[normalized] = public_url
+                        continue
                 host = metadata.get("host")
                 public_url = metadata.get("public_url") or (
                     self._configured_component_public_url(normalized, deployer_config) if normalized else ""
@@ -3425,7 +3484,16 @@ class INESDataComponentsAdapter:
                 except Exception:
                     host = None
 
-                public_url = self._configured_component_public_url(normalized, deployer_config)
+                if (
+                    normalized == "ai-model-hub"
+                    and not self._ai_model_hub_standalone_dashboard_enabled(deployer_config)
+                ):
+                    public_url = self._ai_model_hub_integrated_connector_interface_url(
+                        ds_name=ds_name,
+                        deployer_config=deployer_config,
+                    )
+                else:
+                    public_url = self._configured_component_public_url(normalized, deployer_config)
                 if public_url:
                     inferred_urls[normalized] = public_url
                 elif host:
