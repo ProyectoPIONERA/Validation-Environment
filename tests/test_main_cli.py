@@ -5353,7 +5353,11 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(level5_env["PIONERA_KUBECONFIG_ROLE"], "components")
 
     def test_environment_profile_name_defaults_to_pionera(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            main,
+            "_framework_root_dir",
+            return_value=tmpdir,
+        ), mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(main._environment_profile_name(), "pionera")
             self.assertEqual(main._environment_profile_path(), os.path.join(
                 main._environment_profiles_dir(),
@@ -5366,17 +5370,18 @@ class MainCliTests(unittest.TestCase):
             adapter_name="inesdata",
         )
 
-        self.assertIn("# Local validation-environment profile.", content)
-        self.assertIn("# VM placement", content)
-        self.assertIn("# Dataspace and connector inventory", content)
+        self.assertIn("# Private validation-environment profile.", content)
+        self.assertIn("# SSH route.", content)
+        self.assertIn("# Dataspace inventory.", content)
+        self.assertIn("PROFILE_TOPOLOGY=vm-distributed\n", content)
+        self.assertIn("PROFILE_ADAPTER=inesdata\n", content)
+        self.assertIn("TOPOLOGY_ROUTING_MODE=host\n", content)
+        self.assertIn("SSH_BASTION_HOST=\n", content)
         self.assertIn("DOMAIN_BASE=\n", content)
         self.assertIn("VM_COMMON_IP=\n", content)
         self.assertIn("DS_1_CONNECTORS=\n", content)
+        self.assertNotIn("AI_MODEL_HUB_MODEL_SERVER_VALIDATION_ENDPOINTS", content)
         self.assertNotIn("example.org", content)
-        for line in content.splitlines():
-            if not line or line.startswith("#"):
-                continue
-            self.assertTrue(line.endswith("="), line)
 
     def test_vm_distributed_profile_template_keys_are_supported_by_profile_loader(self):
         keys = main._vm_distributed_profile_template_keys(
@@ -5444,14 +5449,14 @@ class MainCliTests(unittest.TestCase):
             return_value=tmpdir,
         ), mock.patch.dict(os.environ, {}, clear=True):
             state = main._ensure_vm_distributed_profile_file(adapter_name="inesdata")
-            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
+            profile_path = os.path.join(tmpdir, ".secrets", "profiles", "pionera.env")
 
             self.assertEqual(state["status"], "created")
             self.assertEqual(state["path"], profile_path)
             self.assertTrue(os.path.isfile(profile_path))
             with open(profile_path, encoding="utf-8") as handle:
                 created_content = handle.read()
-            self.assertIn("# Common and dataspace domains", created_content)
+            self.assertIn("# Private validation-environment profile.", created_content)
             self.assertIn("DOMAIN_BASE=\n", created_content)
 
             with open(profile_path, "w", encoding="utf-8") as handle:
@@ -5484,7 +5489,7 @@ class MainCliTests(unittest.TestCase):
             return_value={},
         ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
             result = main.run_level(adapter, 2, deployer_name="fake", topology="vm-distributed")
-            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
+            profile_path = os.path.join(tmpdir, ".secrets", "profiles", "pionera.env")
             profile_created = os.path.isfile(profile_path)
 
         self.assertEqual(result["level"], 2)
@@ -5511,7 +5516,7 @@ class MainCliTests(unittest.TestCase):
             return_value={},
         ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
             result = main.run_level(adapter, 2, deployer_name="fake", topology="vm-single")
-            profile_path = os.path.join(tmpdir, ".profiles", "pionera.env")
+            profile_path = os.path.join(tmpdir, ".secrets", "profiles", "pionera.env")
             with open(profile_path, encoding="utf-8") as handle:
                 profile_content = handle.read()
 

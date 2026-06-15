@@ -11260,6 +11260,10 @@ def _ensure_vm_distributed_level_kubeconfig_tunnels(level_id):
     }
 
 
+def _ensure_vm_distributed_level4_kubeconfig_supported():
+    return _ensure_vm_distributed_level_kubeconfig_tunnels(4)
+
+
 def _context_components(context):
     if isinstance(context, dict):
         return list(context.get("components") or [])
@@ -11475,7 +11479,7 @@ def run_level(
             result = deploy_dataspace()
     elif level_id == 4:
         if normalized_topology == "vm-distributed":
-            _ensure_vm_distributed_level_kubeconfig_tunnels(4)
+            _ensure_vm_distributed_level4_kubeconfig_supported()
         level_local_capacity = _run_local_adapter_install_capacity_preflight(
             resolved_deployer_name,
             topology,
@@ -16158,13 +16162,25 @@ def _vm_distributed_profile_sensitive_key(key):
 
 
 DEFAULT_ENVIRONMENT_PROFILE_NAME = "pionera"
+ENVIRONMENT_PROFILE_NAME_ENV_KEYS = (
+    "PIONERA_CONFIG_PROFILE",
+    "PIONERA_ENVIRONMENT_PROFILE",
+)
+PRIVATE_ENVIRONMENT_PROFILES_DIR = os.path.join(".secrets", "profiles")
+LEGACY_ENVIRONMENT_PROFILES_DIR = ".profiles"
 
 
 def _environment_profile_name(raw_name=None):
+    if raw_name is None:
+        for env_key in ENVIRONMENT_PROFILE_NAME_ENV_KEYS:
+            env_value = os.getenv(env_key)
+            if env_value:
+                raw_name = env_value
+                break
     requested = str(
         raw_name
         if raw_name is not None
-        else os.getenv("PIONERA_ENVIRONMENT_PROFILE", DEFAULT_ENVIRONMENT_PROFILE_NAME)
+        else DEFAULT_ENVIRONMENT_PROFILE_NAME
     ).strip()
     if not requested:
         return DEFAULT_ENVIRONMENT_PROFILE_NAME
@@ -16177,35 +16193,54 @@ def _environment_profile_name(raw_name=None):
 
 
 def _environment_profiles_dir():
-    return os.path.abspath(os.path.join(_framework_root_dir(), ".profiles"))
+    return os.path.abspath(os.path.join(_framework_root_dir(), PRIVATE_ENVIRONMENT_PROFILES_DIR))
 
 
-def _environment_profile_path(profile_name=None):
-    return os.path.join(_environment_profiles_dir(), f"{_environment_profile_name(profile_name)}.env")
+def _legacy_environment_profiles_dir():
+    return os.path.abspath(os.path.join(_framework_root_dir(), LEGACY_ENVIRONMENT_PROFILES_DIR))
+
+
+def _environment_profile_candidate_paths(profile_name=None):
+    name = _environment_profile_name(profile_name)
+    return [
+        os.path.join(_environment_profiles_dir(), f"{name}.env"),
+        os.path.join(_legacy_environment_profiles_dir(), f"{name}.env"),
+    ]
+
+
+def _environment_profile_path(profile_name=None, prefer_existing=True):
+    candidates = _environment_profile_candidate_paths(profile_name)
+    if prefer_existing:
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+    return candidates[0]
 
 
 def _available_environment_profiles():
-    profiles_dir = _environment_profiles_dir()
-    if not os.path.isdir(profiles_dir):
-        return []
-    profiles = []
-    for filename in sorted(os.listdir(profiles_dir)):
-        if not filename.endswith(".env"):
+    profiles_by_name = {}
+    for directory, storage in (
+        (_environment_profiles_dir(), "private"),
+        (_legacy_environment_profiles_dir(), "legacy"),
+    ):
+        if not os.path.isdir(directory):
             continue
-        path = os.path.join(profiles_dir, filename)
-        if not os.path.isfile(path):
-            continue
-        profile_name = filename[: -len(".env")]
-        if not profile_name:
-            continue
-        profiles.append(
-            {
+        for filename in sorted(os.listdir(directory)):
+            if not filename.endswith(".env"):
+                continue
+            path = os.path.join(directory, filename)
+            if not os.path.isfile(path):
+                continue
+            profile_name = filename[: -len(".env")]
+            if not profile_name or profile_name in profiles_by_name:
+                continue
+            profiles_by_name[profile_name] = {
                 "name": profile_name,
                 "path": path,
                 "relative_path": _framework_relative_path(path),
+                "storage": storage,
             }
-        )
-    return profiles
+    return [profiles_by_name[name] for name in sorted(profiles_by_name)]
 
 
 def _adapter_profile_keys(adapter_name):
@@ -16299,7 +16334,7 @@ def _split_configuration_profile_updates(profile_values, topology="vm-distribute
                 {
                     "key": key,
                     "reason": "sensitive-key",
-                    "message": "Sensitive values must stay out of local configuration profiles.",
+                    "message": "Sensitive values must stay out of private configuration profiles.",
                 }
             )
             continue
@@ -16308,7 +16343,7 @@ def _split_configuration_profile_updates(profile_values, topology="vm-distribute
                 {
                     "key": key,
                     "reason": "unknown-key",
-                    "message": "This key is not supported by local configuration profiles.",
+                    "message": "This key is not supported by private configuration profiles.",
                 }
             )
             continue
@@ -16466,17 +16501,21 @@ def _select_environment_profile_interactively():
     profiles = _available_environment_profiles()
     current_name = _environment_profile_name()
     print()
-    print("Local configuration profiles")
+    print("Private configuration profiles")
     print(f"Current profile: {_current_environment_profile_display()}")
-    print(f"Profiles directory: {_framework_relative_path(_environment_profiles_dir())}")
+    print(f"Private profiles directory: {_framework_relative_path(_environment_profiles_dir())}")
+    legacy_dir = _legacy_environment_profiles_dir()
+    if os.path.isdir(legacy_dir):
+        print(f"Legacy profiles directory: {_framework_relative_path(legacy_dir)}")
     if profiles:
         print()
         for index, profile in enumerate(profiles, start=1):
             marker = "*" if profile["name"] == current_name else " "
-            print(f"{index} - {profile['name']} {marker} ({profile['relative_path']})")
+            storage = profile.get("storage") or "private"
+            print(f"{index} - {profile['name']} {marker} ({storage}; {profile['relative_path']})")
     else:
         print()
-        print("No local profiles found yet.")
+        print("No private profiles found yet.")
         print("W -> 1 will create the selected profile if it does not exist.")
 
     print()
@@ -16506,11 +16545,12 @@ def _select_environment_profile_interactively():
     else:
         selected_name = _environment_profile_name(answer)
 
+    os.environ["PIONERA_CONFIG_PROFILE"] = selected_name
     os.environ["PIONERA_ENVIRONMENT_PROFILE"] = selected_name
     selected_path = _environment_profile_path(selected_name)
     print(f"Selected profile: {selected_name} ({_framework_relative_path(selected_path)})")
     if not os.path.isfile(selected_path):
-        print("This profile does not exist yet. W -> 1 will create it as a template.")
+        print("This profile does not exist yet. W -> 1 will create a private quick-start template.")
     return {
         "status": "selected",
         "profile": selected_name,
@@ -16521,6 +16561,27 @@ def _select_environment_profile_interactively():
 def _read_vm_distributed_profile_content(profile_path):
     with open(profile_path, encoding="utf-8") as handle:
         return handle.read()
+
+
+def _vm_distributed_profile_apply_ready_missing_keys(profile_values):
+    values = dict(profile_values or {})
+
+    def has_any(*keys):
+        return any(str(values.get(key) or "").strip() for key in keys)
+
+    checks = (
+        ("DOMAIN_BASE", ("DOMAIN_BASE",)),
+        ("DS_DOMAIN_BASE", ("DS_DOMAIN_BASE",)),
+        ("VM_COMMON_IP", ("VM_COMMON_IP", "VM_EXTERNAL_IP")),
+        ("VM_PROVIDER_IP", ("VM_PROVIDER_IP", "VM_CONNECTORS_IP")),
+        ("VM_CONSUMER_IP", ("VM_CONSUMER_IP",)),
+        ("K3S_KUBECONFIG_COMMON", ("K3S_KUBECONFIG_COMMON", "K3S_KUBECONFIG")),
+        ("K3S_KUBECONFIG_PROVIDER", ("K3S_KUBECONFIG_PROVIDER",)),
+        ("K3S_KUBECONFIG_CONSUMER", ("K3S_KUBECONFIG_CONSUMER",)),
+        ("DS_1_NAME", ("DS_1_NAME",)),
+        ("DS_1_CONNECTORS", ("DS_1_CONNECTORS",)),
+    )
+    return [label for label, keys in checks if not has_any(*keys)]
 
 
 VM_DISTRIBUTED_PROFILE_TEMPLATE_KEYS = (
@@ -16805,7 +16866,7 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
     if selected_topology == "vm-single":
         sections = (
             (
-                "Local validation-environment profile.\n"
+                "Private validation-environment profile.\n"
                 "This file is ignored by Git and must not contain passwords, tokens or private keys.",
                 ("PROFILE_TOPOLOGY", "PROFILE_ADAPTER", "ENVIRONMENT_NAME", "FRAMEWORK_EXECUTION_MODE"),
             ),
@@ -16967,13 +17028,78 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
     if selected_topology != "vm-distributed":
         return "".join(f"{key}=\n" for key in _vm_distributed_profile_template_keys(topology, selected_adapter))
 
+    template_mode = str(os.getenv("PIONERA_PROFILE_TEMPLATE") or "quick").strip().lower()
+    if template_mode not in {"full", "complete"}:
+        rendered = [
+            "# Private validation-environment profile.",
+            "# This file is ignored by Git. Do not put passwords, tokens, cookies, private keys or kubeconfig contents here.",
+            "# Use file paths to SSH keys and kubeconfigs, not the secret material itself.",
+            f"PROFILE_TOPOLOGY={selected_topology}",
+            f"PROFILE_ADAPTER={selected_adapter}",
+            "ENVIRONMENT_NAME=",
+            "",
+            "# Domains. In the common PIONERA pattern, org1 is common services, org2 provider and org3 consumer.",
+            "DOMAIN_BASE=",
+            "DS_DOMAIN_BASE=",
+            "TOPOLOGY_ROUTING_MODE=host",
+            "",
+            "# VM placement. For a quick demo, common/components can be the same VM.",
+            "VM_COMMON_IP=",
+            "VM_PROVIDER_IP=",
+            "VM_CONSUMER_IP=",
+            "VM_COMPONENTS_IP=",
+            "INGRESS_EXTERNAL_IP=",
+            "",
+            "# SSH route. Use direct when WSL/operator reaches every VM; use bastion for mixed ownership networks such as STICS.",
+            "SSH_ACCESS_MODE=",
+            "VM_SSH_USER=",
+            "SSH_BASTION_HOST=",
+            "SSH_BASTION_PORT=2222",
+            "SSH_BASTION_USER=",
+            "SSH_BASTION_IDENTITY_FILE=",
+            "SSH_IDENTITY_FILE=",
+            "VM_COMMON_SSH_HOST=",
+            "VM_PROVIDER_SSH_HOST=",
+            "VM_CONSUMER_SSH_HOST=",
+            "VM_COMPONENTS_SSH_HOST=",
+            "",
+            "# Local kubeconfig paths for the operator workstation. Use the same file when all roles share a cluster.",
+            "K3S_KUBECONFIG_COMMON=",
+            "K3S_KUBECONFIG_PROVIDER=",
+            "K3S_KUBECONFIG_CONSUMER=",
+            "K3S_KUBECONFIG_COMPONENTS=",
+            "VM_DISTRIBUTED_KUBECONFIG_AUTO_LOCALIZE=true",
+            "VM_DISTRIBUTED_KUBECONFIG_SYNC=auto",
+            "",
+            "# Dataspace inventory. Connector locations decide which VM/cluster hosts each connector.",
+            "DS_1_NAME=",
+            "DS_1_CONNECTORS=",
+            "DS_1_CONNECTOR_NAMESPACES=",
+            "DS_1_VALIDATION_PAIRS=",
+            "LEVEL4_CONNECTOR_RECONCILIATION_MODE=full",
+            "COMPONENTS=ontology-hub,semantic-virtualization,ai-model-hub",
+            "",
+            "# Optional public URL overrides. Leave blank to infer from DOMAIN_BASE/DS_DOMAIN_BASE.",
+            "VM_COMMON_PUBLIC_URL=",
+            "VM_PROVIDER_PUBLIC_URL=",
+            "VM_CONSUMER_PUBLIC_URL=",
+            "COMPONENTS_PUBLIC_BASE_URL=",
+            "",
+            "# Optional image pins. Leave blank for chart/default image behavior.",
+            "INESDATA_CONNECTOR_IMAGE_NAME=",
+            "INESDATA_CONNECTOR_IMAGE_TAG=",
+            "INESDATA_CONNECTOR_INTERFACE_IMAGE_NAME=",
+            "INESDATA_CONNECTOR_INTERFACE_IMAGE_TAG=",
+        ]
+        return "\n".join(rendered).rstrip() + "\n"
+
     _meta_hints = {
         "PROFILE_TOPOLOGY": selected_topology,
         "PROFILE_ADAPTER": selected_adapter,
     }
     sections = (
         (
-            "Local validation-environment profile.\n"
+            "Private validation-environment profile.\n"
             "This file is ignored by Git and must not contain passwords, tokens or private keys.",
             ("PROFILE_TOPOLOGY", "PROFILE_ADAPTER", "ENVIRONMENT_NAME", "FRAMEWORK_EXECUTION_MODE"),
         ),
@@ -17199,13 +17325,12 @@ def _ensure_pionera_environment_profile_file(topology="vm-distributed", adapter_
 
 
 def _ensure_vm_distributed_profile_file(adapter_name="inesdata"):
-    pionera_state = _ensure_pionera_environment_profile_file(
-        topology="vm-distributed",
-        adapter_name=adapter_name,
-    )
     current_name = _environment_profile_name()
     if current_name == DEFAULT_ENVIRONMENT_PROFILE_NAME:
-        return pionera_state
+        return _ensure_pionera_environment_profile_file(
+            topology="vm-distributed",
+            adapter_name=adapter_name,
+        )
     return _ensure_environment_profile_file(
         current_name,
         topology="vm-distributed",
@@ -17259,6 +17384,15 @@ def _load_vm_distributed_wizard_profile_suggestions(adapter_name=""):
             "rejected": rejected,
             "values": {},
         }
+    missing_apply_keys = _vm_distributed_profile_apply_ready_missing_keys(profile_values)
+    if missing_apply_keys:
+        return {
+            "status": "partial",
+            "path": profile_path,
+            "content": _read_vm_distributed_profile_content(profile_path),
+            "values": profile_values,
+            "missing_apply_keys": missing_apply_keys,
+        }
     return {
         "status": "loaded",
         "path": profile_path,
@@ -17280,11 +17414,11 @@ def _print_vm_distributed_wizard_profile_suggestions(profile):
             print("Configuration profile: not found.")
         print(f"Profile location: {_framework_relative_path(payload.get('path') or _vm_distributed_profile_path())}")
         if status in {"created", "template"}:
-            print("Fill this file, then run W -> 1 again to review and apply it.")
+            print("Fill the quick-start fields, then run W -> 1 again to review and apply it.")
         return
 
     print()
-    if status == "loaded":
+    if status in {"loaded", "partial"}:
         print(f"Configuration profile detected: {_framework_relative_path(payload.get('path'))}")
         print("Profile content:")
         print("-" * 50)
@@ -17292,6 +17426,11 @@ def _print_vm_distributed_wizard_profile_suggestions(profile):
         print(content or "(empty)")
         print("-" * 50)
         print("This profile contains only supported non-sensitive keys.")
+        if status == "partial":
+            missing = ", ".join(list(payload.get("missing_apply_keys") or []))
+            print("Profile is incomplete for direct apply; values will be used as prompt defaults.")
+            if missing:
+                print(f"Missing minimum fields: {missing}")
         return
 
     print(f"Configuration profile ignored: {_framework_relative_path(payload.get('path'))}")
@@ -18112,7 +18251,7 @@ def _ensure_vm_single_k3s_runtime_config(topology_config):
         raise RuntimeError(
             "Topology 'vm-single' must use k3s. "
             "Set CLUSTER_TYPE=k3s in deployers/infrastructure/topologies/vm-single.config "
-            "or in the selected .profiles/*.env profile."
+            "or in the selected private profile under .secrets/profiles/*.env."
         )
     return runtime
 
@@ -20228,10 +20367,14 @@ def _run_ai_model_hub_use_case_demo_logged_command(args, log_prefix, env_updates
 
 
 def _run_ai_model_hub_use_case_demo_level5(adapter_name="inesdata"):
+    profile_name = _environment_profile_name()
     return _run_ai_model_hub_use_case_demo_logged_command(
         _ai_model_hub_use_case_demo_level5_command(adapter_name=adapter_name),
         "level5-components",
-        env_updates={"PIONERA_ENVIRONMENT_PROFILE": _environment_profile_name()},
+        env_updates={
+            "PIONERA_CONFIG_PROFILE": profile_name,
+            "PIONERA_ENVIRONMENT_PROFILE": profile_name,
+        },
     )
 
 
@@ -20542,8 +20685,8 @@ def _print_vm_distributed_assistant_menu(current_adapter=None):
     print("=" * 50)
     print(f"Adapter: {current_adapter or '(not selected)'}")
     print(f"Profile: {_current_environment_profile_display()}")
-    print("P - Select local configuration profile")
-    print("1 - Configure/update local vm-distributed .config files")
+    print("P - Select private configuration profile")
+    print("1 - Configure/update vm-distributed .config files from profile or prompts")
     print("2 - Show configured topology and static preflight")
     print("3 - Preview deployment and hosts plan")
     print("4 - Run non-destructive SSH/HTTP preflight")
