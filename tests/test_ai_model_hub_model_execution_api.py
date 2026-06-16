@@ -31,13 +31,14 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, *, execution_status=200, execution_payload=None):
+    def __init__(self, *, execution_status=200, execution_payload=None, execution_responses=None):
         self.execution_status = execution_status
         self.execution_payload = execution_payload or {
             "model": DEFAULT_EXPECTED_MODEL,
             "sentiment": "positive",
             "confidence": 0.8,
         }
+        self.execution_responses = list(execution_responses or [])
         self.posts = []
         self.deletes = []
 
@@ -48,6 +49,9 @@ class FakeSession:
         if url.endswith("/management/v3/assets"):
             return FakeResponse(200, {"@id": json["@id"]})
         if url.endswith("/management/v3/modelexecutions/execute"):
+            if self.execution_responses:
+                status, payload = self.execution_responses.pop(0)
+                return FakeResponse(status, payload)
             return FakeResponse(self.execution_status, self.execution_payload)
         if url.endswith("/api/infer"):
             return FakeResponse(self.execution_status, self.execution_payload)
@@ -104,6 +108,7 @@ class AIModelHubModelExecutionApiTests(unittest.TestCase):
         self.assertEqual(len(real_asset_requests), 1)
         self.assertEqual(real_asset_requests[0]["json"]["dataAddress"]["type"], "HttpData")
         self.assertEqual(real_asset_requests[0]["json"]["dataAddress"]["method"], "POST")
+        self.assertNotIn("proxyPath", real_asset_requests[0]["json"]["dataAddress"])
 
         execution_requests = [
             entry for entry in session.posts if entry["url"].endswith("/management/v3/modelexecutions/execute")
@@ -112,6 +117,67 @@ class AIModelHubModelExecutionApiTests(unittest.TestCase):
         self.assertEqual(execution_requests[0]["json"]["assetId"], "a52-model-exec-fixed-uuid")
         self.assertEqual(execution_requests[0]["json"]["payload"], {"text": "great"})
         self.assertGreaterEqual(len(session.deletes), 1)  # probe cleanup + real asset cleanup
+
+    def test_run_accepts_current_combined_model_server_model_alias(self):
+        session = FakeSession(
+            execution_payload={
+                "model": "ecommerce-sentiment",
+                "serverMode": "combined",
+                "predictions": [
+                    {
+                        "input": {"text": "great"},
+                        "result": {"label": "positive", "confidence": 0.8},
+                    }
+                ],
+            }
+        )
+
+        result = self._suite(session).run(
+            provider="conn-provider",
+            model_url="http://model-server.demo.svc.cluster.local:8080/api/v1/nlp/ecommerce-sentiment",
+            payload={"text": "great"},
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["executed_cases"][0]["evaluation"]["status"], "passed")
+
+    def test_run_retries_transient_downstream_not_found_from_execution_endpoint(self):
+        session = FakeSession(
+            execution_responses=[
+                (404, {"detail": "Not Found"}),
+                (
+                    200,
+                    {
+                        "model": "ecommerce-sentiment",
+                        "predictions": [
+                            {
+                                "input": {"text": "great"},
+                                "result": {"label": "positive", "confidence": 0.8},
+                            }
+                        ],
+                    },
+                ),
+            ]
+        )
+        suite = self._suite(session)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AI_MODEL_HUB_MODEL_EXECUTION_ATTEMPTS": "2",
+                "AI_MODEL_HUB_MODEL_EXECUTION_RETRY_SECONDS": "0",
+            },
+            clear=False,
+        ):
+            result = suite.run(
+                provider="conn-provider",
+                model_url="http://model-server.demo.svc.cluster.local:8080/api/v1/nlp/ecommerce-sentiment",
+                payload={"text": "great"},
+            )
+
+        self.assertEqual(result["status"], "passed")
+        execute_step = next(step for step in result["steps"] if step["name"] == "execute_model")
+        self.assertEqual([attempt["http_status"] for attempt in execute_step["attempts"]], [404, 200])
 
     def test_run_cleans_temporary_asset_when_execution_fails(self):
         session = FakeSession(execution_status=500, execution_payload={"error": "boom"})

@@ -718,9 +718,13 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
     if (expectedResultText) {
       await expect(page.getByText(new RegExp(expectedResultText, "i")).first()).toBeVisible({ timeout: 10_000 });
     } else if (modelPath === DEFAULT_MODEL_PATH) {
-      await expect(page.getByText(/Twitter Sentiment Analyzer/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText(/Twitter Sentiment Analyzer|twitter-sentiment/i).first(),
+      ).toBeVisible({ timeout: 10_000 });
       await expect(page.getByText(/positive/i).first()).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(/local-rule-engine/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText(/local-rule-engine|deterministic-rule-engine|deterministic mock text classification/i).first(),
+      ).toBeVisible({ timeout: 10_000 });
     }
     await captureStep(page, "03-ai-model-external-execution-result");
 

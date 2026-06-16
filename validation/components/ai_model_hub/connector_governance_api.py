@@ -351,6 +351,8 @@ class AIModelHubConnectorGovernanceApiSuite:
                         except Exception:
                             pass
                     return attempts, round(time.time() - start), current_jwt
+                if r.status_code in {400, 401, 403, 404, 405}:
+                    return attempts, round(time.time() - start), current_jwt
             except requests.RequestException:
                 pass
             time.sleep(poll_interval_seconds)

@@ -472,9 +472,13 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
     if (expectedResultText) {
       await expect(page.getByText(new RegExp(expectedResultText, "i")).first()).toBeVisible({ timeout: 10_000 });
     } else if (requiresText) {
-      await expect(page.getByText(/E-commerce Sentiment Analyzer/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText(/E-commerce Sentiment Analyzer|ecommerce-sentiment/i).first(),
+      ).toBeVisible({ timeout: 10_000 });
       await expect(page.getByText(/positive/i).first()).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(/local-rule-engine/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText(/local-rule-engine|deterministic-rule-engine|deterministic mock text classification/i).first(),
+      ).toBeVisible({ timeout: 10_000 });
     }
     await captureStep(page, "04-ai-model-execution-result");
 

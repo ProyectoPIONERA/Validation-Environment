@@ -3773,6 +3773,7 @@ def _resolve_level6_kafka_enabled_for_run(
     validation_profile=None,
     deployer_name=None,
     flag_enabled=None,
+    cli_enabled=False,
     prompt=True,
 ):
     if not _supports_level6_kafka_edc(
@@ -3792,6 +3793,11 @@ def _resolve_level6_kafka_enabled_for_run(
             print(f"Kafka transfer validation skipped by {KAFKA_LEVEL6_SKIP_FLAG}=true.")
             print(f"Unset it or set {KAFKA_LEVEL6_SKIP_FLAG}=false to allow the interactive prompt.")
         return flag_decision
+
+    if cli_enabled:
+        print()
+        print("Kafka transfer validation enabled by --kafka.")
+        return True
 
     if not prompt:
         return False
@@ -9835,6 +9841,7 @@ def run_validate(
     kafka_edc_validation_suite_cls=KafkaEdcValidationSuite,
     kafka_manager_cls=KafkaManager,
     validation_mode=None,
+    kafka_enabled=False,
 ):
     """Run validation collections with the selected adapter."""
     validation_mode_info = _resolve_level6_validation_mode(validation_mode, topology=topology)
@@ -9854,6 +9861,7 @@ def run_validate(
             adapter,
             validation_profile=validation_profile,
             deployer_name=resolved_deployer_name,
+            cli_enabled=kafka_enabled,
         )
         hosts_sync = (
             _sync_deployer_hosts_if_enabled(deployer_context)
@@ -10586,6 +10594,7 @@ def run_run(
                 save_metadata=False,
                 baseline=baseline,
                 validation_mode=validation_mode,
+                kafka_enabled=kafka_enabled,
             )
             metrics = run_metrics(
                 adapter,
@@ -11334,6 +11343,7 @@ def run_level(
     metrics_collector_cls=MetricsCollector,
     experiment_storage=ExperimentStorage,
     baseline=False,
+    kafka_enabled=False,
 ):
     """Run one numbered level using the selected adapter/deployer context."""
     try:
@@ -11397,6 +11407,7 @@ def run_level(
                     metrics_collector_cls=metrics_collector_cls,
                     experiment_storage=experiment_storage,
                     baseline=baseline,
+                    kafka_enabled=kafka_enabled,
                 )
     if os.environ.get("PIONERA_LEVEL_RUNTIME_ENV_ACTIVE") != "true":
         if normalized_topology == "vm-distributed" and level_id >= 1:
@@ -11420,6 +11431,7 @@ def run_level(
                     metrics_collector_cls=metrics_collector_cls,
                     experiment_storage=experiment_storage,
                     baseline=baseline,
+                    kafka_enabled=kafka_enabled,
                 )
     level_context = None
     level_local_capacity = None
@@ -11548,6 +11560,7 @@ def run_level(
             validation_engine_cls=validation_engine_cls,
             experiment_storage=experiment_storage,
             baseline=baseline,
+            kafka_enabled=kafka_enabled,
         )
 
     if level_id == 1:
@@ -11603,6 +11616,7 @@ def run_levels(
     metrics_collector_cls=MetricsCollector,
     experiment_storage=ExperimentStorage,
     baseline=False,
+    kafka_enabled=False,
 ):
     """Run a sequence of numbered levels with one adapter instance."""
     selected_levels = [int(level) for level in (levels or sorted(LEVEL_DESCRIPTIONS))]
@@ -11626,6 +11640,7 @@ def run_levels(
                 metrics_collector_cls=metrics_collector_cls,
                 experiment_storage=experiment_storage,
                 baseline=baseline,
+                kafka_enabled=kafka_enabled,
             )
         )
 
@@ -24299,6 +24314,7 @@ def main(
             metrics_collector_cls=metrics_collector_cls,
             experiment_storage=experiment_storage,
             baseline=args.baseline,
+            kafka_enabled=args.kafka,
         )
         if args.json:
             print(json.dumps(result, indent=2, default=str))
@@ -24317,6 +24333,7 @@ def main(
                 experiment_storage=experiment_storage,
                 baseline=args.baseline,
                 validation_mode=args.validation_mode,
+                kafka_enabled=args.kafka,
             )
         except ValueError as exc:
             parser.error(str(exc))

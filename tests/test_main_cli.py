@@ -480,6 +480,27 @@ class KafkaTransferConsoleOutputTests(unittest.TestCase):
         self.assertIn("non-interactive", stdout.getvalue())
         self.assertIn("PIONERA_LEVEL6_RUN_KAFKA=true", stdout.getvalue())
 
+    def test_level6_kafka_cli_flag_enables_suite_for_non_interactive_runs(self):
+        class KafkaReadyAdapter(FakeAdapter):
+            def get_kafka_config(self):
+                return {"bootstrap_servers": "localhost:9092"}
+
+        stdout = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(sys.stdin, "isatty", return_value=False),
+            mock.patch("builtins.input", side_effect=AssertionError("prompt should not run")),
+            contextlib.redirect_stdout(stdout),
+        ):
+            enabled = main._resolve_level6_kafka_enabled_for_run(
+                KafkaReadyAdapter(),
+                deployer_name="inesdata",
+                cli_enabled=True,
+            )
+
+        self.assertTrue(enabled)
+        self.assertIn("enabled by --kafka", stdout.getvalue())
+
     def test_level6_kafka_skip_flag_suppresses_prompt(self):
         class KafkaReadyAdapter(FakeAdapter):
             def get_kafka_config(self):
@@ -4657,6 +4678,26 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(run_levels.call_args.kwargs["levels"], [1])
         self.assertEqual(run_levels.call_args.kwargs["topology"], "vm-single")
         self.assertIn("Result: Succeeded", stdout.getvalue())
+
+    def test_level_command_passes_kafka_flag_to_level_six(self):
+        expected = {"status": "completed", "levels": [{"level": 6, "status": "completed"}]}
+
+        with mock.patch.object(
+            main,
+            "run_levels",
+            return_value=expected,
+        ) as run_levels:
+            result = main.main(
+                ["fake", "level", "6", "--topology", "vm-distributed", "--kafka"],
+                adapter_registry=self.registry,
+                deployer_registry=self.deployer_registry,
+            )
+
+        self.assertEqual(result, expected)
+        run_levels.assert_called_once()
+        self.assertEqual(run_levels.call_args.kwargs["levels"], [6])
+        self.assertEqual(run_levels.call_args.kwargs["topology"], "vm-distributed")
+        self.assertTrue(run_levels.call_args.kwargs["kafka_enabled"])
 
     def test_run_local_repair_applies_hosts_reconciliation(self):
         adapter = FakeAdapter()

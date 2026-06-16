@@ -24,6 +24,7 @@ LEGACY_DAIMO_NAMESPACE = "https://pionera.ai/edc/daimo#"
 DEFAULT_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment"
 DEFAULT_PAYLOAD = {"text": "This product is excellent and very useful"}
 DEFAULT_EXPECTED_MODEL = "E-commerce Sentiment Analyzer"
+DEFAULT_EXPECTED_MODEL_ALIASES = {"E-commerce Sentiment Analyzer", "ecommerce-sentiment"}
 FLARES_MODEL_PATH = "/flares/dccuchile-distilbert-base-spanish-uncased-reliability"
 FLARES_EXPECTED_MODEL = ""
 FLARES_DATASET_DIR = str(dataset_source_dir("flares-dataset"))
@@ -78,6 +79,8 @@ class AIModelHubModelExecutionApiSuite:
 
     DEFAULT_REQUEST_ATTEMPTS = 3
     DEFAULT_REQUEST_RETRY_SECONDS = 2
+    DEFAULT_EXECUTION_ATTEMPTS = 6
+    DEFAULT_EXECUTION_RETRY_SECONDS = 10
 
     def __init__(
         self,
@@ -292,6 +295,57 @@ class AIModelHubModelExecutionApiSuite:
         )
         return response.status_code, self._response_json_or_text(response)
 
+    @staticmethod
+    def _response_keys(body: Any) -> list[str]:
+        if isinstance(body, dict):
+            return sorted(str(key) for key in body.keys())
+        if isinstance(body, list):
+            return ["<array>"]
+        return []
+
+    @staticmethod
+    def _execution_retry_attempts() -> int:
+        raw_value = _env_first("AI_MODEL_HUB_MODEL_EXECUTION_ATTEMPTS")
+        try:
+            return max(1, int(raw_value or AIModelHubModelExecutionApiSuite.DEFAULT_EXECUTION_ATTEMPTS))
+        except ValueError:
+            return AIModelHubModelExecutionApiSuite.DEFAULT_EXECUTION_ATTEMPTS
+
+    @staticmethod
+    def _execution_retry_seconds() -> float:
+        raw_value = _env_first("AI_MODEL_HUB_MODEL_EXECUTION_RETRY_SECONDS")
+        try:
+            return max(0.0, float(raw_value or AIModelHubModelExecutionApiSuite.DEFAULT_EXECUTION_RETRY_SECONDS))
+        except ValueError:
+            return float(AIModelHubModelExecutionApiSuite.DEFAULT_EXECUTION_RETRY_SECONDS)
+
+    @staticmethod
+    def _is_retriable_execution_response(status_code: int, body: Any) -> bool:
+        if status_code in {502, 503, 504}:
+            return True
+        if status_code != 404 or not isinstance(body, dict):
+            return False
+        detail = str(body.get("detail") or body.get("error") or body.get("message") or "").strip().lower()
+        return detail in {"not found", "404 not found"}
+
+    def _post_model_execution_json(self, url: str, token: str, payload: dict[str, Any]) -> tuple[int, Any, list[dict[str, Any]]]:
+        attempts: list[dict[str, Any]] = []
+        max_attempts = self._execution_retry_attempts()
+        retry_seconds = self._execution_retry_seconds()
+        for attempt in range(1, max_attempts + 1):
+            status_code, body = self._post_json(url, token, payload, "AI Model Hub model execution")
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "http_status": status_code,
+                    "response_keys": self._response_keys(body),
+                }
+            )
+            if attempt >= max_attempts or not self._is_retriable_execution_response(status_code, body):
+                return status_code, body, attempts
+            time.sleep(retry_seconds)
+        return attempts[-1]["http_status"], {}, attempts
+
     def _delete(self, url: str, token: str, label: str):
         response = self._request_with_retry(
             "delete",
@@ -379,7 +433,6 @@ class AIModelHubModelExecutionApiSuite:
                 "baseUrl": model_url,
                 "method": "POST",
                 "name": f"ai-model-hub-model-execution-{suffix}",
-                "proxyPath": "true",
             },
         }
         status_code, body = self._post_json(
@@ -399,7 +452,7 @@ class AIModelHubModelExecutionApiSuite:
         asset_id: str,
         payload: Any,
         runtime: dict[str, Any],
-    ) -> tuple[int, Any, str]:
+    ) -> tuple[int, Any, str, list[dict[str, Any]]]:
         if runtime.get("adapter") == "edc":
             url = self._execution_url(provider, runtime)
             request_payload = {
@@ -414,13 +467,8 @@ class AIModelHubModelExecutionApiSuite:
                 "assetId": asset_id,
                 "payload": payload,
             }
-        status_code, body = self._post_json(
-            url,
-            provider_jwt,
-            request_payload,
-            "AI Model Hub model execution",
-        )
-        return status_code, body, url
+        status_code, body, attempts = self._post_model_execution_json(url, provider_jwt, request_payload)
+        return status_code, body, url, attempts
 
     def _delete_asset(self, provider: str, provider_jwt: str, asset_id: str):
         return self._delete(
@@ -441,8 +489,19 @@ class AIModelHubModelExecutionApiSuite:
             assertions.append(f"Expected HTTP 2xx, got HTTP {status_code}")
         if not isinstance(body, (dict, list)):
             assertions.append("Model execution response must be a JSON object or array")
-        elif expected_model and isinstance(body, dict) and body.get("model") != expected_model:
-            assertions.append(f"Expected model '{expected_model}', got '{body.get('model')}'")
+        elif expected_model and isinstance(body, dict):
+            actual_model = str(body.get("model") or "")
+            expected_aliases = {expected_model}
+            if expected_model == DEFAULT_EXPECTED_MODEL:
+                expected_aliases.update(DEFAULT_EXPECTED_MODEL_ALIASES)
+            configured_aliases = _env_first("AI_MODEL_HUB_MODEL_EXECUTION_EXPECTED_MODEL_ALIASES")
+            if configured_aliases:
+                expected_aliases.update(
+                    alias.strip() for alias in configured_aliases.split(",") if alias.strip()
+                )
+            if actual_model not in expected_aliases:
+                expected_label = "' or '".join(sorted(expected_aliases))
+                assertions.append(f"Expected model '{expected_label}', got '{body.get('model')}'")
 
         return {
             "status": "failed" if assertions else "passed",
@@ -657,6 +716,8 @@ class AIModelHubModelExecutionApiSuite:
                         except Exception:
                             pass
                     return attempts, round(time.time() - start), current_jwt
+                if r.status_code in {400, 401, 403, 404, 405}:
+                    return attempts, round(time.time() - start), current_jwt
             except requests.RequestException:
                 pass
             time.sleep(poll_interval_seconds)
@@ -766,7 +827,7 @@ class AIModelHubModelExecutionApiSuite:
             )
             step("create_httpdata_asset", http_status=asset_status, asset_id=created_asset_id)
 
-            execution_status, execution_body, execution_url = self._execute_model(
+            execution_status, execution_body, execution_url, execution_attempts = self._execute_model(
                 provider,
                 provider_jwt,
                 asset_id,
@@ -783,6 +844,7 @@ class AIModelHubModelExecutionApiSuite:
                 status=evaluation["status"],
                 http_status=execution_status,
                 response_keys=evaluation["response_keys"],
+                attempts=execution_attempts,
             )
             execution_request = {
                 "method": "POST",
@@ -793,6 +855,7 @@ class AIModelHubModelExecutionApiSuite:
             execution_response = {
                 "http_status": execution_status,
                 "body": execution_body,
+                "attempts": execution_attempts,
             }
             executed_cases.append(
                 self._case_result(

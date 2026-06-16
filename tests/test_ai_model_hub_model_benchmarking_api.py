@@ -51,6 +51,42 @@ class AIModelHubModelBenchmarkingApiTests(unittest.TestCase):
         self.assertNotIn("access_token", report_text)
         self.assertNotIn("Bearer ", report_text)
 
+    def test_transient_model_server_502_is_retried_before_failing_benchmark(self):
+        transient_response = mock.Mock(status_code=502, text="Bad Gateway")
+        transient_response.json.side_effect = ValueError("not json")
+        successful_response = mock.Mock(status_code=200, text="")
+        successful_response.json.return_value = [{"Reliability_Label": "confiable"}]
+        responses = [transient_response]
+
+        def post_side_effect(*args, **kwargs):
+            if responses:
+                return responses.pop(0)
+            return successful_response
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_dir = create_flares_source(tmpdir)
+            with mock.patch(
+                "validation.components.ai_model_hub.model_benchmarking_api.requests.post",
+                side_effect=post_side_effect,
+            ) as post_mock, mock.patch(
+                "validation.components.ai_model_hub.model_benchmarking_api.time.sleep",
+            ) as sleep_mock:
+                result = run_ai_model_hub_model_benchmarking_validation(
+                    source_dir=str(source_dir),
+                    experiment_dir=tmpdir,
+                    model_server_base_url="https://models.example.test/model-server",
+                )
+
+        first_model_id = DEFAULT_MODELS[0]["asset_id"]
+        first_execution = result["executions_by_model"][first_model_id][0]
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(first_execution["status"], "passed")
+        self.assertEqual(first_execution["attempt_count"], 2)
+        self.assertEqual([attempt["http_status"] for attempt in first_execution["attempts"]], [502, 200])
+        self.assertEqual(post_mock.call_count, len(DEFAULT_MODELS) * 3 + 1)
+        sleep_mock.assert_called_once()
+
     def test_benchmark_rows_use_flares_expected_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             source_dir = create_flares_source(tmpdir)

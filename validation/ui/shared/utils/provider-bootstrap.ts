@@ -112,6 +112,15 @@ type ProviderCleanupReport = {
 
 type TokenProvider = string | (() => Promise<string>);
 
+export type ProviderContractDefinitionLookup = {
+  contractDefinitionId: string;
+  found: boolean;
+  itemCount: number;
+  attempts: number;
+  httpStatus?: number;
+  matchedItem?: unknown;
+};
+
 const TRANSIENT_HTTP_STATUSES = new Set([401, 502, 503, 504]);
 const TRANSIENT_FEDERATED_CATALOG_HTTP_STATUSES = new Set([401, 500, 502, 503, 504]);
 const TRANSIENT_HTTP_MAX_ATTEMPTS = 4;
@@ -623,6 +632,64 @@ export async function cleanupProviderValidationArtifacts(
   }
 
   return report;
+}
+
+export async function probeProviderContractDefinition(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  contractDefinitionId: string,
+): Promise<ProviderContractDefinitionLookup> {
+  const providerToken = await issueUserToken(request, runtime);
+  const limit = 100;
+  let itemCount = 0;
+  let attempts = 0;
+  let httpStatus: number | undefined;
+
+  for (let offset = 0; offset < 500; offset += limit) {
+    attempts += 1;
+    const response = await executeRetriableRequest("Probe provider contract definition", () =>
+      request.post(`${runtime.provider.managementBaseUrl}/contractdefinitions/request`, {
+        headers: {
+          Authorization: `Bearer ${providerToken}`,
+          "Content-Type": "application/json",
+        },
+        data: {
+          "@context": {
+            "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
+          },
+          "@type": "QuerySpec",
+          offset,
+          limit,
+          filterExpression: [],
+        },
+      }),
+    );
+    httpStatus = response.status();
+    const items = payloadItems(await response.json());
+    itemCount += items.length;
+    const matchedItem = items.find((item) => extractEntityId(item) === contractDefinitionId);
+    if (matchedItem) {
+      return {
+        contractDefinitionId,
+        found: true,
+        itemCount,
+        attempts,
+        httpStatus,
+        matchedItem,
+      };
+    }
+    if (items.length < limit) {
+      break;
+    }
+  }
+
+  return {
+    contractDefinitionId,
+    found: false,
+    itemCount,
+    attempts,
+    httpStatus,
+  };
 }
 
 export async function fetchConsumerCatalogResponse(

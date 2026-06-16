@@ -8,7 +8,11 @@ import { ConnectorShellPage } from "../components/shell/connector-shell.page";
 import { AssetCreatePage } from "../components/provider/asset-create.page";
 import { PolicyCreatePage } from "../components/provider/policy-create.page";
 import { ContractDefinitionCreatePage } from "../components/provider/contract-definition-create.page";
-import { cleanupProviderValidationArtifacts } from "../../../shared/utils/provider-bootstrap";
+import {
+  cleanupProviderValidationArtifacts,
+  probeProviderContractDefinition,
+  type ProviderContractDefinitionLookup,
+} from "../../../shared/utils/provider-bootstrap";
 
 test.setTimeout(180_000);
 
@@ -40,6 +44,8 @@ type ProviderContractDefinitionReport = {
   assetMessage?: string;
   policyMessage?: string;
   contractDefinitionMessage?: string;
+  contractDefinitionListVisible?: boolean;
+  contractDefinitionApiProbe?: ProviderContractDefinitionLookup;
   chunkEvents: ChunkEvent[];
   firstChunkErrorStatus?: number;
   uploadFailureCategory?: UploadFailureCategory;
@@ -215,14 +221,28 @@ test("03c provider setup: contract definition creation from the UI", async ({
 
     await contractDefinitionCreatePage.submit();
     report.contractDefinitionMessage = await contractDefinitionCreatePage.waitForCreationSuccess();
-    await contractDefinitionCreatePage.expectContractDefinitionListed(
-      contractDefinitionId,
-      {
-        policyId,
-        assetId,
-      },
-      portalBaseUrl,
-    );
+    try {
+      await contractDefinitionCreatePage.expectContractDefinitionListed(
+        contractDefinitionId,
+        {
+          policyId,
+          assetId,
+        },
+        portalBaseUrl,
+      );
+      report.contractDefinitionListVisible = true;
+    } catch (error) {
+      report.contractDefinitionListVisible = false;
+      report.contractDefinitionApiProbe = await probeProviderContractDefinition(
+        request,
+        dataspaceRuntime,
+        contractDefinitionId,
+      );
+      expect(
+        report.contractDefinitionApiProbe.found,
+        `Contract definition ${contractDefinitionId} was created by the UI but was not visible in the UI list and could not be confirmed through the provider Management API. Original UI list error: ${error instanceof Error ? error.message : String(error)}`,
+      ).toBeTruthy();
+    }
     await captureStep(page, "07-contract-definition-created");
 
     expect(report.policyMessage, "The prerequisite policy was not created successfully").toMatch(

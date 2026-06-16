@@ -25,6 +25,9 @@ BENCHMARK_MAPPING = {
     "expectedPath": "expected_label",
     "predictionPath": "0.Reliability_Label",
 }
+RETRYABLE_MODEL_SERVER_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
+DEFAULT_MODEL_SERVER_RETRY_ATTEMPTS = 3
+DEFAULT_MODEL_SERVER_RETRY_DELAY_SECONDS = 1.0
 
 DEFAULT_MODELS = [
     {
@@ -157,6 +160,24 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{str(path or '').lstrip('/')}"
 
 
+def _model_server_retry_attempts() -> int:
+    raw_value = os.environ.get("AI_MODEL_HUB_BENCHMARK_RETRY_ATTEMPTS", "")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_MODEL_SERVER_RETRY_ATTEMPTS
+    return max(1, min(value, 10))
+
+
+def _model_server_retry_delay_seconds() -> float:
+    raw_value = os.environ.get("AI_MODEL_HUB_BENCHMARK_RETRY_DELAY_SECONDS", "")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = DEFAULT_MODEL_SERVER_RETRY_DELAY_SECONDS
+    return max(0.0, min(value, 30.0))
+
+
 def _predicted_label_from_response(body: Any) -> str:
     if isinstance(body, list) and body and isinstance(body[0], dict):
         return str(body[0].get("Reliability_Label") or "")
@@ -191,29 +212,60 @@ def _execute_model(
     error = ""
 
     if endpoint_url:
-        started = time.perf_counter()
-        try:
-            response = requests.post(endpoint_url, json=request_payload, timeout=60)
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            http_status = response.status_code
+        attempts: list[dict[str, Any]] = []
+        retry_attempts = _model_server_retry_attempts()
+        retry_delay_seconds = _model_server_retry_delay_seconds()
+        latency_ms = 0
+        http_status = None
+        response_body = None
+        predicted_label = ""
+        status = "failed"
+
+        for attempt_number in range(1, retry_attempts + 1):
+            started = time.perf_counter()
+            retryable = False
             try:
-                response_body = response.json()
-            except ValueError:
-                response_body = {"text": response.text[:500]}
-            predicted_label = _predicted_label_from_response(response_body)
-            status = "passed" if 200 <= response.status_code < 300 and predicted_label else "failed"
-            if response.status_code < 200 or response.status_code >= 300:
-                error = f"Model server returned HTTP {response.status_code}"
-            elif not predicted_label:
-                error = "Model server response did not include Reliability_Label"
-        except requests.RequestException as exc:
-            latency_ms = int((time.perf_counter() - started) * 1000)
-            http_status = None
-            response_body = None
-            predicted_label = ""
-            status = "failed"
-            error = str(exc)
+                response = requests.post(endpoint_url, json=request_payload, timeout=60)
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                http_status = response.status_code
+                try:
+                    response_body = response.json()
+                except ValueError:
+                    response_body = {"text": response.text[:500]}
+                predicted_label = _predicted_label_from_response(response_body)
+                status = "passed" if 200 <= response.status_code < 300 and predicted_label else "failed"
+                if response.status_code < 200 or response.status_code >= 300:
+                    error = f"Model server returned HTTP {response.status_code}"
+                    retryable = response.status_code in RETRYABLE_MODEL_SERVER_STATUSES
+                elif not predicted_label:
+                    error = "Model server response did not include Reliability_Label"
+                else:
+                    error = ""
+            except requests.RequestException as exc:
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                http_status = None
+                response_body = None
+                predicted_label = ""
+                status = "failed"
+                error = str(exc)
+                retryable = True
+
+            attempts.append(
+                {
+                    "attempt": attempt_number,
+                    "http_status": http_status,
+                    "status": status,
+                    "error": error,
+                    "latency_ms": latency_ms,
+                    "retryable": retryable,
+                }
+            )
+            if status == "passed" or not retryable or attempt_number >= retry_attempts:
+                break
+            if retry_delay_seconds > 0:
+                time.sleep(retry_delay_seconds)
     else:
+        attempts = []
         latency_ms = int(model.get("base_latency_ms") or 0) + (row_index % 3) * int(model.get("latency_step_ms") or 0)
         predicted_label = _predict_label(model, row)
         http_status = None
@@ -233,6 +285,8 @@ def _execute_model(
         "latency_ms": latency_ms,
         "status": status,
         "error": error,
+        "attempt_count": len(attempts) if attempts else 1,
+        "attempts": attempts,
         "correct": predicted_label == expected_label,
     }
 
