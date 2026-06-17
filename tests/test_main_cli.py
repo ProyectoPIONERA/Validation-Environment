@@ -4699,6 +4699,93 @@ class MainCliTests(unittest.TestCase):
         self.assertEqual(run_levels.call_args.kwargs["topology"], "vm-distributed")
         self.assertTrue(run_levels.call_args.kwargs["kafka_enabled"])
 
+    def test_run_level_six_vm_distributed_runs_catalog_cleanup_before_and_after_validation(self):
+        adapter = FakeAdapter()
+        events = []
+
+        def cleanup(deployer_name, topology, phase="pre"):
+            events.append(("cleanup", deployer_name, topology, phase))
+            return {"status": "passed", "phase": phase}
+
+        def validate(*_args, **kwargs):
+            events.append(("validate", kwargs.get("topology")))
+            return {"validation_status": "passed"}
+
+        with mock.patch.object(
+            main,
+            "_ensure_vm_distributed_level_kubeconfig_tunnels",
+            return_value=None,
+        ), mock.patch.object(
+            main,
+            "_run_connector_catalog_cleanup",
+            side_effect=cleanup,
+        ), mock.patch.object(
+            main,
+            "run_validate",
+            side_effect=validate,
+        ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            result = main.run_level(
+                adapter,
+                6,
+                deployer_name="inesdata",
+                deployer_registry={"inesdata": "fake_deployer_module:FakeVmDeployer"},
+                topology="vm-distributed",
+            )
+
+        self.assertEqual(
+            events,
+            [
+                ("cleanup", "inesdata", "vm-distributed", "pre"),
+                ("validate", "vm-distributed"),
+                ("cleanup", "inesdata", "vm-distributed", "post"),
+            ],
+        )
+        self.assertEqual(result["result"]["connector_catalog_cleanup"]["pre"]["phase"], "pre")
+        self.assertEqual(result["result"]["connector_catalog_cleanup"]["post"]["phase"], "post")
+
+    def test_run_level_six_vm_distributed_runs_catalog_post_cleanup_after_validation_error(self):
+        adapter = FakeAdapter()
+        events = []
+
+        def cleanup(deployer_name, topology, phase="pre"):
+            events.append(("cleanup", deployer_name, topology, phase))
+            return {"status": "passed", "phase": phase}
+
+        def validate(*_args, **_kwargs):
+            events.append(("validate",))
+            raise RuntimeError("validation failed")
+
+        with mock.patch.object(
+            main,
+            "_ensure_vm_distributed_level_kubeconfig_tunnels",
+            return_value=None,
+        ), mock.patch.object(
+            main,
+            "_run_connector_catalog_cleanup",
+            side_effect=cleanup,
+        ), mock.patch.object(
+            main,
+            "run_validate",
+            side_effect=validate,
+        ), mock.patch.object(main, "_resolve_level_access_urls", return_value={}):
+            with self.assertRaises(RuntimeError):
+                main.run_level(
+                    adapter,
+                    6,
+                    deployer_name="inesdata",
+                    deployer_registry={"inesdata": "fake_deployer_module:FakeVmDeployer"},
+                    topology="vm-distributed",
+                )
+
+        self.assertEqual(
+            events,
+            [
+                ("cleanup", "inesdata", "vm-distributed", "pre"),
+                ("validate",),
+                ("cleanup", "inesdata", "vm-distributed", "post"),
+            ],
+        )
+
     def test_run_local_repair_applies_hosts_reconciliation(self):
         adapter = FakeAdapter()
         doctor_report = {
@@ -8009,7 +8096,7 @@ class MainCliTests(unittest.TestCase):
             "http://conn-org2-pionera.pionera.oeg.fi.upm.es/protocol",
         )
 
-    def test_level6_component_validation_environment_uses_inesdata_integrated_ai_model_hub_mode(self):
+    def test_level6_component_validation_environment_keeps_inesdata_components_in_mixed_mode(self):
         context = DeploymentContext.from_mapping(
             {
                 "deployer": "inesdata",
@@ -8038,14 +8125,52 @@ class MainCliTests(unittest.TestCase):
             components=["ontology-hub", "ai-model-hub"],
         )
 
-        self.assertEqual(env["PIONERA_COMPONENT_VALIDATION_MODE"], "api")
-        self.assertEqual(env["LEVEL6_COMPONENT_VALIDATION_MODE"], "api")
+        self.assertNotIn("PIONERA_COMPONENT_VALIDATION_MODE", env)
+        self.assertNotIn("LEVEL6_COMPONENT_VALIDATION_MODE", env)
+        self.assertNotIn("PIONERA_AI_MODEL_HUB_COMPONENT_VALIDATION_MODE", env)
+        self.assertNotIn("AI_MODEL_HUB_COMPONENT_VALIDATION_MODE", env)
+        self.assertEqual(env["AI_MODEL_HUB_ENABLE_UI_VALIDATION"], "0")
+        self.assertEqual(env["AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION"], "0")
+        self.assertEqual(env["AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS"], "240")
         self.assertEqual(env["AI_MODEL_HUB_DASHBOARD_PATH"], "/")
         self.assertEqual(env["AI_MODEL_HUB_APP_CONFIG_PATH"], "assets/config/app.config.json")
         self.assertEqual(
             env["AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS"],
             "managementApiUrl,participantId,service",
         )
+
+    def test_level6_component_validation_environment_honors_explicit_inesdata_ai_model_hub_playwright_opt_in(self):
+        context = DeploymentContext.from_mapping(
+            {
+                "deployer": "inesdata",
+                "topology": "vm-distributed",
+                "environment": "DEV",
+                "dataspace_name": "pionera",
+                "ds_domain_base": "pionera.oeg.fi.upm.es",
+                "connectors": [
+                    "conn-org2-pionera",
+                    "conn-org3-pionera",
+                ],
+                "config": {
+                    "DS_1_CONNECTORS": "org2,org3",
+                    "VM_PROVIDER_CONNECTORS": "org2",
+                    "VM_CONSUMER_CONNECTORS": "org3",
+                    "VM_PROVIDER_PUBLIC_URL": "https://org2.pionera.oeg.fi.upm.es",
+                    "VM_CONSUMER_PUBLIC_URL": "https://org3.pionera.oeg.fi.upm.es",
+                    "AI_MODEL_HUB_ENABLE_UI_VALIDATION": "1",
+                    "AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION": "1",
+                },
+            }
+        )
+
+        env = main._level6_component_validation_environment(
+            context,
+            "inesdata",
+            components=["ai-model-hub"],
+        )
+
+        self.assertEqual(env["AI_MODEL_HUB_ENABLE_UI_VALIDATION"], "1")
+        self.assertEqual(env["AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION"], "1")
 
     def test_level6_component_validation_environment_uses_edc_vm_distributed_public_prefix(self):
         context = DeploymentContext.from_mapping(

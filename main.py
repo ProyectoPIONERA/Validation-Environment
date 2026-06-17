@@ -5956,10 +5956,27 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
         env["PIONERA_COMPONENT_VALIDATION_MODE"] = component_validation_mode
         env["LEVEL6_COMPONENT_VALIDATION_MODE"] = component_validation_mode
     if adapter_name == "inesdata":
-        configured_components = set(_normalized_component_tokens(components))
-        if "ai-model-hub" in configured_components and not component_validation_mode:
-            env["PIONERA_COMPONENT_VALIDATION_MODE"] = "api"
-            env["LEVEL6_COMPONENT_VALIDATION_MODE"] = "api"
+        ai_model_hub_enabled = "ai-model-hub" in set(_normalized_component_tokens(components))
+        if ai_model_hub_enabled:
+            if not str(
+                os.environ.get("AI_MODEL_HUB_ENABLE_UI_VALIDATION")
+                or config.get("AI_MODEL_HUB_ENABLE_UI_VALIDATION")
+                or ""
+            ).strip():
+                env["AI_MODEL_HUB_ENABLE_UI_VALIDATION"] = "0"
+            if not str(
+                os.environ.get("AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION")
+                or config.get("AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION")
+                or ""
+            ).strip():
+                env["AI_MODEL_HUB_ENABLE_FUNCTIONAL_VALIDATION"] = "0"
+            if normalize_topology(topology) == VM_DISTRIBUTED_TOPOLOGY:
+                if not str(
+                    os.environ.get("AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS")
+                    or config.get("AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS")
+                    or ""
+                ).strip():
+                    env["AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS"] = "240"
         env.setdefault("AI_MODEL_HUB_DASHBOARD_PATH", "/")
         env.setdefault("AI_MODEL_HUB_APP_CONFIG_PATH", "assets/config/app.config.json")
         env.setdefault("AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS", "managementApiUrl,participantId,service")
@@ -5985,6 +6002,7 @@ def _level6_component_validation_environment(deployer_context, deployer_name, co
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_ENDPOINTS",
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_PAYLOAD",
         "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES",
+        "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
         "COMPONENTS_PUBLIC_BASE_URL",
         "MODEL_SERVER_PUBLIC_URL",
         "MODEL_SERVER_PUBLIC_PATH",
@@ -11551,17 +11569,34 @@ def run_level(
     else:
         if normalized_topology == "vm-distributed":
             _ensure_vm_distributed_level_kubeconfig_tunnels(6)
-        _run_connector_catalog_cleanup(resolved_deployer_name, normalized_topology)
-        result = run_validate(
-            adapter,
-            deployer_name=resolved_deployer_name,
-            deployer_registry=deployer_registry,
-            topology=topology,
-            validation_engine_cls=validation_engine_cls,
-            experiment_storage=experiment_storage,
-            baseline=baseline,
-            kafka_enabled=kafka_enabled,
+        pre_catalog_cleanup = _run_connector_catalog_cleanup(
+            resolved_deployer_name,
+            normalized_topology,
+            phase="pre",
         )
+        post_catalog_cleanup = None
+        try:
+            result = run_validate(
+                adapter,
+                deployer_name=resolved_deployer_name,
+                deployer_registry=deployer_registry,
+                topology=topology,
+                validation_engine_cls=validation_engine_cls,
+                experiment_storage=experiment_storage,
+                baseline=baseline,
+                kafka_enabled=kafka_enabled,
+            )
+        finally:
+            post_catalog_cleanup = _run_connector_catalog_cleanup(
+                resolved_deployer_name,
+                normalized_topology,
+                phase="post",
+            )
+        if isinstance(result, dict):
+            result["connector_catalog_cleanup"] = {
+                "pre": pre_catalog_cleanup,
+                "post": post_catalog_cleanup,
+            }
 
     if level_id == 1:
         if normalized_topology == "vm-single":
@@ -16631,11 +16666,14 @@ VM_DISTRIBUTED_PROFILE_TEMPLATE_KEYS = (
     "AI_MODEL_HUB_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_IMAGE_REF",
+    "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
+    "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
     "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
     "AI_MODEL_HUB_MODEL_SERVER_MODE",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF",
+    "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH",
     "AI_MODEL_HUB_MODEL_SERVER_MANIFEST_PATH",
     "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH",
     "AI_MODEL_HUB_MODEL_SERVER_CONTAINER_PORT",
@@ -16650,6 +16688,8 @@ VM_DISTRIBUTED_PROFILE_TEMPLATE_KEYS = (
     "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH",
     "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_ENDPOINTS",
     "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_PAYLOAD",
+    "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT",
+    "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
     "AI_MODEL_HUB_REAL_MODELS_ARTIFACT_DIR",
     "AI_MODEL_HUB_REAL_MODELS_TRAIN_COMMAND",
     "VM_EXTERNAL_IP",
@@ -16780,11 +16820,14 @@ VM_SINGLE_PROFILE_TEMPLATE_KEYS = (
     "AI_MODEL_HUB_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_IMAGE_REF",
+    "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
+    "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
     "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
     "AI_MODEL_HUB_MODEL_SERVER_MODE",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY",
     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF",
+    "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH",
     "AI_MODEL_HUB_MODEL_SERVER_MANIFEST_PATH",
     "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH",
     "AI_MODEL_HUB_MODEL_SERVER_CONTAINER_PORT",
@@ -16794,6 +16837,8 @@ VM_SINGLE_PROFILE_TEMPLATE_KEYS = (
     "AI_MODEL_HUB_MODEL_SERVER_COPY_EXCLUDES",
     "AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_BASE_URL",
     "AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL",
+    "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT",
+    "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
     "AI_MODEL_HUB_REAL_MODELS_ARTIFACT_DIR",
     "AI_MODEL_HUB_REAL_MODELS_TRAIN_COMMAND",
     "VM_EXTERNAL_IP",
@@ -16934,11 +16979,14 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
             (
                 "AI Model Hub model server",
                 (
+                    "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
+                    "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
                     "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
                     "AI_MODEL_HUB_MODEL_SERVER_MODE",
                     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR",
                     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY",
                     "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF",
+                    "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH",
                     "AI_MODEL_HUB_MODEL_SERVER_MANIFEST_PATH",
                     "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH",
                     "AI_MODEL_HUB_MODEL_SERVER_CONTAINER_PORT",
@@ -16948,6 +16996,7 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
                     "AI_MODEL_HUB_MODEL_SERVER_COPY_EXCLUDES",
                     "AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_BASE_URL",
                     "AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL",
+                    "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT",
                     "AI_MODEL_HUB_REAL_MODELS_ARTIFACT_DIR",
                     "AI_MODEL_HUB_REAL_MODELS_TRAIN_COMMAND",
                 ),
@@ -17159,11 +17208,14 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
         (
             "AI Model Hub model server",
             (
+                "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
+                "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
                 "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
                 "AI_MODEL_HUB_MODEL_SERVER_MODE",
                 "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR",
                 "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY",
                 "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF",
+                "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH",
                 "AI_MODEL_HUB_MODEL_SERVER_MANIFEST_PATH",
                 "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH",
                 "AI_MODEL_HUB_MODEL_SERVER_CONTAINER_PORT",
@@ -17173,6 +17225,7 @@ def _vm_distributed_profile_template_content(topology="vm-distributed", adapter_
                 "AI_MODEL_HUB_MODEL_SERVER_COPY_EXCLUDES",
                 "AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_BASE_URL",
                 "AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL",
+                "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT",
                 "AI_MODEL_HUB_REAL_MODELS_ARTIFACT_DIR",
                 "AI_MODEL_HUB_REAL_MODELS_TRAIN_COMMAND",
             ),
@@ -19913,6 +19966,7 @@ def _write_ai_model_hub_real_models_profile_updates(profile_path, updates):
             "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH",
             "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH",
             "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES",
+            "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
             "AI_MODEL_HUB_REAL_MODELS_ARTIFACT_DIR",
             "AI_MODEL_HUB_REAL_MODELS_TRAIN_COMMAND",
         ),
@@ -19931,8 +19985,9 @@ def _promote_ai_model_hub_real_models_profile(profile_path, profile_values=None,
         "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY": status.get("repository") or "",
         "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH": "/models",
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH": "/models",
-        "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH": "/datasets",
+        "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH": "skip",
         "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES": "true",
+        "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE": "split",
     }
     if status.get("public_url"):
         updates["AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL"] = status["public_url"]
@@ -19963,6 +20018,7 @@ def _restore_ai_model_hub_mock_model_server_profile(profile_path, adapter_name="
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH": "",
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH": "",
         "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES": "",
+        "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE": "",
     }
     _write_ai_model_hub_real_models_profile_updates(profile_path, updates)
     apply_result = apply_environment_configuration_profile(
@@ -20065,20 +20121,23 @@ def _print_ai_model_hub_use_case_demo_status(status, topology_config=None):
 def _ai_model_hub_use_case_demo_profile_updates(profile_values=None):
     values = dict(profile_values or {})
     status = _ai_model_hub_use_case_demo_status(values)
-    source_ref = status.get("source_ref") or status.get("resolved_commit") or ""
-    image_suffix = (source_ref or "demo")[:7]
+    source_ref = "main"
     updates = {
-        "AI_MODEL_HUB_MODEL_SERVER_MODE": "combined",
-        "AI_MODEL_HUB_MODEL_SERVER_IMAGE": f"model-server:combined-{image_suffix}",
+        "AI_MODEL_HUB_MODEL_SERVER_ENABLED": "true",
+        "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED": "true",
+        "AI_MODEL_HUB_MODEL_SERVER_MODE": "use-cases",
+        "AI_MODEL_HUB_MODEL_SERVER_IMAGE": "model-server:use-cases-main",
         "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR": _framework_relative_path(status["source_dir"]),
         "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY": status.get("repository") or "",
+        "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF": source_ref,
+        "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH": "true",
         "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH": "/models",
         "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH": "/models",
-        "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH": "/datasets",
+        "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH": "skip",
+        "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT": "0",
         "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES": "true",
+        "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE": "split",
     }
-    if source_ref:
-        updates["AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF"] = source_ref
     if status.get("public_url"):
         updates["AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL"] = status["public_url"]
         updates["AI_MODEL_HUB_MODEL_SERVER_VALIDATION_URL"] = status["public_url"]
@@ -20090,17 +20149,22 @@ def _write_ai_model_hub_use_case_demo_profile_updates(profile_path, updates):
         profile_path,
         updates,
         (
+            "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
+            "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
             "AI_MODEL_HUB_MODEL_SERVER_MODE",
             "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
             "AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR",
             "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REPOSITORY",
             "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REF",
+            "AI_MODEL_HUB_MODEL_SERVER_SOURCE_REFRESH",
             "AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH",
             "AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL",
             "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_URL",
             "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH",
             "AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH",
+            "AI_MODEL_HUB_MODEL_SERVER_COMBINED_MOCK_HTTP_COUNT",
             "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES",
+            "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
         ),
     )
 
@@ -20127,7 +20191,32 @@ def _promote_ai_model_hub_use_case_demo_profile(profile_path, profile_values=Non
 
 
 def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="inesdata"):
-    values = dict(profile_values or {})
+    normalized_adapter = str(adapter_name or "inesdata").strip().lower() or "inesdata"
+    values = {}
+    if normalized_adapter == "inesdata":
+        try:
+            from adapters.inesdata.config import INESDataConfigAdapter, InesdataConfig
+
+            values.update(
+                INESDataConfigAdapter(
+                    InesdataConfig,
+                    topology=VM_DISTRIBUTED_TOPOLOGY,
+                ).load_deployer_config()
+                or {}
+            )
+        except Exception:
+            values.update(_load_effective_infrastructure_deployer_config(topology=VM_DISTRIBUTED_TOPOLOGY) or {})
+            values.update(_load_effective_adapter_deployer_config(normalized_adapter, topology=VM_DISTRIBUTED_TOPOLOGY))
+    else:
+        values.update(_load_effective_infrastructure_deployer_config(topology=VM_DISTRIBUTED_TOPOLOGY) or {})
+        values.update(_load_effective_adapter_deployer_config(normalized_adapter, topology=VM_DISTRIBUTED_TOPOLOGY))
+    values.update(
+        {
+            key: value
+            for key, value in dict(profile_values or {}).items()
+            if str(value or "").strip()
+        }
+    )
     dataspace = str(
         values.get("DS_1_NAME")
         or values.get("DS_NAME")
@@ -20142,7 +20231,6 @@ def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="
             f"conn-org3-{dataspace}",
         ]
     root_dir = os.path.dirname(__file__)
-    normalized_adapter = str(adapter_name or "inesdata").strip().lower() or "inesdata"
     environment = str(
         values.get("AI_MODEL_HUB_SEED_DEPLOYMENT_ENVIRONMENT")
         or values.get("DEPLOYMENT_ENVIRONMENT")
@@ -20261,6 +20349,11 @@ def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="
         "connector_kubeconfigs": connector_kubeconfigs,
         "connector_protocol_urls": connector_protocol_urls,
         "model_server_url": model_server_url,
+        "use_case_publication_mode": str(
+            values.get("AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE")
+            or values.get("USE_CASE_PUBLICATION_MODE")
+            or "split"
+        ).strip(),
         "negotiation_timeout_seconds": str(
             values.get("AI_MODEL_HUB_SEED_NEGOTIATION_TIMEOUT_SECONDS")
             or values.get("SEED_NEGOTIATION_TIMEOUT_SECONDS")
@@ -20342,12 +20435,15 @@ def _ai_model_hub_use_case_demo_seed_command(profile_values=None, adapter_name="
                 "--model-set",
                 "use-cases",
                 "--skip-inesdata-models",
+                "--include-flares-metric-models",
+                "--use-case-publication-mode",
+                runtime.get("use_case_publication_mode") or "split",
             ]
         )
         if runtime.get("model_server_url"):
             args.extend(["--use-case-model-server-base-url", runtime["model_server_url"]])
     else:
-        args.extend(["--seed-scope", "datasets"])
+        args.extend(["--seed-scope", step if step == "vocabularies" else "datasets"])
     return args
 
 
@@ -20410,7 +20506,7 @@ def _run_ai_model_hub_use_case_demo_seed_step(profile_values=None, adapter_name=
     return result
 
 
-def _run_connector_catalog_cleanup(deployer_name, normalized_topology):
+def _run_connector_catalog_cleanup(deployer_name, normalized_topology, phase="pre"):
     """Prune accumulated test-junk offers from the connector catalog before
     Level 6 runs. The federated catalog is capped (~100 datasets); junk assets
     (qa-ui-*, pt5-mh-*, asset-e2e-*, contract-ui-*, kafka-edc-asset-*) pile up
@@ -20422,15 +20518,31 @@ def _run_connector_catalog_cleanup(deployer_name, normalized_topology):
     Controlled by PIONERA_LEVEL6_CATALOG_CLEANUP (default on). Non-fatal."""
     adapter = str(deployer_name or "").strip().lower()
     if adapter != "inesdata" or normalized_topology != "vm-distributed":
-        return
+        return {"status": "skipped", "reason": "unsupported-target", "phase": phase}
     if not _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_CLEANUP"), default=True):
-        return
+        return {"status": "skipped", "reason": "disabled", "phase": phase}
+    normalized_phase = str(phase or "pre").strip().lower()
+    if normalized_phase == "post" and not _bool_value(
+        os.environ.get("PIONERA_LEVEL6_CATALOG_POST_CLEANUP"),
+        default=True,
+    ):
+        return {"status": "skipped", "reason": "post-cleanup-disabled", "phase": normalized_phase}
     script = os.path.join(os.path.dirname(__file__), "scripts", "clean_connector_catalog.py")
     if not os.path.isfile(script):
-        return
-    print("\nPruning accumulated test-junk offers from the connector catalog (Level 6 pre-clean)...")
+        return {"status": "skipped", "reason": "missing-script", "phase": normalized_phase}
+    action_label = "post-clean" if normalized_phase == "post" else "pre-clean"
+    print(f"\nPruning accumulated test-junk offers from the connector catalog (Level 6 {action_label})...")
     args = [sys.executable, script, "--apply"]
-    if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_CLEANUP_ASSETS"), default=False):
+    if normalized_phase == "post":
+        if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_POST_CLEANUP_AGREEMENTS"), default=True):
+            args.append("--agreements")
+        if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_POST_CLEANUP_ASSETS"), default=True):
+            args.append("--assets")
+        if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_POST_CLEANUP_VOCABULARIES"), default=True):
+            args.append("--vocabularies")
+        if _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_POST_CLEANUP_SPLIT_USE_CASE_MODELS"), default=True):
+            args.append("--split-use-case-models")
+    elif _bool_value(os.environ.get("PIONERA_LEVEL6_CATALOG_CLEANUP_ASSETS"), default=False):
         args.append("--assets")
     try:
         completed = subprocess.run(
@@ -20442,8 +20554,14 @@ def _run_connector_catalog_cleanup(deployer_name, normalized_topology):
             print(tail)
         if completed.returncode != 0:
             print(f"  catalog cleanup exited {completed.returncode} (non-fatal); continuing.")
+        return {
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "phase": normalized_phase,
+            "returncode": completed.returncode,
+        }
     except Exception as exc:  # noqa: BLE001 - cleanup must not block validation
         print(f"  catalog cleanup skipped ({exc}); continuing.")
+        return {"status": "skipped", "phase": normalized_phase, "reason": str(exc)}
 
 
 def _run_ai_model_hub_post_deploy_seed(deployer_name, normalized_topology):
@@ -20530,6 +20648,15 @@ def _run_ai_model_hub_use_case_demo_flow(profile_path, profile_values=None, adap
         if level5_result.get("status") != "passed":
             return {"status": "failed", "reason": "level5-failed", "steps": steps}
 
+    vocabularies_result = _run_ai_model_hub_use_case_demo_seed_step(
+        refreshed_values,
+        adapter_name=adapter_name,
+        step="vocabularies",
+    )
+    steps.append({"name": "step8-vocabularies", **vocabularies_result})
+    if vocabularies_result.get("status") != "passed":
+        return {"status": "failed", "reason": "step8-vocabularies-failed", "steps": steps}
+
     datasets_result = _run_ai_model_hub_use_case_demo_seed_step(
         refreshed_values,
         adapter_name=adapter_name,
@@ -20603,11 +20730,12 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
         status = _ai_model_hub_use_case_demo_status(profile_values)
         _print_ai_model_hub_use_case_demo_status(status, topology_config=topology_config)
         print()
-        print("1 - Prepare/apply use-case demo profile (combined model-server)")
+        print("1 - Prepare/apply use-case profile (use-cases model-server)")
         print("2 - Show Level 5 and demo seed commands")
-        print("3 - Run Step 9: seed benchmark datasets")
-        print("4 - Run Step 10: seed FLARES/Mobility model assets")
-        print("5 - Run use-case demo flow (profile + Level 5 + Steps 9/10)")
+        print("3 - Run Step 8: seed DAIMO model/dataset vocabularies")
+        print("4 - Run Step 9: seed benchmark datasets")
+        print("5 - Run Step 10: seed FLARES/Mobility model assets")
+        print("6 - Run use-case demo flow (profile + Level 5 + Steps 8/9/10)")
         print("B/Q - Back")
         choice = _interactive_read("\nSelection: ").strip().upper()
         if not choice or choice in {"B", "Q"}:
@@ -20642,6 +20770,11 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
                 adapter_name=selected_adapter,
                 step="datasets",
             )
+            vocabularies_cmd = _ai_model_hub_use_case_demo_seed_command(
+                profile_values,
+                adapter_name=selected_adapter,
+                step="vocabularies",
+            )
             models_cmd = _ai_model_hub_use_case_demo_seed_command(
                 profile_values,
                 adapter_name=selected_adapter,
@@ -20651,6 +20784,8 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
             print("AI Model Hub use-case demo commands:")
             print("  Level 5 / Step 7:")
             print("    " + " ".join(shlex.quote(part) for part in level5_cmd))
+            print("  Step 8 vocabularies:")
+            print("    " + " ".join(shlex.quote(part) for part in vocabularies_cmd))
             print("  Step 9 datasets:")
             print("    " + " ".join(shlex.quote(part) for part in datasets_cmd))
             print("  Step 10 FLARES/Mobility models:")
@@ -20658,6 +20793,18 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
             continue
 
         if choice == "3":
+            if not _interactive_confirm("Run Step 8 DAIMO vocabulary seeding now?", default=False):
+                print("Vocabulary seeding cancelled.")
+                continue
+            result = _run_ai_model_hub_use_case_demo_seed_step(
+                profile_values,
+                adapter_name=selected_adapter,
+                step="vocabularies",
+            )
+            _print_ai_model_hub_use_case_demo_action_result(result)
+            continue
+
+        if choice == "4":
             if not _interactive_confirm("Run Step 9 dataset seeding now?", default=False):
                 print("Dataset seeding cancelled.")
                 continue
@@ -20669,9 +20816,9 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
             _print_ai_model_hub_use_case_demo_action_result(result)
             continue
 
-        if choice == "4":
+        if choice == "5":
             print()
-            print("This registers FLARES/Mobility HttpData assets discovered from the running model-server /models endpoint.")
+            print("This registers the FLARES/Mobility HttpData assets defined by the AIModelHub Step 10 contract.")
             if not _interactive_confirm("Run Step 10 model asset seeding now?", default=False):
                 print("Model asset seeding cancelled.")
                 continue
@@ -20683,9 +20830,9 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
             _print_ai_model_hub_use_case_demo_action_result(result)
             continue
 
-        if choice == "5":
+        if choice == "6":
             print()
-            print("This applies the combined model-server profile, runs Level 5, then seeds Step 9 datasets and Step 10 model assets.")
+            print("This applies the use-cases model-server profile, runs Level 5, then seeds Steps 8/9/10.")
             if not _interactive_confirm("Run the AI Model Hub use-case demo flow now?", default=False):
                 print("Use-case demo flow cancelled.")
                 continue

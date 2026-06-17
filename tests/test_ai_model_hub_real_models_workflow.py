@@ -142,11 +142,12 @@ class AIModelHubRealModelsWorkflowTests(unittest.TestCase):
                 content = handle.read()
 
         self.assertEqual(result["status"], "promoted")
-        self.assertIn("AI_MODEL_HUB_MODEL_SERVER_MODE=combined", content)
-        self.assertIn("AI_MODEL_HUB_MODEL_SERVER_IMAGE=model-server:combined-abc1234", content)
+        self.assertIn("AI_MODEL_HUB_MODEL_SERVER_MODE=use-cases", content)
+        self.assertIn("AI_MODEL_HUB_MODEL_SERVER_IMAGE=model-server:use-cases-main", content)
         self.assertIn("AI_MODEL_HUB_MODEL_SERVER_READINESS_PATH=/models", content)
         self.assertIn("AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES=true", content)
         self.assertIn("AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DISCOVERY_PATH=/models", content)
+        self.assertIn("AI_MODEL_HUB_MODEL_SERVER_VALIDATION_DATASETS_PATH=skip", content)
         apply_profile.assert_called_once()
 
     def test_use_case_demo_seed_commands_match_steps_9_and_10(self):
@@ -295,13 +296,18 @@ class AIModelHubRealModelsWorkflowTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
         step_names = [step["name"] for step in result["steps"]]
-        self.assertEqual(step_names, ["prepare-profile", "level5-components", "step9-datasets", "step10-models"])
+        self.assertEqual(
+            step_names,
+            ["prepare-profile", "level5-components", "step8-vocabularies", "step9-datasets", "step10-models"],
+        )
         commands = [call.args[0] for call in subprocess_run.call_args_list]
         self.assertEqual(commands[0][1:], ["main.py", "inesdata", "level", "5", "--topology", "vm-distributed"])
         self.assertIn("--seed-scope", commands[1])
-        self.assertIn("datasets", commands[1])
-        self.assertIn("--model-set", commands[2])
-        self.assertIn("use-cases", commands[2])
+        self.assertIn("vocabularies", commands[1])
+        self.assertIn("--seed-scope", commands[2])
+        self.assertIn("datasets", commands[2])
+        self.assertIn("--model-set", commands[3])
+        self.assertIn("use-cases", commands[3])
 
     def test_use_case_demo_flow_stops_when_level5_fails(self):
         with tempfile.TemporaryDirectory() as source_dir, tempfile.TemporaryDirectory() as tmpdir:

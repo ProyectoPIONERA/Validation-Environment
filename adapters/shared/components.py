@@ -1827,6 +1827,13 @@ def combined_models() -> Dict[str, Any]:
             "metadata": {
                 "name": f"{release_name}-public-root-aliases",
                 "namespace": namespace,
+                "annotations": {
+                    "nginx.ingress.kubernetes.io/proxy-body-size": "800m",
+                    "nginx.ingress.kubernetes.io/proxy-read-timeout": "300",
+                    "nginx.ingress.kubernetes.io/proxy-send-timeout": "300",
+                    "nginx.ingress.kubernetes.io/proxy-connect-timeout": "30",
+                    "nginx.org/client-max-body-size": "800m",
+                },
                 "labels": {
                     "app.kubernetes.io/managed-by": "validation-environment",
                     "app.kubernetes.io/part-of": topology,

@@ -873,11 +873,15 @@ class INESDataComponentsAdapter:
             self._DEFAULT_COMPONENT_SOURCE_REF,
         ):
             value = str(candidate or "").strip()
+            if self._source_ref_uses_local_checkout(value):
+                return ""
             if value:
                 return value
         return self._DEFAULT_COMPONENT_SOURCE_REF
 
     def _ontology_hub_source_refresh_enabled(self, deployer_config: dict | None = None) -> bool:
+        if self._ontology_hub_uses_local_source_checkout(deployer_config):
+            return False
         explicit = None
         for candidate in (
             os.getenv("ONTOLOGY_HUB_SOURCE_REFRESH"),
@@ -893,6 +897,21 @@ class INESDataComponentsAdapter:
         if explicit is not None:
             return self._parse_bool(explicit, default=False)
         return bool(self._ontology_hub_source_ref(deployer_config))
+
+    @staticmethod
+    def _source_ref_uses_local_checkout(value: str) -> bool:
+        return str(value or "").strip().lower() in {"local", "checkout-local", "working-tree"}
+
+    def _ontology_hub_uses_local_source_checkout(self, deployer_config: dict | None = None) -> bool:
+        for candidate in (
+            os.getenv("ONTOLOGY_HUB_SOURCE_REF"),
+            os.getenv("ONTOLOGY_HUB_REPO_REF"),
+            (deployer_config or {}).get("ONTOLOGY_HUB_SOURCE_REF"),
+            (deployer_config or {}).get("ONTOLOGY_HUB_REPO_REF"),
+        ):
+            if self._source_ref_uses_local_checkout(candidate):
+                return True
+        return False
 
     @staticmethod
     def _looks_like_git_sha(value: str) -> bool:

@@ -611,6 +611,26 @@ class InesdataComponentOverridesTests(unittest.TestCase):
         self.assertIsNotNone(ingress)
         self.assertEqual(ingress["metadata"]["name"], "pionera-ontology-hub-public-root-aliases")
         self.assertEqual(ingress["metadata"]["namespace"], "components")
+        self.assertEqual(
+            ingress["metadata"]["annotations"]["nginx.ingress.kubernetes.io/proxy-body-size"],
+            "800m",
+        )
+        self.assertEqual(
+            ingress["metadata"]["annotations"]["nginx.org/client-max-body-size"],
+            "800m",
+        )
+        self.assertEqual(
+            ingress["metadata"]["annotations"]["nginx.ingress.kubernetes.io/proxy-read-timeout"],
+            "300",
+        )
+        self.assertEqual(
+            ingress["metadata"]["annotations"]["nginx.ingress.kubernetes.io/proxy-send-timeout"],
+            "300",
+        )
+        self.assertEqual(
+            ingress["metadata"]["annotations"]["nginx.ingress.kubernetes.io/proxy-connect-timeout"],
+            "30",
+        )
         self.assertEqual(ingress["spec"]["rules"][0]["host"], "org1.pionera.oeg.fi.upm.es")
         paths = ingress["spec"]["rules"][0]["http"]["paths"]
         self.assertEqual(
@@ -1653,6 +1673,30 @@ class InesdataComponentOverridesTests(unittest.TestCase):
                         "ONTOLOGY_HUB_SOURCE_REFRESH": "true",
                     }
                 )
+
+    def test_resolve_ontology_hub_source_dir_can_use_local_checkout_with_tracked_changes(self):
+        adapter = self._make_adapter()
+        ontology_hub_dir = os.path.join(
+            os.path.dirname(os.path.abspath(components_module.__file__)),
+            "sources",
+            "Ontology-Hub",
+        )
+        dockerfile_path = os.path.join(ontology_hub_dir, "Dockerfile")
+
+        with (
+            mock.patch("adapters.inesdata.components.os.path.isfile", side_effect=lambda path: path == dockerfile_path),
+            mock.patch("subprocess.run") as run_mock,
+            mock.patch.dict(os.environ, {"ONTOLOGY_HUB_SOURCE_REF": "local"}, clear=False),
+        ):
+            resolved = adapter._resolve_ontology_hub_source_dir(
+                {
+                    "ONTOLOGY_HUB_SOURCE_REF": "main",
+                    "ONTOLOGY_HUB_SOURCE_REFRESH": "true",
+                }
+            )
+
+        self.assertEqual(resolved, ontology_hub_dir)
+        run_mock.assert_not_called()
 
     def test_resolve_morph_kgv_source_dir_clones_when_sources_dir_exists_but_is_empty(self):
         adapter = self._make_adapter()

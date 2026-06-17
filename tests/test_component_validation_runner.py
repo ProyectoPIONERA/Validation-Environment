@@ -72,6 +72,15 @@ class ComponentValidationRunnerTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_component_execution_mode_honors_component_scoped_override(self):
+        env = {
+            "PIONERA_ADAPTER": "inesdata",
+            "PIONERA_AI_MODEL_HUB_COMPONENT_VALIDATION_MODE": "api-only",
+        }
+
+        self.assertTrue(component_api_only_enabled(env, component="ai-model-hub"))
+        self.assertFalse(component_api_only_enabled(env, component="ontology-hub"))
         self.assertFalse(
             component_api_only_enabled(
                 {
