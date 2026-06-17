@@ -8,7 +8,9 @@ from urllib import error, parse, request
 COMPONENT_KEY = "ai-model-hub"
 DEFAULT_DASHBOARD_PATH = ""
 DEFAULT_APP_CONFIG_PATH = "config/app-config.json"
+INESDATA_APP_CONFIG_PATH = "assets/config/app.config.json"
 DEFAULT_APP_CONFIG_REQUIRED_KEYS = ("menuItems",)
+INESDATA_APP_CONFIG_REQUIRED_KEYS = ("managementApiUrl", "catalogUrl", "participantId")
 
 SUPPORT_CASE_METADATA: Dict[str, Dict[str, str]] = {
     "MH-BOOTSTRAP-01": {
@@ -58,14 +60,35 @@ def _dashboard_path() -> str:
     return os.environ.get("AI_MODEL_HUB_DASHBOARD_PATH", DEFAULT_DASHBOARD_PATH)
 
 
+def _component_adapter_name() -> str:
+    return str(
+        os.environ.get("AI_MODEL_HUB_COMPONENT_ADAPTER")
+        or os.environ.get("PIONERA_ADAPTER")
+        or os.environ.get("UI_ADAPTER")
+        or ""
+    ).strip().lower()
+
+
+def _default_app_config_path() -> str:
+    if _component_adapter_name() == "inesdata":
+        return INESDATA_APP_CONFIG_PATH
+    return DEFAULT_APP_CONFIG_PATH
+
+
 def _app_config_path() -> str:
-    return os.environ.get("AI_MODEL_HUB_APP_CONFIG_PATH", DEFAULT_APP_CONFIG_PATH)
+    return os.environ.get("AI_MODEL_HUB_APP_CONFIG_PATH", _default_app_config_path())
+
+
+def _default_app_config_required_keys() -> tuple[str, ...]:
+    if _component_adapter_name() == "inesdata":
+        return INESDATA_APP_CONFIG_REQUIRED_KEYS
+    return DEFAULT_APP_CONFIG_REQUIRED_KEYS
 
 
 def _app_config_required_keys() -> list[str]:
     raw_value = str(os.environ.get("AI_MODEL_HUB_APP_CONFIG_REQUIRED_KEYS") or "").strip()
     if not raw_value:
-        return list(DEFAULT_APP_CONFIG_REQUIRED_KEYS)
+        return list(_default_app_config_required_keys())
     return [entry.strip() for entry in raw_value.replace(";", ",").split(",") if entry.strip()]
 
 

@@ -45,27 +45,49 @@ type AIModelExecutionUiReport = {
   fatalErrorResponses: Array<{ url: string; status: number }>;
 };
 
-const DEFAULT_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment";
-const DEFAULT_PAYLOAD = {
-  text: "This product is excellent and very useful",
-};
-const TEXT_MODEL_INPUT_FEATURES = [
+const DEFAULT_MODEL_PATH = "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h";
+const DEFAULT_PAYLOAD = [
   {
-    name: "text",
-    type: "string",
-    required: true,
-    description: "Text to analyze",
+    Id: 840,
+    Text: "El comité de medicamentos humanos espera concluir el análisis en marzo.",
   },
 ];
-const TEXT_MODEL_INPUT_SCHEMA = {
+const FLARES_5W1H_INPUT_FEATURES = [
+  {
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
+    type: "string",
+    required: true,
+    description: "Spanish text to analyze",
+  },
+];
+const FLARES_5W1H_JSON_SCHEMA = {
   type: "object",
-  required: ["text"],
+  required: ["Id", "Text"],
   properties: {
-    text: {
+    Id: {
+      type: "integer",
+      description: "Input text identifier",
+    },
+    Text: {
       type: "string",
-      description: "Text to analyze",
+      description: "Spanish text to analyze",
     },
   },
+};
+const FLARES_5W1H_INPUT_SCHEMA = {
+  type: "array",
+  items: FLARES_5W1H_JSON_SCHEMA,
+  fields: FLARES_5W1H_INPUT_FEATURES,
+  jsonSchema: JSON.stringify({
+    type: "array",
+    items: FLARES_5W1H_JSON_SCHEMA,
+  }, null, 2),
 };
 
 test.skip(
@@ -129,11 +151,23 @@ function inferJsonSchema(value: unknown): Record<string, unknown> {
 }
 
 function inputSchemaForPayload(payload: unknown): unknown {
-  return parseJsonEnv("UI_AI_MODEL_HUB_MODEL_INPUT_SCHEMA", inferJsonSchema(payload));
+  const fallback = aiModelHubModelPath() === DEFAULT_MODEL_PATH ? FLARES_5W1H_INPUT_SCHEMA : inferJsonSchema(payload);
+  return parseJsonEnv("UI_AI_MODEL_HUB_MODEL_INPUT_SCHEMA", fallback);
 }
 
 function inputFeaturesForPayload(payload: unknown): unknown[] {
   const schema = inputSchemaForPayload(payload) as Record<string, unknown>;
+  if (Array.isArray(schema.fields)) {
+    return schema.fields.map((field) => {
+      const item = field as Record<string, unknown>;
+      return {
+        name: String(item.name || item.field || item.path || ""),
+        type: String(item.type || "string"),
+        required: item.required !== undefined ? Boolean(item.required) : !Boolean(item.nullable),
+        description: item.description ? String(item.description) : undefined,
+      };
+    }).filter((field) => field.name);
+  }
   const objectSchema = schema.type === "array" && schema.items && typeof schema.items === "object"
     ? schema.items as Record<string, unknown>
     : schema;
@@ -148,8 +182,18 @@ function inputFeaturesForPayload(payload: unknown): unknown[] {
   }));
 }
 
-function payloadRequiresText(payload: unknown): boolean {
-  return !Array.isArray(payload) && !!payload && typeof payload === "object" && Object.prototype.hasOwnProperty.call(payload, "text");
+function firstRequiredFeatureName(inputFeatures: unknown[]): string {
+  for (const feature of inputFeatures) {
+    const candidate = feature as { name?: unknown; required?: unknown };
+    if (candidate.required && String(candidate.name || "").trim()) {
+      return String(candidate.name).trim();
+    }
+  }
+  return "";
+}
+
+function missingRequiredPayloadFor(payload: unknown): unknown {
+  return Array.isArray(payload) ? [{}] : {};
 }
 
 function aiModelMetadataAliases({
@@ -199,6 +243,12 @@ function aiModelMetadataAliases({
     "daimo:software": software,
     "https://w3id.org/daimo/ns#software": software,
     "https://pionera.ai/edc/daimo#software": software,
+    "daimo:taskCategory": task,
+    "daimo:taskType": "classification",
+    "daimo:modality": ["text"],
+    "daimo:endpointBehavior": "prediction",
+    "daimo:libraryName": library,
+    "daimo:requestShape": "batch",
     "daimo:inference_path": inferencePath,
     "https://w3id.org/daimo/ns#inference_path": inferencePath,
     "https://pionera.ai/edc/daimo#inference_path": inferencePath,
@@ -217,6 +267,13 @@ function aiModelMetadataAliases({
     library,
     framework,
     software,
+    taskCategory: task,
+    taskType: "classification",
+    modality: ["text"],
+    endpointBehavior: "prediction",
+    libraryName: library,
+    requestShape: "batch",
+    request_shape: "batch",
     inference_path: inferencePath,
     inferencePath,
     input_features: serializedInputFeatures,
@@ -296,7 +353,7 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
   const modelPayload = aiModelHubPayload();
   const inputSchema = inputSchemaForPayload(modelPayload);
   const inputFeatures = inputFeaturesForPayload(modelPayload);
-  const requiresText = payloadRequiresText(modelPayload);
+  const firstRequiredFeature = firstRequiredFeatureName(inputFeatures);
   const modelName = `AI Model Execution controlled model ${suffix}`;
   const browserDiagnostics = collectBrowserDiagnostics(page);
   const loginPage = new KeycloakLoginPage(page, {
@@ -376,12 +433,12 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
         keywords: ["validation", "ai-model-execution", "model-server", "machine-learning", "HttpData", "A5.2"],
         properties: {
           ...aiModelMetadataAliases({
-            task: "text-classification",
-            subtask: "sentiment-analysis",
-            algorithm: "deterministic-rule-engine",
-            library: "flask",
-            framework: "model-server",
-            software: "pionera-validation-framework",
+            task: "Natural Language Processing",
+            subtask: "token-classification",
+            algorithm: "BERT",
+            library: "Transformers",
+            framework: "AIModelHub-Use-Cases",
+            software: "FastAPI",
             inferencePath: modelPath,
             payload: modelPayload,
             inputSchema,
@@ -420,9 +477,28 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
     });
 
     await expect(page.getByText(/Local Asset/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/deterministic-rule-engine/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/model-server/i).first()).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/Detected example payload/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Transformers/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Natural Language Processing/i).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("button", { name: /Change Model/i }).first()).toBeVisible({ timeout: 10_000 });
+    if (inputFeatures.length > 0) {
+      const schemaSection = page.locator(".input-schema-section").first();
+      await expect(schemaSection).toBeVisible({ timeout: 10_000 });
+      await expect(schemaSection.getByText(/Detected DAIMO input schema/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(schemaSection.getByText(new RegExp(`${inputFeatures.length}\\s+fields?`, "i")).first()).toBeVisible({
+        timeout: 10_000,
+      });
+      await expect(page.getByRole("button", { name: /Generated Form/i }).first()).toBeVisible({ timeout: 10_000 });
+      for (const feature of inputFeatures.slice(0, 3)) {
+        const featureName = String((feature as { name?: unknown }).name || "").trim();
+        if (featureName) {
+          await expect(page.locator(".form-section .form-label").filter({ hasText: featureName }).first()).toBeVisible({
+            timeout: 10_000,
+          });
+        }
+      }
+    } else {
+      await expect(page.getByText(/Detected example payload/i).first()).toBeVisible({ timeout: 10_000 });
+    }
     await attachJson("ai-model-execution-ui-selection-assertions", {
       assetId,
       modelName,
@@ -445,13 +521,15 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
       status: "passed",
     });
 
-    if (requiresText) {
-      await fillMarked(inputJson, "{}");
+    if (firstRequiredFeature) {
+      await fillMarked(inputJson, JSON.stringify(missingRequiredPayloadFor(modelPayload), null, 2));
       await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
-      await expect(page.getByText(/Field "text" is required/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(
+        page.getByText(new RegExp(`(?:Row #1:\\s*)?Field "${firstRequiredFeature}" is required`, "i")).first(),
+      ).toBeVisible({ timeout: 10_000 });
       report.inputValidationChecks.push({
-        scenario: "missing_required_text_field",
-        expectedMessage: 'Field "text" is required.',
+        scenario: `missing_required_${firstRequiredFeature}_field`,
+        expectedMessage: `Field "${firstRequiredFeature}" is required.`,
         status: "passed",
       });
     }
@@ -471,14 +549,6 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
     const expectedResultText = (process.env.UI_AI_MODEL_HUB_EXPECTED_RESULT_TEXT || "").trim();
     if (expectedResultText) {
       await expect(page.getByText(new RegExp(expectedResultText, "i")).first()).toBeVisible({ timeout: 10_000 });
-    } else if (requiresText) {
-      await expect(
-        page.getByText(/E-commerce Sentiment Analyzer|ecommerce-sentiment/i).first(),
-      ).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(/positive/i).first()).toBeVisible({ timeout: 10_000 });
-      await expect(
-        page.getByText(/local-rule-engine|deterministic-rule-engine|deterministic mock text classification/i).first(),
-      ).toBeVisible({ timeout: 10_000 });
     }
     await captureStep(page, "04-ai-model-execution-result");
 

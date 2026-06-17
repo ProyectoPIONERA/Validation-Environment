@@ -30,6 +30,9 @@ MODEL_OBSERVER_ENV = "AI_MODEL_HUB_ENABLE_MODEL_OBSERVER"
 MODEL_OBSERVER_BASE_URL_ENVS = (
     "AI_MODEL_HUB_OBSERVER_API_BASE_URL",
     "AI_MODEL_OBSERVER_API_BASE_URL",
+    "AI_MODEL_HUB_OBSERVER_JOURNAL_BASE_URL",
+    "AI_MODEL_OBSERVER_JOURNAL_BASE_URL",
+    "MODEL_OBSERVER_JOURNAL_BASE_URL",
     "AI_MODEL_HUB_PUBLIC_PORTAL_BACKEND_URL",
     "INESDATA_PUBLIC_PORTAL_BACKEND_URL",
 )
@@ -496,6 +499,9 @@ def _derive_model_observer_base_url_from_adapter() -> str:
         explicit_candidates = (
             config.get("AI_MODEL_HUB_OBSERVER_API_BASE_URL"),
             config.get("AI_MODEL_OBSERVER_API_BASE_URL"),
+            config.get("AI_MODEL_HUB_OBSERVER_JOURNAL_BASE_URL"),
+            config.get("AI_MODEL_OBSERVER_JOURNAL_BASE_URL"),
+            config.get("MODEL_OBSERVER_JOURNAL_BASE_URL"),
             config.get("AI_MODEL_HUB_PUBLIC_PORTAL_BACKEND_URL"),
             config.get("INESDATA_PUBLIC_PORTAL_BACKEND_URL"),
             config.get("PUBLIC_PORTAL_BACKEND_URL"),
@@ -537,6 +543,7 @@ def _resolve_model_observer_base_url(fallback_base_url: str | None = None) -> st
 
 def run_ai_model_hub_connector_governance_validation(experiment_dir: str | None = None) -> Dict[str, Any]:
     from validation.components.ai_model_hub.connector_governance_api import (
+        DEFAULT_MODEL_PATH,
         build_ai_model_hub_connector_governance_suite,
         default_model_url,
     )
@@ -582,7 +589,7 @@ def run_ai_model_hub_connector_governance_validation(experiment_dir: str | None 
         provider=provider,
         consumer=consumer,
         model_url=model_url,
-        model_path=model_path or "/api/v1/nlp/ecommerce-sentiment",
+        model_path=model_path or DEFAULT_MODEL_PATH,
         run_access_transfer=run_access_transfer,
         experiment_dir=experiment_dir,
     )
@@ -694,7 +701,7 @@ def run_ai_model_hub_model_observer_validation(
 def run_ai_model_hub_component_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
     started_at = datetime.now().isoformat()
     normalized_base_url = (base_url or "").rstrip("/")
-    api_only = component_api_only_enabled()
+    api_only = component_api_only_enabled(component=COMPONENT_KEY)
 
     current_suite_header: tuple[str, str] | None = None
 

@@ -156,6 +156,18 @@ function catalogReadinessTimeoutMs(): number {
   if (Number.isFinite(configured) && configured > 0) {
     return configured;
   }
+  const topology = (
+    process.env.UI_TOPOLOGY ||
+    process.env.PIONERA_TOPOLOGY ||
+    process.env.INESDATA_TOPOLOGY ||
+    process.env.TOPOLOGY ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (topology === "vm-distributed") {
+    return 360_000;
+  }
   return DEFAULT_CATALOG_READINESS_TIMEOUT_MS;
 }
 

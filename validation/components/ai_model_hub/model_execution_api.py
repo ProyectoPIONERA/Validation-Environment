@@ -21,12 +21,21 @@ FUNCTIONAL_CASE_ID = "MH-LING-01"
 EDC_NAMESPACE = "https://w3id.org/edc/v0.0.1/ns/"
 DAIMO_NAMESPACE = "https://w3id.org/daimo/0.0.1/ns#"
 LEGACY_DAIMO_NAMESPACE = "https://pionera.ai/edc/daimo#"
-DEFAULT_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment"
-DEFAULT_PAYLOAD = {"text": "This product is excellent and very useful"}
-DEFAULT_EXPECTED_MODEL = "E-commerce Sentiment Analyzer"
-DEFAULT_EXPECTED_MODEL_ALIASES = {"E-commerce Sentiment Analyzer", "ecommerce-sentiment"}
 FLARES_MODEL_PATH = "/flares/dccuchile-distilbert-base-spanish-uncased-reliability"
 FLARES_EXPECTED_MODEL = ""
+DEFAULT_MODEL_PATH = FLARES_MODEL_PATH
+DEFAULT_PAYLOAD = [
+    {
+        "Id": 840,
+        "Text": "El comité de medicamentos humanos espera concluir el análisis en marzo.",
+        "5W1H_Label": "WHO",
+        "Tag_Text": "El comité de medicamentos humanos",
+        "Tag_Start": 0,
+        "Tag_End": 35,
+    }
+]
+DEFAULT_EXPECTED_MODEL = FLARES_EXPECTED_MODEL
+DEFAULT_EXPECTED_MODEL_ALIASES: set[str] = set()
 FLARES_DATASET_DIR = str(dataset_source_dir("flares-dataset"))
 FLARES_TRIAL_FILE = "5w1h_subtask_2_trial.json"
 FLARES_TEST_FILE = "5w1h_subtarea_2_test.json"
@@ -373,7 +382,7 @@ class AIModelHubModelExecutionApiSuite:
             "properties": {
                 "name": f"AI Model Hub executable model {suffix}",
                 "version": "1.0.0",
-                "shortDescription": "Temporary model endpoint for the A5.2 controlled execution baseline",
+                "shortDescription": "Temporary FLARES model endpoint for the A5.2 controlled execution baseline",
                 "assetType": "machineLearning",
                 "assetData": {},
                 "asset:prop:type": "machineLearning",
@@ -385,45 +394,86 @@ class AIModelHubModelExecutionApiSuite:
                 "daimo:asset_kind": "model",
                 f"{DAIMO_NAMESPACE}asset_kind": "model",
                 f"{LEGACY_DAIMO_NAMESPACE}asset_kind": "model",
-                "daimo:task": "text-classification",
-                f"{DAIMO_NAMESPACE}task": "text-classification",
-                f"{LEGACY_DAIMO_NAMESPACE}task": "text-classification",
-                "daimo:subtask": "sentiment-analysis",
-                f"{DAIMO_NAMESPACE}subtask": "sentiment-analysis",
-                f"{LEGACY_DAIMO_NAMESPACE}subtask": "sentiment-analysis",
-                "daimo:algorithm": "deterministic-rule-engine",
-                f"{DAIMO_NAMESPACE}algorithm": "deterministic-rule-engine",
-                f"{LEGACY_DAIMO_NAMESPACE}algorithm": "deterministic-rule-engine",
-                "daimo:library": "flask",
-                "daimo:library_name": "flask",
-                f"{DAIMO_NAMESPACE}library": "flask",
-                f"{LEGACY_DAIMO_NAMESPACE}library": "flask",
-                f"{LEGACY_DAIMO_NAMESPACE}library_name": "flask",
-                "daimo:framework": "model-server",
-                f"{DAIMO_NAMESPACE}framework": "model-server",
-                f"{LEGACY_DAIMO_NAMESPACE}framework": "model-server",
-                "daimo:software": "pionera-validation-framework",
-                f"{DAIMO_NAMESPACE}software": "pionera-validation-framework",
-                f"{LEGACY_DAIMO_NAMESPACE}software": "pionera-validation-framework",
+                "daimo:task": "Natural Language Processing",
+                f"{DAIMO_NAMESPACE}task": "Natural Language Processing",
+                f"{LEGACY_DAIMO_NAMESPACE}task": "Natural Language Processing",
+                "daimo:taskCategory": "Natural Language Processing",
+                "daimo:taskType": "classification",
+                "daimo:modality": ["text"],
+                "daimo:subtask": "text-classification",
+                f"{DAIMO_NAMESPACE}subtask": "text-classification",
+                f"{LEGACY_DAIMO_NAMESPACE}subtask": "text-classification",
+                "daimo:algorithm": "DistilBERT",
+                f"{DAIMO_NAMESPACE}algorithm": "DistilBERT",
+                f"{LEGACY_DAIMO_NAMESPACE}algorithm": "DistilBERT",
+                "daimo:library": "Transformers",
+                "daimo:library_name": "Transformers",
+                "daimo:libraryName": "Transformers",
+                f"{DAIMO_NAMESPACE}library": "Transformers",
+                f"{LEGACY_DAIMO_NAMESPACE}library": "Transformers",
+                f"{LEGACY_DAIMO_NAMESPACE}library_name": "Transformers",
+                "daimo:framework": "AIModelHub-Use-Cases",
+                f"{DAIMO_NAMESPACE}framework": "AIModelHub-Use-Cases",
+                f"{LEGACY_DAIMO_NAMESPACE}framework": "AIModelHub-Use-Cases",
+                "daimo:software": "FastAPI",
+                f"{DAIMO_NAMESPACE}software": "FastAPI",
+                f"{LEGACY_DAIMO_NAMESPACE}software": "FastAPI",
+                "daimo:requestShape": "batch",
                 "daimo:inference_path": DEFAULT_MODEL_PATH,
                 f"{DAIMO_NAMESPACE}inference_path": DEFAULT_MODEL_PATH,
                 f"{LEGACY_DAIMO_NAMESPACE}inference_path": DEFAULT_MODEL_PATH,
                 "daimo:tags": keywords,
                 f"{LEGACY_DAIMO_NAMESPACE}tags": keywords,
-                "task": "text-classification",
-                "subtask": "sentiment-analysis",
-                "algorithm": "deterministic-rule-engine",
-                "library": "flask",
-                "framework": "model-server",
-                "software": "pionera-validation-framework",
+                "task": "Natural Language Processing",
+                "taskCategory": "Natural Language Processing",
+                "taskType": "classification",
+                "modality": ["text"],
+                "subtask": "text-classification",
+                "algorithm": "DistilBERT",
+                "library": "Transformers",
+                "libraryName": "Transformers",
+                "framework": "AIModelHub-Use-Cases",
+                "software": "FastAPI",
+                "requestShape": "batch",
+                "request_shape": "batch",
                 "contenttype": "application/json",
                 "inputFeatures": [
                     {
-                        "name": "text",
+                        "name": "Id",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Input text identifier",
+                    },
+                    {
+                        "name": "Text",
                         "type": "string",
                         "required": True,
-                        "description": "Text to analyze",
-                    }
+                        "description": "Original Spanish text",
+                    },
+                    {
+                        "name": "Tag_Start",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Span start character offset",
+                    },
+                    {
+                        "name": "Tag_End",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Span end character offset",
+                    },
+                    {
+                        "name": "5W1H_Label",
+                        "type": "string",
+                        "required": True,
+                        "description": "5W1H span label",
+                    },
+                    {
+                        "name": "Tag_Text",
+                        "type": "string",
+                        "required": True,
+                        "description": "Extracted span text",
+                    },
                 ],
                 "inputExample": DEFAULT_PAYLOAD,
                 "format": "json",
@@ -742,59 +792,9 @@ class AIModelHubModelExecutionApiSuite:
         runtime = self._runtime()
         component_dir = self._component_dir(experiment_dir)
 
-        model_server_mode = str(
-            os.environ.get("AI_MODEL_HUB_MODEL_SERVER_MODE")
-            or os.environ.get("LEVEL5_AI_MODEL_HUB_MODEL_SERVER_MODE")
-            or os.environ.get("MODEL_SERVER_MODE")
-            or "mock"
-        ).strip().lower()
-
-        if model_server_mode == "use-cases" and expected_model == DEFAULT_EXPECTED_MODEL:
-            skip_reason = "The 'use-cases' model-server mode does not deploy the mock ecommerce-sentiment model."
-            executed_cases = [
-                self._case_result(
-                    status="skipped",
-                    assertions=[skip_reason],
-                    request_payload={"method": "POST", "url": model_url, "asset_id": None, "payload": payload},
-                    response_payload={},
-                )
-            ]
-            if functional_context:
-                executed_cases.append(
-                    self._functional_case_result(
-                        status="skipped",
-                        assertions=[skip_reason],
-                        request_payload={"method": "POST", "url": model_url, "asset_id": None, "payload": payload},
-                        response_payload={},
-                        functional_context=functional_context,
-                    )
-                )
-            summary = self._summary(executed_cases, [{"name": "skipped_use_cases", "status": "skipped"}])
-            return {
-                "component": COMPONENT_KEY,
-                "suite": SUITE_NAME,
-                "status": "skipped",
-                "summary": summary,
-                "timestamp": started_at,
-                "provider": provider,
-                "model_url": model_url,
-                "runtime": {
-                    "dataspace": runtime.get("dataspace"),
-                    "ds_domain": runtime.get("ds_domain"),
-                    "adapter": runtime.get("adapter"),
-                },
-                "created_entities": {},
-                "steps": [{"name": "skipped_use_cases", "status": "skipped"}],
-                "executed_cases": executed_cases,
-                "functional_context": functional_context,
-                "asset_payload": None,
-                "evidence_index": [],
-                "artifacts": {},
-            }
-
         suffix = self._safe_suffix(self.uuid_factory())
         if payload is None:
-            inference_payload: Any = dict(DEFAULT_PAYLOAD)
+            inference_payload: Any = json.loads(json.dumps(DEFAULT_PAYLOAD))
         elif isinstance(payload, dict):
             inference_payload = dict(payload)
         else:
@@ -1430,14 +1430,11 @@ def _default_experiment_dir() -> str:
     return os.path.join("experiments", f"ai-model-hub-model-execution-api-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
 
 
-def _parse_json_object(value: str, label: str) -> dict[str, Any]:
+def _parse_json_value(value: str, label: str) -> Any:
     try:
-        parsed = json.loads(value)
+        return json.loads(value)
     except json.JSONDecodeError as exc:
         raise argparse.ArgumentTypeError(f"{label} must be valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise argparse.ArgumentTypeError(f"{label} must be a JSON object")
-    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1471,7 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.expected_model == DEFAULT_EXPECTED_MODEL:
             args.expected_model = FLARES_EXPECTED_MODEL
     else:
-        payload = _parse_json_object(args.payload_json, "--payload-json")
+        payload = _parse_json_value(args.payload_json, "--payload-json")
 
     suite, adapter = build_ai_model_hub_model_execution_suite(args.adapter, topology=args.topology)
     connectors = list(adapter.get_cluster_connectors() or []) if not args.provider else []

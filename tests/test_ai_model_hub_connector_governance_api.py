@@ -288,6 +288,28 @@ class AIModelHubConnectorGovernanceApiTests(unittest.TestCase):
                 "http://conn-provider.example.test/protocol",
             )
 
+    def test_runtime_honors_level6_timeout_environment_overrides(self):
+        suite = self._suite(FakeSession())
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS": "240",
+                "AI_MODEL_HUB_TRANSFER_TIMEOUT_SECONDS": "360",
+                "AI_MODEL_HUB_POLL_INTERVAL_SECONDS": "5",
+                "AI_MODEL_HUB_ACCESS_TRANSFER_PATH": "inesdatatransferprocesses",
+                "AI_MODEL_HUB_ACCESS_TRANSFER_TYPE": "HttpData-PUSH",
+            },
+            clear=False,
+        ):
+            runtime = suite._runtime()
+
+        self.assertEqual(runtime["negotiation_timeout_seconds"], 240)
+        self.assertEqual(runtime["transfer_timeout_seconds"], 360)
+        self.assertEqual(runtime["poll_interval_seconds"], 5)
+        self.assertEqual(runtime["access_transfer_path"], "inesdatatransferprocesses")
+        self.assertEqual(runtime["access_transfer_type"], "HttpData-PUSH")
+
 
 if __name__ == "__main__":
     unittest.main()

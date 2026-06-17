@@ -58,6 +58,24 @@ class UiRunnerInteractionMarkersTests(unittest.TestCase):
             self.assertEqual(env["UI_AI_MODEL_OBSERVER_DEMO"], "1")
             self.assertEqual(env["UI_INESDATA_LOCAL_STORE_LABEL"], "LocalStore")
 
+    def test_playwright_validation_keeps_ai_model_hub_ui_enabled_for_use_cases_model_server(self):
+        context = self._context()
+        context.config["AI_MODEL_HUB_MODEL_SERVER_MODE"] = "use-cases"
+
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            ui_runner.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0),
+        ) as subprocess_run:
+            ui_runner.run_playwright_validation(
+                profile=self._profile(),
+                context=context,
+                experiment_dir=tmpdir,
+            )
+
+            env = subprocess_run.call_args.kwargs["env"]
+            self.assertEqual(env["UI_AI_MODEL_HUB_HTTPDATA_DEMO"], "1")
+
     def test_playwright_validation_enables_all_edc_component_demos_by_default(self):
         context = self._context()
         context.deployer = "edc"
@@ -363,7 +381,7 @@ class UiRunnerInteractionMarkersTests(unittest.TestCase):
             )
             self.assertEqual(
                 env[f"{city_prefix}_MANAGEMENT_URL"],
-                "https://org4.pionera.oeg.fi.upm.es/c/citycounciledc/management/v3",
+                "https://org4.pionera.oeg.fi.upm.es/edc/c/citycounciledc/management/v3",
             )
             self.assertEqual(
                 env[f"{company_prefix}_PORTAL_URL"],
@@ -371,7 +389,7 @@ class UiRunnerInteractionMarkersTests(unittest.TestCase):
             )
             self.assertEqual(
                 env[f"{company_prefix}_MANAGEMENT_URL"],
-                "https://org4.pionera.oeg.fi.upm.es/c/companyedc/management/v3",
+                "https://org4.pionera.oeg.fi.upm.es/edc/c/companyedc/management/v3",
             )
             self.assertNotIn(f"{city_prefix}_PROTOCOL_URL", env)
             self.assertEqual(env["UI_CONNECTOR_PROTOCOL_ADDRESS_MODE"], "internal")

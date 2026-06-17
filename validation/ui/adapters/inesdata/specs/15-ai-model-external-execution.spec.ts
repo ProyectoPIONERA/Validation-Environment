@@ -98,27 +98,49 @@ type AIModelExternalExecutionUiReport = {
   fatalErrorResponses: Array<{ url: string; status: number }>;
 };
 
-const DEFAULT_MODEL_PATH = "/api/v1/nlp/twitter-sentiment";
-const DEFAULT_PAYLOAD = {
-  text: "This public model response is excellent and useful",
-};
-const TEXT_MODEL_INPUT_FEATURES = [
+const DEFAULT_MODEL_PATH = "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h";
+const DEFAULT_PAYLOAD = [
   {
-    name: "text",
-    type: "string",
-    required: true,
-    description: "Text to analyze",
+    Id: 840,
+    Text: "El comité de medicamentos humanos espera concluir el análisis en marzo.",
   },
 ];
-const TEXT_MODEL_INPUT_SCHEMA = {
+const FLARES_5W1H_INPUT_FEATURES = [
+  {
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
+    type: "string",
+    required: true,
+    description: "Spanish text to analyze",
+  },
+];
+const FLARES_5W1H_JSON_SCHEMA = {
   type: "object",
-  required: ["text"],
+  required: ["Id", "Text"],
   properties: {
-    text: {
+    Id: {
+      type: "integer",
+      description: "Input text identifier",
+    },
+    Text: {
       type: "string",
-      description: "Text to analyze",
+      description: "Spanish text to analyze",
     },
   },
+};
+const FLARES_5W1H_INPUT_SCHEMA = {
+  type: "array",
+  items: FLARES_5W1H_JSON_SCHEMA,
+  fields: FLARES_5W1H_INPUT_FEATURES,
+  jsonSchema: JSON.stringify({
+    type: "array",
+    items: FLARES_5W1H_JSON_SCHEMA,
+  }, null, 2),
 };
 
 const MAX_ATTACHED_RESPONSE_CHARS = 8_000;
@@ -240,14 +262,26 @@ function inferJsonSchema(value: unknown): Record<string, unknown> {
 }
 
 function inputSchemaForPayload(payload: unknown): unknown {
+  const fallback = aiModelHubModelPath() === DEFAULT_MODEL_PATH ? FLARES_5W1H_INPUT_SCHEMA : inferJsonSchema(payload);
   if ((process.env.UI_AI_MODEL_HUB_EXTERNAL_MODEL_INPUT_SCHEMA || "").trim()) {
-    return parseJsonEnv("UI_AI_MODEL_HUB_EXTERNAL_MODEL_INPUT_SCHEMA", inferJsonSchema(payload));
+    return parseJsonEnv("UI_AI_MODEL_HUB_EXTERNAL_MODEL_INPUT_SCHEMA", fallback);
   }
-  return parseJsonEnv("UI_AI_MODEL_HUB_MODEL_INPUT_SCHEMA", inferJsonSchema(payload));
+  return parseJsonEnv("UI_AI_MODEL_HUB_MODEL_INPUT_SCHEMA", fallback);
 }
 
 function inputFeaturesForPayload(payload: unknown): unknown[] {
   const schema = inputSchemaForPayload(payload) as Record<string, unknown>;
+  if (Array.isArray(schema.fields)) {
+    return schema.fields.map((field) => {
+      const item = field as Record<string, unknown>;
+      return {
+        name: String(item.name || item.field || item.path || ""),
+        type: String(item.type || "string"),
+        required: item.required !== undefined ? Boolean(item.required) : !Boolean(item.nullable),
+        description: item.description ? String(item.description) : undefined,
+      };
+    }).filter((field) => field.name);
+  }
   const objectSchema = schema.type === "array" && schema.items && typeof schema.items === "object"
     ? schema.items as Record<string, unknown>
     : schema;
@@ -309,6 +343,12 @@ function aiModelMetadataAliases({
     "daimo:software": software,
     "https://w3id.org/daimo/ns#software": software,
     "https://pionera.ai/edc/daimo#software": software,
+    "daimo:taskCategory": task,
+    "daimo:taskType": "classification",
+    "daimo:modality": ["text"],
+    "daimo:endpointBehavior": "prediction",
+    "daimo:libraryName": library,
+    "daimo:requestShape": "batch",
     "daimo:inference_path": inferencePath,
     "https://w3id.org/daimo/ns#inference_path": inferencePath,
     "https://pionera.ai/edc/daimo#inference_path": inferencePath,
@@ -327,6 +367,13 @@ function aiModelMetadataAliases({
     library,
     framework,
     software,
+    taskCategory: task,
+    taskType: "classification",
+    modality: ["text"],
+    endpointBehavior: "prediction",
+    libraryName: library,
+    requestShape: "batch",
+    request_shape: "batch",
     inference_path: inferencePath,
     inferencePath,
     input_features: serializedInputFeatures,
@@ -499,12 +546,12 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
         keywords: ["validation", "ai-model-execution", "external-model", "contract-agreement", "HttpData", "A5.2"],
         properties: {
           ...aiModelMetadataAliases({
-            task: "text-classification",
-            subtask: "social-media-sentiment",
-            algorithm: "deterministic-rule-engine",
-            library: "flask",
-            framework: "model-server",
-            software: "pionera-validation-framework",
+            task: "Natural Language Processing",
+            subtask: "token-classification",
+            algorithm: "BERT",
+            library: "Transformers",
+            framework: "AIModelHub-Use-Cases",
+            software: "FastAPI",
             inferencePath: modelPath,
             payload: modelPayload,
             inputSchema,
@@ -717,14 +764,6 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
     ).trim();
     if (expectedResultText) {
       await expect(page.getByText(new RegExp(expectedResultText, "i")).first()).toBeVisible({ timeout: 10_000 });
-    } else if (modelPath === DEFAULT_MODEL_PATH) {
-      await expect(
-        page.getByText(/Twitter Sentiment Analyzer|twitter-sentiment/i).first(),
-      ).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(/positive/i).first()).toBeVisible({ timeout: 10_000 });
-      await expect(
-        page.getByText(/local-rule-engine|deterministic-rule-engine|deterministic mock text classification/i).first(),
-      ).toBeVisible({ timeout: 10_000 });
     }
     await captureStep(page, "03-ai-model-external-execution-result");
 

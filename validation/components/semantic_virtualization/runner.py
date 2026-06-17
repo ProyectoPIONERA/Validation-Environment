@@ -591,7 +591,7 @@ def run_semantic_virtualization_validation(
 ) -> Dict[str, Any]:
     started_at = datetime.now().isoformat()
     normalized_base_url = (base_url or "").rstrip("/")
-    api_only = component_api_only_enabled()
+    api_only = component_api_only_enabled(component="semantic-virtualization")
     checks = _api_checks()
 
     component_dir = _component_dir(experiment_dir)

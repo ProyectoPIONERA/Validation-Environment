@@ -378,11 +378,12 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
 
     def test_model_server_use_cases_validation_records_discovery_evidence(self):
         def fake_http_request(method, url, payload=None, timeout=30):
-            self.assertEqual(method, "GET")
-            if url == "https://org.example.test/model-server/models":
-                return 200, "application/json", json.dumps({"flares": [{"name": "flares-reliability"}]})
-            if url == "https://org.example.test/model-server/datasets":
+            if method == "GET" and url == "https://org.example.test/model-server/models":
+                return 200, "application/json", json.dumps({"flares": ["flares-reliability"]})
+            if method == "GET" and url == "https://org.example.test/model-server/datasets":
                 return 200, "application/json", json.dumps({"datasets": [{"name": "segments_test.csv"}]})
+            if method == "POST" and url == "https://org.example.test/model-server/flares/flares-reliability":
+                return 200, "application/json", json.dumps([{"label": "confiable"}])
             self.fail(f"unexpected URL: {url}")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -405,9 +406,10 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["suite_display_name"], "AI Model Hub use cases")
-        self.assertEqual(result["summary"], {"total": 2, "passed": 2, "failed": 0, "skipped": 0})
+        self.assertEqual(result["summary"], {"total": 3, "passed": 3, "failed": 0, "skipped": 0})
         self.assertEqual(result["executed_cases"][0]["test_case_id"], "MH-MODEL-SERVER-01")
         self.assertEqual(result["executed_cases"][1]["test_case_id"], "MH-MODEL-SERVER-02")
+        self.assertEqual(result["executed_cases"][2]["test_case_id"], "MH-MODEL-SERVER-03")
         self.assertEqual(result["model_server"]["source_ref"], "abc123")
 
     def test_model_server_use_cases_validation_can_probe_configured_endpoints(self):
@@ -435,13 +437,13 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["summary"]["total"], 3)
-        self.assertEqual(result["executed_cases"][2]["test_case_id"], "MH-MODEL-SERVER-03")
+        self.assertEqual(result["summary"]["total"], 2)
+        self.assertEqual(result["executed_cases"][1]["test_case_id"], "MH-MODEL-SERVER-03")
+        self.assertFalse(result["model_server"]["datasets_validation_enabled"])
         self.assertEqual(
             calls,
             [
                 ("GET", "http://model-server.example.test/models", None),
-                ("GET", "http://model-server.example.test/datasets", None),
                 ("POST", "http://model-server.example.test/api/v1/flares", {"text": "sample"}),
                 ("POST", "http://model-server.example.test/api/v1/gtfs", {"text": "sample"}),
             ],
@@ -989,6 +991,56 @@ class AIModelHubComponentValidationTests(unittest.TestCase):
 
         self.assertEqual(result, "http://observer.example.local")
         derive_backend.assert_not_called()
+
+    def test_resolve_model_observer_base_url_accepts_journal_environment(self):
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"AI_MODEL_OBSERVER_JOURNAL_BASE_URL": "http://org1.example.test/public-portal-backend"},
+                clear=True,
+            ),
+            mock.patch.object(
+                component_runner,
+                "_derive_model_observer_base_url_from_adapter",
+                return_value="http://backend-demo.dev.ds.dataspaceunit.upm",
+            ) as derive_backend,
+        ):
+            result = component_runner._resolve_model_observer_base_url("http://ai-model-hub.example.local")
+
+        self.assertEqual(result, "http://org1.example.test/public-portal-backend")
+        derive_backend.assert_not_called()
+
+    def test_resolve_model_observer_base_url_accepts_journal_adapter_config(self):
+        class FakeConfig:
+            @staticmethod
+            def ds_domain_base():
+                return "pionera.example.test"
+
+        class FakeAdapter:
+            config = FakeConfig()
+
+            @staticmethod
+            def load_deployer_config():
+                return {
+                    "AI_MODEL_OBSERVER_JOURNAL_BASE_URL": "https://org1.example.test/public-portal-backend",
+                    "DS_1_NAME": "pionera",
+                    "DS_DOMAIN_BASE": "pionera.example.test",
+                }
+
+        with (
+            mock.patch.dict(os.environ, {"PIONERA_ADAPTER": "inesdata"}, clear=True),
+            mock.patch(
+                "validation.components.ai_model_hub.connector_governance_api._build_adapter",
+                return_value=FakeAdapter(),
+            ),
+            mock.patch(
+                "validation.components.ai_model_hub.connector_governance_api._dataspace_name_loader",
+                return_value=lambda adapter: (lambda: "pionera"),
+            ),
+        ):
+            result = component_runner._resolve_model_observer_base_url("http://ai-model-hub.example.local")
+
+        self.assertEqual(result, "https://org1.example.test/public-portal-backend")
 
     def test_resolve_model_observer_base_url_prefers_edc_connector_default_api(self):
         class FakeConfig:

@@ -79,28 +79,42 @@ type BrowserModelFixture = {
   modelUrl: string;
 };
 
-const DEFAULT_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment";
+const DEFAULT_MODEL_PATH = "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h";
 const TEXT_MODEL_INPUT_FEATURES = [
   {
-    name: "text",
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
     type: "string",
     required: true,
-    description: "Text to analyze",
+    description: "Spanish text to analyze",
   },
 ];
 const TEXT_MODEL_INPUT_SCHEMA = {
   type: "object",
-  required: ["text"],
+  required: ["Id", "Text"],
   properties: {
-    text: {
+    Id: {
+      type: "integer",
+      description: "Input text identifier",
+    },
+    Text: {
       type: "string",
-      description: "Text to analyze",
+      description: "Spanish text to analyze",
     },
   },
 };
-const TEXT_MODEL_INPUT_EXAMPLE = {
-  text: "This product is excellent and very useful",
-};
+const TEXT_MODEL_INPUT_EXAMPLE = [
+  {
+    Id: 840,
+    Text: "El comité de medicamentos humanos espera concluir el análisis en marzo.",
+  },
+];
+const PIONERA_DAIMO_NS = "https://w3id.org/pionera/daimo#";
 
 test.skip(
   process.env.UI_AI_MODEL_HUB_HTTPDATA_DEMO !== "1",
@@ -147,8 +161,39 @@ function aiModelMetadataAliases({
   const inputFeatures = JSON.stringify(TEXT_MODEL_INPUT_FEATURES);
   const inputSchema = JSON.stringify(TEXT_MODEL_INPUT_SCHEMA);
   const inputExample = JSON.stringify(TEXT_MODEL_INPUT_EXAMPLE);
+  const modality = task === "Tabular" ? ["tabular"] : ["text"];
+  const modelVocabulary = {
+    "daimo:modality": modality,
+    "daimo:taskType": task === "Tabular" ? "regression" : "classification",
+    "daimo:taskCategory": task,
+    "daimo:subtask": subtask,
+    "daimo:subtaskDescription": `${task} ${subtask} model`,
+    "daimo:endpointBehavior": "prediction",
+    "daimo:requestShape": "batch",
+    "daimo:libraryName": library,
+    "dct:language": ["English", "Spanish"],
+    "dct:license": "apache-2.0",
+    "daimo:inputSchema": TEXT_MODEL_INPUT_SCHEMA,
+    "daimo:inputExample": inputExample,
+    "daimo:metrics": task === "Tabular" ? ["RMSE", "MAE", "MSE", "R2"] : ["Accuracy", "Precision", "Recall", "F1"],
+    [`${PIONERA_DAIMO_NS}modality`]: modality,
+    [`${PIONERA_DAIMO_NS}taskType`]: task === "Tabular" ? "regression" : "classification",
+    [`${PIONERA_DAIMO_NS}taskCategory`]: task,
+    [`${PIONERA_DAIMO_NS}subtask`]: subtask,
+    [`${PIONERA_DAIMO_NS}subtaskDescription`]: `${task} ${subtask} model`,
+    [`${PIONERA_DAIMO_NS}endpointBehavior`]: "prediction",
+    [`${PIONERA_DAIMO_NS}requestShape`]: "batch",
+    [`${PIONERA_DAIMO_NS}libraryName`]: library,
+    [`${PIONERA_DAIMO_NS}inputSchema`]: TEXT_MODEL_INPUT_SCHEMA,
+    [`${PIONERA_DAIMO_NS}inputExample`]: inputExample,
+    [`${PIONERA_DAIMO_NS}metrics`]: task === "Tabular" ? ["RMSE", "MAE", "MSE", "R2"] : ["Accuracy", "Precision", "Recall", "F1"],
+  };
 
   const metadata = {
+    assetData: {
+      JS_DAIMO_Model: modelVocabulary,
+      "https://w3id.org/edc/v0.0.1/ns/JS_DAIMO_Model": modelVocabulary,
+    },
     "daimo:asset_kind": "model",
     "daimo:task": task,
     "https://w3id.org/daimo/ns#task": task,
@@ -168,6 +213,11 @@ function aiModelMetadataAliases({
     "daimo:software": software,
     "https://w3id.org/daimo/ns#software": software,
     "https://pionera.ai/edc/daimo#software": software,
+    "daimo:taskCategory": task,
+    "daimo:modality": modality,
+    "daimo:endpointBehavior": "prediction",
+    "daimo:libraryName": library,
+    "daimo:requestShape": "batch",
     "daimo:inference_path": inferencePath,
     "https://w3id.org/daimo/ns#inference_path": inferencePath,
     "https://pionera.ai/edc/daimo#inference_path": inferencePath,
@@ -186,6 +236,12 @@ function aiModelMetadataAliases({
     library,
     framework,
     software,
+    taskCategory: task,
+    modality,
+    endpointBehavior: "prediction",
+    libraryName: library,
+    requestShape: "batch",
+    request_shape: "batch",
     inference_path: inferencePath,
     inferencePath,
     input_features: inputFeatures,
@@ -338,46 +394,48 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
   const suffix = `amh-browser-${Date.now()}`;
   const modelPath = aiModelHubModelPath();
   const modelUrl = aiModelHubModelUrl(dataspaceRuntime.componentsNamespace);
+  const mobilityModelPath = "/mobility/lightgbm_actual_travel_time";
+  const mobilityModelUrl = modelServerUrlForPath(mobilityModelPath, dataspaceRuntime.componentsNamespace);
   const models: BrowserModelFixture[] = [
     {
-      key: "sentiment",
-      assetId: `qa-ui-amh-browser-sentiment-${suffix}`,
-      name: `AI Model Browser sentiment model ${suffix}`,
-      sourceObjectName: `ai-model-browser-sentiment-${suffix}.json`,
-      shortDescription: "Sentiment classification model exposed as HttpData for AI Model Browser validation",
+      key: "flares-5w1h",
+      assetId: `qa-ui-amh-browser-flares-5w1h-${suffix}`,
+      name: `AI Model Browser FLARES 5W1H model ${suffix}`,
+      sourceObjectName: `ai-model-browser-flares-5w1h-${suffix}.json`,
+      shortDescription: "FLARES 5W1H model exposed as HttpData for AI Model Browser validation",
       description:
-        "Controlled sentiment model endpoint used to validate DAIMO discovery, multidimensional filtering and detail navigation from INESData AI Model Browser.",
-      keywords: ["validation", "ai-model-browser", "machine-learning", "sentiment", "HttpData", "A5.2"],
-      task: "text-classification",
-      subtask: "sentiment-analysis",
-      algorithm: "controlled-baseline",
-      library: "validation-fixture",
-      framework: "controlled-httpdata",
-      software: "pionera-validation-framework",
+        "FLARES 5W1H model endpoint used to validate DAIMO discovery, multidimensional filtering and detail navigation from INESData AI Model Browser.",
+      keywords: ["validation", "ai-model-browser", "machine-learning", "flares", "HttpData", "A5.2"],
+      task: "Natural Language Processing",
+      subtask: "token-classification",
+      algorithm: "BERT",
+      library: "Transformers",
+      framework: "AIModelHub-Use-Cases",
+      software: "FastAPI",
       format: "json",
       contentType: "application/json",
       modelPath,
       modelUrl,
     },
     {
-      key: "forecast",
-      assetId: `qa-ui-amh-browser-forecast-${suffix}`,
-      name: `AI Model Browser forecast model ${suffix}`,
-      sourceObjectName: `ai-model-browser-forecast-${suffix}.onnx`,
-      shortDescription: "Forecasting model metadata fixture used as a controlled filter contrast",
+      key: "mobility",
+      assetId: `qa-ui-amh-browser-mobility-${suffix}`,
+      name: `AI Model Browser Mobility LightGBM model ${suffix}`,
+      sourceObjectName: `ai-model-browser-mobility-${suffix}.json`,
+      shortDescription: "Mobility travel-time model metadata used as a controlled filter contrast",
       description:
-        "Controlled forecast model fixture used to prove that DAIMO task, subtask, algorithm, library, framework, software and format filters discriminate browser results.",
-      keywords: ["validation", "ai-model-browser", "machine-learning", "forecasting", "HttpData", "A5.2"],
-      task: "time-series-regression",
-      subtask: "demand-forecasting",
-      algorithm: "gradient-boosting-regressor",
-      library: "scikit-learn-fixture",
-      framework: "sklearn-httpdata",
-      software: "validation-analytics-suite",
-      format: "onnx",
-      contentType: "application/octet-stream",
-      modelPath,
-      modelUrl,
+        "Mobility LightGBM model endpoint used to prove that DAIMO task filters discriminate browser results.",
+      keywords: ["validation", "ai-model-browser", "machine-learning", "mobility", "HttpData", "A5.2"],
+      task: "Tabular",
+      subtask: "regression",
+      algorithm: "LightGBM",
+      library: "LightGBM",
+      framework: "AIModelHub-Use-Cases",
+      software: "FastAPI",
+      format: "json",
+      contentType: "application/json",
+      modelPath: mobilityModelPath,
+      modelUrl: mobilityModelUrl,
     },
   ];
   const targetModel = models[0];
@@ -565,7 +623,7 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
     await clearActiveFilters(page);
 
     const richFilters = [
-      { filterGroup: "Format", section: /Format(?:\s*\(\d+\))?/i, value: targetModel.format },
+      { filterGroup: "Task Categories", section: /Task Categories(?:\s*\(\d+\))?/i, value: targetModel.task },
     ];
 
     for (const filter of richFilters) {

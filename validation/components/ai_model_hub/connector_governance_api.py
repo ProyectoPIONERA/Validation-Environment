@@ -90,6 +90,13 @@ def _env_first(*names: str) -> str:
     return ""
 
 
+def _config_or_env(config: dict[str, Any], key: str, default: Any = "") -> Any:
+    value = str(os.environ.get(key) or "").strip()
+    if value:
+        return value
+    return config.get(key) or default
+
+
 def _connector_matches(connector: str, *env_names: str) -> bool:
     normalized = str(connector or "").strip()
     return bool(normalized) and any(str(os.environ.get(name) or "").strip() == normalized for name in env_names)
@@ -196,17 +203,32 @@ class AIModelHubConnectorGovernanceApiSuite:
                 or "inesdata"
             ).strip().lower(),
             "negotiation_timeout_seconds": int(
-                config.get("AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS")
-                or self.DEFAULT_NEGOTIATION_TIMEOUT_SECONDS
+                _config_or_env(
+                    config,
+                    "AI_MODEL_HUB_NEGOTIATION_TIMEOUT_SECONDS",
+                    self.DEFAULT_NEGOTIATION_TIMEOUT_SECONDS,
+                )
             ),
             "transfer_timeout_seconds": int(
-                config.get("AI_MODEL_HUB_TRANSFER_TIMEOUT_SECONDS") or self.DEFAULT_TRANSFER_TIMEOUT_SECONDS
+                _config_or_env(
+                    config,
+                    "AI_MODEL_HUB_TRANSFER_TIMEOUT_SECONDS",
+                    self.DEFAULT_TRANSFER_TIMEOUT_SECONDS,
+                )
             ),
             "poll_interval_seconds": int(
-                config.get("AI_MODEL_HUB_POLL_INTERVAL_SECONDS") or self.DEFAULT_POLL_INTERVAL_SECONDS
+                _config_or_env(
+                    config,
+                    "AI_MODEL_HUB_POLL_INTERVAL_SECONDS",
+                    self.DEFAULT_POLL_INTERVAL_SECONDS,
+                )
             ),
-            "access_transfer_path": str(config.get("AI_MODEL_HUB_ACCESS_TRANSFER_PATH") or "transferprocesses"),
-            "access_transfer_type": str(config.get("AI_MODEL_HUB_ACCESS_TRANSFER_TYPE") or "HttpData-PULL"),
+            "access_transfer_path": str(
+                _config_or_env(config, "AI_MODEL_HUB_ACCESS_TRANSFER_PATH", "transferprocesses")
+            ),
+            "access_transfer_type": str(
+                _config_or_env(config, "AI_MODEL_HUB_ACCESS_TRANSFER_TYPE", "HttpData-PULL")
+            ),
         }
         if callable(self.keycloak_url_resolver):
             runtime["keycloak_url"] = str(self.keycloak_url_resolver() or "").strip()

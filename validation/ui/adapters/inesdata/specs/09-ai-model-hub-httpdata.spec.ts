@@ -38,7 +38,28 @@ type AIModelHubUiReport = {
   };
 };
 
-const DEFAULT_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment";
+const DEFAULT_MODEL_PATH = "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h";
+const PIONERA_DAIMO_NS = "https://w3id.org/pionera/daimo#";
+const FLARES_5W1H_INPUT_SCHEMA = [
+  {
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
+    type: "string",
+    required: true,
+    description: "Spanish text to analyze",
+  },
+];
+const FLARES_5W1H_INPUT_EXAMPLE = JSON.stringify([
+  {
+    Id: 840,
+    Text: "El comité de medicamentos humanos espera concluir el análisis en marzo.",
+  },
+]);
 
 test.skip(
   process.env.UI_AI_MODEL_HUB_HTTPDATA_DEMO !== "1",
@@ -79,6 +100,32 @@ test("09 AI Model Hub HttpData: visible model discovery and negotiation from INE
   const modelPath = aiModelHubModelPath();
   const modelUrl = aiModelHubModelUrl(dataspaceRuntime.componentsNamespace);
   const modelName = `AI Model Hub HttpData model ${suffix}`;
+  const daimoModelVocabulary = {
+    "daimo:modality": ["text"],
+    "daimo:taskType": "classification",
+    "daimo:taskCategory": "Natural Language Processing",
+    "daimo:subtask": "token-classification",
+    "daimo:subtaskDescription": "FLARES 5W1H span extraction model",
+    "daimo:endpointBehavior": "prediction",
+    "daimo:requestShape": "batch",
+    "daimo:libraryName": "Transformers",
+    "dct:language": ["English", "Spanish"],
+    "dct:license": "apache-2.0",
+    "daimo:inputSchema": FLARES_5W1H_INPUT_SCHEMA,
+    "daimo:inputExample": FLARES_5W1H_INPUT_EXAMPLE,
+    "daimo:metrics": ["Accuracy", "Precision", "Recall", "F1"],
+    [`${PIONERA_DAIMO_NS}modality`]: ["text"],
+    [`${PIONERA_DAIMO_NS}taskType`]: "classification",
+    [`${PIONERA_DAIMO_NS}taskCategory`]: "Natural Language Processing",
+    [`${PIONERA_DAIMO_NS}subtask`]: "token-classification",
+    [`${PIONERA_DAIMO_NS}subtaskDescription`]: "FLARES 5W1H span extraction model",
+    [`${PIONERA_DAIMO_NS}endpointBehavior`]: "prediction",
+    [`${PIONERA_DAIMO_NS}requestShape`]: "batch",
+    [`${PIONERA_DAIMO_NS}libraryName`]: "Transformers",
+    [`${PIONERA_DAIMO_NS}inputSchema`]: FLARES_5W1H_INPUT_SCHEMA,
+    [`${PIONERA_DAIMO_NS}inputExample`]: FLARES_5W1H_INPUT_EXAMPLE,
+    [`${PIONERA_DAIMO_NS}metrics`]: ["Accuracy", "Precision", "Recall", "F1"],
+  };
   const browserDiagnostics = collectBrowserDiagnostics(page);
   const loginPage = new KeycloakLoginPage(page, {
     portalUser: dataspaceRuntime.consumer.username,
@@ -149,19 +196,35 @@ test("09 AI Model Hub HttpData: visible model discovery and negotiation from INE
         version: "1.0.0",
         shortDescription: "AI Model Hub model endpoint exposed as HttpData for UI demo validation",
         description:
-          "Machine-learning model endpoint governed through INESData as a contractual HttpData asset.",
-        assetType: "ai-model-execution-endpoint",
-        keywords: ["validation", "ai-model-hub", "machine-learning", "HttpData", "A5.2"],
+          "FLARES 5W1H model endpoint governed through INESData as a contractual HttpData asset.",
+        assetType: "machineLearning",
+        keywords: ["validation", "ai-model-hub", "machine-learning", "flares", "HttpData", "A5.2"],
         properties: {
+          contenttype: "application/json",
+          format: "json",
+          "dct:format": "json",
+          "dcterms:format": "json",
+          assetData: {
+            JS_DAIMO_Model: daimoModelVocabulary,
+            "https://w3id.org/edc/v0.0.1/ns/JS_DAIMO_Model": daimoModelVocabulary,
+          },
           "daimo:asset_kind": "model",
-          "daimo:task": "text-classification",
-          "daimo:framework": "controlled-httpdata",
+          "daimo:task": "Natural Language Processing",
+          "daimo:taskCategory": "Natural Language Processing",
+          "daimo:taskType": "classification",
+          "daimo:subtask": "token-classification",
+          "daimo:libraryName": "Transformers",
+          "daimo:framework": "AIModelHub-Use-Cases",
+          "daimo:requestShape": "batch",
           "daimo:inference_path": modelPath,
         },
         dataAddress: {
           type: "HttpData",
           baseUrl: modelUrl,
           method: "POST",
+          proxyBody: "true",
+          proxyMethod: "true",
+          contentType: "application/json",
           name: `ai-model-hub-model-${suffix}.json`,
         },
       },
@@ -213,8 +276,8 @@ test("09 AI Model Hub HttpData: visible model discovery and negotiation from INE
       modelName,
       modelPath,
       modelUrl,
-      expectedAssetType: "ai-model-execution-endpoint",
-      expectedTask: "text-classification",
+      expectedAssetType: "machineLearning",
+      expectedTask: "Natural Language Processing",
     });
     await contractOffersPage.expectReady({
       assetId,
