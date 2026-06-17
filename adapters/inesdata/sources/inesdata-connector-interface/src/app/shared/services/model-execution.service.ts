@@ -10,6 +10,84 @@ import { AssetService } from './asset.service';
 import { CatalogBrowserService } from './catalog-browser.service';
 import { ContractAgreementService } from './contractAgreement.service';
 
+const DAIMO_PIONERA_NS = 'https://w3id.org/pionera/daimo#';
+const DAIMO_LEGACY_NS = 'https://w3id.org/daimo/ns#';
+const DAIMO_LEGACY_EDC_NS = 'https://pionera.ai/edc/daimo#';
+
+const TASK_KEYS = [
+  'daimo:taskCategory',
+  `${DAIMO_PIONERA_NS}taskCategory`,
+  'taskCategory',
+  'daimo:task',
+  `${DAIMO_LEGACY_NS}task`,
+  `${DAIMO_LEGACY_EDC_NS}task`,
+  'task'
+];
+
+const TASK_TYPE_KEYS = [
+  'daimo:taskType',
+  `${DAIMO_PIONERA_NS}taskType`,
+  'taskType'
+];
+
+const MODALITY_KEYS = [
+  'daimo:modality',
+  `${DAIMO_PIONERA_NS}modality`,
+  'modality'
+];
+
+const SUBTASK_KEYS = [
+  'daimo:subtask',
+  `${DAIMO_PIONERA_NS}subtask`,
+  `${DAIMO_LEGACY_NS}subtask`,
+  `${DAIMO_LEGACY_EDC_NS}subtask`,
+  'subtask'
+];
+
+const ENDPOINT_BEHAVIOR_KEYS = [
+  'daimo:endpointBehavior',
+  `${DAIMO_PIONERA_NS}endpointBehavior`,
+  'endpointBehavior'
+];
+
+const ALGORITHM_KEYS = [
+  'daimo:algorithm',
+  `${DAIMO_LEGACY_NS}algorithm`,
+  `${DAIMO_LEGACY_EDC_NS}algorithm`,
+  'algorithm'
+];
+
+const LIBRARY_KEYS = [
+  'daimo:libraryName',
+  `${DAIMO_PIONERA_NS}libraryName`,
+  'libraryName',
+  'daimo:library',
+  `${DAIMO_LEGACY_NS}library`,
+  `${DAIMO_LEGACY_EDC_NS}library`,
+  'library'
+];
+
+const FRAMEWORK_KEYS = [
+  'daimo:framework',
+  `${DAIMO_LEGACY_NS}framework`,
+  `${DAIMO_LEGACY_EDC_NS}framework`,
+  'framework'
+];
+
+const LANGUAGE_KEYS = [
+  'dct:language',
+  'dcterms:language',
+  'http://purl.org/dc/terms/language',
+  'language'
+];
+
+const LICENSE_KEYS = [
+  'dct:license',
+  'dcterms:license',
+  'http://purl.org/dc/terms/license',
+  'license'
+];
+
 @Injectable({
   providedIn: 'root'
 })
@@ -49,7 +127,7 @@ export class ModelExecutionService {
         const federatedModels = federatedOffers
           .filter(offer => this.isMachineLearningAsset(offer?.properties?.assetType))
           .filter(offer => !this.isCurrentConnectorOffer(offer))
-          .filter(offer => this.isFederatedHttpAsset(offer))
+          .filter(offer => this.isFederatedExecutableOffer(offer))
           .filter(offer => !requireAgreementForFederated || agreementAssetIds.has(`${offer.assetId}`))
           .map(offer => this.mapFederatedOffer(offer, agreementAssetIds.has(`${offer.assetId}`)));
 
@@ -137,15 +215,21 @@ export class ModelExecutionService {
       hasAgreement: true,
       contentType: this.firstText(this.readLocalProperty(asset, ['contenttype'])) || 'Not available',
       description: this.firstText(
-        this.readLocalProperty(asset, ['dcterms:description', 'description', 'http://purl.org/dc/terms/description']),
+        this.readLocalProperty(asset, ['dcterms:description', 'dct:description', 'description', 'http://purl.org/dc/terms/description']),
         this.readLocalProperty(asset, ['shortDescription'])
       ),
       executionPath: this.firstText(dataAddress['path'], dataAddress['edc:path'], dataAddress['proxyPath'], dataAddress['edc:proxyPath']) || '',
       httpMethodDefault: this.firstText(dataAddress['method'], dataAddress['edc:method']) || 'POST',
-      tasks: this.collectMetadataValues(metadataNode, ['daimo:task', 'https://w3id.org/daimo/ns#task', 'https://pionera.ai/edc/daimo#task', 'task']),
-      subtasks: this.collectMetadataValues(metadataNode, ['daimo:subtask', 'https://w3id.org/daimo/ns#subtask', 'https://pionera.ai/edc/daimo#subtask', 'subtask']),
-      algorithms: this.collectMetadataValues(metadataNode, ['daimo:algorithm', 'https://w3id.org/daimo/ns#algorithm', 'https://pionera.ai/edc/daimo#algorithm', 'algorithm']),
-      frameworks: this.collectMetadataValues(metadataNode, ['daimo:framework', 'https://w3id.org/daimo/ns#framework', 'https://pionera.ai/edc/daimo#framework', 'framework']),
+      tasks: this.collectMetadataValues(metadataNode, TASK_KEYS),
+      taskTypes: this.collectMetadataValues(metadataNode, TASK_TYPE_KEYS),
+      modalities: this.collectMetadataValues(metadataNode, MODALITY_KEYS),
+      subtasks: this.collectMetadataValues(metadataNode, SUBTASK_KEYS),
+      endpointBehaviors: this.collectMetadataValues(metadataNode, ENDPOINT_BEHAVIOR_KEYS),
+      algorithms: this.collectMetadataValues(metadataNode, ALGORITHM_KEYS),
+      libraries: this.collectMetadataValues(metadataNode, LIBRARY_KEYS),
+      frameworks: this.collectMetadataValues(metadataNode, FRAMEWORK_KEYS),
+      languages: this.collectMetadataValues(metadataNode, LANGUAGE_KEYS),
+      licenses: this.collectMetadataValues(metadataNode, LICENSE_KEYS),
       inputFeatures: this.extractInputFeatures(metadataNode, inputSchema),
       inputColumns: this.extractInputColumns(metadataNode),
       inputSchema,
@@ -176,13 +260,25 @@ export class ModelExecutionService {
       isLocal: false,
       hasAgreement,
       contentType: this.firstText(offer?.properties?.contenttype) || 'Not available',
-      description: this.firstText(offer?.properties?.description, offer?.properties?.shortDescription),
+      description: this.firstText(
+        offer?.properties?.description,
+        offer?.properties?.['dct:description'],
+        offer?.properties?.['dcterms:description'],
+        offer?.properties?.['http://purl.org/dc/terms/description'],
+        offer?.properties?.shortDescription
+      ),
       executionPath: this.firstText(offer?.properties?.path) || '',
       httpMethodDefault: this.firstText(offer?.properties?.method) || 'POST',
-      tasks: this.collectMetadataValues(metadataNode, ['daimo:task', 'https://w3id.org/daimo/ns#task', 'https://pionera.ai/edc/daimo#task', 'task']),
-      subtasks: this.collectMetadataValues(metadataNode, ['daimo:subtask', 'https://w3id.org/daimo/ns#subtask', 'https://pionera.ai/edc/daimo#subtask', 'subtask']),
-      algorithms: this.collectMetadataValues(metadataNode, ['daimo:algorithm', 'https://w3id.org/daimo/ns#algorithm', 'https://pionera.ai/edc/daimo#algorithm', 'algorithm']),
-      frameworks: this.collectMetadataValues(metadataNode, ['daimo:framework', 'https://w3id.org/daimo/ns#framework', 'https://pionera.ai/edc/daimo#framework', 'framework']),
+      tasks: this.collectMetadataValues(metadataNode, TASK_KEYS),
+      taskTypes: this.collectMetadataValues(metadataNode, TASK_TYPE_KEYS),
+      modalities: this.collectMetadataValues(metadataNode, MODALITY_KEYS),
+      subtasks: this.collectMetadataValues(metadataNode, SUBTASK_KEYS),
+      endpointBehaviors: this.collectMetadataValues(metadataNode, ENDPOINT_BEHAVIOR_KEYS),
+      algorithms: this.collectMetadataValues(metadataNode, ALGORITHM_KEYS),
+      libraries: this.collectMetadataValues(metadataNode, LIBRARY_KEYS),
+      frameworks: this.collectMetadataValues(metadataNode, FRAMEWORK_KEYS),
+      languages: this.collectMetadataValues(metadataNode, LANGUAGE_KEYS),
+      licenses: this.collectMetadataValues(metadataNode, LICENSE_KEYS),
       inputFeatures: this.extractInputFeatures(metadataNode, inputSchema),
       inputColumns: this.extractInputColumns(metadataNode),
       inputSchema,
@@ -229,6 +325,25 @@ export class ModelExecutionService {
   private isFederatedHttpAsset(offer: DataOffer): boolean {
     const storageType = this.resolveOfferStorageType(this.asRecord(offer?.properties)).toLowerCase();
     return storageType.includes('http');
+  }
+
+  private isFederatedExecutableOffer(offer: DataOffer): boolean {
+    if (this.isFederatedHttpAsset(offer)) {
+      return true;
+    }
+
+    const properties = this.asRecord(offer?.properties);
+    const assetData = this.normalizeAssetData(properties.assetData);
+    const assetDataRecord = this.asRecord(assetData);
+    const daimoModel = this.asRecord(assetDataRecord['JS_DAIMO_Model']);
+    if (Object.keys(daimoModel).length === 0) {
+      return false;
+    }
+
+    const metadataNode = [assetData, properties, offer as unknown as Record<string, unknown>];
+    return this.collectMetadataValues(metadataNode, ENDPOINT_BEHAVIOR_KEYS).length > 0
+      || this.extractInputSchema(metadataNode) !== null
+      || this.extractInputExample(metadataNode) !== null;
   }
 
   private isCurrentConnectorOffer(offer: DataOffer): boolean {
@@ -360,6 +475,8 @@ export class ModelExecutionService {
 
   private extractInputSchema(node: unknown): unknown {
     const value = this.findFirstValue(node, [
+      'daimo:inputSchema',
+      `${DAIMO_PIONERA_NS}inputSchema`,
       'daimo:input_schema',
       'https://w3id.org/daimo/ns#input_schema',
       'https://pionera.ai/edc/daimo#input_schema',
@@ -375,6 +492,9 @@ export class ModelExecutionService {
       'daimo:input_features',
       'https://w3id.org/daimo/ns#input_features',
       'https://pionera.ai/edc/daimo#input_features',
+      `${DAIMO_PIONERA_NS}input_features`,
+      'daimo:inputFeatures',
+      `${DAIMO_PIONERA_NS}inputFeatures`,
       'input_features',
       'inputFeatures'
     ]);
@@ -386,6 +506,9 @@ export class ModelExecutionService {
       'daimo:input_features',
       'https://w3id.org/daimo/ns#input_features',
       'https://pionera.ai/edc/daimo#input_features',
+      `${DAIMO_PIONERA_NS}input_features`,
+      'daimo:inputFeatures',
+      `${DAIMO_PIONERA_NS}inputFeatures`,
       'input_features',
       'inputFeatures'
     ]));
@@ -405,11 +528,15 @@ export class ModelExecutionService {
   private extractInputColumns(node: unknown): string[] {
     return this.extractFieldNameList(node, [
       'daimo:input',
+      `${DAIMO_PIONERA_NS}input`,
       'https://w3id.org/daimo/ns#input',
       'https://pionera.ai/edc/daimo#input',
       'daimo:input_columns',
       'https://w3id.org/daimo/ns#input_columns',
       'https://pionera.ai/edc/daimo#input_columns',
+      `${DAIMO_PIONERA_NS}input_columns`,
+      'daimo:inputColumns',
+      `${DAIMO_PIONERA_NS}inputColumns`,
       'input',
       'input_columns',
       'inputColumns'
@@ -418,9 +545,12 @@ export class ModelExecutionService {
 
   private extractInputExample(node: unknown): unknown {
     const value = this.findFirstValue(node, [
+      'daimo:inputExample',
+      `${DAIMO_PIONERA_NS}inputExample`,
       'daimo:input_example',
       'https://w3id.org/daimo/ns#input_example',
       'https://pionera.ai/edc/daimo#input_example',
+      `${DAIMO_PIONERA_NS}input_example`,
       'input_example',
       'inputExample'
     ]);
@@ -429,9 +559,12 @@ export class ModelExecutionService {
 
   private extractRequestShape(node: unknown, inputSchema: unknown): AiModelRequestShape {
     const raw = this.findFirstValue(node, [
+      'daimo:requestShape',
+      `${DAIMO_PIONERA_NS}requestShape`,
       'daimo:request_shape',
       'https://w3id.org/daimo/ns#request_shape',
       'https://pionera.ai/edc/daimo#request_shape',
+      `${DAIMO_PIONERA_NS}request_shape`,
       'request_shape',
       'requestShape',
       'payload_shape',
@@ -463,6 +596,10 @@ export class ModelExecutionService {
       'daimo:benchmark_model_type',
       'https://w3id.org/daimo/ns#benchmark_model_type',
       'https://pionera.ai/edc/daimo#benchmark_model_type',
+      `${DAIMO_PIONERA_NS}benchmark_model_type`,
+      'daimo:benchmarkModelType',
+      `${DAIMO_PIONERA_NS}benchmarkModelType`,
+      ...ENDPOINT_BEHAVIOR_KEYS,
       'benchmark_model_type',
       'benchmarkModelType',
       'model_output_type',
@@ -478,9 +615,15 @@ export class ModelExecutionService {
       'daimo:target_field',
       'https://w3id.org/daimo/ns#target_field',
       'https://pionera.ai/edc/daimo#target_field',
+      `${DAIMO_PIONERA_NS}target_field`,
+      'daimo:targetField',
+      `${DAIMO_PIONERA_NS}targetField`,
       'daimo:target_fields',
       'https://w3id.org/daimo/ns#target_fields',
       'https://pionera.ai/edc/daimo#target_fields',
+      `${DAIMO_PIONERA_NS}target_fields`,
+      'daimo:targetFields',
+      `${DAIMO_PIONERA_NS}targetFields`,
       'target_field',
       'targetField',
       'target_fields',
@@ -497,9 +640,15 @@ export class ModelExecutionService {
       'daimo:prediction_field',
       'https://w3id.org/daimo/ns#prediction_field',
       'https://pionera.ai/edc/daimo#prediction_field',
+      `${DAIMO_PIONERA_NS}prediction_field`,
+      'daimo:predictionField',
+      `${DAIMO_PIONERA_NS}predictionField`,
       'daimo:prediction_fields',
       'https://w3id.org/daimo/ns#prediction_fields',
       'https://pionera.ai/edc/daimo#prediction_fields',
+      `${DAIMO_PIONERA_NS}prediction_fields`,
+      'daimo:predictionFields',
+      `${DAIMO_PIONERA_NS}predictionFields`,
       'prediction_field',
       'predictionField',
       'prediction_fields',
@@ -516,9 +665,11 @@ export class ModelExecutionService {
       'daimo:metrics',
       'https://w3id.org/daimo/ns#metrics',
       'https://pionera.ai/edc/daimo#metrics',
+      `${DAIMO_PIONERA_NS}metrics`,
       'daimo:metric',
       'https://w3id.org/daimo/ns#metric',
       'https://pionera.ai/edc/daimo#metric',
+      `${DAIMO_PIONERA_NS}metric`,
       'metrics',
       'metric',
       'supported_metrics',
@@ -526,6 +677,7 @@ export class ModelExecutionService {
     ]));
     const evaluationMetrics = this.collectMetricNames(this.findFirstValue(node, [
       'mls:ModelEvaluation',
+      'http://www.w3.org/ns/mls#ModelEvaluation',
       'https://www.w3.org/ns/mls#ModelEvaluation',
       'ModelEvaluation',
       'modelEvaluation',
@@ -541,9 +693,15 @@ export class ModelExecutionService {
       'daimo:metric_direction',
       'https://w3id.org/daimo/ns#metric_direction',
       'https://pionera.ai/edc/daimo#metric_direction',
+      `${DAIMO_PIONERA_NS}metric_direction`,
+      'daimo:metricDirection',
+      `${DAIMO_PIONERA_NS}metricDirection`,
       'daimo:metric_directions',
       'https://w3id.org/daimo/ns#metric_directions',
       'https://pionera.ai/edc/daimo#metric_directions',
+      `${DAIMO_PIONERA_NS}metric_directions`,
+      'daimo:metricDirections',
+      `${DAIMO_PIONERA_NS}metricDirections`,
       'metric_direction',
       'metricDirection',
       'metric_directions',
@@ -554,9 +712,12 @@ export class ModelExecutionService {
 
   private extractPositiveLabel(node: unknown): string {
     return this.firstText(this.findFirstValue(node, [
+      'daimo:positiveLabel',
+      `${DAIMO_PIONERA_NS}positiveLabel`,
       'daimo:positive_label',
       'https://w3id.org/daimo/ns#positive_label',
       'https://pionera.ai/edc/daimo#positive_label',
+      `${DAIMO_PIONERA_NS}positive_label`,
       'positive_label',
       'positiveLabel',
       'positive_class',
@@ -566,9 +727,12 @@ export class ModelExecutionService {
 
   private extractScoreField(node: unknown): string {
     return this.firstText(this.findFirstValue(node, [
+      'daimo:scoreField',
+      `${DAIMO_PIONERA_NS}scoreField`,
       'daimo:score_field',
       'https://w3id.org/daimo/ns#score_field',
       'https://pionera.ai/edc/daimo#score_field',
+      `${DAIMO_PIONERA_NS}score_field`,
       'score_field',
       'scoreField',
       'confidence_field',

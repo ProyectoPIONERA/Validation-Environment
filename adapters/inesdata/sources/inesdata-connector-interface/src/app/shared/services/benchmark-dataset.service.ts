@@ -68,6 +68,7 @@ export class BenchmarkDatasetService {
   extractInlineDatasetPayload(asset: BenchmarkDatasetAsset): unknown | null {
     const keys = [
       'daimo:benchmark_dataset',
+      'https://w3id.org/pionera/daimo#benchmark_dataset',
       'https://pionera.ai/edc/daimo#benchmark_dataset',
       'https://w3id.org/daimo/ns#benchmark_dataset',
       'benchmark_dataset',
@@ -84,7 +85,8 @@ export class BenchmarkDatasetService {
     }
 
     if (asset.isLocal) {
-      throw new Error('Local dataset asset does not include inline benchmark rows. Upload the file manually or add daimo:benchmark_dataset metadata.');
+      const blob = await lastValueFrom(this.assetService.downloadStoredAssetContent(asset.id));
+      return blob.text();
     }
 
     if (!asset.hasAgreement) {
@@ -103,6 +105,7 @@ export class BenchmarkDatasetService {
     const sources = this.metadataSources(asset);
     const raw = this.findFirstValue(sources, [
       'daimo:benchmark_dataset_mapping',
+      'https://w3id.org/pionera/daimo#benchmark_dataset_mapping',
       'https://pionera.ai/edc/daimo#benchmark_dataset_mapping',
       'https://w3id.org/daimo/ns#benchmark_dataset_mapping',
       'benchmark_dataset_mapping',
@@ -113,8 +116,9 @@ export class BenchmarkDatasetService {
 
     const input = this.unique([
       ...this.extractFieldNameList(mapping['input']),
-      ...this.extractFieldNameList(this.findFirstDirectValue(sources, [
+      ...this.extractFieldNameList(this.findFirstValue(sources, [
         'daimo:input',
+        'https://w3id.org/pionera/daimo#input',
         'https://pionera.ai/edc/daimo#input',
         'https://w3id.org/daimo/ns#input',
         'input'
@@ -122,8 +126,9 @@ export class BenchmarkDatasetService {
     ]);
     const label = this.firstText(
       mapping['label'],
-      this.findFirstDirectValue(sources, [
+      this.findFirstValue(sources, [
         'daimo:label',
+        'https://w3id.org/pionera/daimo#label',
         'https://pionera.ai/edc/daimo#label',
         'https://w3id.org/daimo/ns#label',
         'label'
@@ -208,10 +213,12 @@ export class BenchmarkDatasetService {
       this.readLocalProperty(asset, ['assetType', 'edc:assetType', 'https://w3id.org/edc/v0.0.1/ns/assetType']),
       this.findFirstValue(metadataNode, [
         'daimo:asset_type',
+        'https://w3id.org/pionera/daimo#asset_type',
         'https://pionera.ai/edc/daimo#asset_type',
         'https://w3id.org/daimo/ns#asset_type',
         'asset_type',
         'daimo:assetType',
+        'https://w3id.org/pionera/daimo#assetType',
         'assetType'
       ])
     ) || '';
@@ -235,6 +242,7 @@ export class BenchmarkDatasetService {
       tags: this.unique([
         ...this.collectMetadataValues(metadataNode, [
           'daimo:tags',
+          'https://w3id.org/pionera/daimo#tags',
           'https://pionera.ai/edc/daimo#tags',
           'https://w3id.org/daimo/ns#tags',
           'dcat:keyword',
@@ -262,10 +270,12 @@ export class BenchmarkDatasetService {
       rawProperties['assetType'],
       this.findFirstValue(metadataNode, [
         'daimo:asset_type',
+        'https://w3id.org/pionera/daimo#asset_type',
         'https://pionera.ai/edc/daimo#asset_type',
         'https://w3id.org/daimo/ns#asset_type',
         'asset_type',
         'daimo:assetType',
+        'https://w3id.org/pionera/daimo#assetType',
         'assetType'
       ])
     ) || '';
@@ -286,6 +296,7 @@ export class BenchmarkDatasetService {
       tags: this.unique([
         ...this.collectMetadataValues(metadataNode, [
           'daimo:tags',
+          'https://w3id.org/pionera/daimo#tags',
           'https://pionera.ai/edc/daimo#tags',
           'https://w3id.org/daimo/ns#tags',
           'dcat:keyword',
@@ -314,6 +325,8 @@ export class BenchmarkDatasetService {
 
   private hasInferenceMetadata(asset: BenchmarkDatasetAsset): boolean {
     const value = this.findFirstValue(this.metadataSources(asset), [
+      'https://w3id.org/pionera/daimo#inferencePath',
+      'daimo:inferencePath',
       'https://pionera.ai/edc/daimo#inference_path',
       'https://w3id.org/daimo/ns#inference_path',
       'daimo:inference_path',
@@ -662,6 +675,11 @@ export class BenchmarkDatasetService {
       return;
     }
 
+    if (value['@list'] !== undefined) {
+      this.collectFieldNames(value['@list'], target);
+      return;
+    }
+
     const fieldName = this.firstText(value['name'], value['field'], value['path'], value['column']);
     if (fieldName) {
       target.push(fieldName);
@@ -769,6 +787,11 @@ export class BenchmarkDatasetService {
     const record = value as Record<string, unknown>;
     if (record['@value'] !== undefined) {
       this.collectTextValues(record['@value'], results);
+      return;
+    }
+
+    if (record['@list'] !== undefined) {
+      this.collectTextValues(record['@list'], results);
       return;
     }
 

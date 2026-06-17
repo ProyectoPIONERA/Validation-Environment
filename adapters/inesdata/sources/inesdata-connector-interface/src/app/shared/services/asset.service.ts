@@ -51,6 +51,18 @@ export class AssetService {
     return this.http.post<Asset>(`${this.BASE_URL}`, body);
   }
 
+  public downloadStoredAssetContent(id: string): Observable<Blob> {
+    if (id === null || id === undefined) {
+      throw new Error('Required parameter id was null or undefined when calling downloadStoredAssetContent.');
+    }
+
+    const headers = new HttpHeaders({ Accept: 'application/octet-stream,text/csv,application/json,application/x-ndjson' });
+    return this.http.get(
+      `${environment.runtime.managementApiUrl}/s3assets/${encodeURIComponent(id)}/content`,
+      { headers, responseType: 'blob' }
+    );
+  }
+
   /**
    * Gets an asset with the given ID
    * @param id

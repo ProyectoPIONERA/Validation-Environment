@@ -35,12 +35,17 @@ export class AiModelBrowserComponent implements OnInit {
   readonly expandedSections = {
     source: true,
     tasks: true,
+    taskTypes: true,
+    modalities: true,
     subtasks: false,
+    endpointBehaviors: true,
     algorithms: false,
     libraries: false,
     frameworks: true,
     storage: true,
     software: false,
+    languages: false,
+    licenses: false,
     format: true
   };
 
@@ -53,22 +58,32 @@ export class AiModelBrowserComponent implements OnInit {
 
   selectedSources: string[] = [];
   selectedTasks: string[] = [];
+  selectedTaskTypes: string[] = [];
+  selectedModalities: string[] = [];
   selectedSubtasks: string[] = [];
+  selectedEndpointBehaviors: string[] = [];
   selectedAlgorithms: string[] = [];
   selectedLibraries: string[] = [];
   selectedFrameworks: string[] = [];
   selectedStorageTypes: string[] = [];
   selectedSoftware: string[] = [];
+  selectedLanguages: string[] = [];
+  selectedLicenses: string[] = [];
   selectedFormats: string[] = [];
 
   availableSources: string[] = [];
   availableTasks: string[] = [];
+  availableTaskTypes: string[] = [];
+  availableModalities: string[] = [];
   availableSubtasks: string[] = [];
+  availableEndpointBehaviors: string[] = [];
   availableAlgorithms: string[] = [];
   availableLibraries: string[] = [];
   availableFrameworks: string[] = [];
   availableStorageTypes: string[] = [];
   availableSoftware: string[] = [];
+  availableLanguages: string[] = [];
+  availableLicenses: string[] = [];
   availableFormats: string[] = [];
 
   private searchPublishTimer: ReturnType<typeof setTimeout> | null = null;
@@ -118,7 +133,19 @@ export class AiModelBrowserComponent implements OnInit {
         return false;
       }
 
+      if (!this.matchesMultiValueFilter(model.taskTypes, this.selectedTaskTypes)) {
+        return false;
+      }
+
+      if (!this.matchesMultiValueFilter(model.modalities, this.selectedModalities)) {
+        return false;
+      }
+
       if (!this.matchesMultiValueFilter(model.subtasks, this.selectedSubtasks)) {
+        return false;
+      }
+
+      if (!this.matchesMultiValueFilter(model.endpointBehaviors, this.selectedEndpointBehaviors)) {
         return false;
       }
 
@@ -142,6 +169,14 @@ export class AiModelBrowserComponent implements OnInit {
         return false;
       }
 
+      if (!this.matchesMultiValueFilter(model.languages, this.selectedLanguages)) {
+        return false;
+      }
+
+      if (!this.matchesMultiValueFilter(model.licenses, this.selectedLicenses)) {
+        return false;
+      }
+
       if (!this.matchesSingleValueFilter(model.format, this.selectedFormats)) {
         return false;
       }
@@ -162,11 +197,16 @@ export class AiModelBrowserComponent implements OnInit {
         model.fileName,
         ...model.keywords,
         ...model.tasks,
+        ...model.taskTypes,
+        ...model.modalities,
         ...model.subtasks,
+        ...model.endpointBehaviors,
         ...model.algorithms,
         ...model.libraries,
         ...model.frameworks,
-        ...model.software
+        ...model.software,
+        ...model.languages,
+        ...model.licenses
       ]
         .filter(Boolean)
         .join(' ')
@@ -202,12 +242,17 @@ export class AiModelBrowserComponent implements OnInit {
 
     this.selectedSources = [];
     this.selectedTasks = [];
+    this.selectedTaskTypes = [];
+    this.selectedModalities = [];
     this.selectedSubtasks = [];
+    this.selectedEndpointBehaviors = [];
     this.selectedAlgorithms = [];
     this.selectedLibraries = [];
     this.selectedFrameworks = [];
     this.selectedStorageTypes = [];
     this.selectedSoftware = [];
+    this.selectedLanguages = [];
+    this.selectedLicenses = [];
     this.selectedFormats = [];
     this.applyFilters();
 
@@ -261,7 +306,7 @@ export class AiModelBrowserComponent implements OnInit {
       status: 'VIEWED',
       assetId: model.id,
       modelName: model.name,
-      taskType: model.tasks[0] || undefined,
+      taskType: model.taskTypes[0] || model.tasks[0] || undefined,
       details: {
         source: model.source,
         provider: model.provider,
@@ -355,15 +400,20 @@ export class AiModelBrowserComponent implements OnInit {
 
   getCardMetadata(model: AiModelBrowserItem): ModelCardMetadata[] {
     const metadata: ModelCardMetadata[] = [
-      { label: 'Task', value: this.getPrimaryValue(model.tasks, '') },
+      { label: 'Category', value: this.getPrimaryValue(model.tasks, '') },
+      { label: 'Type', value: this.getPrimaryValue(model.taskTypes, '') },
+      { label: 'Modality', value: model.modalities.join(', ') },
       { label: 'Subtask', value: this.getPrimaryValue(model.subtasks, '') },
+      { label: 'Endpoint', value: this.getPrimaryValue(model.endpointBehaviors, '') },
       { label: 'Framework', value: this.getPrimaryValue(model.frameworks, '') },
       { label: 'Algorithm', value: this.getPrimaryValue(model.algorithms, '') },
       { label: 'Library', value: this.getPrimaryValue(model.libraries, '') },
-      { label: 'Software', value: this.getPrimaryValue(model.software, '') }
+      { label: 'Software', value: this.getPrimaryValue(model.software, '') },
+      { label: 'Language', value: model.languages.join(', ') },
+      { label: 'License', value: this.getPrimaryValue(model.licenses, '') }
     ];
 
-    return metadata.filter(item => item.value.trim().length > 0).slice(0, 3);
+    return metadata.filter(item => item.value.trim().length > 0).slice(0, 4);
   }
 
   getContractBadgeLabel(model: AiModelBrowserItem): string {
@@ -376,12 +426,17 @@ export class AiModelBrowserComponent implements OnInit {
     return [
       this.selectedSources,
       this.selectedTasks,
+      this.selectedTaskTypes,
+      this.selectedModalities,
       this.selectedSubtasks,
+      this.selectedEndpointBehaviors,
       this.selectedAlgorithms,
       this.selectedLibraries,
       this.selectedFrameworks,
       this.selectedStorageTypes,
       this.selectedSoftware,
+      this.selectedLanguages,
+      this.selectedLicenses,
       this.selectedFormats
     ].some(collection => collection.length > 0);
   }
@@ -405,16 +460,21 @@ export class AiModelBrowserComponent implements OnInit {
   private updateAvailableFilters(): void {
     this.availableSources = this.collectUniqueValues(this.allModels.map(model => this.getSourceFilterLabel(model)));
     this.availableTasks = this.collectUniqueValues(this.collectModelValues('tasks'));
+    this.availableTaskTypes = this.collectUniqueValues(this.collectModelValues('taskTypes'));
+    this.availableModalities = this.collectUniqueValues(this.collectModelValues('modalities'));
     this.availableSubtasks = this.collectUniqueValues(this.collectModelValues('subtasks'));
+    this.availableEndpointBehaviors = this.collectUniqueValues(this.collectModelValues('endpointBehaviors'));
     this.availableAlgorithms = this.collectUniqueValues(this.collectModelValues('algorithms'));
     this.availableLibraries = this.collectUniqueValues(this.collectModelValues('libraries'));
     this.availableFrameworks = this.collectUniqueValues(this.collectModelValues('frameworks'));
     this.availableStorageTypes = this.collectUniqueValues(this.allModels.map(model => model.storageType).filter(value => value && value !== 'Unknown'));
     this.availableSoftware = this.collectUniqueValues(this.collectModelValues('software'));
+    this.availableLanguages = this.collectUniqueValues(this.collectModelValues('languages'));
+    this.availableLicenses = this.collectUniqueValues(this.collectModelValues('licenses'));
     this.availableFormats = this.collectUniqueValues(this.allModels.map(model => model.format).filter(value => value && value !== 'Unknown'));
   }
 
-  private collectModelValues(field: 'tasks' | 'subtasks' | 'algorithms' | 'libraries' | 'frameworks' | 'software'): string[] {
+  private collectModelValues(field: 'tasks' | 'taskTypes' | 'modalities' | 'subtasks' | 'endpointBehaviors' | 'algorithms' | 'libraries' | 'frameworks' | 'software' | 'languages' | 'licenses'): string[] {
     return this.allModels.reduce((accumulator: string[], model: AiModelBrowserItem) => {
       return accumulator.concat(model[field]);
     }, []);
@@ -501,8 +561,20 @@ export class AiModelBrowserComponent implements OnInit {
       filters.tasks = [...this.selectedTasks];
     }
 
+    if (this.selectedTaskTypes.length > 0) {
+      filters.taskTypes = [...this.selectedTaskTypes];
+    }
+
+    if (this.selectedModalities.length > 0) {
+      filters.modalities = [...this.selectedModalities];
+    }
+
     if (this.selectedSubtasks.length > 0) {
       filters.subtasks = [...this.selectedSubtasks];
+    }
+
+    if (this.selectedEndpointBehaviors.length > 0) {
+      filters.endpointBehaviors = [...this.selectedEndpointBehaviors];
     }
 
     if (this.selectedAlgorithms.length > 0) {
@@ -525,6 +597,14 @@ export class AiModelBrowserComponent implements OnInit {
       filters.software = [...this.selectedSoftware];
     }
 
+    if (this.selectedLanguages.length > 0) {
+      filters.languages = [...this.selectedLanguages];
+    }
+
+    if (this.selectedLicenses.length > 0) {
+      filters.licenses = [...this.selectedLicenses];
+    }
+
     if (this.selectedFormats.length > 0) {
       filters.formats = [...this.selectedFormats];
     }
@@ -538,11 +618,23 @@ export class AiModelBrowserComponent implements OnInit {
     }
 
     if (collection === this.selectedTasks) {
-      return 'task';
+      return 'taskCategory';
+    }
+
+    if (collection === this.selectedTaskTypes) {
+      return 'taskType';
+    }
+
+    if (collection === this.selectedModalities) {
+      return 'modality';
     }
 
     if (collection === this.selectedSubtasks) {
       return 'subtask';
+    }
+
+    if (collection === this.selectedEndpointBehaviors) {
+      return 'endpointBehavior';
     }
 
     if (collection === this.selectedAlgorithms) {
@@ -563,6 +655,14 @@ export class AiModelBrowserComponent implements OnInit {
 
     if (collection === this.selectedSoftware) {
       return 'software';
+    }
+
+    if (collection === this.selectedLanguages) {
+      return 'language';
+    }
+
+    if (collection === this.selectedLicenses) {
+      return 'license';
     }
 
     if (collection === this.selectedFormats) {

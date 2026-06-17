@@ -58,6 +58,13 @@ interface SchemaField {
   description?: string;
 }
 
+interface SpanAnnotation {
+  start: number;
+  end: number;
+  label: string;
+  text: string;
+}
+
 interface RankingRow {
   rank: number;
   modelId: string;
@@ -269,8 +276,8 @@ export class AiModelBenchmarkingComponent implements OnInit {
       name: item.name,
       task: item.tasks?.[0] || 'Unknown',
       subtask: item.subtasks?.[0] || '',
-      algorithm: item.algorithms?.[0] || '',
-      framework: item.frameworks?.[0] || '',
+      algorithm: item.algorithms?.[0] || item.taskTypes?.[0] || '',
+      framework: item.frameworks?.[0] || item.libraries?.[0] || '',
       source: item.source,
       provider: item.provider,
       hasAgreement: item.hasAgreement,
@@ -1613,6 +1620,29 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return metrics;
     }
 
+    if (this.isSpanClassificationBenchmark(model)) {
+      const spanMetrics = this.computeSpanExtractionMetrics(datasetRows, predictions);
+      this.selectedMetrics.forEach(metric => {
+        switch (this.normalizeMetricName(metric)) {
+          case 'precision':
+            metrics[metric] = spanMetrics.precision;
+            break;
+          case 'recall':
+            metrics[metric] = spanMetrics.recall;
+            break;
+          case 'f1':
+            metrics[metric] = spanMetrics.f1;
+            break;
+          case 'accuracy':
+            metrics[metric] = spanMetrics.accuracy;
+            break;
+          default:
+            metrics[metric] = Number.NaN;
+        }
+      });
+      return metrics;
+    }
+
     const regressionPairs = this.buildRegressionPairs(model, datasetRows, predictions);
     const classificationPairs = this.buildClassificationPairs(model, datasetRows, predictions);
     const accuracy = this.computeClassificationAccuracy(classificationPairs);
@@ -1663,6 +1693,10 @@ export class AiModelBenchmarkingComponent implements OnInit {
     datasetRows: any[],
     predictions: any[]
   ): Array<{ actual: string; predicted: string }> {
+    if (this.isSpanClassificationBenchmark(model)) {
+      return this.buildSpanClassificationPairs(datasetRows, predictions);
+    }
+
     const excludedKeys = new Set(this.getSchemaFieldsFromModel(model).map(field => field.name));
     const pairs: Array<{ actual: string; predicted: string }> = [];
 
@@ -1674,6 +1708,33 @@ export class AiModelBenchmarkingComponent implements OnInit {
       }
 
       pairs.push({ actual, predicted });
+    });
+
+    return pairs;
+  }
+
+  private buildSpanClassificationPairs(datasetRows: any[], predictions: any[]): Array<{ actual: string; predicted: string }> {
+    const pairs: Array<{ actual: string; predicted: string }> = [];
+
+    datasetRows.forEach((row, index) => {
+      const actualSignatures = this.normalizeSpanAnnotations(this.extractDatasetExpectedValue(row))
+        .map(span => this.spanSignature(span));
+      const predictedSignatures = this.normalizeSpanAnnotations(predictions[index])
+        .map(span => this.spanSignature(span));
+      const unmatchedPredicted = new Set(predictedSignatures);
+
+      actualSignatures.forEach(signature => {
+        if (unmatchedPredicted.has(signature)) {
+          unmatchedPredicted.delete(signature);
+          pairs.push({ actual: signature, predicted: signature });
+        } else {
+          pairs.push({ actual: signature, predicted: '__missing_span__' });
+        }
+      });
+
+      unmatchedPredicted.forEach(signature => {
+        pairs.push({ actual: '__extra_span__', predicted: signature });
+      });
     });
 
     return pairs;
@@ -1740,6 +1801,118 @@ export class AiModelBenchmarkingComponent implements OnInit {
     }
 
     return row?.[mapping.label];
+  }
+
+  private isSpanClassificationBenchmark(model: BenchmarkAsset): boolean {
+    const subtask = `${model.subtask || ''}`.toLowerCase();
+    const label = `${this.validationDatasetMapping?.label || ''}`.toLowerCase();
+    const name = `${model.name || ''}`.toLowerCase();
+    return label === 'tags' || subtask.includes('token') || name.includes('5w1h');
+  }
+
+  private normalizeSpanAnnotations(value: any): SpanAnnotation[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.reduce<SpanAnnotation[]>((result, item) => {
+      if (Array.isArray(item)) {
+        result.push(...this.normalizeSpanAnnotations(item));
+        return result;
+      }
+
+      if (!item || typeof item !== 'object') {
+        return result;
+      }
+
+      const start = this.readNumericValue(item.Tag_Start ?? item.tag_start ?? item.start);
+      const end = this.readNumericValue(item.Tag_End ?? item.tag_end ?? item.end);
+      const label = this.normalizeClassificationValue(item['5W1H_Label'] ?? item.Label_5W1H ?? item.label);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !label) {
+        return result;
+      }
+
+      result.push({
+        start,
+        end,
+        label,
+        text: `${item.Tag_Text ?? item.tag_text ?? item.text ?? ''}`.trim().toLowerCase()
+      });
+      return result;
+    }, []);
+  }
+
+  private spanSignature(span: SpanAnnotation): string {
+    return `${span.start}:${span.end}:${span.label}`;
+  }
+
+  private computeSpanExtractionMetrics(datasetRows: any[], predictions: any[]): { precision: number; recall: number; f1: number; accuracy: number } {
+    let correct = 0;
+    let partial = 0;
+    let spurious = 0;
+    let missing = 0;
+    let exactRows = 0;
+
+    datasetRows.forEach((row, index) => {
+      const actual = this.normalizeSpanAnnotations(this.extractDatasetExpectedValue(row));
+      const predicted = this.normalizeSpanAnnotations(predictions[index]);
+      const matchedActual = new Set<number>();
+      let rowCorrect = 0;
+      let rowPartial = 0;
+      let rowSpurious = 0;
+
+      predicted.forEach(predictedSpan => {
+        let matched = false;
+
+        for (let actualIndex = 0; actualIndex < actual.length; actualIndex += 1) {
+          if (matchedActual.has(actualIndex)) {
+            continue;
+          }
+
+          const actualSpan = actual[actualIndex];
+          const sameLabel = predictedSpan.label === actualSpan.label;
+          const exactMatch = predictedSpan.start === actualSpan.start
+            && predictedSpan.end === actualSpan.end
+            && sameLabel;
+
+          if (exactMatch) {
+            correct += 1;
+            rowCorrect += 1;
+            matchedActual.add(actualIndex);
+            matched = true;
+            break;
+          }
+
+          const overlaps = !(predictedSpan.end < actualSpan.start || predictedSpan.start > actualSpan.end);
+          if (overlaps && sameLabel) {
+            partial += 1;
+            rowPartial += 1;
+            matchedActual.add(actualIndex);
+            matched = true;
+            break;
+          }
+        }
+
+        if (!matched) {
+          spurious += 1;
+          rowSpurious += 1;
+        }
+      });
+
+      const rowMissing = actual.length - matchedActual.size;
+      missing += rowMissing;
+
+      if (rowMissing === 0 && rowSpurious === 0 && rowPartial === 0 && rowCorrect === actual.length) {
+        exactRows += 1;
+      }
+    });
+
+    const precision = (correct + (0.5 * partial)) / Math.max(correct + partial + spurious, 1);
+    const recall = (correct + (0.5 * partial)) / Math.max(correct + partial + missing, 1);
+    const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+    const accuracy = datasetRows.length === 0 ? 0 : exactRows / datasetRows.length;
+
+    return { precision, recall, f1, accuracy };
   }
 
   private extractComparableClassificationValue(model: BenchmarkAsset, output: any): string | null {
@@ -2510,9 +2683,11 @@ export class AiModelBenchmarkingComponent implements OnInit {
           }
         } else if (!this.isMetricBenchmarkModel(model)) {
           const mappedValue = this.extractDatasetExpectedValue(row, mapping);
-          const expectedValue = mappedValue !== undefined
-            ? this.normalizeClassificationValue(mappedValue)
-            : this.extractExpectedClassificationValue(model, row, excludedKeys);
+          const expectedValue = this.isSpanClassificationBenchmark(model)
+            ? (this.normalizeSpanAnnotations(mappedValue).length > 0 ? 'spans' : null)
+            : mappedValue !== undefined
+              ? this.normalizeClassificationValue(mappedValue)
+              : this.extractExpectedClassificationValue(model, row, excludedKeys);
           if (!expectedValue) {
             errors.push(`${model.name} row #${index + 1}: validation dataset must include a label/target field for benchmarking.`);
           }

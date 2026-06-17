@@ -27,9 +27,15 @@ export interface AiModelExecutionItem {
   executionPath: string;
   httpMethodDefault: string;
   tasks: string[];
+  taskTypes: string[];
+  modalities: string[];
   subtasks?: string[];
+  endpointBehaviors: string[];
   algorithms: string[];
+  libraries: string[];
   frameworks: string[];
+  languages: string[];
+  licenses: string[];
   inputFeatures: AiModelExecutionInputFeature[];
   inputColumns?: string[];
   inputSchema?: unknown;

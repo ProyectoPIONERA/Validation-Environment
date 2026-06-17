@@ -4,11 +4,15 @@ import jakarta.json.Json;
 import jakarta.json.JsonObject;
 import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
+import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.eclipse.edc.api.model.IdResponse;
 import org.eclipse.edc.connector.controlplane.asset.spi.domain.Asset;
 import org.eclipse.edc.connector.controlplane.services.spi.asset.AssetService;
@@ -121,6 +125,36 @@ public class StorageAssetApiController implements StorageAssetApi {
             .orElseThrow(f -> new EdcException(f.getFailureDetail()));
   }
 
+  @GET
+  @Path("/{assetId}/content")
+  @Produces(MediaType.APPLICATION_OCTET_STREAM)
+  public Response downloadAssetContent(@PathParam("assetId") String assetId) {
+    Asset asset = service.findById(assetId);
+    if (asset == null) {
+      throw new NotFoundException("Asset not found: " + assetId);
+    }
+
+    String objectKey = asset.getDataAddress().getKeyName();
+    if (objectKey == null || objectKey.isBlank()) {
+      Object privateStorageFile = asset.getPrivateProperty("storageAssetFile");
+      objectKey = privateStorageFile == null ? "" : String.valueOf(privateStorageFile);
+    }
+    if (objectKey.isBlank()) {
+      throw new NotFoundException("Asset content key not found: " + assetId);
+    }
+
+    byte[] content = s3Service.downloadFile(objectKey);
+    String contentType = String.valueOf(asset.getProperty(Asset.PROPERTY_CONTENT_TYPE));
+    if (contentType == null || contentType.isBlank() || "null".equals(contentType)) {
+      contentType = MediaType.APPLICATION_OCTET_STREAM;
+    }
+
+    return Response.ok(content)
+            .type(contentType)
+            .header("Content-Disposition", "attachment; filename=\"" + fileNameFromKey(objectKey) + "\"")
+            .build();
+  }
+
   /**
    * Set necessary storage properties for the asset in S3.
    */
@@ -139,5 +173,10 @@ public class StorageAssetApiController implements StorageAssetApi {
     asset.getDataAddress().setType("AmazonS3");
     asset.getDataAddress().getProperties().put(CoreConstants.EDC_NAMESPACE + "bucketName", bucketName);
     asset.getDataAddress().getProperties().put(CoreConstants.EDC_NAMESPACE + "region", region);
+  }
+
+  private String fileNameFromKey(String key) {
+    int lastSlash = key.lastIndexOf('/');
+    return lastSlash >= 0 ? key.substring(lastSlash + 1) : key;
   }
 }

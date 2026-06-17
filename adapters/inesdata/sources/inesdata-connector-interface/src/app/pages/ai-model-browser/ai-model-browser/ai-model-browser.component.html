@@ -6,7 +6,7 @@
 
   <div class="search-row">
     <mat-form-field appearance="outline" class="search-field">
-      <mat-label>Search by name, keyword, provider or framework</mat-label>
+      <mat-label>Search by name, keyword, provider, task or framework</mat-label>
       <input
         matInput
         [(ngModel)]="searchTerm"
@@ -42,7 +42,7 @@
 
       <mat-expansion-panel *ngIf="availableTasks.length > 0" [expanded]="expandedSections.tasks" class="filter-panel">
         <mat-expansion-panel-header>
-          <mat-panel-title>Tasks ({{ availableTasks.length }})</mat-panel-title>
+          <mat-panel-title>Task Categories ({{ availableTasks.length }})</mat-panel-title>
         </mat-expansion-panel-header>
         <div class="filter-options">
           <mat-checkbox
@@ -50,6 +50,34 @@
             [checked]="isSelected(selectedTasks, task)"
             (change)="toggleFilter(selectedTasks, task, $event.checked)">
             {{ task }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableTaskTypes.length > 0" [expanded]="expandedSections.taskTypes" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Task Types ({{ availableTaskTypes.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let taskType of availableTaskTypes"
+            [checked]="isSelected(selectedTaskTypes, taskType)"
+            (change)="toggleFilter(selectedTaskTypes, taskType, $event.checked)">
+            {{ taskType }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableModalities.length > 0" [expanded]="expandedSections.modalities" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Modalities ({{ availableModalities.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let modality of availableModalities"
+            [checked]="isSelected(selectedModalities, modality)"
+            (change)="toggleFilter(selectedModalities, modality, $event.checked)">
+            {{ modality }}
           </mat-checkbox>
         </div>
       </mat-expansion-panel>
@@ -64,6 +92,20 @@
             [checked]="isSelected(selectedSubtasks, subtask)"
             (change)="toggleFilter(selectedSubtasks, subtask, $event.checked)">
             {{ subtask }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableEndpointBehaviors.length > 0" [expanded]="expandedSections.endpointBehaviors" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Endpoint Behavior ({{ availableEndpointBehaviors.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let endpointBehavior of availableEndpointBehaviors"
+            [checked]="isSelected(selectedEndpointBehaviors, endpointBehavior)"
+            (change)="toggleFilter(selectedEndpointBehaviors, endpointBehavior, $event.checked)">
+            {{ endpointBehavior }}
           </mat-checkbox>
         </div>
       </mat-expansion-panel>
@@ -134,6 +176,34 @@
             [checked]="isSelected(selectedSoftware, software)"
             (change)="toggleFilter(selectedSoftware, software, $event.checked)">
             {{ software }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableLanguages.length > 0" [expanded]="expandedSections.languages" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Languages ({{ availableLanguages.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let language of availableLanguages"
+            [checked]="isSelected(selectedLanguages, language)"
+            (change)="toggleFilter(selectedLanguages, language, $event.checked)">
+            {{ language }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableLicenses.length > 0" [expanded]="expandedSections.licenses" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>Licenses ({{ availableLicenses.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let license of availableLicenses"
+            [checked]="isSelected(selectedLicenses, license)"
+            (change)="toggleFilter(selectedLicenses, license, $event.checked)">
+            {{ license }}
           </mat-checkbox>
         </div>
       </mat-expansion-panel>

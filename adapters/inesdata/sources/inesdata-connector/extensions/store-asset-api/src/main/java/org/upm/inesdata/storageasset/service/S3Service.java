@@ -3,6 +3,8 @@ package org.upm.inesdata.storageasset.service;
 import org.eclipse.edc.spi.monitor.Monitor;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.core.async.AsyncResponseTransformer;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
@@ -14,6 +16,8 @@ import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
@@ -134,6 +138,22 @@ public class S3Service {
             s3AsyncClient.deleteObject(deleteObjectRequest).join();
         } catch (Exception e) {
             monitor.severe("Error deleting file " + key + ": " + e.getMessage());
+        }
+    }
+
+    public byte[] downloadFile(String key) {
+        try {
+            GetObjectRequest request = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(key)
+                    .build();
+            ResponseBytes<GetObjectResponse> response = s3AsyncClient
+                    .getObject(request, AsyncResponseTransformer.toBytes())
+                    .join();
+            return response.asByteArray();
+        } catch (Exception e) {
+            monitor.warning("Error downloading file " + key, e);
+            throw new RuntimeException("Error downloading file " + key, e);
         }
     }
 
