@@ -40,7 +40,9 @@ include(":extensions:vocabulary-shared-api")
 include(":extensions:vocabulary-shared-retrieval")
 include(":extensions:inesdata-transfer-process-api")
 include(":extensions:asset-validator")
+include(":extensions:ontology-validator")
 include(":extensions:model-execution-api")
+include(":extensions:ontology-validator-dataplane-extension")
 
 // Connector
 include(":launchers:connector")
