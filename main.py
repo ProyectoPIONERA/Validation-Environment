@@ -2297,6 +2297,11 @@ def _configured_public_connector_base_url(connector_name, deployer_context):
     public_urls = resolve_vm_distributed_public_urls(config)
     provider_connectors = set(parse_connector_list(config.get("VM_PROVIDER_CONNECTORS"), dataspace))
     consumer_connectors = set(parse_connector_list(config.get("VM_CONSUMER_CONNECTORS"), dataspace))
+    configured_connectors = parse_connector_list(config.get("DS_1_CONNECTORS"), dataspace)
+    if not provider_connectors and configured_connectors:
+        provider_connectors.add(configured_connectors[0])
+    if not consumer_connectors and len(configured_connectors) > 1:
+        consumer_connectors.add(configured_connectors[1])
     if connector in provider_connectors:
         return _with_edc_public_path_prefix(public_urls.get("VM_PROVIDER_PUBLIC_URL"))
     if connector in consumer_connectors:

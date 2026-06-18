@@ -41,6 +41,36 @@ class SharedComponentsAdapter(INESDataComponentsAdapter):
         config = self.config_adapter.load_deployer_config() or {}
         return summarize_components_for_adapter(config, self.active_adapter)
 
+    def _ai_model_hub_integrated_connector_interface_url(self, *, ds_name=None, deployer_config=None) -> str:
+        if self.active_adapter != "edc":
+            return super()._ai_model_hub_integrated_connector_interface_url(
+                ds_name=ds_name,
+                deployer_config=deployer_config,
+            )
+
+        config = dict(deployer_config or self.config_adapter.load_deployer_config() or {})
+        dataspace = str(ds_name or self._dataspace_name() or "").strip()
+        connector_ids = self._resolve_dataspace_connector_ids(
+            ds_name=dataspace,
+            deployer_config=config,
+        )
+        if not connector_ids:
+            return ""
+
+        base_url = self._edc_connector_public_base_url(
+            connector_ids[0],
+            config,
+            dataspace=dataspace,
+            role="provider",
+        )
+        if not base_url:
+            return ""
+
+        dashboard_base_href = str(config.get("EDC_DASHBOARD_BASE_HREF") or "/edc-dashboard/").strip()
+        if not dashboard_base_href:
+            dashboard_base_href = "/edc-dashboard/"
+        return self._join_url_path(base_url, dashboard_base_href)
+
     def resolve_component_runtime_metadata(
         self,
         component,

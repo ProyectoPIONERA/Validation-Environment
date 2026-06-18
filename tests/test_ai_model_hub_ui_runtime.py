@@ -86,6 +86,12 @@ console.log(JSON.stringify({
     return json.loads(result.stdout)
 
 
+def connector_full_name(connector, dataspace):
+    if connector.startswith("conn-"):
+        return connector
+    return f"conn-{connector}-{dataspace}"
+
+
 class AIModelHubUiRuntimeTests(unittest.TestCase):
     def test_runtime_uses_shared_infrastructure_keycloak_and_domain_defaults(self):
         inesdata_config = {
@@ -137,13 +143,32 @@ class AIModelHubUiRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime["modelServerBaseUrl"], "https://org1.example.test/model-server")
 
     def test_runtime_uses_edc_connector_defaults_when_adapter_is_edc(self):
+        edc_config = {
+            **parse_key_value_file(PROJECT_ROOT / "deployers" / "edc" / "deployer.config.example"),
+            **parse_key_value_file(PROJECT_ROOT / "deployers" / "edc" / "deployer.config"),
+        }
+        configured_connectors = [
+            value.strip()
+            for value in edc_config.get("DS_1_CONNECTORS", "").split(",")
+            if value.strip()
+        ]
+        dataspace = edc_config.get("DS_1_NAME", "pionera-edc")
+        expected_provider = connector_full_name(
+            configured_connectors[0] if configured_connectors else "citycounciledc",
+            dataspace,
+        )
+        expected_consumer = connector_full_name(
+            configured_connectors[1] if len(configured_connectors) > 1 else "companyedc",
+            dataspace,
+        )
+
         runtime = resolve_runtime_with_node({"PIONERA_ADAPTER": "edc"})
 
         self.assertEqual(runtime["adapterName"], "edc")
-        self.assertEqual(runtime["dataspace"], "pionera-edc")
-        self.assertEqual(runtime["providerConnectorId"], "conn-citycounciledc-pionera-edc")
-        self.assertEqual(runtime["consumerConnectorId"], "conn-companyedc-pionera-edc")
-        self.assertIn("conn-citycounciledc-pionera-edc", runtime["providerManagementUrl"])
+        self.assertEqual(runtime["dataspace"], dataspace)
+        self.assertEqual(runtime["providerConnectorId"], expected_provider)
+        self.assertEqual(runtime["consumerConnectorId"], expected_consumer)
+        self.assertIn(expected_provider, runtime["providerManagementUrl"])
 
     def test_ui_playwright_trace_is_off_by_default(self):
         self.assertEqual(resolve_ui_trace_mode_with_node(), "off")
@@ -182,17 +207,36 @@ class AIModelHubUiRuntimeTests(unittest.TestCase):
         self.assertEqual(result["credentials"]["passwd"], "scoped-password")
 
     def test_auth_credentials_resolver_uses_edc_credentials_when_edc_runtime_is_active(self):
-        result = resolve_connector_credentials_with_node(
-            {
-                "PIONERA_ADAPTER": "edc",
-                "UI_ADAPTER": "inesdata",
-                "UI_TOPOLOGY": "local",
-            },
-            dataspace="pionera-edc",
-            connector_id="conn-citycounciledc-pionera-edc",
-        )
+        with tempfile.TemporaryDirectory() as runtime_dir:
+            connector_id = "conn-citycounciledc-pionera-edc"
+            credentials_dir = Path(runtime_dir) / "connectors" / connector_id
+            credentials_dir.mkdir(parents=True)
+            credentials_file = credentials_dir / "credentials.json"
+            credentials_file.write_text(
+                json.dumps(
+                    {
+                        "connector_user": {
+                            "user": "user-conn-citycounciledc-pionera-edc",
+                            "passwd": "edc-test-password",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
 
-        self.assertIn("deployers/edc/deployments/DEV/pionera-edc", result["path"])
+            result = resolve_connector_credentials_with_node(
+                {
+                    "PIONERA_ADAPTER": "edc",
+                    "UI_ADAPTER": "inesdata",
+                    "UI_RUNTIME_DIR": runtime_dir,
+                    "UI_TOPOLOGY": "vm-distributed",
+                    "UI_ENVIRONMENT": "DEV",
+                },
+                dataspace="pionera-edc",
+                connector_id=connector_id,
+            )
+
+        self.assertEqual(result["path"], str(credentials_file))
         self.assertEqual(result["credentials"]["user"], "user-conn-citycounciledc-pionera-edc")
 
 

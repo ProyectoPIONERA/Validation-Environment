@@ -27,6 +27,7 @@ from deployers.shared.lib.components import (
     resolve_component_release_name,
 )
 from deployers.shared.lib.vm_distributed_public_access import resolve_vm_distributed_public_urls
+from deployers.shared.lib.connectors import normalize_connector_name
 from adapters.inesdata.connectors import INESDataConnectorsAdapter
 from runtime_dependencies import ensure_python_requirements
 
@@ -789,8 +790,9 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             print("Vault token validation failed: VT_URL/VT_TOKEN are not defined in deployer.config")
             return False
 
+        vault_url = primary_url or fallback_url
         validated, network_failure = self._verify_edc_vault_management_token_over_http(
-            primary_url or fallback_url,
+            vault_url,
             vault_token,
         )
         if validated:
@@ -1393,11 +1395,27 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
                 or layout.get("role")
                 or self._connector_kubeconfig_role(connector_name)
             )
+            if role not in {"provider", "consumer"}:
+                role = self._edc_connector_role_from_config(connector_name, deployer_config, ds_name)
             public_base_url = self._normalize_public_url(
                 self._connector_public_url_for_role(role, deployer_config)
             )
             return public_base_url
 
+        return ""
+
+    def _edc_connector_role_from_config(self, connector_name, deployer_config, dataspace):
+        connector = normalize_connector_name(str(connector_name or "").strip(), dataspace)
+        connectors = [
+            normalize_connector_name(item.strip(), dataspace)
+            for item in str((deployer_config or {}).get("DS_1_CONNECTORS") or "").split(",")
+            if item.strip()
+        ]
+        if connector and connectors:
+            if connector == connectors[0]:
+                return "provider"
+            if len(connectors) > 1 and connector == connectors[1]:
+                return "consumer"
         return ""
 
     @staticmethod

@@ -321,7 +321,7 @@ class DeployerAccessUrlsTests(unittest.TestCase):
 
         self.assertEqual(
             urls["connector_management_api_v3"],
-            "https://org4.pionera.oeg.fi.upm.es/c/citycounciledc/management/v3",
+            "https://org4.pionera.oeg.fi.upm.es/edc/c/citycounciledc/management/v3",
         )
         self.assertEqual(
             urls["edc_dashboard_login"],
