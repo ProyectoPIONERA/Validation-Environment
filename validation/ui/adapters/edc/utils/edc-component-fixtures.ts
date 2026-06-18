@@ -1,42 +1,62 @@
 import { modelServerBaseUrlFromUrl, modelServerUrlForPath } from "../../../shared/utils/model-server-url";
 
-export const DEFAULT_AI_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment";
-export const DEFAULT_AI_MODEL_PAYLOAD = {
-  text: "This product is excellent and very useful",
-};
+export const DEFAULT_AI_MODEL_PATH = "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h";
+export const DEFAULT_AI_MODEL_PAYLOAD = [
+  {
+    Id: 840,
+    Text: "El comite de medicamentos humanos espera poder concluir el analisis en marzo.",
+  },
+];
 
 export const TEXT_MODEL_INPUT_FEATURES = [
   {
-    name: "text",
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
     type: "string",
     required: true,
-    description: "Text to analyze",
+    description: "Spanish text to analyze",
   },
 ];
 
 export const TEXT_MODEL_INPUT_SCHEMA = {
-  type: "object",
-  required: ["text"],
-  properties: {
-    text: {
-      type: "string",
-      description: "Text to analyze",
+  type: "array",
+  items: {
+    type: "object",
+    required: ["Id", "Text"],
+    properties: {
+      Id: {
+        type: "integer",
+        description: "Input text identifier",
+      },
+      Text: {
+        type: "string",
+        description: "Spanish text to analyze",
+      },
     },
   },
 };
 
 export const TEXT_MODEL_BENCHMARK_ROWS = [
   {
-    input: {
-      text: "This product is excellent and very useful",
-    },
-    expected_label: "positive",
+    input: [
+      {
+        Id: 840,
+        Text: "El comite de medicamentos humanos espera poder concluir el analisis en marzo.",
+      },
+    ],
   },
   {
-    input: {
-      text: "The delivery was late and the product was broken",
-    },
-    expected_label: "negative",
+    input: [
+      {
+        Id: 841,
+        Text: "La agencia publico el informe tecnico despues de la reunion en Madrid.",
+      },
+    ],
   },
 ];
 
@@ -132,12 +152,12 @@ export function aiModelMetadataAliases({
     "https://pionera.ai/edc/daimo#library_name": library,
     "daimo:license": "Apache-2.0",
     "https://pionera.ai/edc/daimo#license": "Apache-2.0",
-    "daimo:datasets": ["validation-controlled"],
-    "https://pionera.ai/edc/daimo#datasets": ["validation-controlled"],
-    "daimo:language": ["en"],
-    "https://pionera.ai/edc/daimo#language": ["en"],
-    "daimo:base_model": "controlled-httpdata",
-    "https://pionera.ai/edc/daimo#base_model": "controlled-httpdata",
+    "daimo:datasets": ["FLARES"],
+    "https://pionera.ai/edc/daimo#datasets": ["FLARES"],
+    "daimo:language": ["Spanish"],
+    "https://pionera.ai/edc/daimo#language": ["Spanish"],
+    "daimo:base_model": "dccuchile-bert-base-spanish-wwm-uncased",
+    "https://pionera.ai/edc/daimo#base_model": "dccuchile-bert-base-spanish-wwm-uncased",
     "daimo:model_version": "1.0.0",
     "https://pionera.ai/edc/daimo#model_version": "1.0.0",
     "daimo:input_schema_draft": "https://json-schema.org/draft/2020-12/schema",
@@ -184,12 +204,12 @@ export function aiModelAssetOptions({
   modelUrl,
   modelPath,
   modelName,
-  task = "text-classification",
-  subtask = "sentiment-analysis",
-  algorithm = "controlled-httpdata",
-  library = "controlled-httpdata",
-  framework = "controlled-httpdata",
-  software = "controlled-httpdata",
+  task = "token-classification",
+  subtask = "5w1h-span-extraction",
+  algorithm = "BERT",
+  library = "Transformers",
+  framework = "FastAPI",
+  software = "AIModelHub-Use-Cases",
 }: AiModelAssetArgs): Record<string, unknown> {
   const name = modelName || `EDC AI Model Hub model ${suffix}`;
   const tags = ["validation", "ai-model-hub", "inference", "endpoint", "model-serving", "A5.2"];
@@ -250,8 +270,8 @@ export function benchmarkDatasetAssetOptions(suffix: string): Record<string, unk
       "daimo:benchmark_dataset": rows,
       "daimo:benchmark_dataset_mapping": JSON.stringify({
         inputPath: "input",
-        expectedPath: "expected_label",
-        predictionPath: "result.label",
+        expectedPath: "",
+        predictionPath: "",
       }),
       "https://pionera.ai/edc/daimo#benchmark_dataset": rows,
       benchmark_dataset: rows,
