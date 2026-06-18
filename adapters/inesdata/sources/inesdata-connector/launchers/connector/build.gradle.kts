@@ -41,8 +41,7 @@ dependencies {
     }
     implementation(libs.edc.data.plane.kafka)
     implementation(libs.edc.data.plane.iam)
-    implementation(project(":extensions:extended-data-plane-public-api"))
-
+    
     // Audit
     implementation(project(":extensions:audit-configuration"))
 
@@ -131,10 +130,6 @@ dependencies {
 
     // Observability
     implementation(libs.edc.api.observability)
-
-    // Ontology Validator
-    implementation(project(":extensions:ontology-validator"))
-    implementation(project(":extensions:ontology-validator-dataplane-extension"))
 
     // Vulnerabilities
     implementation(libs.google.protobuf)

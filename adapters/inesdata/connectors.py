@@ -3311,6 +3311,46 @@ class INESDataConnectorsAdapter:
             default=self._default_level4_local_images_mode(),
         )
 
+    def _level4_local_connector_image_target(self):
+        try:
+            deployer_config = self.config_adapter.load_deployer_config() or {}
+        except Exception:
+            deployer_config = {}
+
+        raw_value = None
+        for candidate in (
+            os.environ.get("PIONERA_INESDATA_LOCAL_IMAGE_TARGET"),
+            os.environ.get("INESDATA_LOCAL_IMAGE_TARGET"),
+            deployer_config.get("INESDATA_LOCAL_IMAGE_TARGET"),
+            deployer_config.get("LEVEL4_INESDATA_LOCAL_IMAGE_TARGET"),
+        ):
+            if candidate is not None and str(candidate).strip():
+                raw_value = candidate
+                break
+
+        if raw_value is None:
+            return None
+
+        target = str(raw_value or "").strip()
+        if target in {"connectors", "all-connectors"}:
+            return None
+
+        allowed_targets = {
+            "TODO",
+            "CHANGED",
+            "changed",
+            "connector",
+            "connector-interface",
+            "registration-service",
+            "public-portal-backend",
+            "public-portal-frontend",
+        }
+        if target in allowed_targets:
+            return target
+
+        print(f"Unknown INESData local image target '{raw_value}'. Falling back to connector images.")
+        return None
+
     def _local_minikube_profile(self):
         env_profile = os.getenv("PIONERA_MINIKUBE_PROFILE") or os.getenv("MINIKUBE_PROFILE")
         if env_profile:
@@ -3886,6 +3926,7 @@ class INESDataConnectorsAdapter:
         cluster_runtime = self._cluster_runtime()
         cluster_type = str(cluster_runtime.get("cluster_type") or "minikube").strip().lower() or "minikube"
         env_prefix = self._remote_image_import_env_prefix_for_namespace(namespace)
+        local_image_target = self._level4_local_connector_image_target()
         command_parts = [
             "bash",
             script_path,
@@ -3898,10 +3939,12 @@ class INESDataConnectorsAdapter:
             self._local_minikube_profile(),
             "--cluster-runtime",
             cluster_type,
-            "--deploy-target",
-            "connectors",
             "--skip-deploy",
         ]
+        if local_image_target:
+            command_parts.extend(["--target", local_image_target])
+        else:
+            command_parts.extend(["--deploy-target", "connectors"])
         if manifest_file:
             command_parts.extend(["--manifest", manifest_file])
         if skip_build:
@@ -3913,6 +3956,8 @@ class INESDataConnectorsAdapter:
         print(f"Cluster runtime: {cluster_type}")
         if skip_build:
             print("This reuses the existing Level 4 image manifest and imports the same images before Helm deploy.")
+        elif local_image_target:
+            print(f"This builds and loads the INESData {local_image_target} image before Helm deploy.")
         else:
             print("This builds and loads inesdata-connector and inesdata-connector-interface before Helm deploy.")
         try:

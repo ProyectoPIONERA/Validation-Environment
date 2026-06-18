@@ -3,16 +3,7 @@
   "strapiUrl": "$STRAPI_URL",
   "catalogUrl": "$CATALOG_URL",
   "sharedUrl": "$SHARED_URL",
-  "ontologyUrl": "$ONTOLOGY_URL",
-  "ontologyAdminUser": "$ONTOLOGY_ADMIN_USER",
-  "ontologyAdminPassword": "$ONTOLOGY_ADMIN_PASSWORD",
   "participantId": "$PARTICIPANT_ID",
-  "branding": {
-    "name": "$APP_BRAND_NAME",
-    "showMenuText": "$APP_SHOW_MENU_TEXT",
-    "primaryColor": "$APP_PRIMARY_COLOR",
-    "secondaryColor": "$APP_SECONDARY_COLOR"
-  },
   "storageAccount": "$STORAGE_ACCOUNT",
   "storageExplorerLinkTemplate": "$STORAGE_LINK_TEMPLATE",
   "service": {

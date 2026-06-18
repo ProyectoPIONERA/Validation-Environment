@@ -76,13 +76,13 @@ perfil, mostrar comandos, ejecutar `Level 5` y sembrar los pasos operativos:
 
 - `Step 8`: registro de vocabularios `JS_DAIMO_Model` y `JS_DAIMO_Dataset`;
 - `Step 9`: registro de datasets de benchmark;
-- `Step 10`: registro de modelos FLARES/Mobility descubiertos desde `/models`;
+- `Step 10`: registro de modelos FLARES/Mobility descubiertos desde `/models`,
+  junto con los assets métricos FLARES expuestos por los endpoints `/metrics`;
 - flujo completo: perfil, `Level 5`, `Step 8`, `Step 9` y `Step 10`.
 
-Los endpoints FLARES `/metrics` pueden sembrarse de forma explícita con
-`--include-flares-metric-models`, pero no forman parte del flujo por defecto
-para mantener el catálogo limitado a los modelos reales publicados por
-`/models`.
+El flujo agrupado mantiene la semántica del repositorio oficial: los modelos
+predictivos se descubren desde `/models` y los endpoints métricos FLARES se
+registran como assets de modelo para el benchmarking.
 
 Los valores concretos de imagen, commit, URLs, kubeconfigs y credenciales viven
 en perfiles locales o secretos de ejecución, no en `docs/`.

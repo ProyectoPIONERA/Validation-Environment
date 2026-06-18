@@ -3,9 +3,6 @@
   "strapiUrl": "http://localhost:1337",
   "catalogUrl": "http://localhost:19193/management/federatedcatalog",
   "sharedUrl": "http://localhost:19196/shared",
-  "ontologyUrl": "http://ontology-hub-demo.dev.ds.dataspaceunit.upm",
-  "ontologyAdminUser": "",
-  "ontologyAdminPassword": "",
   "participantId": "connector-c1",
   "storageAccount": "company2assets",
   "storageExplorerLinkTemplate": "storageexplorer://v=1",
@@ -78,6 +75,6 @@
     "scope": "openid profile email",
     "responseType": "code",
     "showDebugInformation": true,
-    "allowedUrls": "http://localhost:4200,http://connector-c1:4200"
+    "allowedUrls": "http://localhost:4200,http://connector-c1:4200,http://localhost:1337"
   }
 }

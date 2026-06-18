@@ -5,7 +5,6 @@ import {
   AiModelBenchmarkModelType,
   AiModelExecutionInputFeature,
   AiModelExecutionItem,
-  AiModelMetricDirection,
   AiModelRequestShape,
   ModelExecutionResponsePayload
 } from 'src/app/shared/models/ai-model-execution-item';
@@ -30,6 +29,7 @@ interface BenchmarkAsset {
   id: string;
   name: string;
   task: string;
+  taskType: string;
   subtask: string;
   algorithm: string;
   framework: string;
@@ -43,10 +43,7 @@ interface BenchmarkAsset {
   inputExample?: any;
   requestShape: AiModelRequestShape;
   benchmarkModelType: AiModelBenchmarkModelType;
-  targetFields: string[];
-  predictionFields: string[];
   supportedMetrics: string[];
-  metricDirections: Record<string, AiModelMetricDirection>;
 }
 
 interface SchemaField {
@@ -56,13 +53,6 @@ interface SchemaField {
   min?: number;
   max?: number;
   description?: string;
-}
-
-interface SpanAnnotation {
-  start: number;
-  end: number;
-  label: string;
-  text: string;
 }
 
 interface RankingRow {
@@ -150,6 +140,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
   private readonly batchRequestBenchmarkRequestTimeoutMs = 45000;
   validationDatasetSource: 'manual' | 'dataspace' | null = null;
   private validationDatasetMapping: BenchmarkDatasetMapping | null = null;
+  private benchmarkDatasetReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly metricsConfig: Record<ModelTask, string[]> = {
     classification: ['Accuracy', 'Precision', 'Recall', 'F1 Score'],
@@ -202,14 +193,25 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.benchmarkDatasetAssets;
     }
 
-    return this.benchmarkDatasetAssets.filter(asset =>
-      asset.name.toLowerCase().includes(keyword)
-      || asset.description.toLowerCase().includes(keyword)
-      || asset.provider.toLowerCase().includes(keyword)
-      || asset.tags.some(tag => tag.toLowerCase().includes(keyword))
-      || asset.format.toLowerCase().includes(keyword)
-      || asset.contentType.toLowerCase().includes(keyword)
-    );
+    return this.benchmarkDatasetAssets.filter(asset => {
+      const mapping = this.benchmarkDatasetService.extractDatasetMapping(asset);
+      const haystack = [
+        asset.name,
+        asset.description,
+        asset.provider,
+        asset.format,
+        asset.contentType,
+        asset.fileName,
+        ...asset.tags,
+        ...(mapping?.input || []),
+        mapping?.label || ''
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(keyword);
+    });
   }
 
   get selectedBenchmarkDataset(): BenchmarkDatasetAsset | undefined {
@@ -246,10 +248,17 @@ export class AiModelBenchmarkingComponent implements OnInit {
   }
 
   loadBenchmarkDatasets(): void {
+    if (this.benchmarkDatasetReloadTimer) {
+      clearTimeout(this.benchmarkDatasetReloadTimer);
+      this.benchmarkDatasetReloadTimer = null;
+    }
+
     this.isLoadingBenchmarkDatasets = true;
     this.benchmarkDatasetError = '';
 
-    this.benchmarkDatasetService.getBenchmarkDatasets().subscribe({
+    this.benchmarkDatasetService.getBenchmarkDatasets({
+      searchTerm: this.benchmarkDatasetSearch.trim()
+    }).subscribe({
       next: datasets => {
         this.benchmarkDatasetAssets = datasets;
         if (this.selectedBenchmarkDatasetId && !datasets.some(dataset => dataset.id === this.selectedBenchmarkDatasetId)) {
@@ -275,9 +284,10 @@ export class AiModelBenchmarkingComponent implements OnInit {
       id: item.id,
       name: item.name,
       task: item.tasks?.[0] || 'Unknown',
+      taskType: item.taskTypes?.[0] || '',
       subtask: item.subtasks?.[0] || '',
-      algorithm: item.algorithms?.[0] || item.taskTypes?.[0] || '',
-      framework: item.frameworks?.[0] || item.libraries?.[0] || '',
+      algorithm: item.algorithms?.[0] || '',
+      framework: item.frameworks?.[0] || '',
       source: item.source,
       provider: item.provider,
       hasAgreement: item.hasAgreement,
@@ -288,10 +298,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       inputExample: item.inputExample,
       requestShape: item.requestShape || 'single',
       benchmarkModelType: item.benchmarkModelType || 'output',
-      targetFields: item.targetFields || [],
-      predictionFields: item.predictionFields || [],
-      supportedMetrics: item.supportedMetrics || [],
-      metricDirections: item.metricDirections || {}
+      supportedMetrics: item.supportedMetrics || []
     };
   }
 
@@ -316,6 +323,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       pool = pool.filter(m =>
         m.name.toLowerCase().includes(keyword)
         || m.task.toLowerCase().includes(keyword)
+        || m.taskType.toLowerCase().includes(keyword)
         || m.subtask.toLowerCase().includes(keyword)
         || m.algorithm.toLowerCase().includes(keyword)
         || m.framework.toLowerCase().includes(keyword)
@@ -415,6 +423,10 @@ export class AiModelBenchmarkingComponent implements OnInit {
   }
 
   private inferModelTask(model: BenchmarkAsset): ModelTask {
+    const taskType = model.taskType.toLowerCase().replace(/[\s_-]/g, '');
+    if (taskType === 'regression' || taskType === 'forecasting') return 'regression';
+    if (taskType === 'classification' || taskType === 'detection' || taskType === 'segmentation') return 'classification';
+
     const task = `${model.task} ${model.subtask}`.toLowerCase();
     const algorithm = model.algorithm.toLowerCase();
 
@@ -601,6 +613,18 @@ export class AiModelBenchmarkingComponent implements OnInit {
 
   clearBenchmarkDatasetSearch(): void {
     this.benchmarkDatasetSearch = '';
+    this.loadBenchmarkDatasets();
+  }
+
+  onBenchmarkDatasetSearchChange(): void {
+    if (this.benchmarkDatasetReloadTimer) {
+      clearTimeout(this.benchmarkDatasetReloadTimer);
+    }
+
+    this.benchmarkDatasetReloadTimer = setTimeout(() => {
+      this.benchmarkDatasetReloadTimer = null;
+      this.loadBenchmarkDatasets();
+    }, 300);
   }
 
   selectBenchmarkDataset(assetId: string): void {
@@ -800,16 +824,9 @@ export class AiModelBenchmarkingComponent implements OnInit {
     return this.normalizeColumnSignature(Object.keys(example));
   }
 
-  private getPreferredRegressionKeys(model: BenchmarkAsset): string[] {
-    return this.uniqueStrings(model.targetFields);
-  }
-
-  private getPreferredClassificationKeys(model: BenchmarkAsset): string[] {
-    return this.uniqueStrings(model.targetFields);
-  }
-
-  private getPreferredPredictionKeys(model: BenchmarkAsset): string[] {
-    return this.uniqueStrings([...model.predictionFields, ...model.targetFields]);
+  private getPreferredPredictionKeys(): string[] {
+    const label = this.validationDatasetMapping?.label || '';
+    return label ? [label] : [];
   }
 
   private uniqueStrings(values: string[]): string[] {
@@ -1620,29 +1637,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return metrics;
     }
 
-    if (this.isSpanClassificationBenchmark(model)) {
-      const spanMetrics = this.computeSpanExtractionMetrics(datasetRows, predictions);
-      this.selectedMetrics.forEach(metric => {
-        switch (this.normalizeMetricName(metric)) {
-          case 'precision':
-            metrics[metric] = spanMetrics.precision;
-            break;
-          case 'recall':
-            metrics[metric] = spanMetrics.recall;
-            break;
-          case 'f1':
-            metrics[metric] = spanMetrics.f1;
-            break;
-          case 'accuracy':
-            metrics[metric] = spanMetrics.accuracy;
-            break;
-          default:
-            metrics[metric] = Number.NaN;
-        }
-      });
-      return metrics;
-    }
-
     const regressionPairs = this.buildRegressionPairs(model, datasetRows, predictions);
     const classificationPairs = this.buildClassificationPairs(model, datasetRows, predictions);
     const accuracy = this.computeClassificationAccuracy(classificationPairs);
@@ -1693,10 +1687,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
     datasetRows: any[],
     predictions: any[]
   ): Array<{ actual: string; predicted: string }> {
-    if (this.isSpanClassificationBenchmark(model)) {
-      return this.buildSpanClassificationPairs(datasetRows, predictions);
-    }
-
     const excludedKeys = new Set(this.getSchemaFieldsFromModel(model).map(field => field.name));
     const pairs: Array<{ actual: string; predicted: string }> = [];
 
@@ -1708,33 +1698,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
       }
 
       pairs.push({ actual, predicted });
-    });
-
-    return pairs;
-  }
-
-  private buildSpanClassificationPairs(datasetRows: any[], predictions: any[]): Array<{ actual: string; predicted: string }> {
-    const pairs: Array<{ actual: string; predicted: string }> = [];
-
-    datasetRows.forEach((row, index) => {
-      const actualSignatures = this.normalizeSpanAnnotations(this.extractDatasetExpectedValue(row))
-        .map(span => this.spanSignature(span));
-      const predictedSignatures = this.normalizeSpanAnnotations(predictions[index])
-        .map(span => this.spanSignature(span));
-      const unmatchedPredicted = new Set(predictedSignatures);
-
-      actualSignatures.forEach(signature => {
-        if (unmatchedPredicted.has(signature)) {
-          unmatchedPredicted.delete(signature);
-          pairs.push({ actual: signature, predicted: signature });
-        } else {
-          pairs.push({ actual: signature, predicted: '__missing_span__' });
-        }
-      });
-
-      unmatchedPredicted.forEach(signature => {
-        pairs.push({ actual: '__extra_span__', predicted: signature });
-      });
     });
 
     return pairs;
@@ -1767,11 +1730,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.normalizeClassificationValue(mappedValue);
     }
 
-    const preferredValue = this.findComparableValue(row, this.getPreferredClassificationKeys(model));
-    if (preferredValue !== undefined) {
-      return this.normalizeClassificationValue(preferredValue);
-    }
-
     return this.normalizeClassificationValue(this.findComparableValue(row, [
       'label', 'target', 'expected', 'ground_truth', 'groundTruth', 'actual', 'y',
       'prediction', 'category', 'class', 'decision', 'result', 'value'
@@ -1782,11 +1740,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
     const mappedValue = this.extractDatasetExpectedValue(row);
     if (mappedValue !== undefined) {
       return this.readNumericValue(mappedValue);
-    }
-
-    const preferredValue = this.findComparableValue(row, this.getPreferredRegressionKeys(model));
-    if (preferredValue !== undefined) {
-      return this.readNumericValue(preferredValue);
     }
 
     return this.readNumericValue(this.findComparableValue(row, [
@@ -1801,118 +1754,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
     }
 
     return row?.[mapping.label];
-  }
-
-  private isSpanClassificationBenchmark(model: BenchmarkAsset): boolean {
-    const subtask = `${model.subtask || ''}`.toLowerCase();
-    const label = `${this.validationDatasetMapping?.label || ''}`.toLowerCase();
-    const name = `${model.name || ''}`.toLowerCase();
-    return label === 'tags' || subtask.includes('token') || name.includes('5w1h');
-  }
-
-  private normalizeSpanAnnotations(value: any): SpanAnnotation[] {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-
-    return value.reduce<SpanAnnotation[]>((result, item) => {
-      if (Array.isArray(item)) {
-        result.push(...this.normalizeSpanAnnotations(item));
-        return result;
-      }
-
-      if (!item || typeof item !== 'object') {
-        return result;
-      }
-
-      const start = this.readNumericValue(item.Tag_Start ?? item.tag_start ?? item.start);
-      const end = this.readNumericValue(item.Tag_End ?? item.tag_end ?? item.end);
-      const label = this.normalizeClassificationValue(item['5W1H_Label'] ?? item.Label_5W1H ?? item.label);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || !label) {
-        return result;
-      }
-
-      result.push({
-        start,
-        end,
-        label,
-        text: `${item.Tag_Text ?? item.tag_text ?? item.text ?? ''}`.trim().toLowerCase()
-      });
-      return result;
-    }, []);
-  }
-
-  private spanSignature(span: SpanAnnotation): string {
-    return `${span.start}:${span.end}:${span.label}`;
-  }
-
-  private computeSpanExtractionMetrics(datasetRows: any[], predictions: any[]): { precision: number; recall: number; f1: number; accuracy: number } {
-    let correct = 0;
-    let partial = 0;
-    let spurious = 0;
-    let missing = 0;
-    let exactRows = 0;
-
-    datasetRows.forEach((row, index) => {
-      const actual = this.normalizeSpanAnnotations(this.extractDatasetExpectedValue(row));
-      const predicted = this.normalizeSpanAnnotations(predictions[index]);
-      const matchedActual = new Set<number>();
-      let rowCorrect = 0;
-      let rowPartial = 0;
-      let rowSpurious = 0;
-
-      predicted.forEach(predictedSpan => {
-        let matched = false;
-
-        for (let actualIndex = 0; actualIndex < actual.length; actualIndex += 1) {
-          if (matchedActual.has(actualIndex)) {
-            continue;
-          }
-
-          const actualSpan = actual[actualIndex];
-          const sameLabel = predictedSpan.label === actualSpan.label;
-          const exactMatch = predictedSpan.start === actualSpan.start
-            && predictedSpan.end === actualSpan.end
-            && sameLabel;
-
-          if (exactMatch) {
-            correct += 1;
-            rowCorrect += 1;
-            matchedActual.add(actualIndex);
-            matched = true;
-            break;
-          }
-
-          const overlaps = !(predictedSpan.end < actualSpan.start || predictedSpan.start > actualSpan.end);
-          if (overlaps && sameLabel) {
-            partial += 1;
-            rowPartial += 1;
-            matchedActual.add(actualIndex);
-            matched = true;
-            break;
-          }
-        }
-
-        if (!matched) {
-          spurious += 1;
-          rowSpurious += 1;
-        }
-      });
-
-      const rowMissing = actual.length - matchedActual.size;
-      missing += rowMissing;
-
-      if (rowMissing === 0 && rowSpurious === 0 && rowPartial === 0 && rowCorrect === actual.length) {
-        exactRows += 1;
-      }
-    });
-
-    const precision = (correct + (0.5 * partial)) / Math.max(correct + partial + spurious, 1);
-    const recall = (correct + (0.5 * partial)) / Math.max(correct + partial + missing, 1);
-    const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
-    const accuracy = datasetRows.length === 0 ? 0 : exactRows / datasetRows.length;
-
-    return { precision, recall, f1, accuracy };
   }
 
   private extractComparableClassificationValue(model: BenchmarkAsset, output: any): string | null {
@@ -1934,7 +1775,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.normalizeClassificationValue(output);
     }
 
-    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys(model));
+    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys());
     if (preferredValue !== undefined) {
       return this.normalizeClassificationValue(preferredValue);
     }
@@ -1963,7 +1804,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.readNumericValue(output);
     }
 
-    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys(model));
+    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys());
     if (preferredValue !== undefined) {
       return this.readNumericValue(preferredValue);
     }
@@ -2284,15 +2125,6 @@ export class AiModelBenchmarkingComponent implements OnInit {
 
   private isLowerBetterMetric(metric: string): boolean {
     const metricKey = this.normalizeMetricName(metric);
-    const selectedModels = this.modelPoolAssets.filter(model => this.selectedAssetIds.includes(model.id));
-    const metadataDirection = selectedModels
-      .map(model => model.metricDirections[metricKey])
-      .find(direction => !!direction);
-
-    if (metadataDirection) {
-      return metadataDirection === 'lower';
-    }
-
     return this.lowerIsBetterMetrics.some(fallbackMetric => this.normalizeMetricName(fallbackMetric) === metricKey);
   }
 
@@ -2683,11 +2515,9 @@ export class AiModelBenchmarkingComponent implements OnInit {
           }
         } else if (!this.isMetricBenchmarkModel(model)) {
           const mappedValue = this.extractDatasetExpectedValue(row, mapping);
-          const expectedValue = this.isSpanClassificationBenchmark(model)
-            ? (this.normalizeSpanAnnotations(mappedValue).length > 0 ? 'spans' : null)
-            : mappedValue !== undefined
-              ? this.normalizeClassificationValue(mappedValue)
-              : this.extractExpectedClassificationValue(model, row, excludedKeys);
+          const expectedValue = mappedValue !== undefined
+            ? this.normalizeClassificationValue(mappedValue)
+            : this.extractExpectedClassificationValue(model, row, excludedKeys);
           if (!expectedValue) {
             errors.push(`${model.name} row #${index + 1}: validation dataset must include a label/target field for benchmarking.`);
           }

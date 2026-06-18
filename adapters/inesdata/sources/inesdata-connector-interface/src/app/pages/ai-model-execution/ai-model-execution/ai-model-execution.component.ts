@@ -239,7 +239,6 @@ export class AiModelExecutionComponent implements OnInit {
 
   changeModel(): void {
     this.clearSelection();
-    this.selectedAssetId = '';
     this.router.navigate([], {
       relativeTo: this.route,
       queryParams: { assetId: null },
@@ -310,32 +309,8 @@ export class AiModelExecutionComponent implements OnInit {
   }
 
   getSelectorLabel(asset: AiModelExecutionItem): string {
-    const detail = this.firstModelMetadataValue(
-      asset.taskTypes,
-      asset.libraries,
-      asset.algorithms,
-      asset.frameworks,
-      asset.tasks
-    ) || 'ML Model';
+    const detail = asset.libraries[0] || asset.taskTypes[0] || asset.tasks[0] || 'ML Model';
     return `${asset.name} (${detail})`;
-  }
-
-  getPrimaryModelLibrary(asset: AiModelExecutionItem): string {
-    return this.firstModelMetadataValue(asset.libraries, asset.frameworks, asset.algorithms);
-  }
-
-  getPrimaryTaskType(asset: AiModelExecutionItem): string {
-    return this.firstModelMetadataValue(asset.taskTypes, asset.tasks);
-  }
-
-  private firstModelMetadataValue(...collections: Array<string[] | undefined>): string {
-    for (const collection of collections) {
-      const value = collection?.find(item => `${item}`.trim().length > 0);
-      if (value) {
-        return value;
-      }
-    }
-    return '';
   }
 
   isBooleanField(field: InputFieldState): boolean {
@@ -361,6 +336,7 @@ export class AiModelExecutionComponent implements OnInit {
 
   private clearSelection(): void {
     this.selectedAsset = undefined;
+    this.selectedAssetId = '';
     this.lastExecutionCorrelationId = '';
     this.inputFields = [];
     this.inputJson = '{}';

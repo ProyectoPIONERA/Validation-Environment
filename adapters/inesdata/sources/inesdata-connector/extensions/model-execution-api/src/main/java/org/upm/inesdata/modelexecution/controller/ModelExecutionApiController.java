@@ -20,13 +20,17 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.time.Instant;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static jakarta.ws.rs.core.HttpHeaders.ACCEPT;
 import static jakarta.ws.rs.core.HttpHeaders.AUTHORIZATION;
@@ -39,6 +43,7 @@ public class ModelExecutionApiController {
     private static final String DEFAULT_CONTEXT = "https://w3id.org/edc/v0.0.1/ns/";
     private static final int DEFAULT_EDR_ATTEMPTS = 20;
     private static final long DEFAULT_EDR_DELAY_MS = 500;
+    private static final long DEFAULT_EXECUTION_TARGET_CACHE_TTL_MS = 15 * 60 * 1000;
 
     private final ObjectMapper mapper;
     private final Monitor monitor;
@@ -49,12 +54,11 @@ public class ModelExecutionApiController {
     private final String defaultCounterPartyAddress;
     private final String defaultProtocol;
     private final String defaultTransferType;
-    private final int edrAttempts;
-    private final long edrDelayMs;
     private final boolean observerEnabled;
     private final String observerTargetUrl;
     private final String observerSourceComponent;
     private final HttpClient httpClient;
+    private final Map<String, CachedExecutionTarget> executionTargetCache;
 
     public ModelExecutionApiController(TypeManager typeManager,
                                        Monitor monitor,
@@ -65,8 +69,6 @@ public class ModelExecutionApiController {
                                        String defaultCounterPartyAddress,
                                        String defaultProtocol,
                                        String defaultTransferType,
-                                       int edrAttempts,
-                                       long edrDelayMs,
                                        boolean observerEnabled,
                                        String observerJournalBaseUrl,
                                        String observerJournalEventsPath,
@@ -80,12 +82,11 @@ public class ModelExecutionApiController {
         this.defaultCounterPartyAddress = defaultCounterPartyAddress;
         this.defaultProtocol = defaultProtocol;
         this.defaultTransferType = defaultTransferType;
-        this.edrAttempts = Math.max(1, edrAttempts);
-        this.edrDelayMs = Math.max(1, edrDelayMs);
         this.observerEnabled = observerEnabled;
         this.observerTargetUrl = buildObserverTargetUrl(observerJournalBaseUrl, observerJournalEventsPath);
         this.observerSourceComponent = firstNonBlank(observerSourceComponent, "inesdata-connector:model-execution-api");
         this.httpClient = HttpClient.newHttpClient();
+        this.executionTargetCache = new ConcurrentHashMap<>();
     }
 
     @POST
@@ -119,7 +120,7 @@ public class ModelExecutionApiController {
             }
 
             var authHeaderValue = firstNonBlank(httpHeaders.getHeaderString(AUTHORIZATION), null);
-            resolution = resolveExecutionTarget(requestNode, assetId, authHeaderValue);
+            resolution = resolveExecutionTarget(requestNode, assetId, authHeaderValue, benchmarkRunId);
             if (resolution == null || !hasText(resolution.endpoint())) {
                 return error(Response.Status.BAD_REQUEST, "Unable to resolve executable endpoint for assetId");
             }
@@ -141,6 +142,9 @@ public class ModelExecutionApiController {
             var requestedPath = firstNonBlank(textValue(requestNode, "path"), resolution.path());
             var headersNode = firstNode(requestNode, "headers");
             var outboundResponse = invokeTarget(resolution, requestedMethod, requestedPath, headersNode, payload);
+            if (isAuthorizationFailure(outboundResponse.statusCode())) {
+                evictCachedExecutionTarget(benchmarkRunId, assetId, authHeaderValue);
+            }
 
             var contentType = outboundResponse.headers().firstValue(CONTENT_TYPE).orElse(MediaType.APPLICATION_JSON);
             publishExecutionEvent(
@@ -224,7 +228,14 @@ public class ModelExecutionApiController {
 
     private ResolvedExecutionTarget resolveExecutionTarget(JsonNode requestNode,
                                                            String assetId,
-                                                           String managementAuthorization) throws Exception {
+                                                           String managementAuthorization,
+                                                           String benchmarkRunId) throws Exception {
+        var cacheKey = executionTargetCacheKey(benchmarkRunId, assetId, managementAuthorization);
+        var cachedTarget = cachedExecutionTarget(cacheKey);
+        if (cachedTarget != null) {
+            return cachedTarget;
+        }
+
         var localTarget = resolveLocalAsset(assetId, managementAuthorization);
         if (localTarget != null) {
             return localTarget;
@@ -254,7 +265,7 @@ public class ModelExecutionApiController {
             throw new ExecutionException("Unable to resolve EDR for assetId");
         }
 
-        return new ResolvedExecutionTarget(
+        var target = new ResolvedExecutionTarget(
             edrInfo.endpoint(),
             "POST",
             "",
@@ -266,6 +277,66 @@ public class ModelExecutionApiController {
             "edr-http",
             transferParams.connectorId()
         );
+        cacheExecutionTarget(cacheKey, target);
+        return target;
+    }
+
+    private ResolvedExecutionTarget cachedExecutionTarget(String cacheKey) {
+        if (!hasText(cacheKey)) {
+            return null;
+        }
+
+        var cachedTarget = executionTargetCache.get(cacheKey);
+        if (cachedTarget == null) {
+            return null;
+        }
+
+        if (cachedTarget.isFresh(System.currentTimeMillis())) {
+            return cachedTarget.target();
+        }
+
+        executionTargetCache.remove(cacheKey, cachedTarget);
+        return null;
+    }
+
+    private void cacheExecutionTarget(String cacheKey, ResolvedExecutionTarget target) {
+        if (!hasText(cacheKey) || target == null || !"federated-with-agreement".equals(target.executionMode())) {
+            return;
+        }
+        executionTargetCache.put(cacheKey, new CachedExecutionTarget(
+                target,
+                System.currentTimeMillis() + DEFAULT_EXECUTION_TARGET_CACHE_TTL_MS
+        ));
+    }
+
+    private void evictCachedExecutionTarget(String benchmarkRunId, String assetId, String managementAuthorization) {
+        var cacheKey = executionTargetCacheKey(benchmarkRunId, assetId, managementAuthorization);
+        if (hasText(cacheKey)) {
+            executionTargetCache.remove(cacheKey);
+        }
+    }
+
+    private String executionTargetCacheKey(String benchmarkRunId, String assetId, String managementAuthorization) {
+        if (!hasText(benchmarkRunId) || !hasText(assetId)) {
+            return null;
+        }
+        return benchmarkRunId + "|" + assetId + "|" + authFingerprint(managementAuthorization);
+    }
+
+    private String authFingerprint(String managementAuthorization) {
+        if (!hasText(managementAuthorization)) {
+            return "anonymous";
+        }
+        try {
+            var digest = MessageDigest.getInstance("SHA-256").digest(managementAuthorization.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            return Integer.toHexString(managementAuthorization.hashCode());
+        }
+    }
+
+    private boolean isAuthorizationFailure(int statusCode) {
+        return statusCode == 401 || statusCode == 403;
     }
 
     private ResolvedExecutionTarget resolveLocalAsset(String assetId, String managementAuthorization) throws Exception {
@@ -434,22 +505,14 @@ public class ModelExecutionApiController {
         if (negotiation != null) {
             if (!hasText(resolvedCounterPartyAddress)) {
                 resolvedCounterPartyAddress = firstNonBlank(textValue(negotiation,
-                        "counterPartyAddress", "protocolAddress",
-                        "edc:counterPartyAddress", "edc:protocolAddress",
-                        "https://w3id.org/edc/v0.0.1/ns/counterPartyAddress",
-                        "https://w3id.org/edc/v0.0.1/ns/protocolAddress"), null);
+                        "counterPartyAddress", "protocolAddress", "edc:counterPartyAddress", "edc:protocolAddress"), null);
             }
             if (!hasText(resolvedProtocol)) {
-                resolvedProtocol = firstNonBlank(textValue(negotiation,
-                        "protocol", "edc:protocol",
-                        "https://w3id.org/edc/v0.0.1/ns/protocol"), null);
+                resolvedProtocol = firstNonBlank(textValue(negotiation, "protocol", "edc:protocol"), null);
             }
             if (!hasText(resolvedConnectorId)) {
                 resolvedConnectorId = firstNonBlank(textValue(negotiation,
-                        "counterPartyId", "connectorId",
-                        "edc:counterPartyId", "edc:connectorId",
-                        "https://w3id.org/edc/v0.0.1/ns/counterPartyId",
-                        "https://w3id.org/edc/v0.0.1/ns/connectorId"), null);
+                        "counterPartyId", "connectorId", "edc:counterPartyId", "edc:connectorId"), null);
             }
         }
 
@@ -481,7 +544,7 @@ public class ModelExecutionApiController {
     }
 
     private EdrInfo waitForEdr(String transferId, String managementAuthorization) throws Exception {
-        for (int attempt = 0; attempt < edrAttempts; attempt++) {
+        for (int attempt = 0; attempt < DEFAULT_EDR_ATTEMPTS; attempt++) {
             var edrNode = getJson("/v3/edrs/" + encodePathSegment(transferId) + "/dataaddress", managementAuthorization);
             if (edrNode != null && !edrNode.isNull()) {
                 var endpoint = firstNonBlank(textValue(edrNode, "endpoint", "edc:endpoint", "endpointUrl", "edc:endpointUrl"), null);
@@ -491,7 +554,7 @@ public class ModelExecutionApiController {
                     return new EdrInfo(endpoint, authorization, authHeader);
                 }
             }
-            Thread.sleep(edrDelayMs);
+            Thread.sleep(DEFAULT_EDR_DELAY_MS);
         }
 
         return null;
@@ -610,10 +673,7 @@ public class ModelExecutionApiController {
     }
 
     private String extractAgreementAssetId(JsonNode agreement) {
-        var assetId = firstNonBlank(textValue(agreement,
-                "assetId", "edc:assetId",
-                "https://w3id.org/edc/v0.0.1/ns/assetId",
-                "https://w3id.org/edc/v0.0.1/ns/asset"), null);
+        var assetId = firstNonBlank(textValue(agreement, "assetId", "edc:assetId", "https://w3id.org/edc/v0.0.1/ns/assetId"), null);
         if (hasText(assetId)) {
             return assetId;
         }
@@ -645,12 +705,8 @@ public class ModelExecutionApiController {
     }
 
     private String inferRemoteParticipantId(JsonNode agreement) {
-        var providerId = firstNonBlank(textValue(agreement,
-                "providerId", "edc:providerId",
-                "https://w3id.org/edc/v0.0.1/ns/providerId"), null);
-        var consumerId = firstNonBlank(textValue(agreement,
-                "consumerId", "edc:consumerId",
-                "https://w3id.org/edc/v0.0.1/ns/consumerId"), null);
+        var providerId = firstNonBlank(textValue(agreement, "providerId", "edc:providerId"), null);
+        var consumerId = firstNonBlank(textValue(agreement, "consumerId", "edc:consumerId"), null);
         if (!hasText(localParticipantId)) {
             return firstNonBlank(providerId, consumerId, null);
         }
@@ -780,6 +836,12 @@ public class ModelExecutionApiController {
                                            String executionMode,
                                            String endpointKind,
                                            String remoteParticipantId) {
+    }
+
+    private record CachedExecutionTarget(ResolvedExecutionTarget target, long expiresAtMillis) {
+        private boolean isFresh(long nowMillis) {
+            return target != null && expiresAtMillis > nowMillis;
+        }
     }
 
     private static class ExecutionException extends RuntimeException {

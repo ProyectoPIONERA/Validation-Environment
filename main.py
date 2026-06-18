@@ -6825,7 +6825,7 @@ def _menu_action_requires_vm_single_address(choice):
 
 def _menu_action_benefits_from_vm_distributed_configuration(choice):
     normalized = str(choice or "").strip().upper()
-    if normalized in {"0", "P", "H", "U", "X", "J", "CM", "COMPONENTS"}:
+    if normalized in {"0", "P", "H", "U", "X", "J", "CM", "COMPONENTS", "AMH", "AI-MODEL-HUB", "AIHUB"}:
         return True
     return normalized in {str(level_id) for level_id in LEVEL_DESCRIPTIONS}
 
@@ -21898,6 +21898,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print()
     print("[Components]")
     print("CM - Deploy selected components")
+    print("AMH - AI Model Hub use-case Steps 7-10")
     print()
     print("[Control]")
     print("? - Help")
@@ -21975,6 +21976,8 @@ def _print_interactive_help():
     print("CM - Use to deploy a selected subset of Level 5 components without editing deployer.config.")
     print("     It accepts Ontology Hub, AI Model Hub, Semantic Virtualization, and the optional AI Model Hub model server.")
     print("     The model server is enabled only for that run and is deployed through AI Model Hub.")
+    print("AMH - Use to prepare the official AI Model Hub use-case flow.")
+    print("      The grouped flow applies the use-case profile, runs Level 5/Step 7, and seeds Steps 8, 9 and 10.")
     print()
     print("[Compatibility]")
     print("Levels 1-2 belong to the shared local foundation; the menu asks for an adapter only when an operation needs Levels 3-6, unless you preselect one with S.")
@@ -23794,6 +23797,27 @@ def run_interactive_menu(
                     if result is not None:
                         current_adapter = result.get("adapter") or current_adapter
                         _print_action_result(result)
+                    continue
+
+                if choice in {"AMH", "AI-MODEL-HUB", "AIHUB"}:
+                    if normalize_topology(topology) != "vm-distributed":
+                        if not _interactive_confirm(
+                            "Switch active topology to vm-distributed for the AI Model Hub use-case Steps 7-10?",
+                            default=True,
+                        ):
+                            print("AI Model Hub use-case flow cancelled.")
+                            continue
+                        topology = "vm-distributed"
+                        print("Active topology set to vm-distributed.")
+                        _apply_interactive_topology_runtime_environment(topology)
+                    result = _run_ai_model_hub_use_case_demo_assistant(
+                        current_adapter=current_adapter,
+                        adapter_registry=registry,
+                    )
+                    if isinstance(result, dict):
+                        current_adapter = result.get("adapter") or current_adapter
+                        if result.get("status") not in {"completed", "cancelled"}:
+                            _print_ai_model_hub_use_case_demo_action_result(result)
                     continue
 
                 if choice == "J":

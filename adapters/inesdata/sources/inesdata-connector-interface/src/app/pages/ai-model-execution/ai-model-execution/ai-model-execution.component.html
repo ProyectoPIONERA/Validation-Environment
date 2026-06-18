@@ -51,8 +51,8 @@
         <span class="soft-chip">{{ selectedAsset.provider }}</span>
         <span class="soft-chip" *ngIf="selectedAsset.tasks.length > 0">{{ selectedAsset.tasks[0] }}</span>
         <span class="soft-chip" *ngIf="selectedAsset.taskTypes.length > 0">{{ selectedAsset.taskTypes[0] }}</span>
-        <span class="soft-chip" *ngIf="selectedAsset.modalities.length > 0">{{ selectedAsset.modalities[0] }}</span>
-        <span class="soft-chip" *ngIf="getPrimaryModelLibrary(selectedAsset)">{{ getPrimaryModelLibrary(selectedAsset) }}</span>
+        <span class="soft-chip" *ngIf="selectedAsset.modalities.length > 0">{{ selectedAsset.modalities.join(', ') }}</span>
+        <span class="soft-chip" *ngIf="selectedAsset.libraries.length > 0">{{ selectedAsset.libraries[0] }}</span>
         <span class="soft-chip" *ngIf="selectedAsset.endpointBehaviors.length > 0">{{ selectedAsset.endpointBehaviors[0] }}</span>
         <span class="soft-chip" *ngIf="selectedAsset.hasAgreement && !selectedAsset.isLocal">Agreement ready</span>
       </div>
@@ -73,40 +73,28 @@
           <span class="value">{{ executionPath || '/' }}</span>
         </div>
         <div class="detail-row" *ngIf="selectedAsset.tasks.length > 0">
-          <span class="label">Category:</span>
+          <span class="label">Task category:</span>
           <span class="value">{{ selectedAsset.tasks[0] }}</span>
         </div>
         <div class="detail-row" *ngIf="selectedAsset.taskTypes.length > 0">
-          <span class="label">Type:</span>
+          <span class="label">Task type:</span>
           <span class="value">{{ selectedAsset.taskTypes[0] }}</span>
         </div>
         <div class="detail-row" *ngIf="selectedAsset.modalities.length > 0">
           <span class="label">Modality:</span>
           <span class="value">{{ selectedAsset.modalities.join(', ') }}</span>
         </div>
-        <div class="detail-row" *ngIf="selectedAsset.endpointBehaviors.length > 0">
-          <span class="label">Endpoint:</span>
-          <span class="value">{{ selectedAsset.endpointBehaviors[0] }}</span>
+        <div class="detail-row" *ngIf="selectedAsset.subtasks && selectedAsset.subtasks.length > 0">
+          <span class="label">Subtask:</span>
+          <span class="value">{{ selectedAsset.subtasks[0] }}</span>
         </div>
         <div class="detail-row" *ngIf="selectedAsset.libraries.length > 0">
           <span class="label">Library:</span>
           <span class="value">{{ selectedAsset.libraries[0] }}</span>
         </div>
-        <div class="detail-row" *ngIf="selectedAsset.algorithms.length > 0">
-          <span class="label">Algorithm:</span>
-          <span class="value">{{ selectedAsset.algorithms[0] }}</span>
-        </div>
-        <div class="detail-row" *ngIf="selectedAsset.frameworks.length > 0">
-          <span class="label">Framework:</span>
-          <span class="value">{{ selectedAsset.frameworks[0] }}</span>
-        </div>
-        <div class="detail-row" *ngIf="selectedAsset.languages.length > 0">
-          <span class="label">Language:</span>
-          <span class="value">{{ selectedAsset.languages.join(', ') }}</span>
-        </div>
-        <div class="detail-row" *ngIf="selectedAsset.licenses.length > 0">
-          <span class="label">License:</span>
-          <span class="value">{{ selectedAsset.licenses[0] }}</span>
+        <div class="detail-row" *ngIf="selectedAsset.endpointBehaviors.length > 0">
+          <span class="label">Endpoint behavior:</span>
+          <span class="value">{{ selectedAsset.endpointBehaviors[0] }}</span>
         </div>
       </div>
 

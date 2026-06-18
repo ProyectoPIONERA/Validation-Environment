@@ -6,12 +6,12 @@
 
   <div class="search-row">
     <mat-form-field appearance="outline" class="search-field">
-      <mat-label>Search by name, keyword, provider, task or framework</mat-label>
+      <mat-label>Search by name, keyword, provider, task or library</mat-label>
       <input
         matInput
         [(ngModel)]="searchTerm"
         (ngModelChange)="onSearchTermChange()"
-        placeholder="e.g. classification, pytorch, city council"
+        placeholder="e.g. regression, CatBoost, city council"
       />
       <button matSuffix mat-icon-button *ngIf="searchTerm" (click)="clearSearchTerm()" aria-label="Clear search">
         <mat-icon>close</mat-icon>
@@ -42,7 +42,7 @@
 
       <mat-expansion-panel *ngIf="availableTasks.length > 0" [expanded]="expandedSections.tasks" class="filter-panel">
         <mat-expansion-panel-header>
-          <mat-panel-title>Task Categories ({{ availableTasks.length }})</mat-panel-title>
+          <mat-panel-title>Task Category ({{ availableTasks.length }})</mat-panel-title>
         </mat-expansion-panel-header>
         <div class="filter-options">
           <mat-checkbox
@@ -56,7 +56,7 @@
 
       <mat-expansion-panel *ngIf="availableTaskTypes.length > 0" [expanded]="expandedSections.taskTypes" class="filter-panel">
         <mat-expansion-panel-header>
-          <mat-panel-title>Task Types ({{ availableTaskTypes.length }})</mat-panel-title>
+          <mat-panel-title>Task Type ({{ availableTaskTypes.length }})</mat-panel-title>
         </mat-expansion-panel-header>
         <div class="filter-options">
           <mat-checkbox
@@ -70,7 +70,7 @@
 
       <mat-expansion-panel *ngIf="availableModalities.length > 0" [expanded]="expandedSections.modalities" class="filter-panel">
         <mat-expansion-panel-header>
-          <mat-panel-title>Modalities ({{ availableModalities.length }})</mat-panel-title>
+          <mat-panel-title>Modality ({{ availableModalities.length }})</mat-panel-title>
         </mat-expansion-panel-header>
         <div class="filter-options">
           <mat-checkbox
@@ -110,20 +110,6 @@
         </div>
       </mat-expansion-panel>
 
-      <mat-expansion-panel *ngIf="availableAlgorithms.length > 0" [expanded]="expandedSections.algorithms" class="filter-panel">
-        <mat-expansion-panel-header>
-          <mat-panel-title>Algorithms ({{ availableAlgorithms.length }})</mat-panel-title>
-        </mat-expansion-panel-header>
-        <div class="filter-options">
-          <mat-checkbox
-            *ngFor="let algorithm of availableAlgorithms"
-            [checked]="isSelected(selectedAlgorithms, algorithm)"
-            (change)="toggleFilter(selectedAlgorithms, algorithm, $event.checked)">
-            {{ algorithm }}
-          </mat-checkbox>
-        </div>
-      </mat-expansion-panel>
-
       <mat-expansion-panel *ngIf="availableLibraries.length > 0" [expanded]="expandedSections.libraries" class="filter-panel">
         <mat-expansion-panel-header>
           <mat-panel-title>Libraries ({{ availableLibraries.length }})</mat-panel-title>
@@ -138,16 +124,30 @@
         </div>
       </mat-expansion-panel>
 
-      <mat-expansion-panel *ngIf="availableFrameworks.length > 0" [expanded]="expandedSections.frameworks" class="filter-panel">
+      <mat-expansion-panel *ngIf="availableLanguages.length > 0" [expanded]="expandedSections.languages" class="filter-panel">
         <mat-expansion-panel-header>
-          <mat-panel-title>Frameworks ({{ availableFrameworks.length }})</mat-panel-title>
+          <mat-panel-title>Language ({{ availableLanguages.length }})</mat-panel-title>
         </mat-expansion-panel-header>
         <div class="filter-options">
           <mat-checkbox
-            *ngFor="let framework of availableFrameworks"
-            [checked]="isSelected(selectedFrameworks, framework)"
-            (change)="toggleFilter(selectedFrameworks, framework, $event.checked)">
-            {{ framework }}
+            *ngFor="let language of availableLanguages"
+            [checked]="isSelected(selectedLanguages, language)"
+            (change)="toggleFilter(selectedLanguages, language, $event.checked)">
+            {{ language }}
+          </mat-checkbox>
+        </div>
+      </mat-expansion-panel>
+
+      <mat-expansion-panel *ngIf="availableLicenses.length > 0" [expanded]="expandedSections.licenses" class="filter-panel">
+        <mat-expansion-panel-header>
+          <mat-panel-title>License ({{ availableLicenses.length }})</mat-panel-title>
+        </mat-expansion-panel-header>
+        <div class="filter-options">
+          <mat-checkbox
+            *ngFor="let license of availableLicenses"
+            [checked]="isSelected(selectedLicenses, license)"
+            (change)="toggleFilter(selectedLicenses, license, $event.checked)">
+            {{ license }}
           </mat-checkbox>
         </div>
       </mat-expansion-panel>
@@ -162,48 +162,6 @@
             [checked]="isSelected(selectedStorageTypes, storageType)"
             (change)="toggleFilter(selectedStorageTypes, storageType, $event.checked)">
             {{ storageType }}
-          </mat-checkbox>
-        </div>
-      </mat-expansion-panel>
-
-      <mat-expansion-panel *ngIf="availableSoftware.length > 0" [expanded]="expandedSections.software" class="filter-panel">
-        <mat-expansion-panel-header>
-          <mat-panel-title>Software ({{ availableSoftware.length }})</mat-panel-title>
-        </mat-expansion-panel-header>
-        <div class="filter-options">
-          <mat-checkbox
-            *ngFor="let software of availableSoftware"
-            [checked]="isSelected(selectedSoftware, software)"
-            (change)="toggleFilter(selectedSoftware, software, $event.checked)">
-            {{ software }}
-          </mat-checkbox>
-        </div>
-      </mat-expansion-panel>
-
-      <mat-expansion-panel *ngIf="availableLanguages.length > 0" [expanded]="expandedSections.languages" class="filter-panel">
-        <mat-expansion-panel-header>
-          <mat-panel-title>Languages ({{ availableLanguages.length }})</mat-panel-title>
-        </mat-expansion-panel-header>
-        <div class="filter-options">
-          <mat-checkbox
-            *ngFor="let language of availableLanguages"
-            [checked]="isSelected(selectedLanguages, language)"
-            (change)="toggleFilter(selectedLanguages, language, $event.checked)">
-            {{ language }}
-          </mat-checkbox>
-        </div>
-      </mat-expansion-panel>
-
-      <mat-expansion-panel *ngIf="availableLicenses.length > 0" [expanded]="expandedSections.licenses" class="filter-panel">
-        <mat-expansion-panel-header>
-          <mat-panel-title>Licenses ({{ availableLicenses.length }})</mat-panel-title>
-        </mat-expansion-panel-header>
-        <div class="filter-options">
-          <mat-checkbox
-            *ngFor="let license of availableLicenses"
-            [checked]="isSelected(selectedLicenses, license)"
-            (change)="toggleFilter(selectedLicenses, license, $event.checked)">
-            {{ license }}
           </mat-checkbox>
         </div>
       </mat-expansion-panel>

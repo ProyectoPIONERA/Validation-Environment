@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { forkJoin, Observable, of } from 'rxjs';
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { environment } from 'src/environments/environment';
-import { AiModelBrowserItem } from '../models/ai-model-browser-item';
+import { AiModelBrowserItem, AiModelBrowserSource } from '../models/ai-model-browser-item';
 import {
   Asset,
   ContractDefinition,
@@ -13,75 +13,52 @@ import { AssetService } from './asset.service';
 import { CatalogBrowserService } from './catalog-browser.service';
 import { ContractDefinitionService } from './contractDefinition.service';
 
-const DAIMO_PIONERA_NS = 'https://w3id.org/pionera/daimo#';
-const DAIMO_LEGACY_NS = 'https://w3id.org/daimo/ns#';
-const DAIMO_LEGACY_EDC_NS = 'https://pionera.ai/edc/daimo#';
+export interface AiModelBrowserQuery {
+  searchTerm?: string;
+  sources?: AiModelBrowserSource[];
+  tasks?: string[];
+  taskTypes?: string[];
+  modalities?: string[];
+  subtasks?: string[];
+  endpointBehaviors?: string[];
+  libraries?: string[];
+  languages?: string[];
+  licenses?: string[];
+  formats?: string[];
+}
 
-const TASK_KEYS = [
-  'daimo:taskCategory',
-  `${DAIMO_PIONERA_NS}taskCategory`,
-  'taskCategory',
-  'daimo:task',
-  `${DAIMO_LEGACY_NS}task`,
-  `${DAIMO_LEGACY_EDC_NS}task`,
-  'task'
+const TASK_CATEGORY_KEY_GROUPS = [
+  ['daimo:taskCategory', 'https://w3id.org/pionera/daimo#taskCategory', 'taskCategory']
 ];
 
 const TASK_TYPE_KEYS = [
   'daimo:taskType',
-  `${DAIMO_PIONERA_NS}taskType`,
+  'https://w3id.org/pionera/daimo#taskType',
   'taskType'
 ];
 
 const MODALITY_KEYS = [
   'daimo:modality',
-  `${DAIMO_PIONERA_NS}modality`,
+  'https://w3id.org/pionera/daimo#modality',
   'modality'
 ];
 
 const SUBTASK_KEYS = [
   'daimo:subtask',
-  `${DAIMO_PIONERA_NS}subtask`,
-  `${DAIMO_LEGACY_NS}subtask`,
-  `${DAIMO_LEGACY_EDC_NS}subtask`,
+  'https://w3id.org/pionera/daimo#subtask',
   'subtask'
 ];
 
 const ENDPOINT_BEHAVIOR_KEYS = [
   'daimo:endpointBehavior',
-  `${DAIMO_PIONERA_NS}endpointBehavior`,
+  'https://w3id.org/pionera/daimo#endpointBehavior',
   'endpointBehavior'
-];
-
-const ALGORITHM_KEYS = [
-  'daimo:algorithm',
-  `${DAIMO_LEGACY_NS}algorithm`,
-  `${DAIMO_LEGACY_EDC_NS}algorithm`,
-  'algorithm'
 ];
 
 const LIBRARY_KEYS = [
   'daimo:libraryName',
-  `${DAIMO_PIONERA_NS}libraryName`,
-  'libraryName',
-  'daimo:library',
-  `${DAIMO_LEGACY_NS}library`,
-  `${DAIMO_LEGACY_EDC_NS}library`,
-  'library'
-];
-
-const FRAMEWORK_KEYS = [
-  'daimo:framework',
-  `${DAIMO_LEGACY_NS}framework`,
-  `${DAIMO_LEGACY_EDC_NS}framework`,
-  'framework'
-];
-
-const SOFTWARE_KEYS = [
-  'daimo:software',
-  `${DAIMO_LEGACY_NS}software`,
-  `${DAIMO_LEGACY_EDC_NS}software`,
-  'software'
+  'https://w3id.org/pionera/daimo#libraryName',
+  'libraryName'
 ];
 
 const LANGUAGE_KEYS = [
@@ -112,10 +89,10 @@ export class AiModelBrowserService {
   ) {
   }
 
-  getModels(): Observable<AiModelBrowserItem[]> {
+  getModels(filters: AiModelBrowserQuery = {}): Observable<AiModelBrowserItem[]> {
     return forkJoin({
-      ownAssets: this.loadOwnAssets(),
-      federatedOffers: this.loadFederatedOffers(),
+      ownAssets: this.shouldLoadSource(filters, 'own') ? this.loadOwnAssets() : of([]),
+      federatedOffers: this.shouldLoadSource(filters, 'federated') ? this.loadFederatedOffers(filters) : of([]),
       contractDefinitions: this.loadContractDefinitions()
     }).pipe(
       map(({ ownAssets, federatedOffers, contractDefinitions }) => {
@@ -156,10 +133,12 @@ export class AiModelBrowserService {
     );
   }
 
-  private loadFederatedOffers(): Observable<DataOffer[]> {
+  private loadFederatedOffers(filters: AiModelBrowserQuery): Observable<DataOffer[]> {
     return this.catalogBrowserService.count().pipe(
       catchError(() => of(0)),
-      switchMap(total => this.catalogBrowserService.getPaginatedDataOffers(this.buildQuerySpec(total || this.minPageSize)).pipe(
+      switchMap(total => this.catalogBrowserService.getPaginatedDataOffers(
+        this.buildQuerySpec(total || this.minPageSize, this.buildFederatedFilterExpression(filters))
+      ).pipe(
         catchError(() => of([]))
       ))
     );
@@ -174,11 +153,52 @@ export class AiModelBrowserService {
     );
   }
 
-  private buildQuerySpec(total: number): QuerySpec {
+  private buildQuerySpec(total: number, filterExpression: any[] = []): QuerySpec {
     return {
       offset: 0,
-      limit: Math.max(total, this.minPageSize)
+      limit: Math.max(total, this.minPageSize),
+      filterExpression
     };
+  }
+
+  private shouldLoadSource(filters: AiModelBrowserQuery, source: AiModelBrowserSource): boolean {
+    return !filters.sources || filters.sources.length === 0 || filters.sources.includes(source);
+  }
+
+  private buildFederatedFilterExpression(filters: AiModelBrowserQuery): any[] {
+    const filterExpression: any[] = [
+      { operandLeft: 'daimo:assetType', operator: '=', operandRight: 'machineLearning' }
+    ];
+
+    const searchTerm = filters.searchTerm?.trim();
+    if (searchTerm) {
+      filterExpression.push({ operandLeft: 'daimo:search', operator: 'LIKE', operandRight: `%${searchTerm}%` });
+    }
+
+    this.addMultiValueFilter(filterExpression, 'daimo:taskCategory', filters.tasks);
+    this.addMultiValueFilter(filterExpression, 'daimo:taskType', filters.taskTypes);
+    this.addMultiValueFilter(filterExpression, 'daimo:modality', filters.modalities);
+    this.addMultiValueFilter(filterExpression, 'daimo:subtask', filters.subtasks);
+    this.addMultiValueFilter(filterExpression, 'daimo:endpointBehavior', filters.endpointBehaviors);
+    this.addMultiValueFilter(filterExpression, 'daimo:libraryName', filters.libraries);
+    this.addMultiValueFilter(filterExpression, 'daimo:language', filters.languages);
+    this.addMultiValueFilter(filterExpression, 'daimo:license', filters.licenses);
+    this.addMultiValueFilter(filterExpression, 'daimo:format', filters.formats);
+
+    return filterExpression;
+  }
+
+  private addMultiValueFilter(filterExpression: any[], operandLeft: string, values?: string[]): void {
+    const selected = this.unique(values || []);
+    if (selected.length === 0) {
+      return;
+    }
+
+    filterExpression.push({
+      operandLeft,
+      operator: '=',
+      operandRight: selected.join(',')
+    });
   }
 
   private mapOwnAsset(asset: Asset, ownContractAssetIds: Set<string>, hasGlobalSelector: boolean): AiModelBrowserItem {
@@ -203,15 +223,12 @@ export class AiModelBrowserService {
       format: this.firstText(this.readLocalProperty(asset, ['dcterms:format', 'dct:format', 'format', 'http://purl.org/dc/terms/format'])) || 'Unknown',
       storageType: this.normalizeStorageType(this.firstText(dataAddress['type'], dataAddress['@type']) || ''),
       fileName: this.firstText(dataAddress['keyName'], dataAddress['s3Key'], dataAddress['fileName'], dataAddress['filename']) || 'Unknown',
-      tasks: this.collectMetadataValues(metadataNode, TASK_KEYS),
+      tasks: this.collectPreferredMetadataValues(metadataNode, TASK_CATEGORY_KEY_GROUPS),
       taskTypes: this.collectMetadataValues(metadataNode, TASK_TYPE_KEYS),
       modalities: this.collectMetadataValues(metadataNode, MODALITY_KEYS),
       subtasks: this.collectMetadataValues(metadataNode, SUBTASK_KEYS),
       endpointBehaviors: this.collectMetadataValues(metadataNode, ENDPOINT_BEHAVIOR_KEYS),
-      algorithms: this.collectMetadataValues(metadataNode, ALGORITHM_KEYS),
       libraries: this.collectMetadataValues(metadataNode, LIBRARY_KEYS),
-      frameworks: this.collectMetadataValues(metadataNode, FRAMEWORK_KEYS),
-      software: this.collectMetadataValues(metadataNode, SOFTWARE_KEYS),
       languages: this.collectMetadataValues(metadataNode, LANGUAGE_KEYS),
       licenses: this.collectMetadataValues(metadataNode, LICENSE_KEYS),
       provider: environment.runtime.participantId || 'this-connector',
@@ -253,15 +270,12 @@ export class AiModelBrowserService {
       ) || 'Unknown',
       storageType: this.normalizeStorageType(this.resolveOfferStorageType(properties)),
       fileName: this.firstText(properties.fileName) || 'Unknown',
-      tasks: this.collectMetadataValues(metadataNode, TASK_KEYS),
+      tasks: this.collectPreferredMetadataValues(metadataNode, TASK_CATEGORY_KEY_GROUPS),
       taskTypes: this.collectMetadataValues(metadataNode, TASK_TYPE_KEYS),
       modalities: this.collectMetadataValues(metadataNode, MODALITY_KEYS),
       subtasks: this.collectMetadataValues(metadataNode, SUBTASK_KEYS),
       endpointBehaviors: this.collectMetadataValues(metadataNode, ENDPOINT_BEHAVIOR_KEYS),
-      algorithms: this.collectMetadataValues(metadataNode, ALGORITHM_KEYS),
       libraries: this.collectMetadataValues(metadataNode, LIBRARY_KEYS),
-      frameworks: this.collectMetadataValues(metadataNode, FRAMEWORK_KEYS),
-      software: this.collectMetadataValues(metadataNode, SOFTWARE_KEYS),
       languages: this.collectMetadataValues(metadataNode, LANGUAGE_KEYS),
       licenses: this.collectMetadataValues(metadataNode, LICENSE_KEYS),
       provider: this.firstText(properties.participantId, offer.originator) || 'federated-provider',
@@ -336,6 +350,17 @@ export class AiModelBrowserService {
     const values: string[] = [];
     this.walkMetadata(node, new Set(keys), values);
     return this.unique(values);
+  }
+
+  private collectPreferredMetadataValues(node: unknown, keyGroups: string[][]): string[] {
+    for (const keys of keyGroups) {
+      const values = this.collectMetadataValues(node, keys);
+      if (values.length > 0) {
+        return values;
+      }
+    }
+
+    return [];
   }
 
   private walkMetadata(node: unknown, keys: Set<string>, results: string[]): void {

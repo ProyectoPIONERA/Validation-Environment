@@ -265,6 +265,14 @@ imagen. Los ejemplos de configuración usan `main` para desplegar la versión m�
 reciente disponible; para ejecuciones reproducibles se debe fijar
 `*_SOURCE_REF` a una etiqueta o commit.
 
+`AMH - AI Model Hub use-case Steps 7-10`
+
+Abre directamente el asistente de preparación de casos de uso de AI Model Hub.
+Si la sesión no está en `vm-distributed`, el menú ofrece cambiar a esa topología.
+Desde ese asistente, la opción de flujo completo aplica el perfil de casos de
+uso, ejecuta `Level 5` como `Step 7` del repositorio oficial y después ejecuta
+los pasos de siembra `Step 8`, `Step 9` y `Step 10`.
+
 ## Developer
 
 `B - Bootstrap Framework Dependencies`
