@@ -103,6 +103,16 @@ function resolveModelObserverProxyBaseUrl(location: BrowserLocationLike | null):
   return origin ? `${origin}${MODEL_OBSERVER_PROXY_PATH}` : '';
 }
 
+function isPublicBackendPath(url: string): boolean {
+  const parsed = parseUrl(url);
+  if (!parsed) {
+    return false;
+  }
+
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return Boolean(path && path !== '/');
+}
+
 function resolvePortalBackendOrigin(
   runtime: ModelObserverRuntimeConfig,
   location: BrowserLocationLike | null = getBrowserLocation()
@@ -135,12 +145,16 @@ export function resolveModelObserverApiBaseUrl(
   runtime: ModelObserverRuntimeConfig,
   location: BrowserLocationLike | null = getBrowserLocation()
 ): string {
+  const directStrapiUrl = normalizeUrl(runtime.strapiUrl);
+  if (directStrapiUrl && isPublicBackendPath(directStrapiUrl)) {
+    return `${directStrapiUrl}/api/model-observer`;
+  }
+
   const proxyBaseUrl = resolveModelObserverProxyBaseUrl(location);
   if (proxyBaseUrl) {
     return proxyBaseUrl;
   }
 
-  const directStrapiUrl = normalizeUrl(runtime.strapiUrl);
   const backendOrigin = directStrapiUrl || resolvePortalBackendOrigin(runtime, location);
   return backendOrigin ? `${backendOrigin}/api/model-observer` : '';
 }
