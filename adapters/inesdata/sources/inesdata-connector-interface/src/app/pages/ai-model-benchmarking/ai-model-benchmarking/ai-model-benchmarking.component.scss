@@ -153,6 +153,7 @@
   border-radius: 8px;
   padding: 1rem;
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 
 .panel-header {
@@ -649,6 +650,9 @@
   text-align: left;
   cursor: pointer;
   transition: all 0.2s ease;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 
   &:hover {
     border-color: rgba(0, 111, 127, 0.32);
@@ -686,6 +690,8 @@
 .dataset-mapping-textarea {
   width: 100%;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   border: 1px solid #d8e1ec;
   border-radius: 8px;
   background: #ffffff;
@@ -717,24 +723,44 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
+  min-width: 0;
+}
+
+.dataset-card-top > div {
+  min-width: 0;
+}
+
+.dataset-card-top .badge,
+.dataset-card-bottom .badge {
+  flex: 0 1 auto;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .dataset-card-name {
   font-size: 0.92rem;
   font-weight: 700;
   color: #2a3040;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dataset-card-description {
   margin-top: 0.25rem;
   font-size: 0.8rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dataset-card-file {
   font-size: 0.76rem;
   color: #435065;
   font-family: 'Open Sans', monospace;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .compact-btn {

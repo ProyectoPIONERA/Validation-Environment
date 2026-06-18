@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-/tmp/inesdata_seed}"
 NAMESPACE="${NAMESPACE:-demo}"
 COMPONENTS_NAMESPACE="${COMPONENTS_NAMESPACE:-components}"
+COMMON_SERVICES_NAMESPACE="${COMMON_SERVICES_NAMESPACE:-common-srvs}"
+COMMON_KUBECONFIG="${COMMON_KUBECONFIG:-${AI_MODEL_HUB_COMMON_KUBECONFIG:-${K3S_KUBECONFIG_COMMON:-${KUBECONFIG:-}}}}"
+COMMON_POSTGRES_POD="${COMMON_POSTGRES_POD:-common-srvs-postgresql-0}"
 COUNT="${COUNT:-8}"
 CONNECTORS_CSV="${CONNECTORS_CSV:-conn-citycouncil-demo,conn-company-demo}"
 ADAPTER="${ADAPTER:-inesdata}"
@@ -52,6 +55,8 @@ NEGOTIATION_TIMEOUT_SECONDS="${NEGOTIATION_TIMEOUT_SECONDS:-${AI_MODEL_HUB_SEED_
 NEGOTIATION_POLL_INTERVAL_SECONDS="${NEGOTIATION_POLL_INTERVAL_SECONDS:-${AI_MODEL_HUB_SEED_NEGOTIATION_POLL_INTERVAL_SECONDS:-3}}"
 NEGOTIATION_STATE_REQUEST_TIMEOUT_SECONDS="${NEGOTIATION_STATE_REQUEST_TIMEOUT_SECONDS:-${AI_MODEL_HUB_SEED_NEGOTIATION_STATE_REQUEST_TIMEOUT_SECONDS:-20}}"
 NEGOTIATION_PORT_FORWARD_DELAY_SECONDS="${NEGOTIATION_PORT_FORWARD_DELAY_SECONDS:-${AI_MODEL_HUB_SEED_NEGOTIATION_PORT_FORWARD_DELAY_SECONDS:-3}}"
+RECONCILE_DATASET_STORAGE="${RECONCILE_DATASET_STORAGE:-${AI_MODEL_HUB_RECONCILE_DATASET_STORAGE:-1}}"
+DATASET_STORAGE_REGION="${DATASET_STORAGE_REGION:-${AI_MODEL_HUB_DATASET_STORAGE_REGION:-eu-central-1}}"
 
 usage() {
   cat <<'EOF'
@@ -60,6 +65,9 @@ Usage: seed_ml_assets_for_connectors.sh [options]
 Options:
   --namespace <ns>            Dataspace namespace/name used by legacy seed defaults (default: demo)
   --components-namespace <ns> Namespace where component fixtures run, including model-server (default: components)
+  --common-services-namespace <ns>
+                              Namespace where PostgreSQL is deployed (default: common-srvs)
+  --common-kubeconfig <path>  Kubeconfig for common services in vm-distributed
   --adapter <name>            Dataspace adapter API mode: inesdata or edc (default: inesdata)
   --count <n>                 Number of InesDataStore assets per connector (default: 8)
   --connectors <csv>          Connectors list (default: conn-citycouncil-demo,conn-company-demo)
@@ -112,6 +120,8 @@ Options:
                               Max seconds for each negotiation state request (default: 20)
   --negotiation-port-forward-delay-seconds <n>
                               Seconds to wait after opening each negotiation port-forward (default: 3)
+  --skip-dataset-storage-reconcile
+                              Skip post-Step 9 reconciliation of official uploaded benchmark datasets
   --strict                    Fail if any connector fails (default: disabled)
   -h, --help                  Show this help
 
@@ -131,6 +141,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --components-namespace)
       COMPONENTS_NAMESPACE="${2:-}"
+      shift 2
+      ;;
+    --common-services-namespace)
+      COMMON_SERVICES_NAMESPACE="${2:-}"
+      shift 2
+      ;;
+    --common-kubeconfig)
+      COMMON_KUBECONFIG="${2:-}"
       shift 2
       ;;
     --adapter)
@@ -276,6 +294,10 @@ while [[ $# -gt 0 ]]; do
     --negotiation-port-forward-delay-seconds)
       NEGOTIATION_PORT_FORWARD_DELAY_SECONDS="${2:-}"
       shift 2
+      ;;
+    --skip-dataset-storage-reconcile)
+      RECONCILE_DATASET_STORAGE=0
+      shift
       ;;
     --strict)
       STRICT_MODE=1
@@ -2165,7 +2187,17 @@ CEOF
 
 upload_seed_file_asset() {
   local connector="$1" token="$2" mgmt_url="$3" asset_id="$4" json_file="$5" source_file="$6" upload_filename="$7" content_type="$8" asset_label="$9"
-  local up_code fin_code update_code
+  local delete_status=0 up_code fin_code
+
+  delete_v3_asset_if_exists "$connector" "$asset_id" "$token" "$mgmt_url" "$asset_label" || delete_status=$?
+  if [[ "$delete_status" -eq 1 ]]; then
+    return 1
+  fi
+  local skip_finalize=0
+  if [[ "$delete_status" -eq 2 ]]; then
+    echo "[$connector] ${asset_label} asset $asset_id kept existing; refreshing S3 object only"
+    skip_finalize=1
+  fi
 
   up_code="$(request_retry "$WORK_DIR/${connector}_${asset_id}.upload.out" \
     -X POST "$mgmt_url/s3assets/upload-chunk" \
@@ -2176,27 +2208,17 @@ upload_seed_file_asset() {
     -F "json=@$json_file;type=application/json" \
     -F "file=@$source_file;type=$content_type")" || true
 
-  fin_code="$(request_retry "$WORK_DIR/${connector}_${asset_id}.finalize.out" \
-    -X POST "$mgmt_url/s3assets/finalize-upload" \
-    -H "Authorization: Bearer $token" \
-    -F "json=@$json_file;type=application/json" \
-    -F "fileName=$upload_filename")" || true
-
-  if [[ "$fin_code" == "409" || "$up_code" == "409" ]]; then
-    update_code="$(request_retry "$WORK_DIR/${connector}_${asset_id}.update.out" \
-      -X PUT "$mgmt_url/v3/assets" \
+  if [[ "$skip_finalize" -eq 1 ]]; then
+    fin_code="skipped"
+  else
+    fin_code="$(request_retry "$WORK_DIR/${connector}_${asset_id}.finalize.out" \
+      -X POST "$mgmt_url/s3assets/finalize-upload" \
       -H "Authorization: Bearer $token" \
-      -H 'Content-Type: application/json' \
-      --data-binary "@$json_file")" || true
-
-    if [[ "$update_code" != "200" && "$update_code" != "204" ]]; then
-      echo "[$connector] ${asset_label} asset $asset_id metadata update FAILED (HTTP ${update_code:-NA})" >&2
-      cat "$WORK_DIR/${connector}_${asset_id}.update.out" >&2 2>/dev/null || true
-      return 1
-    fi
+      -F "json=@$json_file;type=application/json" \
+      -F "fileName=$upload_filename")" || true
   fi
 
-  if [[ "$fin_code" == "200" || "$fin_code" == "409" ]] && [[ "$up_code" == "200" || "$up_code" == "000" || "$up_code" == "409" ]]; then
+  if [[ "$fin_code" == "200" || "$fin_code" == "409" || "$fin_code" == "skipped" ]] && [[ "$up_code" == "200" || "$up_code" == "000" || "$up_code" == "409" ]]; then
     echo "[$connector] ${asset_label} asset $asset_id upload=$up_code finalize=$fin_code"
     return 0
   fi
@@ -2416,6 +2438,113 @@ DATASET_EOF
     fi
   done
 
+  return 0
+}
+
+reconcile_use_case_dataset_storage_assets() {
+  local connector="$1"
+  local creds_file="$2"
+
+  if [[ "$RECONCILE_DATASET_STORAGE" != "1" ]]; then
+    return 0
+  fi
+  if [[ "$ADAPTER" != "inesdata" ]]; then
+    return 0
+  fi
+  if [[ "$(connector_tag "$connector")" != "company" ]]; then
+    return 0
+  fi
+
+  local db_name db_user db_pass bucket
+  db_name="$(get_json_value "$creds_file" database name)"
+  db_user="$(get_json_value "$creds_file" database user)"
+  db_pass="$(get_json_value "$creds_file" database passwd)"
+  bucket="$(get_json_value "$creds_file" access_urls minio_bucket)"
+  if [[ -z "$bucket" ]]; then
+    bucket="$(get_json_value "$creds_file" public_access_urls minio_bucket)"
+  fi
+
+  if [[ -z "$db_name" || -z "$db_user" || -z "$db_pass" || -z "$bucket" ]]; then
+    echo "[$connector] cannot reconcile AI Model Hub benchmark dataset storage: missing database or bucket metadata" >&2
+    return 1
+  fi
+
+  local sql_file out_file err_file
+  sql_file="$WORK_DIR/${connector}_ai_model_hub_dataset_storage_reconcile.sql"
+  out_file="$WORK_DIR/${connector}_ai_model_hub_dataset_storage_reconcile.out"
+  err_file="$WORK_DIR/${connector}_ai_model_hub_dataset_storage_reconcile.err"
+
+  python3 - "$sql_file" "$bucket" "$DATASET_STORAGE_REGION" \
+    "$FLARES_5W1H_DATASET_ID" "5w1h_subtarea_1_test.jsonl" \
+    "$FLARES_RELIABILITY_DATASET_ID" "5w1h_subtarea_2_test.jsonl" \
+    "$MOBILITY_SEGMENTS_DATASET_ID" "segments_test.csv" <<'PY'
+import json
+import sys
+
+sql_file, bucket, region, *pairs = sys.argv[1:]
+ns = "https://w3id.org/edc/v0.0.1/ns/"
+
+lines = ["\\set ON_ERROR_STOP on", "begin;"]
+for asset_id, file_name in zip(pairs[0::2], pairs[1::2]):
+    data_address = {
+        f"{ns}type": "AmazonS3",
+        f"{ns}keyName": file_name,
+        f"{ns}bucketName": bucket,
+        f"{ns}region": region,
+    }
+    private_properties = {"storageAssetFile": file_name}
+    lines.append(
+        "update edc_asset\n"
+        f"   set data_address = '{json.dumps(data_address, separators=(',', ':'))}'::json,\n"
+        f"       private_properties = '{json.dumps(private_properties, separators=(',', ':'))}'::json\n"
+        f" where asset_id = '{asset_id}';"
+    )
+lines.append(
+    "select asset_id,\n"
+    "       data_address->>'https://w3id.org/edc/v0.0.1/ns/type',\n"
+    "       data_address->>'https://w3id.org/edc/v0.0.1/ns/keyName',\n"
+    "       private_properties->>'storageAssetFile'\n"
+    "  from edc_asset\n"
+    " where asset_id in ('company-flares-5w1h-test', 'company-flares-reliability-test', 'company-mobility-segments-test')\n"
+    " order by asset_id;"
+)
+lines.append("commit;")
+with open(sql_file, "w", encoding="utf-8") as handle:
+    handle.write("\n".join(lines))
+    handle.write("\n")
+PY
+
+  local kubectl_cmd=(kubectl)
+  if [[ -n "$COMMON_KUBECONFIG" ]]; then
+    kubectl_cmd+=(--kubeconfig "$COMMON_KUBECONFIG")
+  fi
+
+  echo "[$connector] reconciling official AI Model Hub benchmark dataset storage metadata"
+  if ! "${kubectl_cmd[@]}" exec -i -n "$COMMON_SERVICES_NAMESPACE" "$COMMON_POSTGRES_POD" -- \
+    env "PGPASSWORD=$db_pass" psql -U "$db_user" -d "$db_name" -At \
+    < "$sql_file" > "$out_file" 2> "$err_file"; then
+    echo "[$connector] benchmark dataset storage reconciliation failed" >&2
+    cat "$err_file" >&2 2>/dev/null || true
+    return 1
+  fi
+
+  cat "$out_file"
+  local expected ok=1
+  for expected in \
+    "${FLARES_5W1H_DATASET_ID}|AmazonS3|5w1h_subtarea_1_test.jsonl|5w1h_subtarea_1_test.jsonl" \
+    "${FLARES_RELIABILITY_DATASET_ID}|AmazonS3|5w1h_subtarea_2_test.jsonl|5w1h_subtarea_2_test.jsonl" \
+    "${MOBILITY_SEGMENTS_DATASET_ID}|AmazonS3|segments_test.csv|segments_test.csv"; do
+    if ! grep -Fqx "$expected" "$out_file"; then
+      ok=0
+      echo "[$connector] missing reconciled dataset state: $expected" >&2
+    fi
+  done
+
+  if [[ "$ok" != "1" ]]; then
+    return 1
+  fi
+
+  echo "[$connector] official AI Model Hub benchmark datasets are transfer-ready"
   return 0
 }
 
@@ -2899,6 +3028,11 @@ seed_connector() {
       fi
 
       if ! seed_flares_test_dataset_assets "$connector" "$token" "$mgmt_url"; then
+        cleanup_pf
+        return 1
+      fi
+
+      if ! reconcile_use_case_dataset_storage_assets "$connector" "$creds_file"; then
         cleanup_pf
         return 1
       fi

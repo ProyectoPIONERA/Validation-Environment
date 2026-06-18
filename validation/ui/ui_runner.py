@@ -541,6 +541,20 @@ def _build_playwright_environment(
     model_server_url = connector_model_server_url or _model_server_public_base_url(config)
     if model_server_url:
         env.setdefault("AI_MODEL_HUB_MODEL_SERVER_BASE_URL", model_server_url)
+    for key in (
+        "AI_MODEL_HUB_MODEL_SERVER_MODE",
+        "AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES",
+        "AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE",
+    ):
+        configured_value = str(config.get(key) or os.environ.get(key) or "").strip()
+        if configured_value:
+            env.setdefault(key, configured_value)
+    if (
+        env.get("AI_MODEL_HUB_MODEL_SERVER_MODE") == "use-cases"
+        or str(env.get("AI_MODEL_HUB_ENABLE_MODEL_SERVER_USE_CASES") or "").lower() == "true"
+        or env.get("AI_MODEL_HUB_USE_CASE_PUBLICATION_MODE") == "split"
+    ):
+        env.setdefault("UI_AI_MODEL_HUB_USE_CASES_DEMO", "1")
     _export_ai_model_hub_model_server_validation_env(env, config)
 
     connectors = list(context.connectors or [])

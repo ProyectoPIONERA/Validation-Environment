@@ -20224,6 +20224,11 @@ def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="
         or ("pionera-edc" if str(adapter_name or "").strip().lower() == "edc" else "pionera")
     ).strip()
     components_namespace = str(values.get("COMPONENTS_NAMESPACE") or "components").strip() or "components"
+    common_services_namespace = str(
+        values.get("COMMON_SERVICES_NAMESPACE")
+        or values.get("NS_COMMON")
+        or "common-srvs"
+    ).strip() or "common-srvs"
     connectors = parse_connector_list(values.get("DS_1_CONNECTORS"), dataspace)
     if not connectors:
         connectors = [
@@ -20342,6 +20347,8 @@ def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="
     return {
         "dataspace": dataspace,
         "components_namespace": components_namespace,
+        "common_services_namespace": common_services_namespace,
+        "common_kubeconfig": str(kubeconfig_by_role.get("common") or "").strip(),
         "connectors": connectors,
         "credentials_dir": credentials_dir,
         "keycloak_token_url": keycloak_token_url,
@@ -20387,6 +20394,8 @@ def _ai_model_hub_use_case_demo_seed_command(profile_values=None, adapter_name="
         runtime["dataspace"],
         "--components-namespace",
         runtime["components_namespace"],
+        "--common-services-namespace",
+        runtime["common_services_namespace"],
         "--connectors",
         ",".join(runtime["connectors"]),
         "--adapter",
@@ -20397,6 +20406,8 @@ def _ai_model_hub_use_case_demo_seed_command(profile_values=None, adapter_name="
     ]
     if runtime.get("keycloak_token_url"):
         args.extend(["--keycloak-token-url", runtime["keycloak_token_url"]])
+    if runtime.get("common_kubeconfig"):
+        args.extend(["--common-kubeconfig", runtime["common_kubeconfig"]])
     if runtime.get("connector_k8s_namespaces"):
         args.extend(
             [
@@ -20470,18 +20481,48 @@ def _run_ai_model_hub_use_case_demo_logged_command(args, log_prefix, env_updates
     log_path = os.path.join(artifact_dir, f"{log_prefix}-{started_at}.log")
     env = os.environ.copy()
     env.update({key: value for key, value in dict(env_updates or {}).items() if str(value).strip()})
-    with open(log_path, "ab") as log_handle:
-        completed = subprocess.run(
-            args,
-            cwd=os.path.dirname(__file__),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            check=False,
-            env=env,
-        )
+    print()
+    print(f"Streaming {log_prefix} output. Log: {_framework_relative_path(log_path)}")
+    returncode = 255
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log_handle:
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=os.path.dirname(__file__),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+        except OSError as exc:
+            message = f"Failed to start command: {exc}"
+            print(message)
+            log_handle.write(message + "\n")
+            return {
+                "status": "failed",
+                "returncode": returncode,
+                "command": " ".join(shlex.quote(part) for part in args),
+                "log_path": log_path,
+            }
+        try:
+            for line in process.stdout or []:
+                print(line, end="")
+                log_handle.write(line)
+                log_handle.flush()
+            returncode = process.wait()
+        except KeyboardInterrupt:
+            process.terminate()
+            try:
+                returncode = process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait()
+            raise
     return {
-        "status": "passed" if completed.returncode == 0 else "failed",
-        "returncode": completed.returncode,
+        "status": "passed" if returncode == 0 else "failed",
+        "returncode": returncode,
         "command": " ".join(shlex.quote(part) for part in args),
         "log_path": log_path,
     }
@@ -20491,10 +20532,13 @@ def _run_ai_model_hub_use_case_demo_level5(adapter_name="inesdata"):
     profile_name = _environment_profile_name()
     return _run_ai_model_hub_use_case_demo_logged_command(
         _ai_model_hub_use_case_demo_level5_command(adapter_name=adapter_name),
-        "level5-components",
+        "step7-ai-model-hub-deploy",
         env_updates={
             "PIONERA_CONFIG_PROFILE": profile_name,
             "PIONERA_ENVIRONMENT_PROFILE": profile_name,
+            "PIONERA_COMPONENTS": "ai-model-hub",
+            "PIONERA_AI_MODEL_HUB_MODEL_SERVER_ENABLED": "true",
+            "PIONERA_LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED": "true",
         },
     )
 
@@ -20678,6 +20722,16 @@ def _run_ai_model_hub_use_case_demo_flow(profile_path, profile_values=None, adap
     return {"status": "passed", "steps": steps}
 
 
+def _ai_model_hub_use_case_demo_step_display_name(step_name):
+    return {
+        "prepare-profile": "Prepare use-case profile",
+        "level5-components": "Step 7 - Deploy AI Model Hub/model-server",
+        "step8-vocabularies": "Step 8 - Seed DAIMO vocabularies",
+        "step9-datasets": "Step 9 - Seed benchmark datasets",
+        "step10-models": "Step 10 - Seed FLARES/Mobility model assets",
+    }.get(step_name, step_name or "step")
+
+
 def _print_ai_model_hub_use_case_demo_flow_result(result):
     payload = dict(result or {})
     print()
@@ -20686,7 +20740,7 @@ def _print_ai_model_hub_use_case_demo_flow_result(result):
         print(f"Reason: {payload.get('reason')}")
     for step in list(payload.get("steps") or []):
         print()
-        print(f"[{step.get('name') or 'step'}]")
+        print(f"[{_ai_model_hub_use_case_demo_step_display_name(step.get('name'))}]")
         _print_ai_model_hub_use_case_demo_action_result(step)
 
 
@@ -20730,27 +20784,29 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
         status = _ai_model_hub_use_case_demo_status(profile_values)
         _print_ai_model_hub_use_case_demo_status(status, topology_config=topology_config)
         print()
-        print("1 - Prepare/apply use-case profile (use-cases model-server)")
-        print("2 - Show Level 5 and demo seed commands")
-        print("3 - Run Step 8: seed DAIMO model/dataset vocabularies")
-        print("4 - Run Step 9: seed benchmark datasets")
-        print("5 - Run Step 10: seed FLARES/Mobility model assets")
-        print("6 - Run use-case demo flow (profile + Level 5 + Steps 8/9/10)")
+        print("1 - Run official AI Model Hub use-case flow (Steps 7-10)")
+        print("2 - Show exact commands")
         print("B/Q - Back")
         choice = _interactive_read("\nSelection: ").strip().upper()
         if not choice or choice in {"B", "Q"}:
             return {"status": "completed", "adapter": selected_adapter, "topology": "vm-distributed"}
 
         if choice == "1":
-            if not _interactive_confirm("Apply the AI Model Hub use-case demo profile now?", default=False):
-                print("Profile promotion cancelled.")
+            print()
+            print(
+                "This applies the use-case profile, deploys only AI Model Hub/model-server, "
+                "and executes the official Steps 8, 9 and 10."
+            )
+            if not _interactive_confirm("Run the official AI Model Hub flow now?", default=False):
+                print("AI Model Hub flow cancelled.")
                 continue
-            result = _promote_ai_model_hub_use_case_demo_profile(
+            result = _run_ai_model_hub_use_case_demo_flow(
                 profile_path,
                 profile_values,
                 adapter_name=selected_adapter,
+                run_level5=True,
             )
-            _print_ai_model_hub_use_case_demo_action_result(result)
+            _print_ai_model_hub_use_case_demo_flow_result(result)
             profile_values, _parse_errors = _load_vm_distributed_profile(profile_path)
             topology_config.update({key: value for key, value in profile_values.items() if str(value).strip()})
             continue
@@ -20781,9 +20837,17 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
                 step="models",
             )
             print()
+            level5_env = [
+                "PIONERA_COMPONENTS=ai-model-hub",
+                "PIONERA_AI_MODEL_HUB_MODEL_SERVER_ENABLED=true",
+                "PIONERA_LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED=true",
+            ]
             print("AI Model Hub use-case demo commands:")
-            print("  Level 5 / Step 7:")
-            print("    " + " ".join(shlex.quote(part) for part in level5_cmd))
+            print("  AI Model Hub deploy / Step 7:")
+            print(
+                "    "
+                + " ".join(shlex.quote(part) for part in [*level5_env, *level5_cmd])
+            )
             print("  Step 8 vocabularies:")
             print("    " + " ".join(shlex.quote(part) for part in vocabularies_cmd))
             print("  Step 9 datasets:")
@@ -20792,62 +20856,7 @@ def _run_ai_model_hub_use_case_demo_assistant(current_adapter=None, adapter_regi
             print("    " + " ".join(shlex.quote(part) for part in models_cmd))
             continue
 
-        if choice == "3":
-            if not _interactive_confirm("Run Step 8 DAIMO vocabulary seeding now?", default=False):
-                print("Vocabulary seeding cancelled.")
-                continue
-            result = _run_ai_model_hub_use_case_demo_seed_step(
-                profile_values,
-                adapter_name=selected_adapter,
-                step="vocabularies",
-            )
-            _print_ai_model_hub_use_case_demo_action_result(result)
-            continue
-
-        if choice == "4":
-            if not _interactive_confirm("Run Step 9 dataset seeding now?", default=False):
-                print("Dataset seeding cancelled.")
-                continue
-            result = _run_ai_model_hub_use_case_demo_seed_step(
-                profile_values,
-                adapter_name=selected_adapter,
-                step="datasets",
-            )
-            _print_ai_model_hub_use_case_demo_action_result(result)
-            continue
-
-        if choice == "5":
-            print()
-            print("This registers the FLARES/Mobility HttpData assets defined by the AIModelHub Step 10 contract.")
-            if not _interactive_confirm("Run Step 10 model asset seeding now?", default=False):
-                print("Model asset seeding cancelled.")
-                continue
-            result = _run_ai_model_hub_use_case_demo_seed_step(
-                profile_values,
-                adapter_name=selected_adapter,
-                step="models",
-            )
-            _print_ai_model_hub_use_case_demo_action_result(result)
-            continue
-
-        if choice == "6":
-            print()
-            print("This applies the use-cases model-server profile, runs Level 5, then seeds Steps 8/9/10.")
-            if not _interactive_confirm("Run the AI Model Hub use-case demo flow now?", default=False):
-                print("Use-case demo flow cancelled.")
-                continue
-            result = _run_ai_model_hub_use_case_demo_flow(
-                profile_path,
-                profile_values,
-                adapter_name=selected_adapter,
-                run_level5=True,
-            )
-            _print_ai_model_hub_use_case_demo_flow_result(result)
-            profile_values, _parse_errors = _load_vm_distributed_profile(profile_path)
-            topology_config.update({key: value for key, value in profile_values.items() if str(value).strip()})
-            continue
-
-        print("Invalid AI Model Hub use-case demo selection.")
+        print("Invalid AI Model Hub flow selection.")
 
 
 def _print_vm_distributed_assistant_menu(current_adapter=None):
@@ -21898,7 +21907,7 @@ def _print_interactive_menu(adapter_name, adapter_registry=None, topology="local
     print()
     print("[Components]")
     print("CM - Deploy selected components")
-    print("AMH - AI Model Hub use-case Steps 7-10")
+    print("AMH - Run official AI Model Hub Steps 7-10")
     print()
     print("[Control]")
     print("? - Help")
@@ -21976,7 +21985,7 @@ def _print_interactive_help():
     print("CM - Use to deploy a selected subset of Level 5 components without editing deployer.config.")
     print("     It accepts Ontology Hub, AI Model Hub, Semantic Virtualization, and the optional AI Model Hub model server.")
     print("     The model server is enabled only for that run and is deployed through AI Model Hub.")
-    print("AMH - Use to prepare the official AI Model Hub use-case flow.")
+    print("AMH - Use to run the official AI Model Hub flow: deploy AI Model Hub/model-server and seed Steps 8-10.")
     print("      The grouped flow applies the use-case profile, runs Level 5/Step 7, and seeds Steps 8, 9 and 10.")
     print()
     print("[Compatibility]")
