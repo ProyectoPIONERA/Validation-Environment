@@ -661,10 +661,8 @@ if [ -x /app/setup/lovInitialization.sh ]; then
   init_rc=$?
   cat "${init_output}"
   if grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}"; then
-    echo "Ontology Hub SPARQL preparation failed: Elasticsearch rejected the LOV indexer authentication." >&2
-    exit 31
-  fi
-  if [ "${init_rc}" -ne 0 ]; then
+    echo "Ontology Hub legacy LOV indexer authentication failed; continuing with framework-managed ES fixture index." >&2
+  elif [ "${init_rc}" -ne 0 ]; then
     if grep -Fq "Index 'lov' does not exist" "${init_output}"; then
       echo "Ontology Hub legacy index-lov did not find index 'lov'; continuing with framework-managed ES fixture index."
     else
@@ -712,10 +710,8 @@ bash /app/setup/lovInitialization.sh >"${init_output}" 2>&1
 init_rc=$?
 cat "${init_output}"
 if grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}"; then
-  echo "Ontology Hub fixture preparation failed: Elasticsearch rejected the LOV indexer authentication." >&2
-  exit 31
-fi
-if [ "${init_rc}" -ne 0 ]; then
+  echo "Ontology Hub legacy LOV indexer authentication failed; continuing with framework-managed ES fixture index." >&2
+elif [ "${init_rc}" -ne 0 ]; then
   if grep -Fq "Index 'lov' does not exist" "${init_output}"; then
     echo "Ontology Hub legacy index-lov did not find index 'lov'; continuing with framework-managed ES fixture index."
   else

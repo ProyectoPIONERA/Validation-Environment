@@ -10,6 +10,7 @@ import {
   bootstrapConsumerNegotiation,
   bootstrapProviderNegotiationArtifacts,
   cleanupProviderValidationArtifacts,
+  probeConsumerCatalogDatasetReadiness,
   probeConsumerEdrReadinessForAssetAgreement,
   waitForConsumerAgreement,
 } from "../../../shared/utils/provider-bootstrap";
@@ -573,15 +574,14 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
     );
     await attachJson("ai-model-external-execution-provider-bootstrap", report.providerBootstrap);
 
-    await attachJson("ai-model-external-execution-catalog-readiness", {
-      status: "delegated-to-negotiation-bootstrap",
+    report.catalogReadiness = await probeConsumerCatalogDatasetReadiness(
+      request,
+      dataspaceRuntime,
       assetId,
-      counterPartyAddress: dataspaceRuntime.provider.protocolBaseUrl,
-      counterPartyId: dataspaceRuntime.provider.connectorName,
-      reason:
-        "External execution creates a direct contract negotiation immediately after provider bootstrap; " +
-        "bootstrapConsumerNegotiation performs the offer lookup used to build the contract request.",
-    });
+      dataspaceRuntime.provider.protocolBaseUrl,
+      dataspaceRuntime.provider.connectorName,
+    );
+    await attachJson("ai-model-external-execution-catalog-readiness", report.catalogReadiness);
 
     let lastNegotiationIssue = "";
     for (let attempt = 1; attempt <= externalNegotiationMaxAttempts(); attempt += 1) {

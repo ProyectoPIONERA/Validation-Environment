@@ -25,6 +25,7 @@ class NewmanExecutor:
     ASYNC_COLLECTION_DELAY_REQUEST_MS = 2000
     TRANSIENT_AUTH_ATTEMPTS = 5
     TRANSIENT_AUTH_RETRY_DELAY_SECONDS = 5
+    MANAGEMENT_AUTH_REFRESH_ATTEMPTS = 3
     MANAGEMENT_PREFLIGHT_ATTEMPTS = 20
     MANAGEMENT_PREFLIGHT_RETRY_DELAY_SECONDS = 3
     MANAGEMENT_PREFLIGHT_TIMEOUT_SECONDS = 15
@@ -556,6 +557,8 @@ class NewmanExecutor:
             body = response.json()
         except ValueError as exc:
             raise RuntimeError(f"{role} login returned a non-JSON body") from exc
+        if not isinstance(body, dict):
+            raise RuntimeError(f"{role} login returned a JSON {type(body).__name__} instead of an object")
 
         token = body.get("access_token")
         if not token:
@@ -603,7 +606,8 @@ class NewmanExecutor:
     ):
         current_token = token
         last_error = None
-        for attempt in range(1, attempts + 1):
+        auth_refresh_attempts = min(attempts, self.MANAGEMENT_AUTH_REFRESH_ATTEMPTS)
+        for attempt in range(1, auth_refresh_attempts + 1):
             try:
                 response, body = self._post_management_json(
                     url,
@@ -617,7 +621,7 @@ class NewmanExecutor:
                 return response, body, current_token
             except ManagementAuthenticationError as exc:
                 last_error = exc
-                if attempt >= attempts:
+                if attempt >= auth_refresh_attempts:
                     raise
                 _, current_token = self._connector_login(
                     env_vars,
@@ -1729,4 +1733,3 @@ class NewmanExecutor:
 
     def describe(self) -> str:
         return "NewmanExecutor runs Postman collections using Newman."
-

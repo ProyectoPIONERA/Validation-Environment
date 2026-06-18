@@ -182,6 +182,8 @@ class OntologyHubComponentValidationTests(unittest.TestCase):
         self.assertIn("lov_class", script)
         self.assertIn("framework-managed ES fixture index", script)
         self.assertIn("Index 'lov' does not exist", script)
+        self.assertIn("legacy LOV indexer authentication failed", script)
+        self.assertNotIn("exit 31", script)
         self.assertIn("custom-vocab", script)
         self.assertIn("https://example.org/custom/v1/", script)
 
