@@ -140,7 +140,7 @@ export class EdcContractsPage {
   }
 
   private contractCard(assetId: string) {
-    return this.page.locator("lib-contract-agreement-card").filter({ hasText: assetId }).first();
+    return this.page.locator("lib-contract-agreement-card, article, .card").filter({ hasText: assetId }).first();
   }
 
   private openDialog() {

@@ -227,14 +227,19 @@ function normalizeTopology(value: string | undefined): string {
   return ["local", "vm-single", "vm-distributed"].includes(topology) ? topology : "local";
 }
 
-function activeTopologyFromConfig(deployerConfig: Record<string, string>): string {
+function configuredTopology(deployerConfig: Record<string, string>): string {
   return normalizeTopology(
     process.env.UI_TOPOLOGY ||
       process.env.PIONERA_TOPOLOGY ||
+      process.env.EDC_TOPOLOGY ||
       process.env.INESDATA_TOPOLOGY ||
       deployerConfig.TOPOLOGY ||
       deployerConfig.PIONERA_TOPOLOGY,
   );
+}
+
+function activeTopologyFromConfig(deployerConfig: Record<string, string>): string {
+  return configuredTopology(deployerConfig);
 }
 
 function commonServicesNamespace(deployerConfig: Record<string, string>): string {
@@ -302,13 +307,7 @@ function configuredRuntimeDir(adapter: string, environment: string, dataspace: s
     return explicitRuntimeDir;
   }
   const deployerConfig = parseKeyValueFile(deployerConfigPath(adapter));
-  const topology = normalizeTopology(
-    process.env.UI_TOPOLOGY ||
-      process.env.PIONERA_TOPOLOGY ||
-      process.env.INESDATA_TOPOLOGY ||
-      deployerConfig.TOPOLOGY ||
-      deployerConfig.PIONERA_TOPOLOGY,
-  );
+  const topology = configuredTopology(deployerConfig);
   if (topology === "local") {
     return path.join(deploymentRoot(adapter), environment, dataspace);
   }
@@ -476,6 +475,16 @@ function keycloakBaseUrlFromPublicAccessUrl(
   if (!normalized) {
     return undefined;
   }
+  if (configuredTopology(parseKeyValueFile(deployerConfigPath(normalizedAdapter()))) === "vm-distributed") {
+    try {
+      const hostname = new URL(normalized).hostname.toLowerCase();
+      if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
 
   const dataspaceNames = Array.from(new Set([dataspace, encodeURIComponent(dataspace)]));
   const suffixes = dataspaceNames.flatMap((name) => [
@@ -567,6 +576,17 @@ function resolveDataspaceDefaults(): DataspaceDefaults {
   const deployerConfig = parseKeyValueFile(deployerConfigPath(adapter));
   const infrastructureConfigPath = path.join(projectRoot(), "deployers", "infrastructure", "deployer.config");
   const infrastructureConfig = parseKeyValueFile(infrastructureConfigPath);
+  const commonDomain =
+    process.env.UI_COMMON_DOMAIN_BASE ||
+    deployerConfig.DOMAIN_BASE ||
+    infrastructureConfig.DOMAIN_BASE ||
+    "dev.ed.dataspaceunit.upm";
+  const keycloakHostname =
+    process.env.UI_KEYCLOAK_HOSTNAME ||
+    deployerConfig.KEYCLOAK_HOSTNAME ||
+    infrastructureConfig.KEYCLOAK_HOSTNAME ||
+    `auth.${commonDomain}`;
+  const keycloakProtocol = process.env.UI_KEYCLOAK_PROTOCOL || deployerConfig.KEYCLOAK_PROTOCOL || "http";
 
   return {
     adapter,
@@ -588,7 +608,7 @@ function resolveDataspaceDefaults(): DataspaceDefaults {
           infrastructureConfig.KC_INTERNAL_URL ||
           deployerConfig.KC_URL ||
           infrastructureConfig.KC_URL ||
-          "http://keycloak.dev.ed.dataspaceunit.upm",
+          `${keycloakProtocol.replace(/:$/, "")}://${keycloakHostname}`,
       ),
     keycloakClientId: process.env.UI_KEYCLOAK_CLIENT_ID || "dataspace-users",
   };

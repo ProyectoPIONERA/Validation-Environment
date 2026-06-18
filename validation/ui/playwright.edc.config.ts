@@ -4,6 +4,8 @@ import path from "path";
 
 dotenv.config({ path: ".env" });
 
+process.env.UI_ADAPTER ||= "edc";
+
 const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR || "test-results";
 const htmlReportDir = process.env.PLAYWRIGHT_HTML_REPORT_DIR || "playwright-report";
 const blobReportDir = process.env.PLAYWRIGHT_BLOB_REPORT_DIR || "blob-report";

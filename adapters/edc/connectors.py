@@ -541,12 +541,21 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             print("Level 4 local EDC dashboard images already prepared for this execution.")
             return True
 
-        if self._is_truthy(os.environ.get("PIONERA_SKIP_EDC_LOCAL_DASHBOARD_IMAGE_BUILD")) and mode != "required":
+        force_dashboard_build = self._is_truthy(
+            os.environ.get("PIONERA_FORCE_EDC_LOCAL_DASHBOARD_IMAGE_BUILD")
+            or os.environ.get("PIONERA_EDC_FORCE_LOCAL_DASHBOARD_IMAGE_BUILD")
+        )
+
+        if (
+            self._is_truthy(os.environ.get("PIONERA_SKIP_EDC_LOCAL_DASHBOARD_IMAGE_BUILD"))
+            and mode != "required"
+            and not force_dashboard_build
+        ):
             print("Skipping Level 4 local EDC dashboard image preparation; disabled by environment.")
             return True
 
         images = self._edc_dashboard_image_values()
-        if mode != "required" and self._edc_dashboard_image_override_configured(images):
+        if mode != "required" and not force_dashboard_build and self._edc_dashboard_image_override_configured(images):
             print("Skipping Level 4 local EDC dashboard image preparation; explicit image override is configured.")
             return True
         missing = [key for key, value in images.items() if not value]
@@ -4120,7 +4129,10 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
         return self._is_truthy(os.environ.get(env_name))
 
     def _edc_local_deployment_restart_targets(self, connector_name):
-        if self._normalized_topology() not in self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES:
+        if (
+            self._normalized_topology() not in self.LEVEL4_LOCAL_IMAGE_TOPOLOGIES
+            and self._normalized_topology() != VM_DISTRIBUTED_TOPOLOGY
+        ):
             return []
         restart_targets = []
         if self._edc_local_image_prepared(

@@ -1190,6 +1190,7 @@ def default_model_url(adapter, model_path: str = DEFAULT_MODEL_PATH) -> str:
     topology = (
         getattr(adapter, "topology", "")
         or config.get("TOPOLOGY")
+        or os.environ.get("EDC_TOPOLOGY")
         or os.environ.get("PIONERA_TOPOLOGY")
         or os.environ.get("TOPOLOGY")
         or ""

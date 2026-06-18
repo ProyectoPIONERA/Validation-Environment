@@ -69,6 +69,17 @@ def _component_adapter_name() -> str:
     ).strip().lower()
 
 
+def _component_topology() -> str:
+    return str(
+        os.environ.get("AI_MODEL_HUB_COMPONENT_TOPOLOGY")
+        or os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_TOPOLOGY")
+        or os.environ.get("EDC_TOPOLOGY")
+        or os.environ.get("PIONERA_TOPOLOGY")
+        or os.environ.get("INESDATA_TOPOLOGY")
+        or "local"
+    ).strip().lower().replace("_", "-") or "local"
+
+
 def _default_app_config_path() -> str:
     if _component_adapter_name() == "inesdata":
         return INESDATA_APP_CONFIG_PATH
@@ -107,6 +118,53 @@ def _http_get(url: str, timeout: int = 20) -> Tuple[int, str, str]:
         return exc.code, exc.headers.get("Content-Type", ""), body
     except error.URLError as exc:
         return 0, "", str(exc)
+
+
+def _load_edc_generated_app_config() -> tuple[dict[str, Any] | None, str]:
+    if _component_adapter_name() != "edc":
+        return None, ""
+    try:
+        from validation.components.ai_model_hub.connector_governance_api import _build_adapter
+        from deployers.shared.lib.connectors import parse_connector_list
+
+        adapter = _build_adapter("edc", _component_topology())
+        deployer_config = dict(adapter.load_deployer_config() or {})
+        connectors = list(adapter.get_cluster_connectors() or [])
+        if not connectors:
+            ds_name = str(
+                deployer_config.get("DS_1_NAME")
+                or getattr(adapter.config, "DS_NAME", "")
+                or ""
+            ).strip()
+            connectors = parse_connector_list(deployer_config.get("DS_1_CONNECTORS"), ds_name)
+        connector = str(
+            os.environ.get("AI_MODEL_HUB_BOOTSTRAP_CONNECTOR")
+            or os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_PROVIDER")
+            or (connectors[0] if connectors else "")
+        ).strip()
+
+        config_adapter = getattr(adapter, "config_adapter", None)
+        config_file = getattr(config_adapter, "edc_dashboard_app_config_file", None)
+        candidate_paths: list[str] = []
+        if callable(config_file) and connector:
+            candidate_paths.append(str(config_file(connector) or "").strip())
+        runtime_dir = getattr(config_adapter, "edc_dataspace_runtime_dir", None)
+        if callable(runtime_dir):
+            dashboard_dir = os.path.join(str(runtime_dir() or ""), "dashboard")
+            if os.path.isdir(dashboard_dir):
+                for entry in sorted(os.listdir(dashboard_dir)):
+                    candidate_paths.append(os.path.join(dashboard_dir, entry, "app-config.json"))
+
+        for path in [item for item in candidate_paths if item]:
+            if not os.path.exists(path):
+                continue
+            with open(path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return payload, path
+        return None, candidate_paths[0] if candidate_paths else ""
+    except Exception:
+        return None, ""
 
 
 def evaluate_html_shell_response(
@@ -293,15 +351,18 @@ def _build_evidence_index(
 def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None) -> Dict[str, Any]:
     started_at = datetime.now().isoformat()
     normalized_base_url = (base_url or "").rstrip("/")
+    adapter_name = _component_adapter_name()
 
     shell_url = _build_url(normalized_base_url, _dashboard_path())
     shell_status, shell_content_type, shell_body = _http_get(shell_url)
+    shell_required_markers = ["<html"] if adapter_name == "edc" else ["<html", "app-root"]
     shell_evaluation = evaluate_html_shell_response(
         shell_status,
         shell_content_type,
         shell_body,
-        required_markers=["<html", "app-root"],
+        required_markers=shell_required_markers,
     )
+    shell_auth_protected = adapter_name == "edc" and "sign in to pionera-edc" in shell_body.lower()
     shell_case = _build_case_result(
         case_id="MH-BOOTSTRAP-01",
         description="Dashboard shell availability",
@@ -315,12 +376,22 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
             "http_status": shell_status,
             "content_type": shell_content_type,
             "body_excerpt": shell_body[:500],
+            "auth_protected": shell_auth_protected,
+            "bootstrap_contract": "edc-dashboard-keycloak-protected" if adapter_name == "edc" else "standalone-dashboard",
         },
         assertions=list(shell_evaluation.get("assertions") or []),
     )
 
     config_url = _build_url(normalized_base_url, _app_config_path())
     config_status, config_content_type, config_body = _http_get(config_url)
+    config_source = "http"
+    if adapter_name == "edc":
+        generated_config, generated_config_path = _load_edc_generated_app_config()
+        if generated_config is not None:
+            config_status = 200
+            config_content_type = "application/json"
+            config_body = json.dumps(generated_config)
+            config_source = f"generated-file:{generated_config_path}"
     config_evaluation = evaluate_runtime_config_response(
         config_status,
         config_content_type,
@@ -345,6 +416,7 @@ def run_ai_model_hub_validation(base_url: str, experiment_dir: str | None = None
             "menu_items_count": config_evaluation.get("menu_items_count"),
             "health_check_interval_seconds": config_evaluation.get("health_check_interval_seconds"),
             "enable_user_config": config_evaluation.get("enable_user_config"),
+            "config_source": config_source,
         },
         assertions=list(config_evaluation.get("assertions") or []),
     )

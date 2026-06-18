@@ -33,8 +33,8 @@ test("14 edc AI Model Hub DAIMO metadata: model metadata is rendered in ML Asset
 }) => {
   const suffix = `amh-daimo-edc-${Date.now()}`;
   const assetId = `qa-ui-edc-amh-daimo-${suffix}`;
-  const expectedTask = "text-classification";
-  const expectedFramework = "controlled-httpdata";
+  const expectedTask = "token-classification";
+  const expectedFramework = "FastAPI";
   const modelPath = aiModelHubModelPath();
   const modelUrl = aiModelHubModelUrl(dataspaceRuntime.componentsNamespace);
   const report: AIMetadataEdcReport = {

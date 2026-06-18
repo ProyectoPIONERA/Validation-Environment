@@ -335,10 +335,11 @@ def _parse_json_env(*names: str) -> Any | None:
 def _model_observer_topology() -> str:
     return (
         os.environ.get("AI_MODEL_HUB_MODEL_OBSERVER_TOPOLOGY")
+        or os.environ.get("EDC_TOPOLOGY")
         or os.environ.get("PIONERA_TOPOLOGY")
         or os.environ.get("INESDATA_TOPOLOGY")
         or "local"
-    )
+    ).strip().lower().replace("_", "-")
 
 
 def _explicit_model_observer_base_url_configured() -> bool:
@@ -375,7 +376,23 @@ def _preferred_model_observer_connector(adapter: Any) -> str:
         if candidate:
             return candidate
     connectors = list(adapter.get_cluster_connectors() or [])
-    return str(connectors[0] or "").strip() if connectors else ""
+    if connectors:
+        return str(connectors[0] or "").strip()
+    try:
+        from deployers.shared.lib.connectors import parse_connector_list
+
+        config = dict(adapter.load_deployer_config() or {})
+        ds_name = str(
+            config.get("DS_1_NAME")
+            or getattr(adapter.config, "DS_NAME", "")
+            or ""
+        ).strip()
+        configured_connectors = parse_connector_list(config.get("DS_1_CONNECTORS"), ds_name)
+        if configured_connectors:
+            return str(configured_connectors[0] or "").strip()
+    except Exception:
+        return ""
+    return ""
 
 
 def _derive_edc_model_observer_base_url(adapter: Any, config: Dict[str, Any], ds_domain: str) -> str:
@@ -496,6 +513,13 @@ def _derive_model_observer_base_url_from_adapter() -> str:
 
         adapter = _build_adapter(_component_adapter_name(), _model_observer_topology())
         config = dict(adapter.load_deployer_config() or {})
+        adapter_name = _component_adapter_name()
+        ds_domain = str(config.get("DS_DOMAIN_BASE") or adapter.config.ds_domain_base() or "").strip()
+        if adapter_name == "edc":
+            edc_observer_url = _derive_edc_model_observer_base_url(adapter, config, ds_domain)
+            if edc_observer_url:
+                return edc_observer_url
+
         explicit_candidates = (
             config.get("AI_MODEL_HUB_OBSERVER_API_BASE_URL"),
             config.get("AI_MODEL_OBSERVER_API_BASE_URL"),
@@ -511,16 +535,12 @@ def _derive_model_observer_base_url_from_adapter() -> str:
             if normalized:
                 return normalized
 
-        adapter_name = _component_adapter_name()
         dataspace = str(
             _dataspace_name_loader(adapter)()
             or config.get("DS_1_NAME")
             or config.get("DS_NAME")
             or "demo"
         ).strip()
-        ds_domain = str(config.get("DS_DOMAIN_BASE") or adapter.config.ds_domain_base() or "").strip()
-        if adapter_name == "edc":
-            return _derive_edc_model_observer_base_url(adapter, config, ds_domain)
         if dataspace and ds_domain:
             return f"{_protocol_from_config(config)}://backend-{dataspace}.{ds_domain}"
     except Exception:
@@ -550,6 +570,7 @@ def run_ai_model_hub_connector_governance_validation(experiment_dir: str | None 
 
     topology = (
         os.environ.get("AI_MODEL_HUB_CONNECTOR_GOVERNANCE_TOPOLOGY")
+        or os.environ.get("EDC_TOPOLOGY")
         or os.environ.get("PIONERA_TOPOLOGY")
         or os.environ.get("INESDATA_TOPOLOGY")
         or "local"
@@ -605,6 +626,7 @@ def run_ai_model_hub_model_execution_validation(experiment_dir: str | None = Non
 
     topology = (
         os.environ.get("AI_MODEL_HUB_MODEL_EXECUTION_TOPOLOGY")
+        or os.environ.get("EDC_TOPOLOGY")
         or os.environ.get("PIONERA_TOPOLOGY")
         or os.environ.get("INESDATA_TOPOLOGY")
         or "local"

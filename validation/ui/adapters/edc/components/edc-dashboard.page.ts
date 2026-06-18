@@ -124,7 +124,19 @@ export class EdcDashboardPage {
 
   async expectShellReady(): Promise<void> {
     await expect(
-      this.page.locator("text=EDC Dashboard").first(),
+      this.page.getByText(/EDC Dashboard\s*-/i).first(),
+      "The EDC dashboard title did not load",
+    ).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      this.page.getByRole("button", { name: /conn-org\d+-pionera-edc/i }).first(),
+      "The EDC dashboard did not report a connector session",
+    ).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      this.page.getByRole("button", { name: /Catalog|Assets|Contracts|Transfer History|ML Assets|Model Execution/i }).first(),
       "The EDC dashboard shell did not load",
     ).toBeVisible({
       timeout: 60_000,

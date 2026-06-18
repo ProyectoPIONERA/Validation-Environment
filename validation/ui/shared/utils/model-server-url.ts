@@ -31,8 +31,34 @@ function forceUrlScheme(baseUrl: string, scheme: string): string {
   }
 }
 
+function normalizeBaseUrl(baseUrl: string, defaultScheme: string): string {
+  const rawValue = withoutTrailingSlash(baseUrl.trim());
+  if (!rawValue) {
+    return "";
+  }
+  const withScheme = rawValue.includes("://") ? rawValue : `${defaultScheme}://${rawValue}`;
+  try {
+    const parsed = new URL(withScheme);
+    parsed.search = "";
+    parsed.hash = "";
+    return withoutTrailingSlash(parsed.toString());
+  } catch {
+    return "";
+  }
+}
+
 function isVmDistributedTopology(): boolean {
-  return (process.env.UI_TOPOLOGY || process.env.TOPOLOGY || "").trim().toLowerCase() === "vm-distributed";
+  return (
+    process.env.UI_TOPOLOGY ||
+    process.env.PIONERA_TOPOLOGY ||
+    process.env.EDC_TOPOLOGY ||
+    process.env.INESDATA_TOPOLOGY ||
+    process.env.TOPOLOGY ||
+    ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-") === "vm-distributed";
 }
 
 function connectorModelServerBaseUrlFromConfig(): string {
@@ -62,13 +88,21 @@ function connectorModelServerBaseUrlFromTopology(): string {
   const commonHttpUrl = (
     process.env.UI_VM_COMMON_HTTP_URL ||
     process.env.VM_COMMON_HTTP_URL ||
+    ""
+  ).trim();
+  const commonHttpBaseUrl = forceUrlScheme(commonHttpUrl, "http");
+  if (commonHttpBaseUrl) {
+    return appendUrlPath(commonHttpBaseUrl, publicPath);
+  }
+
+  const commonPublicUrl = (
     process.env.UI_VM_COMMON_PUBLIC_URL ||
     process.env.VM_COMMON_PUBLIC_URL ||
     ""
   ).trim();
-  const commonBaseUrl = forceUrlScheme(commonHttpUrl, "http");
-  if (commonBaseUrl) {
-    return appendUrlPath(commonBaseUrl, publicPath);
+  const commonPublicBaseUrl = normalizeBaseUrl(commonPublicUrl, "https");
+  if (commonPublicBaseUrl) {
+    return appendUrlPath(commonPublicBaseUrl, publicPath);
   }
 
   const domain = (
@@ -81,7 +115,7 @@ function connectorModelServerBaseUrlFromTopology(): string {
   if (!domain) {
     return "";
   }
-  return appendUrlPath(`http://org1.${domain}`, publicPath);
+  return appendUrlPath(`https://org1.${domain}`, publicPath);
 }
 
 function publicModelServerBaseUrlFromTopology(): string {

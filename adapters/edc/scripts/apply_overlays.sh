@@ -234,6 +234,8 @@ apply_dashboard_overlay() {
   patch_dashboard_app_config_menu "$DASHBOARD_APP/public/config/app-config.json"
   patch_dashboard_app_config_runtime "$DASHBOARD_APP/public/config/app-config.json"
   patch_dashboard_app_routes "$DASHBOARD_APP/src/app/app.routes.ts"
+  patch_dashboard_model_benchmarking_array_payloads \
+    "$DASHBOARD_APP/src/app/features/model-benchmarking/model-benchmarking.component.ts"
 }
 
 patch_dashboard_app_base_href() {
@@ -350,6 +352,105 @@ routes_path.write_text(content, encoding="utf-8")
 PY
   else
     echo "Would insert validation routes into $(basename "$routes_file")"
+  fi
+}
+
+patch_dashboard_model_benchmarking_array_payloads() {
+  local benchmarking_file="$1"
+  local marker="validation-environment-edc-benchmark-array-payloads"
+
+  if [[ ! -f "$benchmarking_file" ]]; then
+    echo "Dashboard model benchmarking component not found: $benchmarking_file" >&2
+    return 1
+  fi
+
+  if [[ "$APPLY" -eq 1 ]]; then
+    python3 - "$benchmarking_file" "$marker" <<'PY'
+import pathlib
+import sys
+
+target_path = pathlib.Path(sys.argv[1])
+marker = sys.argv[2]
+content = target_path.read_text(encoding="utf-8")
+if marker in content:
+    sys.exit(0)
+
+old = """  private validatePayloadAgainstFeatures(payload: unknown, features: InputFeatureSpec[], rowIndex: number): string[] {
+    const errors: string[] = [];
+    if (!this.isRecord(payload)) {
+      return [`Dataset row #${rowIndex}: payload must be a JSON object after applying input path.`];
+    }
+
+    for (const feature of features) {
+      const featureValue = this.getValueAtSchemaPath(payload, feature.name);
+      const fieldLabel = `Dataset row #${rowIndex} field "${feature.name}"`;
+
+      if (feature.required && (featureValue === undefined || featureValue === null)) {
+        errors.push(`${fieldLabel} is required but missing.`);
+        continue;
+      }
+
+      if (featureValue === undefined || featureValue === null) {
+        continue;
+      }
+
+      if (!this.matchesSchemaType(featureValue, feature.type)) {
+        errors.push(
+          `${fieldLabel} has invalid type. Expected "${this.normalizeSchemaType(feature.type)}", got "${this.describeType(featureValue)}".`,
+        );
+      }
+    }
+
+    return errors;
+  }
+"""
+new = f"""  // {marker}
+  private validatePayloadAgainstFeatures(payload: unknown, features: InputFeatureSpec[], rowIndex: number): string[] {{
+    const errors: string[] = [];
+    const payloadItems = Array.isArray(payload) ? payload : [payload];
+
+    for (let itemIndex = 0; itemIndex < payloadItems.length; itemIndex += 1) {{
+      const itemPayload = payloadItems[itemIndex];
+      const rowLabel = Array.isArray(payload)
+        ? `Dataset row #${{rowIndex}} item #${{itemIndex + 1}}`
+        : `Dataset row #${{rowIndex}}`;
+
+      if (!this.isRecord(itemPayload)) {{
+        errors.push(`${{rowLabel}}: payload must be a JSON object after applying input path.`);
+        continue;
+      }}
+
+      for (const feature of features) {{
+        const featureValue = this.getValueAtSchemaPath(itemPayload, feature.name);
+        const fieldLabel = `${{rowLabel}} field "${{feature.name}}"`;
+
+        if (feature.required && (featureValue === undefined || featureValue === null)) {{
+          errors.push(`${{fieldLabel}} is required but missing.`);
+          continue;
+        }}
+
+        if (featureValue === undefined || featureValue === null) {{
+          continue;
+        }}
+
+        if (!this.matchesSchemaType(featureValue, feature.type)) {{
+          errors.push(
+            `${{fieldLabel}} has invalid type. Expected "${{this.normalizeSchemaType(feature.type)}}", got "${{this.describeType(featureValue)}}".`,
+          );
+        }}
+      }}
+    }}
+
+    return errors;
+  }}
+"""
+if old not in content:
+    raise SystemExit(f"Could not locate model benchmarking payload validator in {target_path}")
+content = content.replace(old, new, 1)
+target_path.write_text(content, encoding="utf-8")
+PY
+  else
+    echo "Would patch AI model benchmarking array payload validation in $(basename "$benchmarking_file")"
   fi
 }
 
