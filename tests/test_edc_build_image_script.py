@@ -83,7 +83,7 @@ class EdcBuildImageScriptTests(unittest.TestCase):
             script = handle.read()
 
         self.assertIn("--ref|--revision|--commit", script)
-        self.assertIn('git -C "$TARGET_DIR" rev-parse --is-inside-work-tree', script)
+        self.assertIn('git -C "$TARGET_DIR" rev-parse --show-toplevel', script)
         self.assertIn("Dashboard sources already at requested ref", script)
         self.assertIn("keeping local changes", script)
         self.assertIn('git -C "$TARGET_DIR" checkout --detach "$SOURCE_REF"', script)

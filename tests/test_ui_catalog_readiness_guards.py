@@ -103,13 +103,12 @@ class ConsumerCatalogReadinessGuardsTests(unittest.TestCase):
         self.assertIn("accessKeyId: destination.accessKeyId", source)
         self.assertIn("secretAccessKey: destination.secretAccessKey", source)
 
-    def test_edc_dashboard_transfer_history_handles_async_pagination_state(self):
+    def test_edc_dashboard_overlay_controls_transfer_history_async_pagination_state(self):
         transfer_view = _read_validation_file(
             "adapters",
             "edc",
-            "sources",
+            "overlays",
             "dashboard",
-            "DataDashboard",
             "projects",
             "dashboard-core",
             "transfer",
@@ -120,9 +119,8 @@ class ConsumerCatalogReadinessGuardsTests(unittest.TestCase):
         pagination = _read_validation_file(
             "adapters",
             "edc",
-            "sources",
+            "overlays",
             "dashboard",
-            "DataDashboard",
             "projects",
             "dashboard-core",
             "src",
@@ -260,9 +258,9 @@ class ConsumerCatalogReadinessGuardsTests(unittest.TestCase):
         self.assertIn("modelServerBaseUrlFromUrl(modelUrl, modelPath)", edc_fixtures)
         self.assertIn('"daimo:inference_path": inferencePath', edc_fixtures)
         self.assertIn('"daimo:license": "Apache-2.0"', edc_fixtures)
-        self.assertIn('"daimo:language": ["en"]', edc_fixtures)
-        self.assertIn('"daimo:datasets": ["validation-controlled"]', edc_fixtures)
-        self.assertIn('"daimo:base_model": "controlled-httpdata"', edc_fixtures)
+        self.assertIn('"daimo:language": ["Spanish"]', edc_fixtures)
+        self.assertIn('"daimo:datasets": ["FLARES"]', edc_fixtures)
+        self.assertIn('"daimo:base_model": "dccuchile-bert-base-spanish-wwm-uncased"', edc_fixtures)
         self.assertIn('proxyPath: "true"', edc_fixtures)
 
     def test_edc_asset_filter_searches_jsonld_dataset_ids(self):
