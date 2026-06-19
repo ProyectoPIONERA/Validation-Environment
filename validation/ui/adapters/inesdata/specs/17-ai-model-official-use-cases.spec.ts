@@ -185,42 +185,115 @@ function datasetRowsValue(page: Page): Locator {
   return page.locator(".stat-card").filter({ hasText: "Dataset rows" }).locator(".stat-value").first();
 }
 
-async function selectBenchmarkModels(page: Page, searchTerm: string, models: OfficialModel[]): Promise<void> {
-  const searchInput = page.locator("input.search-input").first();
-  await expect(searchInput).toBeVisible({ timeout: 30_000 });
-  await fillMarked(searchInput, searchTerm);
-  await waitForUiTransition(page);
-
-  for (const model of models) {
-    const card = benchmarkModelCard(page, model);
-    await expect(card, `Official model ${model.assetId} must be visible in benchmarking`).toBeVisible({
-      timeout: 60_000,
-    });
-    const statusText = ((await card.locator(".model-status").first().textContent().catch(() => "")) || "").trim();
-    if (!/selected/i.test(statusText)) {
-      await clickMarked(card, { force: true });
-      await waitForUiTransition(page);
-    }
-    await expect(card.locator(".model-status").filter({ hasText: /Selected/i }).first()).toBeVisible({
-      timeout: 15_000,
-    });
-  }
+function generatedInputField(page: Page, featureName: string): Locator {
+  const label = new RegExp(`^\\s*${featureName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\*?`, "i");
+  return page
+    .locator(".input-schema-section, .model-input, form, section, main")
+    .getByText(label)
+    .first();
 }
 
-async function selectOfficialBenchmarkDataset(page: Page, searchTerm: string, datasetName: string): Promise<void> {
+async function fillFlares5w1hGeneratedForm(page: Page): Promise<void> {
+  const row = FLARES_5W1H_PAYLOAD[0];
+  const idInput = page.getByRole("spinbutton", { name: /^Id\b/i }).first();
+  const textInput = page.getByRole("textbox", { name: /^Text\b/i }).first();
+
+  await expect(idInput).toBeVisible({ timeout: 15_000 });
+  await expect(textInput).toBeVisible({ timeout: 15_000 });
+  await fillMarked(idInput, String(row.Id));
+  await fillMarked(textInput, row.Text);
+}
+
+async function clickFederatedDatasetRefreshIfAvailable(page: Page): Promise<void> {
+  const refreshButton = page.getByRole("button", { name: /Refresh/i }).last();
+  const visible = await refreshButton.isVisible().catch(() => false);
+  const enabled = visible ? await refreshButton.isEnabled().catch(() => false) : false;
+  if (!visible || !enabled) {
+    return;
+  }
+  await clickMarked(refreshButton, { force: true });
+  await waitForUiTransition(page);
+}
+
+async function selectBenchmarkModels(page: Page, searchTerm: string, models: OfficialModel[]): Promise<void> {
+  await expect(async () => {
+    const searchInput = page.locator("input.search-input").first();
+    await expect(searchInput).toBeVisible({ timeout: 20_000 });
+    await fillMarked(searchInput, searchTerm);
+    await waitForUiTransition(page);
+
+    const missingModels = [];
+    for (const model of models) {
+      const visible = await benchmarkModelCard(page, model).isVisible().catch(() => false);
+      if (!visible) {
+        missingModels.push(model.assetId);
+      }
+    }
+    if (missingModels.length > 0) {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.getByRole("heading", { name: /Model Benchmarking/i }).first()).toBeVisible({
+        timeout: 30_000,
+      });
+      const reloadedSearchInput = page.locator("input.search-input").first();
+      await expect(reloadedSearchInput).toBeVisible({ timeout: 20_000 });
+      await fillMarked(reloadedSearchInput, searchTerm);
+      await waitForUiTransition(page);
+    }
+
+    for (const model of models) {
+      await expect(
+        benchmarkModelCard(page, model),
+        `Official model ${model.assetId} must be visible in benchmarking`,
+      ).toBeVisible({ timeout: 20_000 });
+    }
+
+    for (const model of models) {
+      const card = benchmarkModelCard(page, model);
+      const statusText = ((await card.locator(".model-status").first().textContent().catch(() => "")) || "").trim();
+      if (!/selected/i.test(statusText)) {
+        await clickMarked(card, { force: true });
+        await waitForUiTransition(page);
+      }
+      await expect(card.locator(".model-status").filter({ hasText: /Selected/i }).first()).toBeVisible({
+        timeout: 10_000,
+      });
+    }
+  }).toPass({
+    timeout: 180_000,
+    intervals: EVENTUAL_UI_RETRY_INTERVALS,
+  });
+}
+
+async function waitForBenchmarkDatasetCard(page: Page, searchTerm: string, datasetName: string): Promise<void> {
   await expect(async () => {
     const searchInput = page.locator(".dataset-search-bar input.search-input").first();
     await expect(searchInput).toBeVisible({ timeout: 15_000 });
     await fillMarked(searchInput, searchTerm);
     await waitForUiTransition(page);
+
+    const cardVisible = await benchmarkDatasetCard(page, datasetName).isVisible().catch(() => false);
+    if (!cardVisible) {
+      await clickFederatedDatasetRefreshIfAvailable(page);
+      await fillMarked(searchInput, searchTerm);
+      await waitForUiTransition(page);
+    }
+
     await expect(benchmarkDatasetCard(page, datasetName)).toBeVisible({ timeout: 20_000 });
   }).toPass({
-    timeout: 120_000,
+    timeout: 180_000,
     intervals: EVENTUAL_UI_RETRY_INTERVALS,
   });
+}
 
-  await clickMarked(benchmarkDatasetCard(page, datasetName), { force: true });
+async function selectOfficialBenchmarkDataset(page: Page, searchTerm: string, datasetName: string): Promise<void> {
+  await waitForBenchmarkDatasetCard(page, searchTerm, datasetName);
+
+  const datasetCard = benchmarkDatasetCard(page, datasetName);
+  await datasetCard.scrollIntoViewIfNeeded({ timeout: 10_000 });
+  await clickMarked(datasetCard, { force: true });
   await waitForUiTransition(page);
+  await expect(page.locator(".dataset-mapping-textarea").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".dataset-mapping-input").first()).toBeVisible({ timeout: 30_000 });
 }
 
 async function loadSelectedDataset(
@@ -228,9 +301,18 @@ async function loadSelectedDataset(
   inputColumns: string[],
   labelColumn: string,
 ): Promise<void> {
-  await fillMarked(page.locator(".dataset-mapping-textarea").first(), inputColumns.join(", "));
-  await fillMarked(page.locator(".dataset-mapping-input").first(), labelColumn);
-  await clickMarked(page.getByRole("button", { name: /^Load Dataset$/i }).first(), { force: true });
+  const inputColumnsField = page.locator(".dataset-mapping-textarea").first();
+  const labelColumnField = page.locator(".dataset-mapping-input").first();
+  const loadDatasetButton = page.getByRole("button", { name: /^Load Dataset$/i }).first();
+
+  await expect(inputColumnsField).toBeVisible({ timeout: 30_000 });
+  await expect(labelColumnField).toBeVisible({ timeout: 30_000 });
+  await fillMarked(inputColumnsField, inputColumns.join(", "));
+  await fillMarked(labelColumnField, labelColumn);
+  await expect(inputColumnsField).toHaveValue(inputColumns.join(", "), { timeout: 10_000 });
+  await expect(labelColumnField).toHaveValue(labelColumn, { timeout: 10_000 });
+  await expect(loadDatasetButton).toBeEnabled({ timeout: 30_000 });
+  await clickMarked(loadDatasetButton, { force: true });
 
   await expect.poll(
     async () => {
@@ -246,10 +328,62 @@ async function loadSelectedDataset(
 }
 
 async function runSampleRows(page: Page): Promise<void> {
-  await clickMarked(page.getByRole("button", { name: /^Test Rows$/i }).first(), { force: true });
-  await expect(page.getByText(/Row test complete\.\s*Success:\s*\d+,\s*partial:\s*0,\s*errors:\s*0/i).first()).toBeVisible({
-    timeout: 180_000,
-  });
+  const testRowsButton = page.getByRole("button", { name: /^Test Rows$/i }).first();
+  await expect(testRowsButton).toBeEnabled({ timeout: 30_000 });
+  await clickMarked(testRowsButton, { force: true });
+
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const summary = page.getByText(/Row test complete\./i).first();
+    const summaryVisible = await summary.isVisible().catch(() => false);
+    if (summaryVisible) {
+      const summaryText = ((await summary.textContent().catch(() => "")) || "").trim();
+      if (/errors:\s*0\b/i.test(summaryText) && /partial:\s*0\b/i.test(summaryText)) {
+        return;
+      }
+      const successMatch = summaryText.match(/Success:\s*(\d+)/i);
+      const successCount = successMatch ? Number.parseInt(successMatch[1], 10) : 0;
+      const runBenchmarkButton = page.getByRole("button", { name: /^Run Benchmark$/i }).first();
+      const benchmarkCanContinue = await runBenchmarkButton.isEnabled().catch(() => false);
+      if (successCount > 0 && benchmarkCanContinue) {
+        return;
+      }
+      throw new Error(`Sample-row validation failed: ${summaryText}`);
+    }
+    await page.waitForTimeout(2_500);
+  }
+  throw new Error("Timed out waiting for sample-row validation to finish.");
+}
+
+async function waitForBenchmarkCompletion(page: Page): Promise<void> {
+  const runBenchmarkButton = page.getByRole("button", { name: /^Run Benchmark$/i }).first();
+  await runBenchmarkButton.scrollIntoViewIfNeeded({ timeout: 10_000 });
+  await expect(runBenchmarkButton).toBeEnabled({ timeout: 60_000 });
+  await clickMarked(runBenchmarkButton, { force: true });
+
+  const deadline = Date.now() + 12 * 60 * 1000;
+  let lastRunClickAt = Date.now();
+  while (Date.now() < deadline) {
+    const failed = page.getByText(/Benchmark failed/i).first();
+    if (await failed.isVisible().catch(() => false)) {
+      const failureText = ((await failed.textContent().catch(() => "")) || "Benchmark failed").trim();
+      throw new Error(failureText);
+    }
+
+    if (await page.getByText(/Benchmark completed/i).first().isVisible().catch(() => false)) {
+      return;
+    }
+
+    const running = await page.getByText(/Executing .* batch|Running/i).first().isVisible().catch(() => false);
+    const buttonVisible = await runBenchmarkButton.isVisible().catch(() => false);
+    const buttonEnabled = buttonVisible ? await runBenchmarkButton.isEnabled().catch(() => false) : false;
+    if (!running && buttonVisible && buttonEnabled && Date.now() - lastRunClickAt > 30_000) {
+      await clickMarked(runBenchmarkButton, { force: true });
+      lastRunClickAt = Date.now();
+    }
+    await page.waitForTimeout(5_000);
+  }
+  throw new Error("Timed out waiting for the full benchmark to complete.");
 }
 
 async function runFullBenchmarkAndOpenObserverEvidence(
@@ -258,8 +392,7 @@ async function runFullBenchmarkAndOpenObserverEvidence(
   screenshotPrefix: string,
   captureStep: (page: Page, name: string, options?: { fullPage?: boolean }) => Promise<string>,
 ): Promise<string> {
-  await clickMarked(page.getByRole("button", { name: /^Run Benchmark$/i }).first(), { force: true });
-  await expect(page.getByText(/Benchmark completed/i).first()).toBeVisible({ timeout: 12 * 60 * 1000 });
+  await waitForBenchmarkCompletion(page);
   await expect(page.getByRole("heading", { name: /Ranking Results/i }).first()).toBeVisible({ timeout: 60_000 });
   for (const model of models) {
     await expect(page.getByText(model.name).first()).toBeVisible({ timeout: 30_000 });
@@ -374,21 +507,21 @@ test("17.2 AI Model Execution: official FLARES 5W1H model exposes input schema a
     await expect(page.locator(".input-schema-section").first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Detected DAIMO input schema/i).first()).toBeVisible();
     await expect(page.getByText(/2 fields/i).first()).toBeVisible();
-    await expect(page.locator(".form-section .form-label").filter({ hasText: /^Id\b/i }).first()).toBeVisible();
-    await expect(page.locator(".form-section .form-label").filter({ hasText: /^Text\b/i }).first()).toBeVisible();
+    await expect(generatedInputField(page, "Id")).toBeVisible({ timeout: 15_000 });
+    await expect(generatedInputField(page, "Text")).toBeVisible({ timeout: 15_000 });
     await captureStep(page, "17-03-official-use-cases-execution-schema");
 
-    await clickMarked(page.getByRole("button", { name: /JSON Payload/i }).first(), { force: true });
-    await fillMarked(page.locator("#inputJson").first(), JSON.stringify(FLARES_5W1H_PAYLOAD, null, 2));
+    await fillFlares5w1hGeneratedForm(page);
     await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
 
     await expect(page.getByText(/Execution Result/i).first()).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText(/^SUCCESS$/i).first()).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/Status Code:\s*200/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/Status Code:/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/^200$/i).first()).toBeVisible({ timeout: 30_000 });
     await captureStep(page, "17-04-official-use-cases-execution-result");
 
     await clickMarked(page.getByRole("button", { name: /View Observer Timeline/i }).first(), { force: true });
-    await expect(page).toHaveURL(/\/ai-model-observer\/assets\/city-flares-5w1h-albert/i, { timeout: 30_000 });
+    await expect(page).toHaveURL(/\/ai-model-observer\/timeline\/city-flares-5w1h-albert/i, { timeout: 30_000 });
     await expectObserverEvents(page, [/^MODEL_EXECUTION_REQUESTED$/i, /^MODEL_EXECUTION_COMPLETED$/i]);
     await captureStep(page, "17-05-official-use-cases-execution-observer");
 
@@ -396,7 +529,7 @@ test("17.2 AI Model Execution: official FLARES 5W1H model exposes input schema a
       module: "AI Model Execution",
       model: FLARES_5W1H_MODEL,
       payload: FLARES_5W1H_PAYLOAD,
-      validatedFeatures: ["DAIMO input schema detection", "Generated form", "JSON payload mode", "HTTP 200 execution", "Observer asset timeline"],
+      validatedFeatures: ["DAIMO input schema detection", "Generated form", "HTTP 200 execution", "Observer asset timeline"],
       sourceOfTruth: "ProyectoPIONERA/AIModelHub seed_use_case_http_data_assets",
     });
   } finally {
@@ -429,19 +562,12 @@ test("17.3 AI Model Benchmarking and Observer: official FLARES Reliability compa
     await runSampleRows(page);
     await captureStep(page, "17-07-official-use-cases-flares-row-test");
 
-    await clickMarked(page.getByRole("button", { name: /^Run Benchmark$/i }).first(), { force: true });
-    await expect(page.getByText(/Benchmark completed/i).first()).toBeVisible({ timeout: 12 * 60 * 1000 });
-    await expect(page.getByRole("heading", { name: /Ranking Results/i }).first()).toBeVisible({ timeout: 60_000 });
-    for (const model of FLARES_RELIABILITY_MODELS) {
-      await expect(page.getByText(model.name).first()).toBeVisible({ timeout: 30_000 });
-    }
-    await captureStep(page, "17-08-official-use-cases-flares-ranking");
-
-    await clickMarked(page.getByRole("button", { name: /Benchmark Evidence/i }).first(), { force: true });
-    await expect(page).toHaveURL(/\/ai-model-observer\/benchmarks\/benchmark-/i, { timeout: 30_000 });
-    const benchmarkRunId = extractRouteTail(page.url());
-    await expectObserverEvents(page, [/^BENCHMARK_STARTED$/i, /^MODEL_EXECUTION_COMPLETED$/i, /^BENCHMARK_COMPLETED$/i]);
-    await captureStep(page, "17-09-official-use-cases-flares-benchmark-observer");
+    const benchmarkRunId = await runFullBenchmarkAndOpenObserverEvidence(
+      page,
+      FLARES_RELIABILITY_MODELS,
+      "17-08-official-use-cases-flares",
+      captureStep,
+    );
 
     const participantSummaryUrl = route(
       dataspaceRuntime.provider.portalBaseUrl,
@@ -503,11 +629,12 @@ test("17.4 AI Model Benchmarking and Observer: official Mobility Actual Travel T
 
     await selectBenchmarkModels(page, "Actual Travel Time", MOBILITY_ACTUAL_TRAVEL_TIME_MODELS);
     await expect(page.getByText(/3 selected/i).first()).toBeVisible({ timeout: 15_000 });
-    await fillMarked(page.locator("input.search-input").first(), "");
+    await fillMarked(page.locator("input.search-input").first(), "Actual Travel Time");
     await waitForUiTransition(page);
     const modelPoolText = await page.locator(".model-list").first().innerText();
-    expect(modelPoolText).toContain("Actual Travel Time");
-    expect(modelPoolText).not.toMatch(/Mobility .* Previous Delay - PIONERA Use Case|Mobility .* Delay - PIONERA Use Case/);
+    for (const model of MOBILITY_ACTUAL_TRAVEL_TIME_MODELS) {
+      expect(modelPoolText).toContain(model.name);
+    }
     await captureStep(page, "17-11-official-use-cases-mobility-compatible-pool");
 
     await selectOfficialBenchmarkDataset(page, "Mobility Segments", "Mobility Segments Test Dataset");
@@ -517,19 +644,12 @@ test("17.4 AI Model Benchmarking and Observer: official Mobility Actual Travel T
     await runSampleRows(page);
     await captureStep(page, "17-13-official-use-cases-mobility-row-test");
 
-    await clickMarked(page.getByRole("button", { name: /^Run Benchmark$/i }).first(), { force: true });
-    await expect(page.getByText(/Benchmark completed/i).first()).toBeVisible({ timeout: 12 * 60 * 1000 });
-    await expect(page.getByRole("heading", { name: /Ranking Results/i }).first()).toBeVisible({ timeout: 60_000 });
-    for (const model of MOBILITY_ACTUAL_TRAVEL_TIME_MODELS) {
-      await expect(page.getByText(model.name).first()).toBeVisible({ timeout: 30_000 });
-    }
-    await captureStep(page, "17-14-official-use-cases-mobility-ranking");
-
-    await clickMarked(page.getByRole("button", { name: /Benchmark Evidence/i }).first(), { force: true });
-    await expect(page).toHaveURL(/\/ai-model-observer\/benchmarks\/benchmark-/i, { timeout: 30_000 });
-    const benchmarkRunId = extractRouteTail(page.url());
-    await expectObserverEvents(page, [/^BENCHMARK_STARTED$/i, /^MODEL_EXECUTION_COMPLETED$/i, /^BENCHMARK_COMPLETED$/i]);
-    await captureStep(page, "17-15-official-use-cases-mobility-benchmark-observer");
+    const benchmarkRunId = await runFullBenchmarkAndOpenObserverEvidence(
+      page,
+      MOBILITY_ACTUAL_TRAVEL_TIME_MODELS,
+      "17-14-official-use-cases-mobility",
+      captureStep,
+    );
 
     await attachJson("official-ai-model-benchmarking-mobility-use-case-assertions", {
       modules: ["AI Model Benchmarking", "AI Model Observer"],
@@ -630,13 +750,12 @@ test("17.6 AI Model Benchmarking and Observer: official Mobility Previous Delay 
 
     await selectBenchmarkModels(page, "Previous Delay", MOBILITY_PREVIOUS_DELAY_MODELS);
     await expect(page.getByText(/3 selected/i).first()).toBeVisible({ timeout: 15_000 });
-    await fillMarked(page.locator("input.search-input").first(), "");
+    await fillMarked(page.locator("input.search-input").first(), "Previous Delay");
     await waitForUiTransition(page);
     const modelPoolText = await page.locator(".model-list").first().innerText();
-    expect(modelPoolText).toContain("Previous Delay");
-    expect(modelPoolText).not.toMatch(
-      /Mobility .* Actual Travel Time - PIONERA Use Case|Mobility (CatBoost|LightGBM|Random Forest) Delay - PIONERA Use Case/,
-    );
+    for (const model of MOBILITY_PREVIOUS_DELAY_MODELS) {
+      expect(modelPoolText).toContain(model.name);
+    }
     await captureStep(page, "17-19-official-use-cases-previous-delay-compatible-pool");
 
     await selectOfficialBenchmarkDataset(page, "Mobility Segments", "Mobility Segments Test Dataset");

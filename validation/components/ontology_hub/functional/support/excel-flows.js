@@ -1204,7 +1204,7 @@ async function createVersion(page, version, filePath, options = {}) {
   await fillMarked(dialog.locator("tr").filter({ hasText: /Version issued Date/i }).locator("input").first(), version.issued);
   await fillMarked(dialog.locator("tr").filter({ hasText: /Version Label/i }).locator("input, textarea").first(), version.name);
   await setInputFilesMarked(dialog.locator("input[type='file'], input[name='file']").first(), filePath);
-  await dialog.locator("form#dialogNewVersionForm").evaluate((form) => form.submit());
+  await submitFormPreservingPublicPrefix(dialog.locator("form#dialogNewVersionForm"), options.runtime);
   await page.waitForLoadState("domcontentloaded");
 
   const versionRow = page.locator(".editionBoxSugg").filter({
@@ -1245,6 +1245,29 @@ async function createVersion(page, version, filePath, options = {}) {
 
 function versionRowPattern(version) {
   return new RegExp(`${escapeRegExp(version.issued)}|${escapeRegExp(version.name)}`, "i");
+}
+
+function publicPathPrefix(runtime = {}) {
+  try {
+    const pathname = new URL(runtime.baseUrl || "").pathname.replace(/\/+$/, "");
+    return pathname === "/" ? "" : pathname;
+  } catch (error) {
+    return "";
+  }
+}
+
+async function submitFormPreservingPublicPrefix(formLocator, runtime = {}) {
+  const prefix = publicPathPrefix(runtime);
+  await formLocator.evaluate(
+    (form, publicPrefix) => {
+      const action = form.getAttribute("action") || "";
+      if (publicPrefix && action.startsWith("/") && !action.startsWith(`${publicPrefix}/`)) {
+        form.setAttribute("action", `${publicPrefix}${action}`);
+      }
+      form.submit();
+    },
+    prefix,
+  );
 }
 
 async function waitForRecoveredVersionRow(page, runtime, prefix, updatedVersion, timeoutMs = Math.max(readyTimeoutMs * 4, 180000)) {
@@ -1318,7 +1341,7 @@ async function editVersion(page, runtime, prefix, currentVersionName, updatedVer
     dialog.locator("tr").filter({ hasText: /Version Label/i }).locator("input, textarea").first(),
     updatedVersion.name,
   );
-  await dialog.locator("form#dialogEditVersionForm").evaluate((form) => form.submit());
+  await submitFormPreservingPublicPrefix(dialog.locator("form#dialogEditVersionForm"), runtime);
   await page.waitForLoadState("domcontentloaded");
 
   const updatedRow = page.locator(".editionBoxSugg").filter({

@@ -262,7 +262,17 @@ async function gotoAiModelBrowser(page: Page, baseUrl: string): Promise<void> {
 }
 
 function aiModelBrowserSearchInput(page: Page) {
-  return page.locator("input[placeholder*='classification']").first();
+  return page
+    .locator(
+      [
+        "input[placeholder*='name']",
+        "input[placeholder*='keyword']",
+        "input[placeholder*='provider']",
+        "input[placeholder*='task']",
+        "input.search-input",
+      ].join(", "),
+    )
+    .first();
 }
 
 function aiModelCard(page: Page, assetId: string) {
@@ -493,6 +503,151 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
   });
 
   try {
+    const officialTargetModel = {
+      assetId: "company-flares-5w1h-bert",
+      name: "FLARES 5W1H BERT - PIONERA Use Case",
+      task: "Natural Language Processing",
+      taskType: "classification",
+      subtask: "token-classification",
+      library: "Transformers",
+      modelPath: "/flares/dccuchile-bert-base-spanish-wwm-uncased-5w1h",
+    };
+    const officialComparisonModel = {
+      assetId: "company-mobility-catboost-actual-travel-time",
+      name: "Mobility CatBoost Actual Travel Time - PIONERA Use Case",
+      task: "Tabular",
+      taskType: "regression",
+      subtask: "tabular-regression",
+      library: "CatBoost",
+      modelPath: "/mobility/catboost_actual_travel_time",
+    };
+
+    report.assetId = officialTargetModel.assetId;
+    report.modelName = officialTargetModel.name;
+    report.modelUrl = "official-ai-model-hub-use-case-server";
+    report.modelPath = officialTargetModel.modelPath;
+    report.comparisonAssetId = officialComparisonModel.assetId;
+
+    await attachJson("ai-model-browser-ui-bootstrap", {
+      sourceOfTruth: "ProyectoPIONERA/AIModelHub Step 10 use-case model assets",
+      mode: "official-use-case-assets",
+      syntheticAssetsCreated: false,
+      assets: [officialTargetModel, officialComparisonModel],
+    });
+
+    await loginPage.open(dataspaceRuntime.consumer.portalBaseUrl);
+    await loginPage.loginIfNeeded();
+    await shellPage.expectReady();
+    await captureStep(page, "01-ai-model-browser-after-login");
+
+    await expect(async () => {
+      await gotoAiModelBrowser(page, dataspaceRuntime.consumer.portalBaseUrl);
+      await shellPage.assertNoGateway403("AI Model Browser page");
+      await shellPage.assertNoServerErrorBanner("AI Model Browser page");
+      await expect(page.getByRole("heading", { name: /AI Model Browser/i })).toBeVisible({ timeout: 20_000 });
+
+      const searchInput = aiModelBrowserSearchInput(page);
+      await expect(searchInput).toBeVisible({ timeout: 20_000 });
+      await searchInput.fill("PIONERA Use Case");
+      await waitForUiTransition(page);
+
+      await expect(aiModelCard(page, officialTargetModel.assetId)).toBeVisible({ timeout: 20_000 });
+      await expect(aiModelCard(page, officialComparisonModel.assetId)).toBeVisible({ timeout: 20_000 });
+    }).toPass({
+      timeout: 120_000,
+      intervals: EVENTUAL_UI_RETRY_INTERVALS,
+    });
+    await captureStep(page, "02-ai-model-browser-official-use-case-search");
+
+    const officialCard = aiModelCard(page, officialTargetModel.assetId);
+    await expect(officialCard).toBeVisible({ timeout: 10_000 });
+    const officialCardText = await officialCard.innerText();
+    for (const expectedText of [
+      officialTargetModel.name,
+      officialTargetModel.assetId,
+      "Local",
+      "Contract published",
+      officialTargetModel.task,
+      officialTargetModel.taskType,
+      officialTargetModel.subtask,
+      officialTargetModel.library,
+    ]) {
+      expect(officialCardText).toContain(expectedText);
+    }
+
+    const searchInput = aiModelBrowserSearchInput(page);
+    await searchInput.fill(officialTargetModel.assetId);
+    await waitForUiTransition(page);
+    await expect(aiModelCard(page, officialTargetModel.assetId)).toBeVisible({ timeout: 10_000 });
+    report.filterChecks.push({
+      filterGroup: "Search",
+      selectedValue: officialTargetModel.assetId,
+      expectedVisibleAssetId: officialTargetModel.assetId,
+      status: "passed",
+    });
+
+    await searchInput.fill(officialComparisonModel.assetId);
+    await waitForUiTransition(page);
+    await expect(aiModelCard(page, officialComparisonModel.assetId)).toBeVisible({ timeout: 10_000 });
+    report.filterChecks.push({
+      filterGroup: "Search",
+      selectedValue: officialComparisonModel.assetId,
+      expectedVisibleAssetId: officialComparisonModel.assetId,
+      status: "passed",
+    });
+
+    await searchInput.fill(officialTargetModel.name);
+    await waitForUiTransition(page);
+    await expect(aiModelCard(page, officialTargetModel.assetId)).toBeVisible({ timeout: 10_000 });
+    await attachJson("ai-model-browser-ui-filter-assertions", {
+      sourceOfTruth: "Official PIONERA use-case metadata",
+      checks: report.filterChecks,
+    });
+    await captureStep(page, "03-ai-model-browser-official-use-case-filtered-result");
+
+    await clickMarked(aiModelCard(page, officialTargetModel.assetId).getByRole("button", { name: /View details/i }).first(), {
+      force: true,
+    });
+    await waitForUiTransition(page);
+    await expect(page).toHaveURL(/\/catalog\/datasets\/view/);
+    await expect(page.getByText(officialTargetModel.name).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(officialTargetModel.assetId, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/Contract offer|JSON-LD|Asset information/i).first()).toBeVisible({ timeout: 15_000 });
+    report.detailChecks.push({
+      scenario: "official_use_case_model_detail",
+      expectedContent: [
+        officialTargetModel.assetId,
+        officialTargetModel.name,
+        officialTargetModel.task,
+        officialTargetModel.taskType,
+        officialTargetModel.library,
+      ],
+      status: "passed",
+    });
+    report.primaryActionChecks.push({
+      scenario: "official_use_case_model_detail_action",
+      expectedContent: ["View details", "Contract offer"],
+      status: "passed",
+    });
+    await attachJson("ai-model-browser-ui-detail-assertions", {
+      sourceOfTruth: "ProyectoPIONERA/AIModelHub official use-case catalog",
+      checks: report.detailChecks,
+      primaryActionChecks: report.primaryActionChecks,
+    });
+    await captureStep(page, "04-ai-model-browser-official-use-case-detail");
+
+    report.toleratedErrorResponses = report.errorResponses.filter(({ url, status }) =>
+      isTolerableCatalogRetry(url, status),
+    );
+    report.fatalErrorResponses = report.errorResponses.filter(
+      ({ url, status }) => !isTolerableCatalogRetry(url, status),
+    );
+    expect(
+      report.fatalErrorResponses,
+      `API calls returned fatal errors: ${JSON.stringify(report.fatalErrorResponses)} (tolerated transient catalog errors: ${JSON.stringify(report.toleratedErrorResponses)})`,
+    ).toHaveLength(0);
+    return;
+
     if (aiModelHubCatalogCleanupEnabled()) {
       await attachJson(
         "ai-model-browser-ui-catalog-cleanup",
