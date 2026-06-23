@@ -48,32 +48,33 @@ implementada y validación oficial reproducida:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Implementado y usado como ruta local de desarrollo/validación | Implementado y validado como entorno VM de referencia | Disponible en la rama especializada `refactoring-vm-distributed-inesdata-ai` |
-| `edc` | Implementado; pasó validaciones antes de la conciliación reciente de topologías y debe revalidarse antes de usarlo como evidencia actual | Implementado; no se ha validado oficialmente después de la conciliación reciente | Estará disponible en la rama especializada `refactoring-vm-distributed-edc-ai` |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
 
-Actualmente, la rama `main` se encuentra alineada con la línea estable
-`refactoring-local-vm-single`, que consolida la ejecución local y `vm-single`.
-La validación del adapter INESData en topología `vm-distributed` se mantiene en
-una rama especializada, `refactoring-vm-distributed-inesdata-ai`, ya que aún no
-ha sido conciliada con la línea base `refactoring-local-vm-single`. De forma
-análoga, la validación del adapter EDC en topología `vm-distributed` quedará
-disponible en la rama `refactoring-vm-distributed-edc-ai`.
+La línea funcional de `main` toma como referencia
+`refactoring-local-vm-single`, que consolida evidencias para los adapters
+INESData y EDC en las topologías `local` y `vm-single`. La validación del
+adapter INESData en topología `vm-distributed` se mantiene en una rama
+especializada, `refactoring-vm-distributed-inesdata-ai`, ya que aún no ha sido
+conciliada con la línea base `refactoring-local-vm-single`. La validación del
+adapter EDC en topología `vm-distributed` queda pendiente y se publicará en la
+rama `refactoring-vm-distributed-edc-ai`.
 
-Por tanto, las rutas `vm-distributed` deben tomarse desde sus ramas
-especializadas mientras se completa la conciliación con `main`. Las rutas
-`local` y `vm-single` permanecen disponibles en `main` como línea estable de
-desarrollo y validación.
+Por tanto, las evidencias `local` y `vm-single` deben tomarse desde la línea
+estable `refactoring-local-vm-single`, mientras que la evidencia INESData
+`vm-distributed` debe tomarse desde `refactoring-vm-distributed-inesdata-ai`
+hasta que se complete su conciliación con `main`.
 
 ### Referencias de Reproducibilidad
 
 Las siguientes referencias pueden usarse como punto de restauración si las ramas
 o repositorios externos cambian después de esta entrega. La rama `main` incluye
 esta nota documental; la línea funcional estable que consolida `local` y
-`vm-single` corresponde a `refactoring-local-vm-single`.
+`vm-single` para INESData y EDC corresponde a `refactoring-local-vm-single`.
 
 | Alcance | Referencia | Commit |
 | --- | --- | --- |
-| Línea estable `local` y `vm-single` | `refactoring-local-vm-single` | `532926e16a9f8845f65d328a8c6107d86f576c7d` |
+| Línea estable `local` y `vm-single` para INESData y EDC | `refactoring-local-vm-single` | `532926e16a9f8845f65d328a8c6107d86f576c7d` |
 | INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `f2f2cdc1f115a6f02ab05cdfbd2d08f5738e6e51` |
 | EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | Pendiente de publicación |
 | EDC `vm-distributed`, referencia previa disponible | `refactoring-vm-distributed-edc` | `9487093803bf11c7f8e06ee875e38785001fa4db` |
