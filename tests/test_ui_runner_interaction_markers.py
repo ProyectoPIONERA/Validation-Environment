@@ -558,7 +558,7 @@ class UiRunnerInteractionMarkersTests(unittest.TestCase):
                 env["UI_AI_MODEL_HUB_BENCHMARK_MODEL_PATHS"],
                 "/mobility/lightgbm_previous_delay,/mobility/randomforest_previous_delay",
             )
-            self.assertEqual(env["UI_AI_MODEL_HUB_BENCHMARKING_DEMO"], "0")
+            self.assertNotEqual(env.get("UI_AI_MODEL_HUB_BENCHMARKING_DEMO"), "0")
 
     def test_playwright_validation_respects_explicit_vm_distributed_protocol_mode(self):
         context = self._context()

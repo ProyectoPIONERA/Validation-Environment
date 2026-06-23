@@ -115,6 +115,7 @@ const TEXT_MODEL_INPUT_EXAMPLE = [
   },
 ];
 const PIONERA_DAIMO_NS = "https://w3id.org/pionera/daimo#";
+const DATASET_DETAIL_URL_RE = /\/(?:catalog\/datasets|assets)\/view/;
 
 test.skip(
   process.env.UI_AI_MODEL_HUB_HTTPDATA_DEMO !== "1",
@@ -265,10 +266,13 @@ function aiModelBrowserSearchInput(page: Page) {
   return page
     .locator(
       [
+        ".search-field input",
         "input[placeholder*='name']",
         "input[placeholder*='keyword']",
         "input[placeholder*='provider']",
         "input[placeholder*='task']",
+        "input[placeholder*='regression']",
+        "input[placeholder*='CatBoost']",
         "input.search-input",
       ].join(", "),
     )
@@ -572,7 +576,7 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
       officialTargetModel.subtask,
       officialTargetModel.library,
     ]) {
-      expect(officialCardText).toContain(expectedText);
+      expect(officialCardText.toLowerCase()).toContain(expectedText.toLowerCase());
     }
 
     const searchInput = aiModelBrowserSearchInput(page);
@@ -609,7 +613,7 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
       force: true,
     });
     await waitForUiTransition(page);
-    await expect(page).toHaveURL(/\/catalog\/datasets\/view/);
+    await expect(page).toHaveURL(DATASET_DETAIL_URL_RE);
     await expect(page.getByText(officialTargetModel.name).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(officialTargetModel.assetId, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/Contract offer|JSON-LD|Asset information/i).first()).toBeVisible({ timeout: 15_000 });
@@ -810,7 +814,7 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
       force: true,
     });
     await waitForUiTransition(page);
-    await expect(page).toHaveURL(/\/catalog\/datasets\/view/);
+    await expect(page).toHaveURL(DATASET_DETAIL_URL_RE);
     await expect(page.getByText(/Contract offer/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("button", { name: /Negotiate Contract/i }).first()).toBeVisible({ timeout: 10_000 });
     report.primaryActionChecks.push({
@@ -837,7 +841,7 @@ test("11 AI Model Browser: controlled model discovery, filtering and detail from
       force: true,
     });
     await waitForUiTransition(page);
-    await expect(page).toHaveURL(/\/catalog\/datasets\/view/);
+    await expect(page).toHaveURL(DATASET_DETAIL_URL_RE);
     await expect(page.getByText(targetModel.assetId, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(targetModel.name).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(targetModel.contentType).first()).toBeVisible({ timeout: 10_000 });

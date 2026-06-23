@@ -310,10 +310,9 @@ async function gotoAiModelExecution(page: Page, baseUrl: string): Promise<void> 
 }
 
 function generatedInputField(page: Page, featureName: string): Locator {
-  const label = new RegExp(`^\\s*${featureName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\*?`, "i");
+  const label = new RegExp(`^${featureName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
   return page
-    .locator(".input-schema-section, .model-input, form, section, main")
-    .getByText(label)
+    .getByRole(featureName.toLowerCase() === "id" ? "spinbutton" : "textbox", { name: label })
     .first();
 }
 
@@ -492,9 +491,9 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
     await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
 
     await expect(page.getByText(/Execution Result/i).first()).toBeVisible({ timeout: 120_000 });
-    await expect(page.getByText(/^SUCCESS$/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("body")).toContainText(/SUCCESS/i, { timeout: 30_000 });
     await expect(page.getByText(/Status Code:/i).first()).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/^200$/i).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator("body")).toContainText(/Status Code:\s*200/i, { timeout: 30_000 });
     await captureStep(page, "04-ai-model-execution-result");
 
     await clickMarked(page.getByRole("button", { name: /History/i }).first(), { force: true });

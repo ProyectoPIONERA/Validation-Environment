@@ -431,6 +431,15 @@ async function createPolicy(
   });
 }
 
+export async function createProviderPolicyDefinition(
+  request: APIRequestContext,
+  runtime: DataspacePortalRuntime,
+  policyId: string,
+): Promise<void> {
+  const providerToken = () => issueUserToken(request, runtime);
+  await createPolicy(request, runtime, providerToken, policyId);
+}
+
 async function createAsset(
   request: APIRequestContext,
   runtime: DataspacePortalRuntime,

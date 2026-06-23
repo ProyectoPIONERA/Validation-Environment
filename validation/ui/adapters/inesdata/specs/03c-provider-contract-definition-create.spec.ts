@@ -6,10 +6,10 @@ import path from "path";
 import { KeycloakLoginPage } from "../../../shared/components/auth/keycloak-login.page";
 import { ConnectorShellPage } from "../components/shell/connector-shell.page";
 import { AssetCreatePage } from "../components/provider/asset-create.page";
-import { PolicyCreatePage } from "../components/provider/policy-create.page";
 import { ContractDefinitionCreatePage } from "../components/provider/contract-definition-create.page";
 import {
   cleanupProviderValidationArtifacts,
+  createProviderPolicyDefinition,
   probeProviderContractDefinition,
   type ProviderContractDefinitionLookup,
 } from "../../../shared/utils/provider-bootstrap";
@@ -119,7 +119,6 @@ test("03c provider setup: contract definition creation from the UI", async ({
   const assetId = `qa-ui-contract-asset-${suffix}`;
   const policyId = `qa-ui-contract-policy-${suffix}`;
   const contractDefinitionId = `qa-ui-contract-definition-${suffix}`;
-  const participantId = `participant-${suffix}`;
   const upload = createSmallUploadFile();
   const loginPage = new KeycloakLoginPage(page, {
     portalUser: dataspaceRuntime.provider.username,
@@ -128,7 +127,6 @@ test("03c provider setup: contract definition creation from the UI", async ({
   });
   const shellPage = new ConnectorShellPage(page);
   const assetCreatePage = new AssetCreatePage(page);
-  const policyCreatePage = new PolicyCreatePage(page);
   const contractDefinitionCreatePage = new ContractDefinitionCreatePage(page);
   const report: ProviderContractDefinitionReport = {
     startedAt: new Date().toISOString(),
@@ -201,16 +199,17 @@ test("03c provider setup: contract definition creation from the UI", async ({
       /asset created successfully/i,
     );
 
-    await policyCreatePage.goto(portalBaseUrl);
-    await policyCreatePage.expectReady();
-    await policyCreatePage.fillPolicyId(policyId);
-    await policyCreatePage.addParticipantIdConstraint(participantId);
-    await captureStep(page, "04-contract-definition-policy-form");
-
-    await policyCreatePage.submit();
-    report.policyMessage = await policyCreatePage.waitForCreationSuccess();
-    await policyCreatePage.expectPolicyListed(policyId);
-    await captureStep(page, "05-contract-definition-policy-created");
+    // The policies UI creates complex policies, while the contract definition
+    // form reads standard policy definitions for its access/contract selectors.
+    // Test 03b covers policy creation from the UI; 03c needs the selector-compatible
+    // prerequisite so the contract definition creation itself is validated here.
+    await createProviderPolicyDefinition(request, dataspaceRuntime, policyId);
+    report.policyMessage = `Policy definition ${policyId} successfully created through Management API`;
+    await attachJson("provider-contract-definition-policy-bootstrap", {
+      policyId,
+      method: "management-api",
+      catalog: "policydefinitions",
+    });
 
     await contractDefinitionCreatePage.goto(portalBaseUrl);
     await contractDefinitionCreatePage.expectReady();

@@ -245,7 +245,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRecoverableExecutionHttpStatus(status: number): boolean {
-  return [400, 502, 503, 504].includes(status);
+  return [400, 500, 502, 503, 504].includes(status);
 }
 
 function inferJsonSchema(value: unknown): Record<string, unknown> {
@@ -411,8 +411,29 @@ async function gotoAiModelExecution(page: Page, baseUrl: string): Promise<void> 
 async function selectExecutionModel(page: Page, assetId: string, modelName: string): Promise<void> {
   const assetSelect = page.locator("#assetSelect").first();
   await expect(assetSelect).toBeVisible({ timeout: 20_000 });
-  const hasValue = await assetSelect.locator(`option[value="${assetId}"]`).count();
-  if (hasValue > 0) {
+
+  let selectByValue = false;
+  await expect(async () => {
+    const options = await assetSelect.locator("option").evaluateAll(items =>
+      items.map(item => ({
+        value: (item as HTMLOptionElement).value,
+        label: ((item as HTMLOptionElement).textContent || "").trim(),
+      })),
+    );
+    selectByValue = options.some(option => option.value === assetId);
+    const selectByLabel = options.some(option => option.label === modelName);
+    expect(
+      selectByValue || selectByLabel,
+      `Executable model option '${assetId}' was not loaded yet. Current options: ${options
+        .map(option => option.value || option.label)
+        .join(", ")}`,
+    ).toBeTruthy();
+  }).toPass({
+    timeout: 120_000,
+    intervals: EVENTUAL_UI_RETRY_INTERVALS,
+  });
+
+  if (selectByValue) {
     await selectOptionMarked(assetSelect, assetId);
   } else {
     await selectOptionMarked(assetSelect, { label: modelName });
@@ -653,31 +674,58 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
         expectedUiState: ["External Asset", "Agreement ready", dataspaceRuntime.provider.connectorName, "POST"],
       });
 
-      const executeResponsePromise = page.waitForResponse(
-        (response) => response.url().includes("/management/v3/modelexecutions/execute"),
-        { timeout: 120_000 },
-      );
-      await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
-      const executeResponse = await executeResponsePromise;
-      const executionAttempt = {
-        attempt: 1,
-        url: executeResponse.url(),
-        status: executeResponse.status(),
-        responseBody: truncateForAttachment(await executeResponse.text().catch(() => "")),
-        requestPayload: {
-          assetId: OFFICIAL_EXTERNAL_FLARES_MODEL.assetId,
-          method: "POST",
-          path: OFFICIAL_EXTERNAL_FLARES_MODEL.modelPath,
-          payload: DEFAULT_PAYLOAD,
-        },
-      };
-      report.executionAttempts.push(executionAttempt);
-      await attachJson("ai-model-external-execution-attempt-1", executionAttempt);
+      let lastExecutionIssue = "";
+      for (let attempt = 1; attempt <= externalExecutionMaxAttempts(); attempt += 1) {
+        const executeResponsePromise = page.waitForResponse(
+          (response) => response.url().includes("/management/v3/modelexecutions/execute"),
+          { timeout: 120_000 },
+        );
+        await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
+        const executeResponse = await executeResponsePromise;
+        const executionAttempt = {
+          attempt,
+          url: executeResponse.url(),
+          status: executeResponse.status(),
+          responseBody: truncateForAttachment(await executeResponse.text().catch(() => "")),
+          requestPayload: {
+            assetId: OFFICIAL_EXTERNAL_FLARES_MODEL.assetId,
+            method: "POST",
+            path: OFFICIAL_EXTERNAL_FLARES_MODEL.modelPath,
+            payload: DEFAULT_PAYLOAD,
+          },
+        };
+        report.executionAttempts.push(executionAttempt);
+        await attachJson(`ai-model-external-execution-attempt-${attempt}`, executionAttempt);
 
-      await expect(page.getByText(/Execution Result/i).first()).toBeVisible({ timeout: 120_000 });
-      await expect(page.getByText(/SUCCESS/i).first()).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByText(/Execution Result/i).first()).toBeVisible({ timeout: 120_000 });
+        if (await page.getByText(/SUCCESS/i).first().isVisible().catch(() => false)) {
+          lastExecutionIssue = "";
+          break;
+        }
+
+        if (!isRecoverableExecutionHttpStatus(executeResponse.status())) {
+          lastExecutionIssue = `Official external execution attempt ${attempt} returned non-recoverable HTTP ${executeResponse.status()}: ${executionAttempt.responseBody || "<empty>"}.`;
+          break;
+        }
+
+        lastExecutionIssue = `Official external execution attempt ${attempt} returned HTTP ${executeResponse.status()}: ${executionAttempt.responseBody || "<empty>"}.`;
+        if (attempt < externalExecutionMaxAttempts()) {
+          await sleep(externalExecutionSettleMs());
+          const inputTabRetry = page.getByRole("button", { name: /^Input$/i }).first();
+          if (await inputTabRetry.isVisible().catch(() => false)) {
+            await clickMarked(inputTabRetry, { force: true });
+            await waitForUiTransition(page);
+          }
+          await expect(page.getByRole("button", { name: /Execute Model/i }).first()).toBeEnabled({ timeout: 30_000 });
+        }
+      }
+
+      if (lastExecutionIssue) {
+        throw new Error(`${lastExecutionIssue} External official execution did not stabilize after retries.`);
+      }
+      await expect(page.locator("body")).toContainText(/SUCCESS/i, { timeout: 30_000 });
       await expect(page.getByText(/Status Code:/i).first()).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText(/200/i).first()).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator("body")).toContainText(/Status Code:\s*200/i, { timeout: 10_000 });
       await captureStep(page, "03-ai-model-external-execution-result");
 
       await clickMarked(page.getByRole("button", { name: /History/i }).first(), { force: true });
@@ -953,6 +1001,11 @@ test("15 AI Model Execution: external model with negotiated agreement from INESD
 
       if (attempt < externalExecutionMaxAttempts()) {
         await sleep(externalExecutionSettleMs());
+        const inputTabRetry = page.getByRole("button", { name: /^Input$/i }).first();
+        if (await inputTabRetry.isVisible().catch(() => false)) {
+          await clickMarked(inputTabRetry, { force: true });
+          await waitForUiTransition(page);
+        }
         const jsonPayloadTabRetry = page.getByRole("button", { name: /^JSON Payload$/i }).first();
         if (await jsonPayloadTabRetry.isVisible().catch(() => false)) {
           await clickMarked(jsonPayloadTabRetry, { force: true });

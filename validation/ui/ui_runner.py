@@ -430,20 +430,6 @@ def _split_model_server_validation_endpoints(config: dict[str, Any]) -> list[str
     return [entry.strip() for entry in raw_value.replace(";", ",").split(",") if entry.strip()]
 
 
-def _validation_payload_is_array(config: dict[str, Any]) -> bool:
-    raw_value = str(
-        config.get("AI_MODEL_HUB_MODEL_SERVER_VALIDATION_PAYLOAD")
-        or os.environ.get("AI_MODEL_HUB_MODEL_SERVER_VALIDATION_PAYLOAD")
-        or ""
-    ).strip()
-    if not raw_value:
-        return False
-    try:
-        return isinstance(json.loads(raw_value), list)
-    except json.JSONDecodeError:
-        return False
-
-
 def _export_ai_model_hub_model_server_validation_env(env: dict[str, str], config: dict[str, Any]) -> None:
     endpoints = _split_model_server_validation_endpoints(config)
     if endpoints:
@@ -460,9 +446,6 @@ def _export_ai_model_hub_model_server_validation_env(env: dict[str, str], config
     if payload:
         env["UI_AI_MODEL_HUB_MODEL_PAYLOAD"] = payload
         env["UI_AI_MODEL_HUB_EXTERNAL_MODEL_PAYLOAD"] = payload
-        if _validation_payload_is_array(config):
-            env.setdefault("UI_AI_MODEL_HUB_BENCHMARKING_DEMO", "0")
-
 
 def _build_playwright_environment(
     *,
