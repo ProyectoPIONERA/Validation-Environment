@@ -1,42 +1,54 @@
 import { modelServerBaseUrlFromUrl, modelServerUrlForPath } from "../../../shared/utils/model-server-url";
 
-export const DEFAULT_AI_MODEL_PATH = "/api/v1/nlp/ecommerce-sentiment";
-export const DEFAULT_AI_MODEL_PAYLOAD = {
-  text: "This product is excellent and very useful",
-};
+export const DEFAULT_AI_MODEL_PATH = "/flares/dccuchile-albert-base-spanish-5w1h";
+export const DEFAULT_AI_MODEL_PAYLOAD = [
+  {
+    Id: 1,
+    Text: "El comité de medicamentos humanos espera concluir el análisis en marzo.",
+  },
+];
 
 export const TEXT_MODEL_INPUT_FEATURES = [
   {
-    name: "text",
+    name: "Id",
+    type: "integer",
+    required: true,
+    description: "Input text identifier",
+  },
+  {
+    name: "Text",
     type: "string",
     required: true,
-    description: "Text to analyze",
+    description: "Spanish text to analyze",
   },
 ];
 
 export const TEXT_MODEL_INPUT_SCHEMA = {
-  type: "object",
-  required: ["text"],
-  properties: {
-    text: {
-      type: "string",
-      description: "Text to analyze",
+  type: "array",
+  items: {
+    type: "object",
+    required: ["Id", "Text"],
+    properties: {
+      Id: {
+        type: "integer",
+        description: "Input text identifier",
+      },
+      Text: {
+        type: "string",
+        description: "Spanish text to analyze",
+      },
     },
   },
 };
 
 export const TEXT_MODEL_BENCHMARK_ROWS = [
   {
-    input: {
-      text: "This product is excellent and very useful",
-    },
-    expected_label: "positive",
+    input: [{ Id: 1, Text: "El comité de medicamentos humanos espera concluir el análisis en marzo." }],
+    expected_label: "WHAT",
   },
   {
-    input: {
-      text: "The delivery was late and the product was broken",
-    },
-    expected_label: "negative",
+    input: [{ Id: 2, Text: "Juan presidió la reunión del comité el lunes pasado." }],
+    expected_label: "WHO",
   },
 ];
 
@@ -184,8 +196,8 @@ export function aiModelAssetOptions({
   modelUrl,
   modelPath,
   modelName,
-  task = "text-classification",
-  subtask = "sentiment-analysis",
+  task = "token-classification",
+  subtask = "5w1h-tagging",
   algorithm = "controlled-httpdata",
   library = "controlled-httpdata",
   framework = "controlled-httpdata",

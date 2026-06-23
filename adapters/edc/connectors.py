@@ -797,10 +797,11 @@ class EDCConnectorsAdapter(INESDataConnectorsAdapter):
             return True
 
         if network_failure:
+            effective_vault_url = primary_url or fallback_url
             if (
                 self._should_attempt_local_fallback(network_failure["exception"])
-                and self._vault_cluster_service_reference(vault_url)
-                and self._verify_edc_vault_management_token_via_port_forward(vault_url, vault_token)
+                and self._vault_cluster_service_reference(effective_vault_url)
+                and self._verify_edc_vault_management_token_via_port_forward(effective_vault_url, vault_token)
             ):
                 return True
             print(
@@ -2910,10 +2911,16 @@ path "secret/data/{ds_name}/{connector_name}/*" {{
     def _dashboard_component_proxy_config_entries(self, config, ds_name):
         if not self._dashboard_component_proxy_enabled(config):
             return []
-        ontology_target = self._resolve_ontology_hub_internal_url(config, ds_name)
+        resolved_ds_name = str(ds_name or (config or {}).get("DS_1_NAME") or "").strip()
         entries = []
+        ontology_target = self._resolve_ontology_hub_internal_url(config, ds_name)
         if ontology_target:
             entries.append({"name": "ontology-hub", "target": ontology_target})
+        ai_model_hub_target = self._component_internal_service_url(
+            "ai-model-hub", config, resolved_ds_name, 8080
+        )
+        if ai_model_hub_target:
+            entries.append({"name": "ai-model-hub", "target": ai_model_hub_target})
         return entries
 
     @staticmethod

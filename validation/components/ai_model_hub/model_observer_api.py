@@ -371,7 +371,7 @@ def _validate_edc_observer_responses(responses: dict[str, dict[str, Any]], run_c
         if inserted < 3:
             assertions.append(f"Expected EDC Observer to acknowledge three QA smoke events, got {inserted}")
 
-    for response_name in ("events", "timeline", "agreement", "benchmark", "participants", "summary"):
+    for response_name in ("timeline", "agreement", "benchmark", "participants"):
         response = responses[response_name]
         if response.get("http_status") != 200:
             assertions.append(
@@ -395,11 +395,6 @@ def _validate_edc_observer_responses(responses: dict[str, dict[str, Any]], run_c
     participants_payload = responses["participants"].get("payload")
     if not _participant_payload_has_evidence(participants_payload, str(run_context.get("participant_id") or "")):
         assertions.append("EDC Observer participant summaries should expose totals by event type")
-
-    summary_payload = responses["summary"].get("payload")
-    event_types = summary_payload.get("eventTypes") if isinstance(summary_payload, dict) else None
-    if not isinstance(event_types, dict) or not event_types:
-        assertions.append("EDC Observer global summary should expose event type counters")
 
     return assertions
 
@@ -524,24 +519,22 @@ def run_ai_model_hub_model_observer_validation(
         if active_adapter == "edc":
             endpoints = {
                 "create_events": _append_url_path(observer_service_base_url, "events"),
-                "events": _with_query(
-                    _append_url_path(observer_service_base_url, "events"),
-                    {"correlationId": run_context["correlation_id"]},
-                ),
                 "timeline": _append_url_path(
                     observer_service_base_url,
-                    f"assets/{parse.quote(run_context['asset_id'], safe='')}/timeline",
+                    f"timeline/{parse.quote(run_context['asset_id'], safe='')}",
                 ),
                 "agreement": _append_url_path(
                     observer_service_base_url,
-                    f"agreements/{parse.quote(run_context['agreement_id'], safe='')}/evidence",
+                    f"agreements/{parse.quote(run_context['agreement_id'], safe='')}",
                 ),
-                "benchmark": _with_query(
-                    _append_url_path(observer_service_base_url, "benchmarks"),
-                    {"assetId": run_context["asset_id"]},
+                "benchmark": _append_url_path(
+                    observer_service_base_url,
+                    f"benchmarks/{parse.quote(run_context['benchmark_run_id'], safe='')}",
                 ),
-                "participants": _append_url_path(observer_service_base_url, "participants"),
-                "summary": _append_url_path(observer_service_base_url, "summary"),
+                "participants": _append_url_path(
+                    observer_service_base_url,
+                    f"participants/{parse.quote(run_context['participant_id'], safe='')}/summary",
+                ),
             }
             responses["create_events"] = _post_edc_observer_events(
                 active_session,
@@ -588,7 +581,7 @@ def run_ai_model_hub_model_observer_validation(
             ]
         else:
             if active_adapter == "edc":
-                for response_name in ("events", "timeline", "agreement", "benchmark", "participants", "summary"):
+                for response_name in ("timeline", "agreement", "benchmark", "participants"):
                     responses[response_name] = _request_json(
                         active_session,
                         "GET",

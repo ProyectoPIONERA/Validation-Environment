@@ -267,7 +267,7 @@ export class EdcModelExecutionPage {
     throw new Error(`Executable asset ${assetId} did not appear in EDC Model Execution`);
   }
 
-  async executeAsset(assetId: string, payload: Record<string, unknown>, timeoutMs = 90_000): Promise<void> {
+  async executeAsset(assetId: string, payload: unknown, timeoutMs = 90_000): Promise<void> {
     await selectOptionMarked(this.assetSelect(), { value: assetId });
     await waitForUiTransition(this.page);
     await fillMarked(this.page.locator("textarea").first(), JSON.stringify(payload, null, 2));

@@ -186,10 +186,15 @@ function datasetRowsValue(page: Page): Locator {
 }
 
 function generatedInputField(page: Page, featureName: string): Locator {
-  const label = new RegExp(`^\\s*${featureName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\*?`, "i");
+  const label = new RegExp(`${featureName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
+  // Target the parent container that wraps the label + tooltip + input;
+  // the schema renders label text inside a <span> that Playwright may
+  // treat as hidden, so we locate through the composite accessible name.
   return page
     .locator(".input-schema-section, .model-input, form, section, main")
-    .getByText(label)
+    .locator("div, generic")
+    .filter({ hasText: label })
+    .locator("input, [role='spinbutton'], [role='textbox'], textarea")
     .first();
 }
 
@@ -288,12 +293,18 @@ async function waitForBenchmarkDatasetCard(page: Page, searchTerm: string, datas
 async function selectOfficialBenchmarkDataset(page: Page, searchTerm: string, datasetName: string): Promise<void> {
   await waitForBenchmarkDatasetCard(page, searchTerm, datasetName);
 
-  const datasetCard = benchmarkDatasetCard(page, datasetName);
-  await datasetCard.scrollIntoViewIfNeeded({ timeout: 10_000 });
-  await clickMarked(datasetCard, { force: true });
-  await waitForUiTransition(page);
-  await expect(page.locator(".dataset-mapping-textarea").first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(".dataset-mapping-input").first()).toBeVisible({ timeout: 30_000 });
+  await expect(async () => {
+    const datasetCard = benchmarkDatasetCard(page, datasetName);
+    // Remove scrollIntoViewIfNeeded; rely on Playwright's auto-scrolling during click.
+    // If the element detaches, toPass will retry the locator evaluation.
+    await clickMarked(datasetCard);
+    await waitForUiTransition(page);
+    await expect(page.locator(".dataset-mapping-textarea").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".dataset-mapping-input").first()).toBeVisible({ timeout: 10_000 });
+  }).toPass({
+    timeout: 60_000,
+    intervals: EVENTUAL_UI_RETRY_INTERVALS,
+  });
 }
 
 async function loadSelectedDataset(
@@ -312,7 +323,7 @@ async function loadSelectedDataset(
   await expect(inputColumnsField).toHaveValue(inputColumns.join(", "), { timeout: 10_000 });
   await expect(labelColumnField).toHaveValue(labelColumn, { timeout: 10_000 });
   await expect(loadDatasetButton).toBeEnabled({ timeout: 30_000 });
-  await clickMarked(loadDatasetButton, { force: true });
+  await clickMarked(loadDatasetButton);
 
   await expect.poll(
     async () => {
@@ -330,7 +341,7 @@ async function loadSelectedDataset(
 async function runSampleRows(page: Page): Promise<void> {
   const testRowsButton = page.getByRole("button", { name: /^Test Rows$/i }).first();
   await expect(testRowsButton).toBeEnabled({ timeout: 30_000 });
-  await clickMarked(testRowsButton, { force: true });
+  await clickMarked(testRowsButton);
 
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
@@ -359,7 +370,7 @@ async function waitForBenchmarkCompletion(page: Page): Promise<void> {
   const runBenchmarkButton = page.getByRole("button", { name: /^Run Benchmark$/i }).first();
   await runBenchmarkButton.scrollIntoViewIfNeeded({ timeout: 10_000 });
   await expect(runBenchmarkButton).toBeEnabled({ timeout: 60_000 });
-  await clickMarked(runBenchmarkButton, { force: true });
+  await clickMarked(runBenchmarkButton);
 
   const deadline = Date.now() + 12 * 60 * 1000;
   let lastRunClickAt = Date.now();
@@ -378,7 +389,7 @@ async function waitForBenchmarkCompletion(page: Page): Promise<void> {
     const buttonVisible = await runBenchmarkButton.isVisible().catch(() => false);
     const buttonEnabled = buttonVisible ? await runBenchmarkButton.isEnabled().catch(() => false) : false;
     if (!running && buttonVisible && buttonEnabled && Date.now() - lastRunClickAt > 30_000) {
-      await clickMarked(runBenchmarkButton, { force: true });
+      await clickMarked(runBenchmarkButton);
       lastRunClickAt = Date.now();
     }
     await page.waitForTimeout(5_000);
@@ -399,7 +410,7 @@ async function runFullBenchmarkAndOpenObserverEvidence(
   }
   await captureStep(page, `${screenshotPrefix}-ranking`);
 
-  await clickMarked(page.getByRole("button", { name: /Benchmark Evidence/i }).first(), { force: true });
+  await clickMarked(page.getByRole("button", { name: /Benchmark Evidence/i }).first());
   await expect(page).toHaveURL(/\/ai-model-observer\/benchmarks\/benchmark-/i, { timeout: 30_000 });
   const benchmarkRunId = extractRouteTail(page.url());
   await expectObserverEvents(page, [/^BENCHMARK_STARTED$/i, /^MODEL_EXECUTION_COMPLETED$/i, /^BENCHMARK_COMPLETED$/i]);
@@ -512,7 +523,7 @@ test("17.2 AI Model Execution: official FLARES 5W1H model exposes input schema a
     await captureStep(page, "17-03-official-use-cases-execution-schema");
 
     await fillFlares5w1hGeneratedForm(page);
-    await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first(), { force: true });
+    await clickMarked(page.getByRole("button", { name: /Execute Model/i }).first());
 
     await expect(page.getByText(/Execution Result/i).first()).toBeVisible({ timeout: 120_000 });
     await expect(page.getByText(/^SUCCESS$/i).first()).toBeVisible({ timeout: 30_000 });
@@ -520,7 +531,7 @@ test("17.2 AI Model Execution: official FLARES 5W1H model exposes input schema a
     await expect(page.getByText(/^200$/i).first()).toBeVisible({ timeout: 30_000 });
     await captureStep(page, "17-04-official-use-cases-execution-result");
 
-    await clickMarked(page.getByRole("button", { name: /View Observer Timeline/i }).first(), { force: true });
+    await clickMarked(page.getByRole("button", { name: /View Observer Timeline/i }).first());
     await expect(page).toHaveURL(/\/ai-model-observer\/timeline\/city-flares-5w1h-albert/i, { timeout: 30_000 });
     await expectObserverEvents(page, [/^MODEL_EXECUTION_REQUESTED$/i, /^MODEL_EXECUTION_COMPLETED$/i]);
     await captureStep(page, "17-05-official-use-cases-execution-observer");

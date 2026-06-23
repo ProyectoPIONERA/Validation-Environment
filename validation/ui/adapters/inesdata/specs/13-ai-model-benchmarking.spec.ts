@@ -111,18 +111,15 @@ const FLARES_MODEL_INPUT_FEATURES = [
   },
 ];
 const FLARES_MODEL_INPUT_SCHEMA = {
-  type: "array",
-  items: {
-    type: "object",
-    required: FLARES_INPUT_COLUMNS,
-    properties: {
-      Id: { type: "integer" },
-      Text: { type: "string" },
-      "5W1H_Label": { type: "string" },
-      Tag_Text: { type: "string" },
-      Tag_Start: { type: "integer" },
-      Tag_End: { type: "integer" },
-    },
+  type: "object",
+  required: FLARES_INPUT_COLUMNS,
+  properties: {
+    Id: { type: "integer" },
+    Text: { type: "string" },
+    "5W1H_Label": { type: "string" },
+    Tag_Text: { type: "string" },
+    Tag_Start: { type: "integer" },
+    Tag_End: { type: "integer" },
   },
 };
 const FLARES_MODEL_INPUT_EXAMPLE = [

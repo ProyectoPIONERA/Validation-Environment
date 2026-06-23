@@ -265,6 +265,9 @@ function aiModelBrowserSearchInput(page: Page) {
   return page
     .locator(
       [
+        "mat-form-field.search-field input",
+        "div.search-row input",
+        "input[placeholder*='regression']",
         "input[placeholder*='name']",
         "input[placeholder*='keyword']",
         "input[placeholder*='provider']",

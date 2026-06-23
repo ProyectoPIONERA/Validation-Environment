@@ -16,7 +16,7 @@ type AIModelExecutionEdcReport = {
   assetId: string;
   modelUrl: string;
   modelPath: string;
-  payload: Record<string, unknown>;
+  payload: unknown;
   linkedCases: string[];
   errorResponses: Array<{ url: string; status: number }>;
 };

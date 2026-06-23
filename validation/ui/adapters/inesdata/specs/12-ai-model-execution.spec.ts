@@ -472,6 +472,15 @@ test("12 AI Model Execution: local model-server inference from INESData UI", asy
     await expect(page.locator(".input-schema-section").first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Detected DAIMO input schema/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/2 fields/i).first()).toBeVisible({ timeout: 10_000 });
+    // Expand the <details> section so the generated fields become visible.
+    const schemaSummary = page.locator(".input-schema-section summary").first();
+    if (await schemaSummary.isVisible()) {
+      const isOpen = await page.locator(".input-schema-section[open]").count();
+      if (!isOpen) {
+        await schemaSummary.click();
+        await waitForUiTransition(page);
+      }
+    }
     await expect(generatedInputField(page, "Id")).toBeVisible({ timeout: 15_000 });
     await expect(generatedInputField(page, "Text")).toBeVisible({ timeout: 15_000 });
     report.inputValidationChecks.push({

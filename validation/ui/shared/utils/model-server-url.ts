@@ -81,7 +81,7 @@ function connectorModelServerBaseUrlFromTopology(): string {
   if (!domain) {
     return "";
   }
-  return appendUrlPath(`http://org1.${domain}`, publicPath);
+  return appendUrlPath(`https://org1.${domain}`, publicPath);
 }
 
 function publicModelServerBaseUrlFromTopology(): string {

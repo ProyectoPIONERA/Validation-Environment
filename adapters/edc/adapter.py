@@ -178,6 +178,14 @@ class EdcAdapter(InesdataAdapter):
         """
         return True
 
+    def get_kafka_config(self):
+        loader = getattr(self.config_adapter, "kafka_runtime_config", None)
+        if callable(loader):
+            config = loader()
+            if isinstance(config, dict):
+                return config
+        return {}
+
     def _preview_common_services(self):
         namespace = self.config.NS_COMMON
         pod_output = self.run_silent(f"kubectl get pods -n {namespace} --no-headers") or ""
