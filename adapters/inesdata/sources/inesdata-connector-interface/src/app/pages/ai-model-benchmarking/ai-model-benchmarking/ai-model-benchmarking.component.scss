@@ -171,12 +171,18 @@
 
 /* ─── Badges ─── */
 .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
   padding: 0.3rem 0.8rem;
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .badge.live { background: rgba(23, 184, 144, 0.15); color: #0b7f65; border: 1px solid rgba(23, 184, 144, 0.4); }
@@ -732,10 +738,12 @@
 
 .dataset-card-top .badge,
 .dataset-card-bottom .badge {
-  flex: 0 1 auto;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  flex: 0 0 auto;
+  max-width: min(100%, 14rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 .dataset-card-name {

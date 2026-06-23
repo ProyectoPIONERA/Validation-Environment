@@ -41,8 +41,6 @@ import static jakarta.ws.rs.core.HttpHeaders.CONTENT_TYPE;
 @Produces(MediaType.APPLICATION_JSON)
 public class ModelExecutionApiController {
     private static final String DEFAULT_CONTEXT = "https://w3id.org/edc/v0.0.1/ns/";
-    private static final int DEFAULT_EDR_ATTEMPTS = 20;
-    private static final long DEFAULT_EDR_DELAY_MS = 500;
     private static final long DEFAULT_EXECUTION_TARGET_CACHE_TTL_MS = 15 * 60 * 1000;
 
     private final ObjectMapper mapper;
@@ -54,6 +52,9 @@ public class ModelExecutionApiController {
     private final String defaultCounterPartyAddress;
     private final String defaultProtocol;
     private final String defaultTransferType;
+    private final int edrAttempts;
+    private final long edrDelayMs;
+    private final String edrEndpointMode;
     private final boolean observerEnabled;
     private final String observerTargetUrl;
     private final String observerSourceComponent;
@@ -69,6 +70,9 @@ public class ModelExecutionApiController {
                                        String defaultCounterPartyAddress,
                                        String defaultProtocol,
                                        String defaultTransferType,
+                                       int edrAttempts,
+                                       long edrDelayMs,
+                                       String edrEndpointMode,
                                        boolean observerEnabled,
                                        String observerJournalBaseUrl,
                                        String observerJournalEventsPath,
@@ -82,10 +86,16 @@ public class ModelExecutionApiController {
         this.defaultCounterPartyAddress = defaultCounterPartyAddress;
         this.defaultProtocol = defaultProtocol;
         this.defaultTransferType = defaultTransferType;
+        this.edrAttempts = Math.max(1, edrAttempts);
+        this.edrDelayMs = Math.max(100L, edrDelayMs);
+        this.edrEndpointMode = firstNonBlank(edrEndpointMode, "public").toLowerCase(Locale.ROOT);
         this.observerEnabled = observerEnabled;
         this.observerTargetUrl = buildObserverTargetUrl(observerJournalBaseUrl, observerJournalEventsPath);
         this.observerSourceComponent = firstNonBlank(observerSourceComponent, "inesdata-connector:model-execution-api");
-        this.httpClient = HttpClient.newHttpClient();
+        this.httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
         this.executionTargetCache = new ConcurrentHashMap<>();
     }
 
@@ -140,6 +150,9 @@ public class ModelExecutionApiController {
 
             var requestedMethod = firstNonBlank(textValue(requestNode, "method"), resolution.method());
             var requestedPath = firstNonBlank(textValue(requestNode, "path"), resolution.path());
+            if ("edr-http".equals(resolution.endpointKind())) {
+                requestedPath = firstNonBlank(resolution.path(), "");
+            }
             var headersNode = firstNode(requestNode, "headers");
             var outboundResponse = invokeTarget(resolution, requestedMethod, requestedPath, headersNode, payload);
             if (isAuthorizationFailure(outboundResponse.statusCode())) {
@@ -266,7 +279,7 @@ public class ModelExecutionApiController {
         }
 
         var target = new ResolvedExecutionTarget(
-            edrInfo.endpoint(),
+            normalizeEdrEndpoint(edrInfo.endpoint(), transferParams.connectorId()),
             "POST",
             "",
             edrInfo.authHeader(),
@@ -544,7 +557,7 @@ public class ModelExecutionApiController {
     }
 
     private EdrInfo waitForEdr(String transferId, String managementAuthorization) throws Exception {
-        for (int attempt = 0; attempt < DEFAULT_EDR_ATTEMPTS; attempt++) {
+        for (int attempt = 0; attempt < edrAttempts; attempt++) {
             var edrNode = getJson("/v3/edrs/" + encodePathSegment(transferId) + "/dataaddress", managementAuthorization);
             if (edrNode != null && !edrNode.isNull()) {
                 var endpoint = firstNonBlank(textValue(edrNode, "endpoint", "edc:endpoint", "endpointUrl", "edc:endpointUrl"), null);
@@ -554,7 +567,7 @@ public class ModelExecutionApiController {
                     return new EdrInfo(endpoint, authorization, authHeader);
                 }
             }
-            Thread.sleep(DEFAULT_EDR_DELAY_MS);
+            Thread.sleep(edrDelayMs);
         }
 
         return null;
@@ -764,6 +777,67 @@ public class ModelExecutionApiController {
             return normalizedBase;
         }
         return normalizedBase + (normalizedPath.startsWith("/") ? normalizedPath : "/" + normalizedPath);
+    }
+
+    private String normalizeEdrEndpoint(String endpoint, String remoteParticipantId) {
+        if (!hasText(endpoint)) {
+            return endpoint;
+        }
+
+        try {
+            var uri = URI.create(endpoint);
+            var host = firstNonBlank(uri.getHost(), "").toLowerCase(Locale.ROOT);
+            var path = firstNonBlank(uri.getPath(), "");
+            if (!host.endsWith(".pionera.oeg.fi.upm.es") || !"/public".equals(path)) {
+                return endpoint;
+            }
+
+            if (shouldUsePublicHttpEdrEndpoint() && "https".equalsIgnoreCase(uri.getScheme())) {
+                return "http://" + host
+                        + (uri.getPort() > 0 && uri.getPort() != 443 ? ":" + uri.getPort() : "")
+                        + path
+                        + (hasText(uri.getQuery()) ? "?" + uri.getQuery() : "")
+                        + (hasText(uri.getFragment()) ? "#" + uri.getFragment() : "");
+            }
+
+            if (!shouldUseInternalKubernetesEdrEndpoint() || !hasText(remoteParticipantId)) {
+                return endpoint;
+            }
+
+            var namespace = inferPioneraConnectorNamespace(remoteParticipantId);
+            if (!hasText(namespace)) {
+                return endpoint;
+            }
+
+            var internalBase = "http://%s.%s.svc.cluster.local:19291".formatted(remoteParticipantId, namespace);
+            return internalBase + path
+                    + (hasText(uri.getQuery()) ? "?" + uri.getQuery() : "")
+                    + (hasText(uri.getFragment()) ? "#" + uri.getFragment() : "");
+        } catch (RuntimeException exception) {
+            return endpoint;
+        }
+    }
+
+    private boolean shouldUsePublicHttpEdrEndpoint() {
+        return "public-http".equals(edrEndpointMode)
+                || "http".equals(edrEndpointMode);
+    }
+
+    private boolean shouldUseInternalKubernetesEdrEndpoint() {
+        return "internal-k8s".equals(edrEndpointMode)
+                || "kubernetes".equals(edrEndpointMode)
+                || "k8s".equals(edrEndpointMode);
+    }
+
+    private String inferPioneraConnectorNamespace(String participantId) {
+        var value = firstNonBlank(participantId, "").toLowerCase(Locale.ROOT);
+        if (value.contains("org2")) {
+            return "provider";
+        }
+        if (value.contains("org3")) {
+            return "consumer";
+        }
+        return "";
     }
 
     private String encodePathSegment(String value) {

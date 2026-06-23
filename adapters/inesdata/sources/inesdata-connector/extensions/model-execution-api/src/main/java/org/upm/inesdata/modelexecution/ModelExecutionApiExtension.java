@@ -52,6 +52,15 @@ public class ModelExecutionApiExtension implements ServiceExtension {
     @Setting(value = "Fallback transfer type for transfer requests triggered by model execution.", defaultValue = DEFAULT_TRANSFER_TYPE)
     private static final String DEFAULT_EXECUTION_TRANSFER_TYPE = "asset.infer.transfer.type";
 
+    @Setting(value = "Number of attempts used to wait for an EDR after starting a transfer.", defaultValue = "90")
+    private static final String EDR_ATTEMPTS = "asset.infer.edr.attempts";
+
+    @Setting(value = "Delay in milliseconds between EDR polling attempts.", defaultValue = "1000")
+    private static final String EDR_DELAY_MS = "asset.infer.edr.delay.ms";
+
+    @Setting(value = "EDR endpoint normalization mode for model execution. Use public-http for vm-distributed with HTTP ingress dataplane, public to preserve EDR endpoints, or internal-k8s only when participants share a Kubernetes DNS domain.", defaultValue = "public-http")
+    private static final String EDR_ENDPOINT_MODE = "asset.infer.edr.endpoint.mode";
+
     @Inject
     private WebService webService;
 
@@ -92,11 +101,30 @@ public class ModelExecutionApiExtension implements ServiceExtension {
                 context.getSetting(DEFAULT_CONNECTOR_ID, ""),
                 context.getSetting(DEFAULT_COUNTER_PARTY_ADDRESS, ""),
                 context.getSetting(DEFAULT_EXECUTION_PROTOCOL, DEFAULT_PROTOCOL),
-            context.getSetting(DEFAULT_EXECUTION_TRANSFER_TYPE, DEFAULT_TRANSFER_TYPE),
-            Boolean.parseBoolean(String.valueOf(context.getSetting(OBSERVER_JOURNAL_ENABLED, "true"))),
-            context.getSetting(OBSERVER_JOURNAL_BASE_URL, ""),
-            context.getSetting(OBSERVER_JOURNAL_EVENTS_PATH, DEFAULT_OBSERVER_EVENTS_PATH),
-            context.getSetting(OBSERVER_SOURCE_COMPONENT, "inesdata-connector:model-execution-api")
+                context.getSetting(DEFAULT_EXECUTION_TRANSFER_TYPE, DEFAULT_TRANSFER_TYPE),
+                intSetting(context, EDR_ATTEMPTS, 90),
+                longSetting(context, EDR_DELAY_MS, 1000L),
+                context.getSetting(EDR_ENDPOINT_MODE, "public-http"),
+                Boolean.parseBoolean(String.valueOf(context.getSetting(OBSERVER_JOURNAL_ENABLED, "true"))),
+                context.getSetting(OBSERVER_JOURNAL_BASE_URL, ""),
+                context.getSetting(OBSERVER_JOURNAL_EVENTS_PATH, DEFAULT_OBSERVER_EVENTS_PATH),
+                context.getSetting(OBSERVER_SOURCE_COMPONENT, "inesdata-connector:model-execution-api")
         ));
+    }
+
+    private static int intSetting(ServiceExtensionContext context, String key, int defaultValue) {
+        try {
+            return Integer.parseInt(String.valueOf(context.getSetting(key, String.valueOf(defaultValue))));
+        } catch (RuntimeException exception) {
+            return defaultValue;
+        }
+    }
+
+    private static long longSetting(ServiceExtensionContext context, String key, long defaultValue) {
+        try {
+            return Long.parseLong(String.valueOf(context.getSetting(key, String.valueOf(defaultValue))));
+        } catch (RuntimeException exception) {
+            return defaultValue;
+        }
     }
 }

@@ -40,6 +40,7 @@ export interface AiModelExecutionItem {
   requestShape?: AiModelRequestShape;
   benchmarkModelType?: AiModelBenchmarkModelType;
   supportedMetrics?: string[];
+  predictionFields?: string[];
   positiveLabel?: string;
   scoreField?: string;
   rawAsset?: Asset;

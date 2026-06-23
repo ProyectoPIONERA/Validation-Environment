@@ -164,6 +164,7 @@ export class ModelExecutionService {
       requestShape,
       benchmarkModelType: this.extractBenchmarkModelType(metadataNode),
       supportedMetrics: this.extractSupportedMetrics(metadataNode),
+      predictionFields: this.extractPredictionFields(metadataNode),
       positiveLabel: this.extractPositiveLabel(metadataNode),
       scoreField: this.extractScoreField(metadataNode),
       rawAsset: asset
@@ -204,6 +205,7 @@ export class ModelExecutionService {
       requestShape,
       benchmarkModelType: this.extractBenchmarkModelType(metadataNode),
       supportedMetrics: this.extractSupportedMetrics(metadataNode),
+      predictionFields: this.extractPredictionFields(metadataNode),
       positiveLabel: this.extractPositiveLabel(metadataNode),
       scoreField: this.extractScoreField(metadataNode),
       rawOffer: offer
@@ -465,6 +467,28 @@ export class ModelExecutionService {
     ]));
 
     return this.unique([...directMetrics, ...evaluationMetrics]);
+  }
+
+  private extractPredictionFields(node: unknown): string[] {
+    return this.extractFieldNameList(node, [
+      'daimo:prediction',
+      'https://w3id.org/pionera/daimo#prediction',
+      'prediction',
+      'daimo:predictionField',
+      'https://w3id.org/pionera/daimo#predictionField',
+      'predictionField',
+      'daimo:predictionFields',
+      'https://w3id.org/pionera/daimo#predictionFields',
+      'predictionFields',
+      'daimo:prediction_field',
+      'https://w3id.org/daimo/ns#prediction_field',
+      'https://pionera.ai/edc/daimo#prediction_field',
+      'prediction_field',
+      'daimo:prediction_fields',
+      'https://w3id.org/daimo/ns#prediction_fields',
+      'https://pionera.ai/edc/daimo#prediction_fields',
+      'prediction_fields'
+    ]);
   }
 
   private extractPositiveLabel(node: unknown): string {

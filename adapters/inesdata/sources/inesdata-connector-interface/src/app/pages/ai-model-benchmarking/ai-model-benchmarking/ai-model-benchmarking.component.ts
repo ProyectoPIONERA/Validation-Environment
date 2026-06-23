@@ -44,6 +44,7 @@ interface BenchmarkAsset {
   requestShape: AiModelRequestShape;
   benchmarkModelType: AiModelBenchmarkModelType;
   supportedMetrics: string[];
+  predictionFields: string[];
 }
 
 interface SchemaField {
@@ -298,7 +299,8 @@ export class AiModelBenchmarkingComponent implements OnInit {
       inputExample: item.inputExample,
       requestShape: item.requestShape || 'single',
       benchmarkModelType: item.benchmarkModelType || 'output',
-      supportedMetrics: item.supportedMetrics || []
+      supportedMetrics: item.supportedMetrics || [],
+      predictionFields: item.predictionFields || []
     };
   }
 
@@ -583,7 +585,8 @@ export class AiModelBenchmarkingComponent implements OnInit {
       }
 
       const mapping = this.resolveBenchmarkDatasetMapping(null);
-      const validationErrors = this.validateValidationDatasetRows(parsedRows, selectedModels, mapping);
+      const normalizedRows = this.normalizeBenchmarkDatasetRows(parsedRows, mapping);
+      const validationErrors = this.validateValidationDatasetRows(normalizedRows, selectedModels, mapping);
       if (validationErrors.length > 0) {
         this.notificationService.showError(`Validation dataset invalid: ${validationErrors[0]}`);
         this.statusMessage = `Validation dataset invalid: ${validationErrors[0]}`;
@@ -591,7 +594,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
         return;
       }
 
-      this.validationDatasetRows = parsedRows;
+      this.validationDatasetRows = normalizedRows;
       this.validationDatasetFileName = file.name;
       this.validationDatasetSource = 'manual';
       this.validationDatasetMapping = mapping;
@@ -694,7 +697,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
     const metadataMapping = this.validationDatasetSource === 'dataspace'
       ? this.getSelectedBenchmarkDatasetMetadataMapping()
       : null;
-    return this.resolveBenchmarkDatasetMapping(metadataMapping);
+    return this.resolveBenchmarkDatasetMapping(metadataMapping) || this.validationDatasetMapping;
   }
 
   async loadSelectedBenchmarkDataset(): Promise<void> {
@@ -723,7 +726,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       if (requiresColumnMapping && (!mapping || mapping.input.length === 0 || !mapping.label)) {
         throw new Error('Benchmark dataset metadata must define daimo:input column names and a daimo:label column.');
       }
-      const normalizedRows = this.normalizeBenchmarkDatasetRows(parsedRows);
+      const normalizedRows = this.normalizeBenchmarkDatasetRows(parsedRows, mapping);
       if (normalizedRows.length === 0) {
         throw new Error('The benchmark dataset contains no rows.');
       }
@@ -824,9 +827,12 @@ export class AiModelBenchmarkingComponent implements OnInit {
     return this.normalizeColumnSignature(Object.keys(example));
   }
 
-  private getPreferredPredictionKeys(): string[] {
+  private getPreferredPredictionKeys(model: BenchmarkAsset): string[] {
     const label = this.validationDatasetMapping?.label || '';
-    return label ? [label] : [];
+    return this.uniqueStrings([
+      ...(model.predictionFields || []),
+      ...(label ? [label] : [])
+    ]);
   }
 
   private uniqueStrings(values: string[]): string[] {
@@ -1049,8 +1055,9 @@ export class AiModelBenchmarkingComponent implements OnInit {
     this.lastBenchmarkRunId = benchmarkRunId;
 
     try {
-      const datasetRows = this.validationDatasetRows;
       const activeMapping = this.getActiveValidationDatasetMapping();
+      const datasetRows = this.normalizeBenchmarkDatasetRows(this.validationDatasetRows, activeMapping);
+      this.validationDatasetRows = datasetRows;
       this.validationDatasetMapping = activeMapping;
       const datasetValidationErrors = this.validateValidationDatasetRows(datasetRows, selectedModels, activeMapping);
       if (datasetValidationErrors.length > 0) {
@@ -1775,7 +1782,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.normalizeClassificationValue(output);
     }
 
-    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys());
+    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys(model));
     if (preferredValue !== undefined) {
       return this.normalizeClassificationValue(preferredValue);
     }
@@ -1804,7 +1811,7 @@ export class AiModelBenchmarkingComponent implements OnInit {
       return this.readNumericValue(output);
     }
 
-    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys());
+    const preferredValue = this.findComparableValue(output, this.getPreferredPredictionKeys(model));
     if (preferredValue !== undefined) {
       return this.readNumericValue(preferredValue);
     }
@@ -2603,8 +2610,25 @@ export class AiModelBenchmarkingComponent implements OnInit {
     return null;
   }
 
-  private normalizeBenchmarkDatasetRows(rows: any[]): any[] {
-    return rows.map(row => this.unwrapJsonLdValue(row));
+  private normalizeBenchmarkDatasetRows(rows: any[], mapping: BenchmarkDatasetMapping | null = this.validationDatasetMapping): any[] {
+    return rows.map(row => this.addBenchmarkLabelAliases(this.unwrapJsonLdValue(row), mapping));
+  }
+
+  private addBenchmarkLabelAliases(row: any, mapping: BenchmarkDatasetMapping | null): any {
+    if (!row || typeof row !== 'object' || Array.isArray(row) || !mapping?.label) {
+      return row;
+    }
+
+    const labelValue = row[mapping.label];
+    if (labelValue === undefined || labelValue === null || labelValue === '') {
+      return row;
+    }
+
+    return {
+      ...row,
+      label: row.label ?? labelValue,
+      target: row.target ?? labelValue
+    };
   }
 
   private unwrapJsonLdValue(value: any): any {
