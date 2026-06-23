@@ -341,6 +341,55 @@ ensure_legacy_lov_mapping_paths
 '''
 
 
+def _lov_vocabulary_mapping_compat_script() -> str:
+    return r'''
+ensure_lov_vocabulary_mapping_compat() {
+  es_host="${ELASTIC_SEARCH_HOST:-elasticsearch}"
+  es_url="http://${es_host}:9200/lov_vocabulary/_mapping"
+  mapping_file="$(mktemp)"
+  response_file="$(mktemp)"
+
+  curl_es() {
+    if [ -n "${ELASTIC_SEARCH_PASSWORD:-}" ]; then
+      curl --silent --show-error --max-time 20 --user "${ELASTIC_SEARCH_USER:-elastic}:${ELASTIC_SEARCH_PASSWORD}" "$@"
+    else
+      curl --silent --show-error --max-time 20 "$@"
+    fi
+  }
+
+  status="$(curl_es --output "${mapping_file}" --write-out "%{http_code}" "${es_url}" || true)"
+  case "${status}" in
+    200) ;;
+    404)
+      echo "Ontology Hub Elasticsearch mapping compatibility: lov_vocabulary is absent; the app will create it from official mappings."
+      return 0
+      ;;
+    *)
+      echo "Ontology Hub Elasticsearch mapping compatibility failed while reading lov_vocabulary mapping: HTTP ${status}" >&2
+      cat "${mapping_file}" >&2
+      return 31
+      ;;
+  esac
+
+  compat_payload="$(node -e 'const fs=require("fs"); const payload=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const index=payload.lov_vocabulary || Object.values(payload)[0] || {}; const props=((index.mappings||{}).properties)||{}; const update={properties:{}}; for (const name of ["tags","langs"]) { const field=props[name]||{}; if (!field.type) { update.properties[name]={type:"keyword"}; } else if (field.type==="text" && field.fielddata!==true) { update.properties[name]={type:"text",fielddata:true,fields:field.fields||{keyword:{type:"keyword",ignore_above:256}}}; } } const names=Object.keys(update.properties); if (names.length===0) { process.exit(2); } process.stdout.write(JSON.stringify(update));' "${mapping_file}" || true)"
+  if [ -z "${compat_payload}" ]; then
+    echo "Ontology Hub Elasticsearch mapping compatibility: lov_vocabulary tags/langs are compatible."
+    return 0
+  fi
+
+  curl_es \
+    --fail \
+    --request PUT \
+    --header "Content-Type: application/json" \
+    --data "${compat_payload}" \
+    "${es_url}" >"${response_file}"
+  cat "${response_file}"
+  echo "Ontology Hub Elasticsearch mapping compatibility: enabled fielddata for legacy lov_vocabulary text facets."
+}
+ensure_lov_vocabulary_mapping_compat
+'''
+
+
 def _validation_fixture_seed_script(runtime: Dict[str, Any]) -> str:
     payload = {
         "prefix": runtime.get("expectedVocabularyPrefix") or "saref4grid",
@@ -653,6 +702,7 @@ export PATH="/opt/java/openjdk/bin:/opt/java/openjdk/jre/bin:${PATH}"
 '''
         + _lov_config_sync_script()
         + _lov_legacy_mapping_compat_script()
+        + _lov_vocabulary_mapping_compat_script()
         + _validation_fixture_seed_script(runtime)
         + r'''
 if [ -x /app/setup/lovInitialization.sh ]; then
@@ -661,12 +711,18 @@ if [ -x /app/setup/lovInitialization.sh ]; then
   init_rc=$?
   cat "${init_output}"
   if grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}"; then
-    echo "Ontology Hub SPARQL preparation failed: Elasticsearch rejected the LOV indexer authentication." >&2
-    exit 31
+    if [ -s /app/public/lov.nq ]; then
+      echo "Ontology Hub legacy LOV Elasticsearch indexer was rejected by authentication; continuing because /app/public/lov.nq is available for SPARQL preparation."
+    else
+      echo "Ontology Hub SPARQL preparation failed: Elasticsearch rejected the LOV indexer authentication and /app/public/lov.nq was not generated." >&2
+      exit 31
+    fi
   fi
   if [ "${init_rc}" -ne 0 ]; then
     if grep -Fq "Index 'lov' does not exist" "${init_output}"; then
       echo "Ontology Hub legacy index-lov did not find index 'lov'; continuing with framework-managed ES fixture index."
+    elif grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}" && [ -s /app/public/lov.nq ]; then
+      echo "Ontology Hub legacy index-lov authentication failure is non-blocking for SPARQL because /app/public/lov.nq exists."
     else
       exit "${init_rc}"
     fi
@@ -712,12 +768,18 @@ bash /app/setup/lovInitialization.sh >"${init_output}" 2>&1
 init_rc=$?
 cat "${init_output}"
 if grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}"; then
-  echo "Ontology Hub fixture preparation failed: Elasticsearch rejected the LOV indexer authentication." >&2
-  exit 31
+  if [ -s /app/public/lov.nq ]; then
+    echo "Ontology Hub legacy LOV Elasticsearch indexer was rejected by authentication; continuing because /app/public/lov.nq is available for validation."
+  else
+    echo "Ontology Hub fixture preparation failed: Elasticsearch rejected the LOV indexer authentication and /app/public/lov.nq was not generated." >&2
+    exit 31
+  fi
 fi
 if [ "${init_rc}" -ne 0 ]; then
   if grep -Fq "Index 'lov' does not exist" "${init_output}"; then
     echo "Ontology Hub legacy index-lov did not find index 'lov'; continuing with framework-managed ES fixture index."
+  elif grep -Eiq "status:[[:space:]]*401|security_exception|authentication|unauthorized" "${init_output}" && [ -s /app/public/lov.nq ]; then
+    echo "Ontology Hub legacy index-lov authentication failure is non-blocking for validation because /app/public/lov.nq exists."
   else
     exit "${init_rc}"
   fi

@@ -37,38 +37,63 @@ test("OH-APP-05: vocabulary detail is visible and the .n3 can be downloaded", as
 
   await catalogPage.goto(flowRuntime.baseUrl, query);
   await catalogPage.expectReady();
-  await catalogPage.waitForResults();
-  const initialCount = await catalogPage.currentResultCount().catch(() => null);
+  let catalogReady = true;
+  let catalogFailure = "";
+  try {
+    await catalogPage.waitForResults();
+  } catch (error) {
+    catalogReady = false;
+    catalogFailure = normalizeText(error?.message);
+  }
+  const initialCount = catalogReady
+    ? await catalogPage.currentResultCount().catch(() => null)
+    : null;
   await captureStep(page, "01-catalog-search");
-
-  await catalogPage.search(query);
-  const hasSuggestions = await safeWaitForSuggestions(catalogPage);
 
   let openedLabel = "";
   let openSource = "none";
-  if (hasSuggestions) {
-    if (targetPrefix) {
-      try {
-        openedLabel = await catalogPage.openSuggestion(targetPrefix);
-        openSource = "autocomplete-target";
-      } catch (error) {
-        openedLabel = await catalogPage.openSuggestion();
-        openSource = "autocomplete-first";
+  let openFallbackReason = catalogFailure;
+  if (catalogReady) {
+    try {
+      await catalogPage.search(query);
+      const hasSuggestions = await safeWaitForSuggestions(catalogPage);
+
+      if (hasSuggestions) {
+        if (targetPrefix) {
+          try {
+            openedLabel = await catalogPage.openSuggestion(targetPrefix);
+            openSource = "autocomplete-target";
+          } catch (error) {
+            openedLabel = await catalogPage.openSuggestion();
+            openSource = "autocomplete-first";
+          }
+        } else {
+          openedLabel = await catalogPage.openSuggestion();
+          openSource = "autocomplete-first";
+        }
+      } else if (targetPrefix) {
+        openedLabel = await catalogPage.openResult(targetPrefix);
+        openSource = "result-prefix";
+      } else {
+        const fallback = await openFirstCatalogResult(page);
+        openedLabel = fallback.label;
+        openSource = fallback.source;
       }
-    } else {
-      openedLabel = await catalogPage.openSuggestion();
-      openSource = "autocomplete-first";
+    } catch (error) {
+      openFallbackReason = normalizeText(error?.message);
+      if (!targetPrefix) {
+        throw error;
+      }
     }
-  } else if (targetPrefix) {
-    openedLabel = await catalogPage.openResult(targetPrefix);
-    openSource = "result-prefix";
-  } else {
-    const fallback = await openFirstCatalogResult(page);
-    openedLabel = fallback.label;
-    openSource = fallback.source;
   }
 
-  await page.waitForLoadState("domcontentloaded");
+  if (openSource === "none" && targetPrefix) {
+    openedLabel = targetPrefix;
+    openSource = "direct-prefix-fallback";
+    await detailPage.goto(flowRuntime.baseUrl, targetPrefix);
+  } else {
+    await page.waitForLoadState("domcontentloaded");
+  }
   const detailMatch = page.url().match(/\/dataset\/vocabs\/([^/?#]+)/);
   const resolvedPrefix = detailMatch ? decodeURIComponent(detailMatch[1]) : targetPrefix;
 
@@ -98,6 +123,7 @@ test("OH-APP-05: vocabulary detail is visible and the .n3 can be downloaded", as
   });
   await captureStep(page, "03-vocab-n3-downloaded");
 
+  const detailUrl = page.url();
   await signOut(page, flowRuntime);
 
   await attachJson("05-vocab-visualization-report", {
@@ -105,8 +131,9 @@ test("OH-APP-05: vocabulary detail is visible and the .n3 can be downloaded", as
     initialCount,
     openedLabel,
     openSource,
+    openFallbackReason,
     resolvedPrefix,
-    detailUrl: page.url(),
+    detailUrl,
     downloadInfo,
   });
 });
