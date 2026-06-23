@@ -2560,6 +2560,11 @@ class INESDataConnectorsAdapter:
             or ""
         ).strip()
         if explicit_url:
+            if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
+                return self._url_with_forced_scheme(
+                    self._strip_model_observer_api_path(explicit_url),
+                    "http",
+                )
             return self._strip_model_observer_api_path(explicit_url)
 
         if self._normalized_topology() != VM_DISTRIBUTED_TOPOLOGY:
@@ -2927,10 +2932,11 @@ class INESDataConnectorsAdapter:
             ingress["publicProtocol"] = public_protocol
             ingress["publicHostname"] = public_external
             if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
-                ingress["callbackProtocol"] = self._vm_distributed_connector_dsp_protocol(
+                dsp_protocol = self._vm_distributed_connector_dsp_protocol(
                     deployer_config,
-                    fallback=public_protocol,
+                    fallback="http",
                 )
+                ingress["callbackProtocol"] = dsp_protocol
                 ingress["callbackHostname"] = public_external
                 ingress["dataplanePublicBaseUrl"] = f"{public_protocol}://{public_external}/public"
             with open(values_file, "w") as f:
@@ -2940,10 +2946,11 @@ class INESDataConnectorsAdapter:
         ingress["publicProtocol"] = public_protocol
         ingress["publicHostname"] = public_external
         if self._normalized_topology() == VM_DISTRIBUTED_TOPOLOGY:
-            ingress["callbackProtocol"] = self._vm_distributed_connector_dsp_protocol(
+            dsp_protocol = self._vm_distributed_connector_dsp_protocol(
                 deployer_config,
-                fallback=public_protocol,
+                fallback="http",
             )
+            ingress["callbackProtocol"] = dsp_protocol
             ingress["callbackHostname"] = public_external
             ingress["dataplanePublicBaseUrl"] = f"{public_protocol}://{public_external}/public"
 

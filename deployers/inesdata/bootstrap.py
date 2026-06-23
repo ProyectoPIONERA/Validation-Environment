@@ -781,6 +781,9 @@ def connector_participant_urls(config, connector, dataspace, environment):
     public_urls = build_connector_public_access_urls(connector, dataspace, environment, config)
     public_protocol = public_urls.get("connector_protocol_api")
     public_shared = public_urls.get("connector_shared_api")
+    dsp_base = connector_dsp_public_base_url(connector, dataspace, config)
+    if dsp_base:
+        return f"{dsp_base}/protocol", f"{dsp_base}/shared"
     if public_protocol and public_shared:
         return public_protocol, public_shared
 
@@ -1467,6 +1470,56 @@ def connector_public_base_url(connector, dataspace, config):
                     or public_urls.get(public_url_key)
                     or config.get(fallback_url_key)
                 )
+    return ""
+
+
+def connector_dsp_public_base_url(connector, dataspace, config):
+    values = config or {}
+    topology = normalize_topology(
+        values.get("TOPOLOGY")
+        or values.get("PIONERA_TOPOLOGY")
+        or values.get("INESDATA_TOPOLOGY")
+        or ""
+    )
+    if topology == "local" and (
+        str(values.get("VM_PROVIDER_PUBLIC_URL") or values.get("VM_PROVIDER_HTTP_URL") or "").strip()
+        and str(values.get("VM_CONSUMER_PUBLIC_URL") or values.get("VM_CONSUMER_HTTP_URL") or "").strip()
+    ):
+        topology = "vm-distributed"
+    mode = str(
+        values.get("PIONERA_CONNECTOR_PROTOCOL_ADDRESS_MODE")
+        or values.get("CONNECTOR_PROTOCOL_ADDRESS_MODE")
+        or ("internal" if topology == "vm-distributed" else "")
+    ).strip().lower()
+    if topology != "vm-distributed" or mode not in {"internal", "private"}:
+        return ""
+
+    protocol = str(
+        values.get("VM_DISTRIBUTED_CONNECTOR_DSP_PROTOCOL")
+        or values.get("INESDATA_CONNECTOR_DSP_PROTOCOL")
+        or "http"
+    ).strip().lower()
+    if protocol not in {"http", "https"}:
+        protocol = "http"
+
+    public_urls = resolve_vm_distributed_public_urls(values)
+    role_options = (
+        ("VM_PROVIDER_CONNECTORS", "VM_PROVIDER_PUBLIC_URL", "VM_PROVIDER_HTTP_URL"),
+        ("VM_CONSUMER_CONNECTORS", "VM_CONSUMER_PUBLIC_URL", "VM_CONSUMER_HTTP_URL"),
+    )
+    for connectors_key, public_url_key, fallback_url_key in role_options:
+        for configured_connector in split_config_list(values.get(connectors_key)):
+            if not connector_matches_configured_name(connector, dataspace, configured_connector):
+                continue
+            base_url = normalize_url(
+                _first_usable_vm_public_url(values, public_urls, public_url_key, fallback_url_key)
+            )
+            parsed = urlparse(base_url)
+            if parsed.netloc:
+                path = parsed.path.rstrip("/")
+                return f"{protocol}://{parsed.netloc}{path}"
+            if base_url:
+                return f"{protocol}://{base_url.removeprefix('http://').removeprefix('https://')}"
     return ""
 
 

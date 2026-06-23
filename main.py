@@ -12664,6 +12664,15 @@ VM_DISTRIBUTED_TOPOLOGY_KEYS = (
     "AI_MODEL_HUB_PUBLIC_URL",
     "SEMANTIC_VIRTUALIZATION_PUBLIC_URL",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_URL",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_PUBLIC_URL",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_EXPOSURE_MODE",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_HOST_PORT",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_PUBLIC_HOST",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_NAMESPACE",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_NAME",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_PORT",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_TYPE",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_NODE_PORT",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_TUNNEL_MODE",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_TUNNEL_LOCAL_PORT",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_TUNNEL_REMOTE_HOST",
@@ -16666,6 +16675,14 @@ VM_DISTRIBUTED_PROFILE_TEMPLATE_KEYS = (
     "AI_MODEL_HUB_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_IMAGE_REF",
     "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_IMAGE_REF",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_PUBLIC_URL",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_EXPOSURE_MODE",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_HOST_PORT",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_PUBLIC_HOST",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_NAME",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_PORT",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_SERVICE_TYPE",
+    "SEMANTIC_VIRTUALIZATION_MAPPING_EDITOR_NODE_PORT",
     "AI_MODEL_HUB_MODEL_SERVER_ENABLED",
     "LEVEL5_AI_MODEL_HUB_MODEL_SERVER_ENABLED",
     "AI_MODEL_HUB_MODEL_SERVER_IMAGE",
@@ -19788,11 +19805,22 @@ def _ai_model_hub_real_models_source_ref(profile_values=None):
     ).strip()
 
 
+def _ai_model_hub_public_model_server_url(url):
+    value = str(url or "").strip().rstrip("/")
+    if not value:
+        return ""
+    parsed = urllib.parse.urlparse(value)
+    host = parsed.hostname or ""
+    if parsed.scheme == "http" and host.endswith(".pionera.oeg.fi.upm.es"):
+        return urllib.parse.urlunparse(parsed._replace(scheme="https"))
+    return value
+
+
 def _ai_model_hub_real_models_public_url(profile_values=None):
     values = dict(profile_values or {})
     explicit = str(values.get("AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL") or "").strip().rstrip("/")
     if explicit:
-        return explicit
+        return _ai_model_hub_public_model_server_url(explicit)
     public_base = str(
         values.get("COMPONENTS_PUBLIC_BASE_URL")
         or values.get("VM_COMMON_PUBLIC_URL")
@@ -19800,7 +19828,25 @@ def _ai_model_hub_real_models_public_url(profile_values=None):
     ).strip().rstrip("/")
     if not public_base:
         return ""
-    return f"{public_base}/model-server"
+    return _ai_model_hub_public_model_server_url(f"{public_base}/model-server")
+
+
+def _ai_model_hub_connector_model_server_url(values, components_namespace):
+    values = dict(values or {})
+    for key in (
+        "AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_BASE_URL",
+        "MODEL_SERVER_CONNECTOR_BASE_URL",
+        "AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_URL",
+        "MODEL_SERVER_CONNECTOR_URL",
+    ):
+        candidate = str(values.get(key) or "").strip().rstrip("/")
+        if not candidate:
+            continue
+        return _ai_model_hub_public_model_server_url(candidate)
+    public_candidate = _ai_model_hub_real_models_public_url(values)
+    if public_candidate:
+        return public_candidate
+    return ai_model_hub_model_server.service_url(components_namespace)
 
 
 def _ensure_ai_model_hub_real_models_source(profile_values=None):
@@ -20338,17 +20384,15 @@ def _ai_model_hub_use_case_demo_seed_runtime(profile_values=None, adapter_name="
                     f"{connector_dsp_protocol}://{'.'.join(host_parts)}"
                     f"{connector_protocol_path_prefix}/protocol"
                 )
-    model_server_url = str(
-        values.get("AI_MODEL_HUB_MODEL_SERVER_CONNECTOR_BASE_URL")
-        or values.get("AI_MODEL_HUB_MODEL_SERVER_PUBLIC_URL")
-        or _ai_model_hub_real_models_public_url(values)
-        or ""
-    ).strip().rstrip("/")
+    model_server_url = _ai_model_hub_connector_model_server_url(values, components_namespace)
+    common_kubeconfig = str(kubeconfig_by_role.get("common") or "").strip()
+    if common_kubeconfig:
+        common_kubeconfig = os.path.abspath(os.path.expanduser(common_kubeconfig))
     return {
         "dataspace": dataspace,
         "components_namespace": components_namespace,
         "common_services_namespace": common_services_namespace,
-        "common_kubeconfig": str(kubeconfig_by_role.get("common") or "").strip(),
+        "common_kubeconfig": common_kubeconfig,
         "connectors": connectors,
         "credentials_dir": credentials_dir,
         "keycloak_token_url": keycloak_token_url,
@@ -20453,6 +20497,8 @@ def _ai_model_hub_use_case_demo_seed_command(profile_values=None, adapter_name="
         )
         if runtime.get("model_server_url"):
             args.extend(["--use-case-model-server-base-url", runtime["model_server_url"]])
+            if ".svc.cluster.local" in runtime["model_server_url"]:
+                args.append("--skip-use-case-model-server-contract-check")
     else:
         args.extend(["--seed-scope", step if step == "vocabularies" else "datasets"])
     return args

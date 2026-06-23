@@ -31,15 +31,33 @@ DCAT_NS="http://www.w3.org/ns/dcat#"
 MODEL_FILE="$WORK_DIR/LGBM_Classifier_1.pkl"
 SEED_SCOPE="${SEED_SCOPE:-models}"
 USE_CASES_SOURCE_DIR="${USE_CASES_SOURCE_DIR:-${AI_MODEL_HUB_USE_CASE_MODEL_SERVER_SOURCE_DIR:-${AI_MODEL_HUB_MODEL_SERVER_SOURCE_DIR:-$ROOT_DIR/adapters/inesdata/sources/AIModelHub-Use-Cases}}}"
-USE_CASE_MODEL_ASSET_JSON_DIR="${USE_CASE_MODEL_ASSET_JSON_DIR:-$ROOT_DIR/context/casos_de_uso/use_case_models/use_case_models}"
-USE_CASE_DATASET_ASSET_JSON_DIR="${USE_CASE_DATASET_ASSET_JSON_DIR:-$ROOT_DIR/context/casos_de_uso/use_case_datasets/use_case_datasets}"
+USE_CASE_MODEL_ASSET_JSON_DIR="${USE_CASE_MODEL_ASSET_JSON_DIR:-$ROOT_DIR/use_cases/use_case_models}"
+USE_CASE_DATASET_ASSET_JSON_DIR="${USE_CASE_DATASET_ASSET_JSON_DIR:-$ROOT_DIR/use_cases/use_case_datasets}"
 MOBILITY_SEGMENTS_DATASET_FILE="${MOBILITY_SEGMENTS_DATASET_FILE:-$USE_CASES_SOURCE_DIR/data/mobility-datasets/segments_test.csv}"
-MOBILITY_SEGMENTS_DATASET_ID="${MOBILITY_SEGMENTS_DATASET_ID:-company-mobility-segments-test}"
+MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID="${MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID:-company-mobility-actual-travel-time-test}"
+MOBILITY_DELAY_DATASET_ID="${MOBILITY_DELAY_DATASET_ID:-company-mobility-delay-test}"
+MOBILITY_PREVIOUS_DELAY_DATASET_ID="${MOBILITY_PREVIOUS_DELAY_DATASET_ID:-company-mobility-previous-delay-test}"
+MOBILITY_BENCHMARK_SAMPLE_ROWS="${MOBILITY_BENCHMARK_SAMPLE_ROWS:-30}"
+MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME="${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME:-segments_test_sample.csv}"
+MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID="${MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID:-company-mobility-actual-travel-time-sample-test}"
+MOBILITY_DELAY_SAMPLE_DATASET_ID="${MOBILITY_DELAY_SAMPLE_DATASET_ID:-company-mobility-delay-sample-test}"
+MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID="${MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID:-company-mobility-previous-delay-sample-test}"
+MOBILITY_SEGMENTS_DATASET_ID="${MOBILITY_SEGMENTS_DATASET_ID:-$MOBILITY_DELAY_DATASET_ID}"
+LEGACY_MOBILITY_SEGMENTS_DATASET_ID="${LEGACY_MOBILITY_SEGMENTS_DATASET_ID:-company-mobility-segments-test}"
 FLARES_5W1H_DATASET_FILE="${FLARES_5W1H_DATASET_FILE:-$USE_CASES_SOURCE_DIR/data/flares-datasets/5w1h_subtarea_1_test.json}"
 FLARES_5W1H_DATASET_ID="${FLARES_5W1H_DATASET_ID:-company-flares-5w1h-test}"
 FLARES_RELIABILITY_DATASET_FILE="${FLARES_RELIABILITY_DATASET_FILE:-$USE_CASES_SOURCE_DIR/data/flares-datasets/5w1h_subtarea_2_test.json}"
 FLARES_RELIABILITY_DATASET_ID="${FLARES_RELIABILITY_DATASET_ID:-company-flares-reliability-test}"
-USE_CASE_DATASET_IDS=("$MOBILITY_SEGMENTS_DATASET_ID" "$FLARES_5W1H_DATASET_ID" "$FLARES_RELIABILITY_DATASET_ID")
+USE_CASE_DATASET_IDS=(
+  "$MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID"
+  "$MOBILITY_DELAY_DATASET_ID"
+  "$MOBILITY_PREVIOUS_DELAY_DATASET_ID"
+  "$MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID"
+  "$MOBILITY_DELAY_SAMPLE_DATASET_ID"
+  "$MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID"
+  "$FLARES_5W1H_DATASET_ID"
+  "$FLARES_RELIABILITY_DATASET_ID"
+)
 STRICT_MODE="${STRICT_MODE:-0}"
 MODEL_SET="${MODEL_SET:-mock}"
 INCLUDE_USE_CASE_MODELS="${INCLUDE_USE_CASE_MODELS:-0}"
@@ -332,6 +350,19 @@ positive_integer_or_default() {
   fi
 }
 
+expand_home_path() {
+  local value="$1"
+  case "$value" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${value#~/}" ;;
+    *) printf '%s' "$value" ;;
+  esac
+}
+
+if [[ -n "$COMMON_KUBECONFIG" ]]; then
+  COMMON_KUBECONFIG="$(expand_home_path "$COMMON_KUBECONFIG")"
+fi
+
 NEGOTIATION_TIMEOUT_SECONDS="$(positive_integer_or_default "$NEGOTIATION_TIMEOUT_SECONDS" 180)"
 NEGOTIATION_POLL_INTERVAL_SECONDS="$(positive_integer_or_default "$NEGOTIATION_POLL_INTERVAL_SECONDS" 3)"
 NEGOTIATION_STATE_REQUEST_TIMEOUT_SECONDS="$(positive_integer_or_default "$NEGOTIATION_STATE_REQUEST_TIMEOUT_SECONDS" 20)"
@@ -576,6 +607,47 @@ delete_v3_asset_if_exists() {
   echo "[$connector] ${asset_label} asset $asset_id delete FAILED (HTTP ${code:-NA})" >&2
   cat "$out_file" >&2 2>/dev/null || true
   return 1
+}
+
+delete_v3_resource_if_exists() {
+  local connector="$1"
+  local resource_path="$2"
+  local resource_id="$3"
+  local token="$4"
+  local mgmt_url="$5"
+  local resource_label="$6"
+  local out_file="$WORK_DIR/${connector}_${resource_id}.delete.out"
+  local code
+
+  code="$(curl -s --max-time 30 -o "$out_file" -w '%{http_code}' \
+    -X DELETE "$mgmt_url/$resource_path/$resource_id" \
+    -H "Authorization: Bearer $token")" || true
+
+  if [[ "$code" == "200" || "$code" == "204" ]]; then
+    echo "[$connector] ${resource_label} $resource_id deleted (HTTP $code)"
+    return 0
+  fi
+
+  if [[ "$code" == "404" ]]; then
+    return 0
+  fi
+
+  echo "[$connector] ${resource_label} $resource_id delete skipped/failed (HTTP ${code:-NA})" >&2
+  cat "$out_file" >&2 2>/dev/null || true
+  return 1
+}
+
+retire_legacy_mobility_segments_dataset_asset() {
+  local connector="$1" token="$2" mgmt_url="$3"
+  local legacy_id="$LEGACY_MOBILITY_SEGMENTS_DATASET_ID"
+
+  if [[ -z "$legacy_id" || "$legacy_id" == "$MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID" || "$legacy_id" == "$MOBILITY_DELAY_DATASET_ID" || "$legacy_id" == "$MOBILITY_PREVIOUS_DELAY_DATASET_ID" ]]; then
+    return 0
+  fi
+
+  delete_v3_resource_if_exists "$connector" "v3/contractdefinitions" "contract-seed-${legacy_id}" "$token" "$mgmt_url" "legacy Mobility dataset contract" || true
+  delete_v3_resource_if_exists "$connector" "v3/policydefinitions" "policy-seed-${legacy_id}" "$token" "$mgmt_url" "legacy Mobility dataset policy" || true
+  delete_v3_asset_if_exists "$connector" "$legacy_id" "$token" "$mgmt_url" "legacy Mobility dataset" || true
 }
 
 input_schema_fields_json_from_features_json() {
@@ -2230,7 +2302,7 @@ upload_seed_file_asset() {
 
 seed_mobility_segments_dataset_asset() {
   local connector="$1" token="$2" mgmt_url="$3"
-  local tag dataset_filename json_file
+  local tag dataset_filename sample_dataset_file sample_rows
   tag="$(connector_tag "$connector")"
 
   if [[ "$tag" != "company" ]]; then
@@ -2243,85 +2315,58 @@ seed_mobility_segments_dataset_asset() {
   fi
 
   dataset_filename="$(basename "$MOBILITY_SEGMENTS_DATASET_FILE")"
-  json_file="$WORK_DIR/${connector}_${MOBILITY_SEGMENTS_DATASET_ID}.json"
-  local fixture_file="$USE_CASE_DATASET_ASSET_JSON_DIR/${MOBILITY_SEGMENTS_DATASET_ID}.json"
-
-  if [[ -f "$fixture_file" ]]; then
-    write_use_case_asset_json_from_fixture "$fixture_file" "$json_file"
-  else
-  cat > "$json_file" <<DATASET_EOF
-{
-  "@context": {
-    "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
-    "dct": "http://purl.org/dc/terms/",
-    "dcterms": "http://purl.org/dc/terms/",
-    "dcat": "http://www.w3.org/ns/dcat#",
-    "daimo": "https://w3id.org/pionera/daimo#"
-  },
-  "@id": "${MOBILITY_SEGMENTS_DATASET_ID}",
-  "properties": {
-    "name": "Mobility Segments Test Dataset",
-    "version": "1.0.0",
-    "contenttype": "text/csv",
-    "assetType": "dataset",
-    "shortDescription": "Mobility benchmark validation dataset.",
-    "dct:description": "CSV validation dataset for Mobility benchmark models.",
-    "dcterms:description": "CSV validation dataset for Mobility benchmark models.",
-    "dcterms:format": "csv",
-    "dcat:keyword": ["dataset","benchmark","validation","mobility","csv"],
-    "assetData": {
-      "${DATASET_VOCABULARY_ID}": {
-        "dct:title": "Mobility Segments Test Dataset",
-        "dcterms:title": "Mobility Segments Test Dataset",
-        "dct:description": "CSV validation dataset for Mobility benchmark models.",
-        "dcterms:description": "CSV validation dataset for Mobility benchmark models.",
-        "${DCT_NS}description": "CSV validation dataset for Mobility benchmark models.",
-        "${DCT_NS}format": "csv",
-        "${DCT_NS}license": "other",
-        "${DCAT_NS}keyword": ["benchmark","validation","test","mobility","public-transport","regression","csv"],
-        "${DAIMO_NS}modality": ["tabular","time_series"],
-        "${DAIMO_NS}taskCategory": "Time series",
-        "${DAIMO_NS}taskType": "regression",
-        "${DAIMO_NS}subtask": "time-series-forecasting",
-        "${DAIMO_NS}subtaskDescription": "GTFS mobility segment validation rows for travel-time and delay regression models.",
-        "${DAIMO_NS}input": [
-          "trip_id",
-          "journey_id",
-          "from_stop_id",
-          "to_stop_id",
-          "departure_time",
-          "arrival_time",
-          "actual_travel_time",
-          "scheduled_travel_time",
-          "delay",
-          "shape_distance",
-          "route_id",
-          "direction_id",
-          "service_id",
-          "hour",
-          "weekday",
-          "is_peak",
-          "hour_sin",
-          "hour_cos",
-          "weekday_sin",
-          "weekday_cos",
-          "previous_delay",
-          "previous_delay_ratio"
-        ],
-        "${DAIMO_NS}label": "previous_delay_delta",
-        "${DAIMO_NS}labelType": "continuous",
-        "${DAIMO_NS}datasetVersion": "1.0.0",
-        "${DAIMO_NS}datasetRole": "benchmark",
-        "${DAIMO_NS}protocol": "holdout-test-set"
-      }
-    }
-  },
-  "dataAddress": {"type":"InesDataStore"}
-}
-DATASET_EOF
+  sample_dataset_file="$WORK_DIR/$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+  sample_rows="$MOBILITY_BENCHMARK_SAMPLE_ROWS"
+  if ! [[ "$sample_rows" =~ ^[0-9]+$ ]] || [[ "$sample_rows" -lt 1 ]]; then
+    echo "[$connector] invalid MOBILITY_BENCHMARK_SAMPLE_ROWS=$sample_rows" >&2
+    return 1
   fi
+  head -n "$((sample_rows + 1))" "$MOBILITY_SEGMENTS_DATASET_FILE" > "$sample_dataset_file"
 
-  upload_seed_file_asset "$connector" "$token" "$mgmt_url" "$MOBILITY_SEGMENTS_DATASET_ID" "$json_file" "$MOBILITY_SEGMENTS_DATASET_FILE" "$dataset_filename" "text/csv" "Mobility dataset"
+  retire_legacy_mobility_segments_dataset_asset "$connector" "$token" "$mgmt_url"
+
+  local dataset_ids=(
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID"
+    "$MOBILITY_DELAY_DATASET_ID"
+    "$MOBILITY_PREVIOUS_DELAY_DATASET_ID"
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID"
+    "$MOBILITY_DELAY_SAMPLE_DATASET_ID"
+    "$MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID"
+  )
+  local source_files=(
+    "$MOBILITY_SEGMENTS_DATASET_FILE"
+    "$MOBILITY_SEGMENTS_DATASET_FILE"
+    "$MOBILITY_SEGMENTS_DATASET_FILE"
+    "$sample_dataset_file"
+    "$sample_dataset_file"
+    "$sample_dataset_file"
+  )
+  local upload_filenames=(
+    "$dataset_filename"
+    "$dataset_filename"
+    "$dataset_filename"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+  )
+
+  for idx in "${!dataset_ids[@]}"; do
+    local asset_id="${dataset_ids[$idx]}"
+    local json_file="$WORK_DIR/${connector}_${asset_id}.json"
+    local fixture_file="$USE_CASE_DATASET_ASSET_JSON_DIR/${asset_id}.json"
+    local source_file="${source_files[$idx]}"
+    local upload_filename="${upload_filenames[$idx]}"
+
+    if [[ ! -f "$fixture_file" ]]; then
+      echo "[$connector] Mobility dataset fixture not found: $fixture_file" >&2
+      return 1
+    fi
+
+    write_use_case_asset_json_from_fixture "$fixture_file" "$json_file"
+    if ! upload_seed_file_asset "$connector" "$token" "$mgmt_url" "$asset_id" "$json_file" "$source_file" "$upload_filename" "text/csv" "Mobility dataset"; then
+      return 1
+    fi
+  done
 }
 
 seed_flares_test_dataset_assets() {
@@ -2475,9 +2520,14 @@ reconcile_use_case_dataset_storage_assets() {
   err_file="$WORK_DIR/${connector}_ai_model_hub_dataset_storage_reconcile.err"
 
   python3 - "$sql_file" "$bucket" "$DATASET_STORAGE_REGION" \
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID" "segments_test.csv" \
+    "$MOBILITY_DELAY_DATASET_ID" "segments_test.csv" \
+    "$MOBILITY_PREVIOUS_DELAY_DATASET_ID" "segments_test.csv" \
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID" "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME" \
+    "$MOBILITY_DELAY_SAMPLE_DATASET_ID" "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME" \
+    "$MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID" "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME" \
     "$FLARES_5W1H_DATASET_ID" "5w1h_subtarea_1_test.jsonl" \
-    "$FLARES_RELIABILITY_DATASET_ID" "5w1h_subtarea_2_test.jsonl" \
-    "$MOBILITY_SEGMENTS_DATASET_ID" "segments_test.csv" <<'PY'
+    "$FLARES_RELIABILITY_DATASET_ID" "5w1h_subtarea_2_test.jsonl" <<'PY'
 import json
 import sys
 
@@ -2485,7 +2535,9 @@ sql_file, bucket, region, *pairs = sys.argv[1:]
 ns = "https://w3id.org/edc/v0.0.1/ns/"
 
 lines = ["\\set ON_ERROR_STOP on", "begin;"]
+asset_ids = []
 for asset_id, file_name in zip(pairs[0::2], pairs[1::2]):
+    asset_ids.append(asset_id)
     data_address = {
         f"{ns}type": "AmazonS3",
         f"{ns}keyName": file_name,
@@ -2499,13 +2551,14 @@ for asset_id, file_name in zip(pairs[0::2], pairs[1::2]):
         f"       private_properties = '{json.dumps(private_properties, separators=(',', ':'))}'::json\n"
         f" where asset_id = '{asset_id}';"
     )
+ids_sql = ",".join("'" + asset_id.replace("'", "''") + "'" for asset_id in asset_ids)
 lines.append(
     "select asset_id,\n"
     "       data_address->>'https://w3id.org/edc/v0.0.1/ns/type',\n"
     "       data_address->>'https://w3id.org/edc/v0.0.1/ns/keyName',\n"
     "       private_properties->>'storageAssetFile'\n"
     "  from edc_asset\n"
-    " where asset_id in ('company-flares-5w1h-test', 'company-flares-reliability-test', 'company-mobility-segments-test')\n"
+    f" where asset_id in ({ids_sql})\n"
     " order by asset_id;"
 )
 lines.append("commit;")
@@ -2531,9 +2584,14 @@ PY
   cat "$out_file"
   local expected ok=1
   for expected in \
+    "${MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID}|AmazonS3|segments_test.csv|segments_test.csv" \
+    "${MOBILITY_DELAY_DATASET_ID}|AmazonS3|segments_test.csv|segments_test.csv" \
+    "${MOBILITY_PREVIOUS_DELAY_DATASET_ID}|AmazonS3|segments_test.csv|segments_test.csv" \
+    "${MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID}|AmazonS3|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}" \
+    "${MOBILITY_DELAY_SAMPLE_DATASET_ID}|AmazonS3|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}" \
+    "${MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID}|AmazonS3|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}|${MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME}" \
     "${FLARES_5W1H_DATASET_ID}|AmazonS3|5w1h_subtarea_1_test.jsonl|5w1h_subtarea_1_test.jsonl" \
-    "${FLARES_RELIABILITY_DATASET_ID}|AmazonS3|5w1h_subtarea_2_test.jsonl|5w1h_subtarea_2_test.jsonl" \
-    "${MOBILITY_SEGMENTS_DATASET_ID}|AmazonS3|segments_test.csv|segments_test.csv"; do
+    "${FLARES_RELIABILITY_DATASET_ID}|AmazonS3|5w1h_subtarea_2_test.jsonl|5w1h_subtarea_2_test.jsonl"; do
     if ! grep -Fqx "$expected" "$out_file"; then
       ok=0
       echo "[$connector] missing reconciled dataset state: $expected" >&2
@@ -2553,69 +2611,145 @@ seed_use_case_dataset_http_data_assets() {
   local tag created=0
   tag="$(connector_tag "$connector")"
 
-  local dataset_ids=("$MOBILITY_SEGMENTS_DATASET_ID" "$FLARES_5W1H_DATASET_ID" "$FLARES_RELIABILITY_DATASET_ID")
+  retire_legacy_mobility_segments_dataset_asset "$connector" "$token" "$mgmt_url"
+
+  local dataset_ids=(
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_DATASET_ID"
+    "$MOBILITY_DELAY_DATASET_ID"
+    "$MOBILITY_PREVIOUS_DELAY_DATASET_ID"
+    "$MOBILITY_ACTUAL_TRAVEL_TIME_SAMPLE_DATASET_ID"
+    "$MOBILITY_DELAY_SAMPLE_DATASET_ID"
+    "$MOBILITY_PREVIOUS_DELAY_SAMPLE_DATASET_ID"
+    "$FLARES_5W1H_DATASET_ID"
+    "$FLARES_RELIABILITY_DATASET_ID"
+  )
   local titles=(
-    "Mobility segments test dataset"
+    "Mobility actual travel time test dataset"
+    "Mobility delay test dataset"
+    "Mobility previous delay test dataset"
+    "Mobility actual travel time sample test dataset"
+    "Mobility delay sample test dataset"
+    "Mobility previous delay sample test dataset"
     "FLARES 5W1H test dataset"
     "FLARES reliability test dataset"
   )
   local filenames=(
     "$(basename "$MOBILITY_SEGMENTS_DATASET_FILE")"
+    "$(basename "$MOBILITY_SEGMENTS_DATASET_FILE")"
+    "$(basename "$MOBILITY_SEGMENTS_DATASET_FILE")"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
+    "$MOBILITY_SEGMENTS_SAMPLE_DATASET_FILENAME"
     "$(basename "$FLARES_5W1H_DATASET_FILE")"
     "$(basename "$FLARES_RELIABILITY_DATASET_FILE")"
   )
   local content_types=(
     "text/csv"
+    "text/csv"
+    "text/csv"
+    "text/csv"
+    "text/csv"
+    "text/csv"
     "application/x-ndjson"
     "application/x-ndjson"
   )
   local task_categories=(
-    "Time series"
+    "Tabular"
+    "Tabular"
+    "Tabular"
+    "Tabular"
+    "Tabular"
+    "Tabular"
     "Natural Language Processing"
     "Natural Language Processing"
   )
   local task_types=(
     "regression"
+    "regression"
+    "regression"
+    "regression"
+    "regression"
+    "regression"
     "classification"
     "classification"
   )
   local subtasks=(
-    "time-series-forecasting"
+    "tabular-regression"
+    "tabular-regression"
+    "tabular-regression"
+    "tabular-regression"
+    "tabular-regression"
+    "tabular-regression"
     "token-classification"
     "text-classification"
   )
   local label_types=(
+    "continuous"
+    "continuous"
+    "continuous"
+    "continuous"
+    "continuous"
     "continuous"
     "span"
     "categorical"
   )
   local formats=(
     "csv"
+    "csv"
+    "csv"
+    "csv"
+    "csv"
+    "csv"
     "jsonl"
     "jsonl"
   )
   local modalities_json=(
-    '["tabular","time_series"]'
+    '["tabular"]'
+    '["tabular"]'
+    '["tabular"]'
+    '["tabular"]'
+    '["tabular"]'
+    '["tabular"]'
     '["text"]'
     '["text"]'
   )
   local languages_json=(
     '["Language independent"]'
+    '["Language independent"]'
+    '["Language independent"]'
+    '["Language independent"]'
+    '["Language independent"]'
+    '["Language independent"]'
     '["Spanish"]'
     '["Spanish"]'
   )
   local keywords_json=(
-    '["benchmark","validation","test","mobility","public-transport","regression","csv"]'
+    '["benchmark","validation","test","mobility","actual-travel-time","public-transport","regression","csv"]'
+    '["benchmark","validation","test","mobility","delay","public-transport","regression","csv"]'
+    '["benchmark","validation","test","mobility","previous-delay","public-transport","regression","csv"]'
+    '["benchmark","validation","sample","test","mobility","actual-travel-time","public-transport","regression","csv"]'
+    '["benchmark","validation","sample","test","mobility","delay","public-transport","regression","csv"]'
+    '["benchmark","validation","sample","test","mobility","previous-delay","public-transport","regression","csv"]'
     '["benchmark","validation","test","flares","span-extraction","jsonl"]'
     '["benchmark","validation","test","flares","classification","jsonl"]'
   )
   local input_json=(
-    '["trip_id","journey_id","from_stop_id","to_stop_id","departure_time","arrival_time","actual_travel_time","scheduled_travel_time","delay","shape_distance","route_id","direction_id","service_id","hour","weekday","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos","previous_delay","previous_delay_ratio"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos","previous_delay_ratio","previous_delay_delta"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos","previous_delay_ratio","previous_delay_delta"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos","previous_delay_ratio","previous_delay_delta"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos","previous_delay_ratio","previous_delay_delta"]'
+    '["trip_id","from_stop_id","to_stop_id","route_id","scheduled_travel_time","shape_distance","is_peak","hour_sin","hour_cos","weekday_sin","weekday_cos"]'
     '["Id","Text"]'
     '["Id","Text","5W1H_Label","Tag_Text","Tag_Start","Tag_End"]'
   )
   local labels=(
-    "previous_delay_delta"
+    "actual_travel_time"
+    "delay"
+    "previous_delay"
+    "actual_travel_time"
+    "delay"
+    "previous_delay"
     "Tags"
     "Reliability_Label"
   )
