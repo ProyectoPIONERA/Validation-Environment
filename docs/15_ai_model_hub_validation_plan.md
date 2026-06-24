@@ -1,9 +1,14 @@
 # 15. Validación de AI Model Hub
 
+## Propósito
+
+Documentar cómo se integra, despliega y valida `AI Model Hub` dentro del
+Validation Environment.
+
 `AI Model Hub` se trata como componente opcional de `Level 5` y como objetivo
 de validación funcional en `Level 6` cuando está habilitado.
 
-## Rutas Principales
+## Rutas principales
 
 | Elemento | Ruta |
 | --- | --- |
@@ -41,9 +46,10 @@ En la ruta actual de `inesdata`, `Level 5` publica el componente con:
 En `edc`, `Level 5` reutiliza el chart compartido del componente y espera que
 los conectores desplegados expongan las capacidades requeridas para registrar
 assets, contratos y flujos de observabilidad. La ruta con evidencia operativa
-actual para EDC es `vm-distributed`.
+actual para EDC corresponde a `local` y `vm-single`; `vm-distributed` queda
+pendiente de consolidación.
 
-## Model-Server de Casos de Uso
+## Model-server de casos de uso
 
 El framework incluye soporte explícito para desplegar un `model-server`
 asociado a AI Model Hub, pero ese despliegue es opcional. `Level 5` solo crea o
@@ -61,9 +67,9 @@ Los modos disponibles, una vez habilitado el despliegue del servidor, son:
 | `external` | Servidor gestionado fuera del framework. |
 
 Para las demostraciones reproducibles de casos de uso, el modo operativo es
-`use-cases` junto con `AI_MODEL_HUB_MODEL_SERVER_ENABLED=true`. Este modo usa el
+`combined` junto con `AI_MODEL_HUB_MODEL_SERVER_ENABLED=true`. Este modo usa el
 repositorio de casos de uso configurado en el perfil, por defecto
-`ProyectoPIONERA/AIModelHub-Use-Cases` en `main`, y expone:
+`ProyectoPIONERA/AIModelHub-Use-Cases`, y expone:
 
 - `/models`, para descubrir modelos FLARES y Mobility;
 - `/datasets`, para descubrir datasets de benchmark;
@@ -74,20 +80,14 @@ El asistente de `vm-distributed` incorpora la opción
 `10 - AI Model Hub use-case demo preparation`. Esta opción puede preparar el
 perfil, mostrar comandos, ejecutar `Level 5` y sembrar los pasos operativos:
 
-- `Step 8`: registro de vocabularios `JS_DAIMO_Model` y `JS_DAIMO_Dataset`;
 - `Step 9`: registro de datasets de benchmark;
-- `Step 10`: registro de modelos FLARES/Mobility descubiertos desde `/models`,
-  junto con los assets métricos FLARES expuestos por los endpoints `/metrics`;
-- flujo completo: perfil, `Level 5`, `Step 8`, `Step 9` y `Step 10`.
-
-El flujo agrupado mantiene la semántica del repositorio oficial: los modelos
-predictivos se descubren desde `/models` y los endpoints métricos FLARES se
-registran como assets de modelo para el benchmarking.
+- `Step 10`: registro de modelos FLARES/Mobility;
+- flujo completo: perfil, `Level 5`, `Step 9` y `Step 10`.
 
 Los valores concretos de imagen, commit, URLs, kubeconfigs y credenciales viven
 en perfiles locales o secretos de ejecución, no en `docs/`.
 
-## Validación Actual
+## Validación actual
 
 La validación automatizada comprueba:
 
@@ -116,7 +116,7 @@ contrato del `model-server` cuando el modo es `use-cases`, `combined` o
 `/datasets`; los endpoints de inferencia se prueban solo si se declaran en
 `AI_MODEL_HUB_MODEL_SERVER_VALIDATION_ENDPOINTS`.
 
-## Relación con el Dataspace
+## Relación con el dataspace
 
 `AI Model Hub` debe poder operar como componente del dataspace, pero no debe
 quedar acoplado a un portal concreto. En la arquitectura actual:

@@ -1,9 +1,14 @@
-# 19. Playwright por Adapter
+# 19. Playwright por adapter
+
+## Propósito
+
+Explicar cómo separar las suites Playwright por adapter para mantener la
+validación UI extensible.
 
 La validación UI está organizada por adapter para evitar acoplar todos los
 portales al comportamiento de INESData.
 
-## Estructura Actual
+## Estructura actual
 
 ```text
 validation/ui/
@@ -27,7 +32,7 @@ validation/ui/
 | `playwright.edc.config.ts` | suite EDC |
 | `playwright.ops.config.ts` | validaciones operativas como MinIO |
 
-## Principio de Separación
+## Principio de separación
 
 Las piezas compartidas viven en `shared/` y en la orquestación comun. Las rutas,
 page objects y flujos especificos viven bajo el adapter correspondiente.
@@ -77,7 +82,7 @@ explícita, no por supuestos heredados de otro portal.
 
 EDC usa `oidc-bff` por defecto. INESData usa el flujo compatible con su portal.
 
-## Marcado Visual de Interacciones
+## Marcado visual de interacciones
 
 Las suites conservan helpers para destacar elementos antes de hacer click o
 rellenar formularios. Esto facilita seguir el flujo en modo headed, debug y en

@@ -1,4 +1,9 @@
-# Model Clearing House for InesData
+# Model Clearing House for INESData
+
+## Purpose
+
+Define the planned scope of a model clearing-house capability inside existing
+INESData components.
 
 ## Objective
 
@@ -20,9 +25,9 @@ The target use cases are:
 - contract-backed access to federated models
 - auditable evidence of what happened, when, by whom, for which model, and under which agreement
 
-## External Research Summary
+## External research summary
 
-### Classical IDS Clearing House
+### Classical IDS clearing house
 
 The classic IDS definition treats the Clearing House as a trusted logging capability for data-sharing transactions. The main functions repeatedly described in IDSA material are:
 
@@ -39,7 +44,7 @@ Key observations from the reviewed material:
 - Logged information is correlated by a shared process identifier, typically the contract agreement UUID.
 - The specification also states that the Clearing House is implemented on top of a connector, not as an unrelated external pattern.
 
-### Current IDSA Direction: Observer Instead of Clearing House
+### Current IDSA direction: observer instead of clearing house
 
 Recent IDSA material reframes the concept from a dedicated Clearing House into an observability capability.
 
@@ -52,7 +57,7 @@ The important design consequence is this:
 
 This matches InesData better than trying to recreate a literal IDS Clearing House product.
 
-## Local Findings in InesData
+## Local findings in InesData
 
 ### `inesdata-connector`
 
@@ -112,7 +117,7 @@ The public portal frontend already contains catalog browsing surfaces for machin
 
 The registration service already stores participant metadata and exposes it publicly. It should be used as the participant identity registry for evidence enrichment, not as the primary audit ledger.
 
-## Recommended Architecture
+## Recommended architecture
 
 ### Decisión
 
@@ -139,7 +144,7 @@ This design matches both the external theory and the current codebase:
 - It keeps the connector as the authoritative emitter for contract, transfer, and execution facts.
 - It uses the portal backend for storage and query, which is easier than forcing durable evidence storage into connector logs.
 
-## Component Responsibilities
+## Component responsibilities
 
 ### 1. `inesdata-connector`: authoritative event emission
 
@@ -274,7 +279,7 @@ Not recommended:
 - using it as the main event ledger
 - coupling model evidence persistence to participant CRUD transactions
 
-## Evidence Model
+## Evidence model
 
 ### Core event schema
 
@@ -331,7 +336,7 @@ Persist instead:
 
 This is especially important because model inputs may contain confidential or personal data.
 
-## Correlation Strategy
+## Correlation strategy
 
 The most important design choice is correlation.
 
@@ -349,16 +354,16 @@ The most important design choice is correlation.
 3. For benchmarks, generate one `benchmarkRunId` and attach child execution events for each model.
 4. When possible, include both `correlationId` and `agreementId`; they answer different questions.
 
-## Event Flows
+## Event flows
 
-### A. Model Browser
+### A. model browser
 
 1. Public portal frontend loads model details.
 2. Public portal backend serves catalog data.
 3. Frontend or backend emits `MODEL_DETAIL_VIEWED`.
 4. If the asset is federated, the timeline also shows whether a finalized agreement exists.
 
-### B. Model Execution
+### B. model execution
 
 1. Connector interface generates `correlationId`.
 2. User selects a model.
@@ -369,7 +374,7 @@ The most important design choice is correlation.
 7. Portal backend stores immutable evidence.
 8. Frontend can query the timeline later.
 
-### C. Benchmarking
+### C. benchmarking
 
 1. Connector interface creates `benchmarkRunId` and `correlationId`.
 2. Each model execution inside the benchmark carries the same `benchmarkRunId` and a per-call child identifier.
@@ -378,9 +383,9 @@ The most important design choice is correlation.
 5. Portal backend stores both detailed and summarized evidence.
 6. Public portal frontend can later show benchmark provenance and comparison history.
 
-## Best Implementation Sequence
+## Best implementation sequence
 
-### Phase 1. Structured evidence foundation
+### Phase 1. structured evidence foundation
 
 Implement first:
 
@@ -391,7 +396,7 @@ Implement first:
 
 This phase gives the system real evidence without changing user flows much.
 
-### Phase 2. Query and visualization
+### Phase 2. query and visualization
 
 Implement next:
 
@@ -399,7 +404,7 @@ Implement next:
 - model detail evidence panels in public portal frontend
 - execution and benchmark evidence panels in connector interface
 
-### Phase 3. Derived trust summaries
+### Phase 3. derived trust summaries
 
 Implement later:
 
@@ -408,7 +413,7 @@ Implement later:
 - agreement-backed usage summaries
 - benchmark provenance digests
 
-## What Should Not Be Done
+## What should not be done
 
 - Do not create a sixth standalone service just for the clearing house.
 - Do not rely only on frontend logs as evidence of execution.
@@ -416,7 +421,7 @@ Implement later:
 - Do not use plain text logs as the only durable journal.
 - Do not couple the evidence ledger to participant CRUD.
 
-## Concrete Recommendation
+## Concrete recommendation
 
 The best implementation for InesData is **not** a literal classic Clearing House service.
 
@@ -438,7 +443,7 @@ This gives InesData the practical benefits expected from a clearing-house-like r
 
 without introducing a new source or breaking the current component model.
 
-## Source Material Used
+## Source material used
 
 - IDSA RAM 4, section on Clearing House
 - IDSA Clearing House specification metadata at Zenodo

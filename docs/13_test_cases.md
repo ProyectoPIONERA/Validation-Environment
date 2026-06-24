@@ -1,10 +1,15 @@
-# 13. Casos de Prueba y Correlación PT5
+# 13. Casos de prueba y correlación PT5
+
+## Propósito
+
+Relacionar casos de prueba, capacidades validadas y trazabilidad PT5 dentro del
+framework.
 
 La correlación PT5 se usa para conectar funcionalidades, casos de prueba,
 flujos operativos y automatizaciones reales. El criterio es comun para
 componentes como `Ontology Hub`, `AI Model Hub` y futuros componentes.
 
-## Capas de Referencia
+## Capas de referencia
 
 | Capa | Ejemplo | Que representa |
 | --- | --- | --- |
@@ -22,7 +27,7 @@ funcionalidad atomica
       -> automatizacion real
 ```
 
-## Inventario Mínimo por Componente
+## Inventario mínimo por componente
 
 Cada componente debe documentar:
 
@@ -35,7 +40,7 @@ Cada componente debe documentar:
 | Estado de cobertura | `si`, `parcial`, `no` |
 | Observaciones | Gaps o diferencias de alcance |
 
-## Uso por Tipo de Suite
+## Uso por tipo de suite
 
 La suite funcional se mapea primero contra la hoja especifica del componente,
 porque ahí está el flujo operativo detallado.
@@ -49,7 +54,7 @@ Virtualizador reutilizan términos de una ontología RDF/OWL gobernable desde
 Ontology Hub, sin convertir esa prueba en un flujo funcional exclusivo de uno
 de los dos componentes.
 
-## Ejemplo Aplicado a Ontology Hub
+## Ejemplo aplicado a Ontology Hub
 
 | Referencia | Rango |
 | --- | --- |
@@ -58,7 +63,7 @@ de los dos componentes.
 | Casos operativos | `27` casos de la hoja `Ontology Hub` |
 | Automatización funcional | `OH-APP-00`, `OH-APP-01`, `OH-APP-03` a `OH-APP-27` |
 
-## Resultado Practico
+## Resultado práctico
 
 Este criterio permite decir con precision si una prueba cubre:
 

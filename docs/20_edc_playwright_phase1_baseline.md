@@ -1,5 +1,10 @@
 # 20. Baseline Playwright EDC
 
+## Propósito
+
+Conservar la primera baseline de Playwright para EDC como referencia histórica
+de evolución de la suite UI.
+
 > Documento de trazabilidad histórica. Para el alcance vigente de cierre usa
 > [30 Estado actual](./30_framework_current_state.md) y
 > [37 Validación](./37_validation.md). En el cierre del repositorio, EDC queda
@@ -14,7 +19,7 @@ ejecuta con una configuración separada de INESData.
 validation/ui/adapters/edc/
 ```
 
-## Specs Actuales
+## Specs actuales
 
 | Spec | Propósito |
 | --- | --- |
@@ -27,7 +32,7 @@ validation/ui/adapters/edc/
 | `04-consumer-transfer.spec.ts` | inicio de transferencia y visibilidad en historial |
 | `05-consumer-transfer-storage.spec.ts` | objeto transferido visible en MinIO consumer |
 
-## Diferencias Frente a INESData
+## Diferencias frente a INESData
 
 | Area | INESData | EDC |
 | --- | --- | --- |
@@ -40,7 +45,7 @@ validation/ui/adapters/edc/
 La suite EDC es analoga a INESData en intencion, pero no replica exactamente los
 mismos formularios porque el dashboard EDC expone capacidades distintas.
 
-## Bootstrap y Datos de Prueba
+## Bootstrap y datos de prueba
 
 Los tests usan nombres de prueba trazables, por ejemplo prefijos:
 
@@ -54,7 +59,7 @@ playwright-edc-contract-
 La validación de storage usa nombres unicos por ejecución para evitar falsos
 fallos por objetos residuales en MinIO.
 
-## Ejecución Manual
+## Ejecución manual
 
 ```bash
 cd validation/ui
@@ -65,7 +70,7 @@ UI_CONSUMER_CONNECTOR=conn-companyedc-pionera-edc \
 npm run test:edc
 ```
 
-## Resultado Esperado
+## Resultado esperado
 
 En un entorno EDC sano, la suite debe completar los `8` specs y dejar el HTML
 report bajo el experimento generado por `Level 6`.

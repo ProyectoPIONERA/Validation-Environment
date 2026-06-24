@@ -1,4 +1,9 @@
-# 03. Guía de Integración para Desarrolladores
+# 03. Guía de integración para desarrolladores
+
+## Propósito
+
+Guiar la integración de nuevos componentes o adaptadores sin romper la
+estructura del framework.
 
 ## Regla principal
 

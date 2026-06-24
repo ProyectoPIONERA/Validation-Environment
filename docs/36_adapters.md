@@ -108,19 +108,19 @@ configuración de `identity/`.
 
 El adapter EDC soporta un despliegue EDC genérico.
 
-### Alcance de Cierre de EDC
+### Alcance de cierre de EDC
 
 En la versión de cierre del repositorio, EDC debe describirse así:
 
 | Topología | Estado de cierre |
 | --- | --- |
-| `vm-distributed` | Ruta probada oficialmente para EDC. |
-| `local` | Ruta implementada y útil para desarrollo; pasó validaciones antes de la conciliación reciente de topologías, pero debe revalidarse antes de presentarse como evidencia actual. |
-| `vm-single` | Ruta implementada; no se ha validado oficialmente después de la conciliación reciente. |
+| `local` | Evidencia obtenida en `refactoring-local-vm-single`. |
+| `vm-single` | Evidencia obtenida en `refactoring-local-vm-single`. |
+| `vm-distributed` | Pendiente de consolidación; se publicará en `refactoring-vm-distributed-edc-ai`. |
 
 Esta distinción evita confundir soporte de código con evidencia auditada. Si se
-necesita cerrar EDC en `local` o `vm-single`, ejecuta una revalidación completa
-desde los niveles `1-6` y conserva el experimento resultante.
+necesita cerrar EDC en `vm-distributed`, ejecuta una validación completa desde
+los niveles `1-6` en la rama especializada y conserva el experimento resultante.
 
 Configuración relevante:
 
@@ -186,7 +186,23 @@ ejecuta el bootstrap del dataspace del adapter activo aunque el namespace ya
 exista. Después de `Level 3`, ejecuta `Level 4` para desplegar o actualizar los
 conectores EDC.
 
-El adapter EDC puede construir o usar una imagen de conector configurada. En topología `local`, si no se han definido overrides, Level 4 prepara automáticamente la imagen local desde `adapters/edc/sources/connector`, la carga en Minikube y usa `validation-environment/edc-connector:local` para esa ejecución. Esta preparación vive también dentro del adapter EDC, de modo que funciona tanto desde el menú por niveles como desde llamadas directas del adapter.
+El adapter EDC puede construir o usar una imagen de conector configurada. En
+topología `local`, si no se han definido overrides, Level 4 prepara
+automáticamente la imagen local desde `adapters/edc/sources/connector`, la carga
+en Minikube y usa `validation-environment/edc-connector:local` para esa
+ejecución. Esta preparación vive también dentro del adapter EDC, de modo que
+funciona tanto desde el menú por niveles como desde llamadas directas del
+adapter.
+
+El runtime del conector EDC no está registrado como submódulo Git independiente
+en este checkout. Es una fuente importada y versionada dentro de
+`ProyectoPIONERA/Validation-Environment`, bajo
+`adapters/edc/sources/connector`. Su origen técnico se conserva en
+`adapters/edc/sources/connector/UPSTREAM.md`: repositorio
+`ProyectoPIONERA/EDC-asset-filter-dashboard`, subdirectorio
+`asset-filter-template`. Por ese motivo, la reproducibilidad del conector EDC
+depende del commit del framework y de la referencia upstream indicada en ese
+archivo, no de un repositorio externo llamado "adapter EDC".
 
 Si `EDC_DASHBOARD_ENABLED=true`, Level 4 también prepara y carga en Minikube las imágenes locales del dashboard y del proxy:
 
@@ -254,7 +270,7 @@ hostnames antes de ejecutar niveles `3-6` en topología `local`. Si faltan
 entradas, el usuario puede aplicar solo las ausentes antes de continuar; si no
 lo confirma, el nivel se cancela para evitar fallos posteriores menos claros.
 
-## Añadir un Adapter
+## Añadir un adapter
 
 Para añadir otro adapter:
 

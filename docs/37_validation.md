@@ -1,6 +1,11 @@
 # Validación
 
-## Nivel 5 y Datasets
+## Propósito
+
+Documentar cómo se ejecutan las validaciones, qué artefactos generan y cómo se
+interpreta su resultado.
+
+## Nivel 5 y datasets
 
 `Level 5` prepara los componentes configurados y también sincroniza las fuentes
 de datasets que esos componentes necesitan para sus validaciones. Los
@@ -40,15 +45,15 @@ reducido versionado.
 
 El nivel 6 es el nivel de validación. Debe validar el dataspace desplegado y los componentes habilitados sin requerir un nivel adicional de validación de servicios.
 
-## Alcance de Validación de Cierre
+## Alcance de validación de cierre
 
 Para esta versión de cierre, la evidencia de validación se interpreta por
 adapter y topología:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Ruta de desarrollo/validación local implementada | Ruta VM implementada y validada como referencia | Ruta distribuida implementada y validada como referencia |
-| `edc` | Implementado; requiere revalidación tras la conciliación reciente de topologías | Implementado; no validado oficialmente tras la conciliación reciente | Ruta oficial de cierre para EDC |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
 
 El repositorio contiene suites de `Level 6` para más combinaciones que las usadas
 como evidencia oficial. Antes de usar un resultado como evidencia de cierre,
@@ -205,17 +210,17 @@ Comandos típicos:
 
 ```bash
 python3 main.py inesdata validate --topology local
-python3 main.py edc validate --topology vm-distributed
+python3 main.py edc validate --topology local
 ```
 
-## Limpieza de Datos de Prueba
+## Limpieza de datos de prueba
 
 La validación empieza con limpieza cuando el perfil activo lo requiere, para
 facilitar trazabilidad y evitar saturación por datos de ejecuciones previas.
 
 La limpieza debe ser segura por defecto y reportar qué eliminó o qué omitió.
 
-## Kafka en Nivel 6
+## Kafka en nivel 6
 
 La validación funcional EDC+Kafka no es el mismo flujo que el benchmark opcional
 de broker. En `Level 6`, está desactivada por defecto para ahorrar tiempo en

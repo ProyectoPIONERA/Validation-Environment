@@ -1,6 +1,11 @@
-# Desarrollo y Testing
+# Desarrollo y testing
 
-## Flujo Seguro de Desarrollo
+## Propósito
+
+Recoger prácticas de desarrollo y pruebas para modificar el framework con menor
+riesgo.
+
+## Flujo seguro de desarrollo
 
 Trabaja con cambios pequeños y valídalos con pruebas focalizadas antes de ejecutar suites amplias.
 
@@ -14,7 +19,7 @@ python3 -m unittest tests.test_deployer_shared_hosts_manager
 
 Para cambios UI, ejecuta la suite Playwright relevante desde `validation/ui/`.
 
-## Probar Imágenes Locales
+## Probar imágenes locales
 
 Usa `L - Build and Deploy Local Images` cuando modifiques fuentes bajo
 `adapters/<adapter>/sources/` y quieras probarlas en el cluster local.
@@ -75,7 +80,7 @@ cd validation/ui
 UI_ADAPTER=inesdata npx playwright test adapters/inesdata/specs/05-e2e-transfer-flow.spec.ts --config=playwright.inesdata.config.ts --workers=1
 ```
 
-## Extender Deployers
+## Extender deployers
 
 La lógica compartida de deployers pertenece a:
 
@@ -92,7 +97,7 @@ adapters/<adapter>/
 
 Evita añadir comportamiento específico de un adapter en helpers compartidos si no está parametrizado explícitamente.
 
-## Extender Topologías
+## Extender topologías
 
 La resolución de topología está centralizada en:
 
@@ -111,7 +116,7 @@ El contexto del deployer debe describir:
 
 La ejecución real de una topología solo debe habilitarse después de implementar y probar sus preflights.
 
-## Extender Validaciones
+## Extender validaciones
 
 Las nuevas validaciones deben seguir este orden:
 
@@ -127,7 +132,7 @@ decláralas en `project_suites.yaml` y actívalas desde el target correspondient
 como se describe en
 [Validación de INESData externo](./29_inesdata_external_validation_targets.md).
 
-## Ficheros Generados y Sensibles
+## Ficheros generados y sensibles
 
 No subas:
 
@@ -140,6 +145,6 @@ No subas:
 
 Usa `.gitignore` como fuente de verdad antes de preparar commits.
 
-## Suites Amplias
+## Suites amplias
 
 Algunas suites legacy amplias pueden requerir servicios externos o suposiciones antiguas. Para desarrollo diario, prioriza pruebas focalizadas del área modificada y amplía cobertura cuando el entorno esté preparado.

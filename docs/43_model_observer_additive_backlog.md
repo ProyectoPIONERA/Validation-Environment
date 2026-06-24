@@ -1,4 +1,4 @@
-# Model Observer Additive-Only Backlog
+# Model Observer additive-only backlog
 
 ## Scope
 
@@ -10,7 +10,7 @@ This backlog assumes a strict additive strategy:
 
 The goal is to introduce a model-focused observability capability without risking regressions in what is already implemented.
 
-## Delivery Strategy
+## Delivery strategy
 
 ### Phase 1
 
@@ -24,7 +24,7 @@ Add connector-side observer extensions that emit contract and transfer evidence.
 
 Add optional connector-interface observability pages and benchmark provenance views.
 
-## Backlog by Component
+## Backlog by component
 
 ## 1. `inesdata-public-portal-backend`
 
@@ -411,7 +411,7 @@ Do not start here.
 
 Use existing participant endpoints from the new portal-backend enricher first.
 
-## Cross-Component Event Model
+## Cross-component event model
 
 ### Files to define centrally in documentation and then mirror in implementations
 
@@ -447,7 +447,7 @@ Use existing participant endpoints from the new portal-backend enricher first.
 - `BENCHMARK_FAILED`
 - `MODEL_DETAIL_VIEWED`
 
-## Priority Order
+## Priority order
 
 ## Sprint 1
 
@@ -464,7 +464,7 @@ Use existing participant endpoints from the new portal-backend enricher first.
 1. Optional management observer extensión in `inesdata-connector`
 2. Optional new observability pages in `inesdata-connector-interface`
 
-## Explicit Non-Goals for the First Iteration
+## Explicit non-goals for the first iteration
 
 - embedding observer widgets into current catalog pages
 - editing current execution pages
@@ -473,7 +473,7 @@ Use existing participant endpoints from the new portal-backend enricher first.
 - changing current participant entities or controllers
 - relying on existing plain-text logs as the durable observer journal
 
-## Final Recommendation
+## Final recommendation
 
 The safest first implementation is:
 

@@ -1,11 +1,11 @@
-# Guía de Navegación para Auditoría
+# Guía de navegación para auditoría
 
 Este documento orienta la revisión pública del Validation Environment. Su
 objetivo es ayudar a identificar qué documentación representa el estado actual
 del framework, dónde se encuentra la evidencia técnica y qué material se
 conserva solo como trazabilidad histórica.
 
-## Alcance Vigente
+## Alcance vigente
 
 El framework permite desplegar y validar entornos PIONERA con adapters de
 INESData y EDC. La documentación vigente cubre:
@@ -22,14 +22,14 @@ Para cierre, el alcance validado por adapter y topología es:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Implementado y usado como ruta local de desarrollo/validación | Implementado y validado como entorno VM de referencia | Implementado y validado como entorno distribuido de referencia |
-| `edc` | Implementado; requiere revalidación tras la conciliación reciente de topologías | Implementado; no validado oficialmente tras la conciliación reciente | Ruta probada oficialmente para evidencia de cierre |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
 
-Cuando se revise EDC, las evidencias de cierre deben corresponder a
-`vm-distributed` hasta que exista una revalidación posterior de `local` o
-`vm-single`.
+Cuando se revise EDC, las evidencias de cierre disponibles corresponden a
+`local` y `vm-single`. La topología `vm-distributed` no debe declararse cerrada
+para EDC hasta que exista un experimento final asociado a esa ruta.
 
-## Fuera de Alcance
+## Fuera de alcance
 
 La documentación no debe contener contraseñas reales, tokens, claves de
 API, rutas privadas de una máquina, IP privadas de una instalación concreta ni
@@ -39,7 +39,7 @@ de variables.
 Los logs y artefactos generados por ejecución se tratan como evidencia local de
 cada experimento y no forman parte del contenido estable de `docs/`.
 
-## Orden de Lectura Sugerido
+## Orden de lectura sugerido
 
 1. [README](./README.md): índice principal de la documentación.
 2. [30 Estado actual del framework](./30_framework_current_state.md): resumen
@@ -59,7 +59,7 @@ cada experimento y no forman parte del contenido estable de `docs/`.
 9. [39 Troubleshooting](./39_troubleshooting.md): diagnóstico de fallos
    frecuentes.
 
-## Mapa de Evidencia
+## Mapa de evidencia
 
 | Evidencia | Ubicación | Comentario |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ cada experimento y no forman parte del contenido estable de `docs/`.
 | Reporte consolidado A5.2/E5.2 | `docs/E5.2_Resultados_Validacion_Componentes.xlsx` | Matriz de resultados, evidencias y checklist de apoyo UNE 0087 |
 | Alineación UNE 0087 | `experiments/<experimento>/une_0087_alignment.*` | Artefacto de apoyo no certificante generado desde evidencias del experimento |
 
-## Namespaces Canónicos
+## Namespaces canónicos
 
 Todas las topologías deben alinearse con los mismos namespaces funcionales:
 
@@ -86,7 +86,7 @@ Todas las topologías deben alinearse con los mismos namespaces funcionales:
 | `consumer` | Conector y servicios del consumidor |
 | `components` | Componentes compartidos y auxiliares |
 
-## Estado de Topologías
+## Estado de topologías
 
 `local`, `vm-single` y `vm-distributed` comparten el mismo modelo de niveles,
 namespaces funcionales y contratos de adapter. La topología `vm-distributed`
@@ -97,7 +97,7 @@ La existencia de un contrato común no significa que todos los adapters tengan
 evidencia oficial en todas las topologías. La matriz de alcance de este
 documento es la referencia para auditoría.
 
-## Trazabilidad Histórica
+## Trazabilidad histórica
 
 Los documentos `00` a `29` explican decisiones, diseño y evolución técnica. Se
 mantienen navegables para auditoría, pero la fuente operativa actual es la

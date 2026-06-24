@@ -1,4 +1,4 @@
-# Validación UI Core
+# Validación UI core
 
 La Fase 4 incorpora una capa de validación UI con Playwright alineada con los flujos ya cubiertos por Newman. La suite UI no introduce lógica de negocio nueva: refleja lo que el `connector-interface` ya expone para un usuario real.
 
@@ -24,7 +24,7 @@ Y reutilizan page objects y fixtures en:
 - `validation/ui/shared/components/`
 - `validation/ui/shared/`
 
-## Flujos Core
+## Flujos core
 
 La suite INESData cubre actualmente:
 
@@ -38,7 +38,7 @@ La suite INESData cubre actualmente:
 
 ## Mapeo UI -> API
 
-### 01 login readiness
+### 01 Login readiness
 
 - Paginas:
   - login de Keycloak
@@ -57,7 +57,7 @@ La suite INESData cubre actualmente:
 - Alineacion API:
   - prerrequisito de `01_environment_health`
 
-### 03 provider setup
+### 03 Provider setup
 
 - Paginas:
   - `/assets/create`
@@ -119,7 +119,7 @@ La suite INESData cubre actualmente:
 - Alineacion API:
   - `03_provider_setup` en su parte de contract definition
 
-### 04 consumer catalog
+### 04 Consumer catalog
 
 - Paginas:
   - `/catalog`
@@ -136,7 +136,7 @@ La suite INESData cubre actualmente:
 - Alineacion API:
   - `04_consumer_catalog`
 
-### 05 consumer negotiation
+### 05 Consumer negotiation
 
 - Paginas:
   - `/catalog`
@@ -160,7 +160,7 @@ La suite INESData cubre actualmente:
 - Alineacion API:
   - `05_consumer_negotiation`
 
-### 06 consumer transfer
+### 06 Consumer transfer
 
 - Paginas:
   - `/catalog`
@@ -186,7 +186,7 @@ La suite INESData cubre actualmente:
 - Alineacion API:
   - `06_consumer_transfer`
 
-## Suite Extendida
+## Suite extendida
 
 Además de los specs atómicos, existe un flujo E2E largo:
 
@@ -204,7 +204,7 @@ Este spec encadena:
 
 Su objetivo es servir como regresion extendida y validación visual del recorrido visible de punta a punta. No sustituye a los specs atómicos `05` y `06`.
 
-## Suite Ops Opcional
+## Suite ops opcional
 
 La suite `ops` contiene comprobaciones visuales separadas del flujo funcional del adapter:
 
@@ -235,7 +235,7 @@ Por defecto los artefactos se guardan en:
 
 Cuando la ejecución se redirige desde el framework, las rutas pueden sobreescribirse por variables de entorno para quedar asociadas al experimento activo.
 
-## Parametrizacion
+## Parametrización
 
 La suite soporta dos modos de resolucion de runtime.
 
@@ -295,7 +295,7 @@ Para cada conector, `Level 6` guarda evidencias en:
 - `experiments/<experiment_id>/ui/<connector>/blob-report`
 - `experiments/<experiment_id>/ui/<connector>/results.json`
 
-## Integración de la Suite Ops en Level 6
+## Integración de la suite ops en Level 6
 
 `Level 6` ejecuta la suite de MinIO Console automáticamente cuando:
 
@@ -346,7 +346,7 @@ Este paso ha resuelto en la practica el problema de visibilidad del navegador Pl
 
 Si el entorno sigue mostrando síntomas gráficos extraños después de varias modificaciones locales del framework, conviene probar también con una reinstalación limpia del workspace de `Validation-Environment` antes de seguir depurando la suite.
 
-## Limites Conocidos
+## Límites conocidos
 
 - La UI cubre el flujo visible de negociación y transferencia, pero no sustituye las validaciones técnicas de `EDR` o descarga raw.
 - La comprobación del almacenamiento final sigue siendo más fiable por API o SDK que por la consola de MinIO.
