@@ -1,4 +1,9 @@
-# 05. Estructura del Repositorio
+# 05. Estructura del repositorio
+
+## Propósito
+
+Ubicar las carpetas principales del repositorio y explicar qué tipo de artefactos
+contiene cada una.
 
 ## Mapa rápido
 
@@ -134,7 +139,9 @@ Subdirectorios destacados:
 Contiene las fuentes locales del conector EDC y del dashboard cuando se usan
 recetas de build local o sincronización de fuentes. El dashboard se gestiona
 como submódulo para conservar la autoría del repositorio de origen y evitar
-copias divergentes.
+copias divergentes. El conector EDC no es un submódulo independiente en este
+checkout: está importado en el framework y conserva su atribución upstream en
+`adapters/edc/sources/connector/UPSTREAM.md`.
 
 Subdirectorios destacados:
 

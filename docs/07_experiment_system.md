@@ -1,4 +1,4 @@
-# Sistema de Experimentos
+# Sistema de experimentos
 
 La evolución del framework se ha dividido por fases. En esta serie, la `Fase 1` corresponde al sistema de experimentos, la `Fase 2` al pipeline de métricas, la `Fase 3` a Kafka y la `Fase 4` a la validación UI.
 
@@ -13,7 +13,7 @@ Esta fase cubre los dos caminos de ejecución usados actualmente en el proyecto:
 
 Ambos caminos deben dejar un esqueleto de experimento consistente en disco, incluso si la validación falla después de que el experimento haya comenzado.
 
-## Contrato Mínimo de Artefactos
+## Contrato mínimo de artefactos
 
 Todo experimento debe crear:
 
@@ -21,7 +21,7 @@ Todo experimento debe crear:
 - `experiments/experiment_<timestamp>/experiment_results.json`
 - `experiments/experiment_<timestamp>/newman_reports/`
 
-## Estructura Esperada
+## Estructura esperada
 
 ```text
 experiments/
@@ -49,7 +49,7 @@ En el estado actual del framework, un experimento de validación puede generar a
 
 La carpeta `storage_checks/` contiene post-checks técnicos de almacenamiento para transferencias INESData. No forma parte del contrato mínimo histórico de la Fase 1, pero hoy es una evidencia complementaria importante cuando `06_consumer_transfer.json` se ejecuta con `experiment_dir`.
 
-## Comportamiento en Ejecución
+## Comportamiento en ejecución
 
 ### `main.py inesdata run`
 
@@ -67,7 +67,7 @@ La carpeta `storage_checks/` contiene post-checks técnicos de almacenamiento pa
 - escribe `experiment_results.json` con `status=running`, `completed` o `failed`
 - preserva las salidas de validación incluso cuando fallan pasos posteriores
 
-## Semántica de Fallo
+## Semántica de fallo
 
 Si la ejecución falla después de que el directorio del experimento haya sido creado:
 

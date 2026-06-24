@@ -1,4 +1,8 @@
-# Inicio Rápido
+# Inicio rápido
+
+## Propósito
+
+Ofrecer una ruta corta para preparar el entorno y empezar a operar el framework.
 
 ## Requisitos
 
@@ -28,20 +32,21 @@ La topología local usa Minikube en la máquina de desarrollo. La topología
 mantener una configuración reproducible. `vm-distributed` usa configuración
 parametrizable de VMs, SSH, kubeconfig, DNS/Ingress y URLs públicas.
 
-## Alcance de Cierre
+## Alcance de cierre
 
 Si el objetivo es generar evidencia de cierre, usa esta lectura:
 
 | Adapter | Ruta recomendada |
 | --- | --- |
 | `inesdata` | `local`, `vm-single` o `vm-distributed`, según el entorno que se quiera evidenciar |
-| `edc` | `vm-distributed` |
+| `edc` | `local` o `vm-single`; `vm-distributed` queda pendiente de consolidación |
 
-EDC conserva rutas implementadas en `local` y `vm-single`, pero `local` debe
-revalidarse tras la conciliación reciente de topologías y `vm-single` no se ha
-validado oficialmente tras esa conciliación.
+La evidencia de cierre de INESData en `vm-distributed` se mantiene en la rama
+especializada `refactoring-vm-distributed-inesdata-ai`. La evidencia equivalente
+de EDC en `vm-distributed` debe generarse en `refactoring-vm-distributed-edc-ai`
+cuando esa rama quede consolidada.
 
-## Vista Local
+## Vista local
 
 El siguiente diagrama resume el entorno local de validación:
 
@@ -165,8 +170,7 @@ menos esa memoria. Si tu Docker Desktop tiene menos margen, reduce
 `PIONERA_MINIKUBE_MEMORY=12288`. Para validar `inesdata` y `edc` coexistiendo en
 la misma topología local, cambia a `LOCAL_RESOURCE_PROFILE=coexistence` y el
 baseline recomendado sigue siendo `10 CPU / 18432 MB`; si Docker no puede
-asignarlo, valida un adapter cada vez o usa una topología VM adecuada. Para
-evidencia de cierre de `edc`, usa `vm-distributed`. En modo estable,
+asignarlo, valida un adapter cada vez o usa una topología VM adecuada. En modo estable,
 `Level 1` avisa si Docker solo soporta un adapter local, y `Level 3/4/5`
 bloquean la instalación del segundo adapter si ya hay otro activo con memoria
 efectiva inferior a ese baseline. En terminal interactiva, ese bloqueo abre un
@@ -177,7 +181,7 @@ ejecución no interactiva, usa la variable `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM
 con el valor `SWITCH TO EDC` o `SWITCH TO INESDATA`, según el adapter destino.
 `Level 6` mantiene la misma guarda para no contaminar resultados.
 
-## Coexistencia de Adapters
+## Coexistencia de adapters
 
 `inesdata` y `edc` reutilizan los servicios comunes de `common-srvs` cuando se
 prueban ambos adapters sobre el mismo cluster local.
@@ -228,7 +232,7 @@ Usa el `hosts` de Windows solo para topologías locales. En topologías distribu
 
 La sincronización es idempotente: si una entrada ya existe fuera de los bloques gestionados, se omite en lugar de duplicarse.
 
-## Niveles del Menú
+## Niveles del menú
 
 El menú expone seis niveles:
 
@@ -247,7 +251,7 @@ activa y después muestra el menú. Usa `python3 main.py menu --topology local` 
 
 La referencia completa del menú está en [Referencia del menú](./33_menu_reference.md).
 
-## Minikube Tunnel
+## Minikube tunnel
 
 En despliegues locales completos, mantén `minikube tunnel` abierto para que los
 servicios sean accesibles por ingress:

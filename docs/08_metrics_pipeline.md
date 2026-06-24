@@ -1,4 +1,4 @@
-# Pipeline de Métricas
+# Pipeline de métricas
 
 En la secuencia de evolución descrita desde [07_experiment_system.md](./07_experiment_system.md), la Fase 2 transforma los reportes exportados de Newman en artefactos estables del experimento.
 
@@ -31,7 +31,7 @@ newman_reports/
       06_consumer_transfer.json
 ```
 
-## Artefactos de Salida
+## Artefactos de salida
 
 El pipeline de métricas debe producir:
 
@@ -41,7 +41,7 @@ El pipeline de métricas debe producir:
 - `negotiation_metrics.json`
 - `aggregated_metrics.json`
 
-## Cadena de Artefactos
+## Cadena de artefactos
 
 ```text
 Reportes JSON de Newman
@@ -52,7 +52,7 @@ Reportes JSON de Newman
   -> persistencia como artefactos del experimento
 ```
 
-## Responsabilidades de Procesado
+## Responsabilidades de procesado
 
 - `framework/metrics/collector.py`
   - carga los reportes exportados de Newman
@@ -70,7 +70,7 @@ Reportes JSON de Newman
   - orquesta la generación de artefactos para un directorio de experimento
   - persiste salidas normalizadas a traves de `ExperimentStorage`
 
-## Comportamiento ante Fallos
+## Comportamiento ante fallos
 
 - Si la validación termina correctamente, la extracción de métricas debe ejecutarse automáticamente.
 - Si la validación falla después de exportar algunos reportes de Newman, la extracción de métricas sigue ejecutándose sobre los reportes exportados siempre que sea posible.

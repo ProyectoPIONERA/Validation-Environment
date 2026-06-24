@@ -1,4 +1,9 @@
-# 14. Entorno Productivo de Validación
+# 14. Entorno productivo de validación
+
+## Propósito
+
+Conservar la planificación histórica del entorno productivo y sus decisiones de
+arquitectura como referencia de trazabilidad.
 
 > Documento de trazabilidad histórica. Para el alcance vigente de cierre usa
 > [30 Estado actual](./30_framework_current_state.md),
@@ -13,13 +18,13 @@ por niveles del framework.
 
 ![PIONERA distributed validation environment](<./pionera_distributed_validation_environment.png>)
 
-## Topologías Soportadas por el Framework
+## Topologías soportadas por el framework
 
 | Topología canónica | Alias visual | Estado actual |
 | --- | --- | --- |
 | `local` | local | despliegue real habilitado |
-| `vm-single` | vm1 | despliegue real habilitado; EDC requiere revalidación de cierre |
-| `vm-distributed` | vm3 | despliegue real habilitado mediante perfil de VMs; ruta oficial de cierre para EDC |
+| `vm-single` | vm1 | despliegue real habilitado |
+| `vm-distributed` | vm3 | despliegue real habilitado mediante perfil de VMs; evidencia INESData disponible y EDC pendiente de consolidación |
 
 El alcance vigente de cierre debe interpretarse siempre con la matriz de
 adapter y topología de la documentación actual.
@@ -39,7 +44,7 @@ La separación se puede aplicar mediante labels, `nodeSelector`, affinity o
 mecanismos equivalentes. Esta decisión mantiene un solo plano de control
 Kubernetes y reduce la complejidad operativa inicial.
 
-## Por Qué un Solo Cluster es Adecuado
+## Por qué un solo cluster es adecuado
 
 Un único cluster con tres nodos permite validar:
 
@@ -56,7 +61,7 @@ la negociación, la transferencia y la separación de roles. No exige tres plano
 de control Kubernetes independientes para el primer incremento del entorno de
 validación.
 
-## Routing y Endpoints
+## Routing y endpoints
 
 El modo preferente es `routing_mode=host`: cada servicio relevante tiene su
 hostname. Es menos intrusivo para charts y aplicaciones que publicar múltiples
@@ -78,7 +83,7 @@ servicios bajo prefijos de path.
 El routing por path queda como modo avanzado para entornos donde no sea posible
 obtener hostnames por servicio.
 
-## Variables de Topología
+## Variables de topología
 
 El perfil de topología permite separar direcciones por rol:
 
@@ -92,7 +97,7 @@ El perfil de topología permite separar direcciones por rol:
 Las entradas de hosts se generan según el rol de cada servicio. En local se usa
 `127.0.0.1`; en VM se usan las IPs del perfil.
 
-## Diferencias Frente a Local
+## Diferencias frente a local
 
 | Elemento local | Equivalente productivo |
 | --- | --- |

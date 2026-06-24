@@ -48,13 +48,48 @@ implementada y validación oficial reproducida:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Implementado y usado como ruta local de desarrollo/validación | Implementado y validado como entorno VM de referencia | Implementado y validado como entorno distribuido de referencia |
-| `edc` | Implementado; pasó validaciones antes de la conciliación reciente de topologías y debe revalidarse antes de usarlo como evidencia actual | Implementado; no se ha validado oficialmente después de la conciliación reciente | Implementado y probado oficialmente como ruta de cierre para EDC |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai` |
 
-Por tanto, para evidencias de cierre del adapter `edc`, usa
-`vm-distributed`. Las rutas `local` y `vm-single` de EDC permanecen disponibles
-para desarrollo y futuras revalidaciones, pero no se presentan como resultado
-oficial actualizado en esta versión de cierre.
+La línea funcional de `main` toma como referencia
+`refactoring-local-vm-single`, que consolida evidencias para los adapters
+INESData y EDC en las topologías `local` y `vm-single`. Esta rama conserva la
+evidencia de cierre del adapter EDC en topología `vm-distributed`. La evidencia
+equivalente para INESData en `vm-distributed` debe tomarse desde
+`refactoring-vm-distributed-inesdata-ai`.
+
+Por tanto, las evidencias `local` y `vm-single` deben tomarse desde la línea
+estable `refactoring-local-vm-single`; la evidencia INESData `vm-distributed`
+desde `refactoring-vm-distributed-inesdata-ai`; y la evidencia EDC
+`vm-distributed` desde esta rama, `refactoring-vm-distributed-edc-ai`.
+
+### Referencias de Reproducibilidad
+
+Las siguientes referencias pueden usarse como punto de restauración si las ramas
+o repositorios externos cambian después de esta entrega. La rama `main` incluye
+esta nota documental; la línea funcional estable que consolida `local` y
+`vm-single` para INESData y EDC corresponde a `refactoring-local-vm-single`.
+
+| Alcance | Referencia | Commit |
+| --- | --- | --- |
+| Línea estable `local` y `vm-single` para INESData y EDC | `refactoring-local-vm-single` | `532926e16a9f8845f65d328a8c6107d86f576c7d` |
+| INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `f2f2cdc1f115a6f02ab05cdfbd2d08f5738e6e51` |
+| EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | `7c13b0d903425bc428fe18db9426c7e36fa67e46` |
+
+Cuando sea necesario reconstruir el entorno frente a cambios posteriores en los
+repositorios fuente, estos commits locales sirvieron como referencia durante la
+validación de la línea estable:
+
+| Repositorio fuente | Commit de referencia |
+| --- | --- |
+| `ProyectoPIONERA/AIModelHub` | `91ef338c4203` |
+| `ProyectoPIONERA/AIModelHub-Use-Cases` | `371d349c924c` |
+| `ProyectoPIONERA/Ontology-Hub` | `23455014e676` |
+| `ProyectoPIONERA/mapping-editor` | `eba85129e05c` |
+| `ProyectoPIONERA/morph-kgv` | `19c9bcbd791e` |
+| `ProyectoPIONERA/automap` | `f6debd99f104` |
+| `ProyectoPIONERA/EDC-asset-filter-dashboard` - dashboard EDC | `3a36d8d3282e` |
+| `ProyectoPIONERA/EDC-asset-filter-dashboard/asset-filter-template` - runtime del conector EDC importado en el framework | `9175ce552d93` |
 
 ## Índice
 
@@ -97,7 +132,7 @@ oficial actualizado en esta versión de cierre.
 | Adapter | Uso |
 | --- | --- |
 | `inesdata` | Despliegue y validación con conectores INESData y su portal. |
-| `edc` | Despliegue y validación con conectores EDC genéricos; la evidencia oficial de cierre se limita a `vm-distributed`. |
+| `edc` | Despliegue y validación con conectores EDC genéricos; la evidencia de cierre está disponible en `local`, `vm-single` y `vm-distributed`. |
 
 Cada adapter tiene su propio deployer:
 
@@ -151,7 +186,10 @@ git submodule update --init --recursive
 También puedes clonar todo en un solo paso con
 `git clone --recurse-submodules`. El submódulo del dashboard EDC apunta al
 repositorio oficial `ProyectoPIONERA/EDC-asset-filter-dashboard` para conservar
-su autoría y fijar una versión reproducible.
+su autoría y fijar una versión reproducible. El runtime del conector EDC no es
+un submódulo aparte: está importado y versionado dentro de este repositorio en
+`adapters/edc/sources/connector`; su origen upstream queda descrito en
+`adapters/edc/sources/connector/UPSTREAM.md`.
 
 2. Prepara dependencias del framework:
 
@@ -236,6 +274,13 @@ Usa los ficheros `.example` como plantilla cuando existan:
 deployers/infrastructure/deployer.config.example
 deployers/inesdata/deployer.config.example
 ```
+
+Los `.config` locales son la configuración efectiva del despliegue. Los perfiles
+`.profiles/*.env` sirven como entrada local para rellenar esos `.config` desde
+el asistente o desde `batch`, pero no sustituyen a las capas efectivas hasta que
+se aplican. Para adaptar el framework a otro contexto, revisa
+[Mapa de configuración y despliegue](./docs/49_configuration_map.md) y
+[Referencia de variables de configuración](./docs/51_configuration_variables_reference.md).
 
 La variable `PUBLIC_HOSTNAME` en `deployers/infrastructure/deployer.config` controla
 el hostname público del entorno. Cuando está configurada, `bootstrap.py` la usa
@@ -663,11 +708,9 @@ el perfil activo, incluye:
 - métricas;
 - reportes en `experiments/`.
 
-En esta versión de cierre, la validación oficial actualizada de `edc` se
-considera limitada a `vm-distributed`. La ruta `local` de EDC conserva soporte
-de desarrollo y llegó a pasar validaciones antes de la conciliación reciente de
-topologías; la ruta `vm-single` de EDC no se ha validado oficialmente después de
-esa conciliación.
+En esta rama de cierre, la evidencia actualizada de `edc` está disponible para
+`vm-distributed`. Las evidencias de `local` y `vm-single` se mantienen en la
+línea estable `refactoring-local-vm-single`.
 
 En topología `local`, `Level 6` usa por defecto el modo de orquestación
 `stable`: Newman, Kafka, Playwright y componentes se coordinan con menos
@@ -814,11 +857,16 @@ Para EDC, las fuentes locales se gestionan bajo:
 adapters/edc/sources/
 ```
 
-El runtime del conector EDC se sincroniza desde:
+El runtime del conector EDC se mantiene dentro del framework en:
 
 ```text
 adapters/edc/sources/connector
 ```
+
+Esa copia procede del subdirectorio `asset-filter-template` del repositorio
+`ProyectoPIONERA/EDC-asset-filter-dashboard`; la referencia upstream concreta se
+documenta en `adapters/edc/sources/connector/UPSTREAM.md`. No hay un repositorio
+externo separado llamado "adapter EDC".
 
 El dashboard EDC se sincroniza desde:
 
@@ -932,6 +980,11 @@ Orden recomendado:
 - [Acceso externo a conectores](./docs/41_pionera_connector_external_access.md)
 - [Guía de navegación para auditoría](./docs/44_audit_navigation_guide.md)
 - [Guía operativa de vm-distributed](./docs/46_vm_distributed_runbook.md)
+- [Manual de usuario](./docs/47_user_manual.md)
+- [Manual técnico](./docs/48_technical_manual.md)
+- [Mapa de configuración y despliegue](./docs/49_configuration_map.md)
+- [Estructura para vm-distributed](./docs/50_vm_distributed_framework_structure.md)
+- [Referencia de variables de configuración](./docs/51_configuration_variables_reference.md)
 - [Resultados tabulares E5.2](./docs/E5.2_Resultados_Validacion_Componentes.xlsx)
 
 ## Imágenes, Diagramas y Vídeos Explicativos
@@ -941,6 +994,8 @@ Diagramas disponibles:
 - [Entorno local de validación](./docs/pionera_local_validation_environment.png)
 - [Entorno distribuido de validación](./docs/pionera_distributed_validation_environment.png)
 - [Arquitectura del entorno de pruebas](./docs/test_environment_architecture.png)
+- [Vista simplificada de estructura vm-distributed](./docs/vm_distributed_framework_structure_simplified.png)
+- [Estructura del framework para vm-distributed](./docs/50_vm_distributed_framework_structure.md)
 - [Resultados de validación de componentes](./docs/E5.2_Resultados_Validacion_Componentes.xlsx)
 
 Los vídeos explicativos se enlazan desde `docs/README.md` cuando estén

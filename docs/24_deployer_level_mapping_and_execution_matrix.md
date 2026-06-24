@@ -1,4 +1,9 @@
-# 24. Matriz de Niveles y Ejecución
+# 24. Matriz de niveles y ejecución
+
+## Propósito
+
+Conservar la matriz histórica que relaciona niveles, deployers y modos de
+ejecución.
 
 > Documento de trazabilidad histórica. Para el alcance vigente de cierre usa
 > [30 Estado actual del framework](./30_framework_current_state.md),
@@ -30,18 +35,18 @@ su deployer y topología.
 | `python3 main.py <adapter> hosts --topology local` | plan/aplicación de hosts |
 | `python3 main.py <adapter> metrics --topology local` | experimento de métricas |
 
-## Estado por Topología
+## Estado por topología
 
 | Topología | Hosts | Despliegue real `1-5` | Validación |
 | --- | --- | --- | --- |
 | `local` | habilitado | habilitado según adapter | habilitada |
-| `vm-single` | habilitado por perfil VM | habilitado según adapter y nivel | habilitada según adapter; EDC pendiente de revalidación de cierre |
-| `vm-distributed` | planificado por perfil VM | habilitado con preflight y configuración de VMs | ruta oficial de cierre para EDC |
+| `vm-single` | habilitado por perfil VM | habilitado según adapter y nivel | habilitada según adapter |
+| `vm-distributed` | planificado por perfil VM | habilitado con preflight y configuración de VMs | INESData con evidencia; EDC pendiente de consolidación |
 
 El soporte implementado no equivale automáticamente a evidencia oficial. En la
-versión de cierre, EDC se considera probado oficialmente en `vm-distributed`;
-`local` debe revalidarse tras la conciliación reciente de topologías y
-`vm-single` no se ha validado oficialmente después de esa conciliación.
+versión de cierre, INESData cuenta con evidencia en `local`, `vm-single` y
+`vm-distributed`; EDC cuenta con evidencia en `local` y `vm-single`. La ruta EDC
+en `vm-distributed` queda pendiente de consolidación.
 
 ## INESData
 
@@ -55,12 +60,12 @@ versión de cierre, EDC se considera probado oficialmente en `vm-distributed`;
 
 | Nivel | Estado |
 | --- | --- |
-| `1` a `3` | reutiliza infraestructura y servicios compartidos; ruta oficial de cierre en `vm-distributed` |
-| `4` | conectores EDC y dashboard EDC implementados; evidencia de cierre en `vm-distributed` |
+| `1` a `3` | reutiliza infraestructura y servicios compartidos |
+| `4` | conectores EDC y dashboard EDC implementados |
 | `5` | componentes compartidos operativos cuando están configurados y el conector registra sus extensiones requeridas |
-| `6` | Newman, Playwright EDC, storage, componentes y reportes; usar `vm-distributed` para evidencia oficial |
+| `6` | Newman, Playwright EDC, storage, componentes y reportes; evidencia de cierre disponible en `local` y `vm-single`, con `vm-distributed` pendiente |
 
-## Recreate Dataspace
+## Recreate dataspace
 
 El comando `recreate-dataspace` permite borrar y recrear el dataspace de forma
 controlada:

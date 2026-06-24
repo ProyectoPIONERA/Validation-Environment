@@ -9,20 +9,29 @@ privadas, rutas personales, kubeconfigs reales ni datos sensibles. Los
 artefactos generados por ejecución viven en `experiments/` y no sustituyen a la
 documentación estable de `docs/`.
 
-## Dónde Empezar
+Cada documento Markdown de esta carpeta debe empezar con un título y una
+descripción breve de su propósito. Si el documento conserva decisiones
+históricas, el propósito debe indicarlo para diferenciarlo de las instrucciones
+operativas vigentes.
+
+## Dónde empezar
 
 | Necesidad | Ruta recomendada |
 | --- | --- |
 | Primera ejecución | [Inicio rápido](./32_getting_started.md) |
-| Usar el menú | [Referencia del menú](./33_menu_reference.md) |
+| Usar el menú | [Manual de usuario](./47_user_manual.md) y [Referencia del menú](./33_menu_reference.md) |
 | Entender la arquitectura | [Arquitectura](./34_architecture.md) |
 | Elegir topología | [Deployers y topologías](./35_deployers_and_topologies.md) |
+| Configurar un entorno propio | [Mapa de configuración y despliegue](./49_configuration_map.md) |
+| Consultar variables modificables | [Referencia de variables de configuración](./51_configuration_variables_reference.md) |
+| Explicar `vm-distributed` | [Estructura de `vm-distributed`](./50_vm_distributed_framework_structure.md) |
 | Ejecutar validación | [Validación](./37_validation.md) |
+| Usar CLI y estructura técnica | [Manual técnico](./48_technical_manual.md) |
 | Revisar resultados | [Visor de reportes](./40_report_viewer.md) |
 | Resolver errores | [Troubleshooting](./39_troubleshooting.md) |
 | Auditar el framework | [Guía de navegación para auditoría](./44_audit_navigation_guide.md), [estado actual](./30_framework_current_state.md), [validación](./37_validation.md) y artefactos tabulares A5.2/E5.2 |
 
-## Estructura Pública del Repositorio Software
+## Estructura pública del repositorio software
 
 La documentación sigue esta estructura de referencia para facilitar revisión,
 uso y auditoría.
@@ -44,18 +53,23 @@ uso y auditoría.
 | Pruebas y cómo ejecutarlas | [README principal](../README.md#pruebas-y-cómo-ejecutarlas) y [Desarrollo y testing](./38_development_and_testing.md) |
 | Imágenes, diagramas o vídeos explicativos | [README principal](../README.md#imágenes-diagramas-y-vídeos-explicativos) y [diagramas](#diagramas-y-evidencias) |
 
-## Rutas de Lectura
+## Rutas de lectura
 
-### Operación del Framework
+### Operación del framework
 
 1. [Estado actual del framework](./30_framework_current_state.md)
 2. [Inicio rápido](./32_getting_started.md)
-3. [Referencia del menú](./33_menu_reference.md)
-4. [Deployers y topologías](./35_deployers_and_topologies.md)
-5. [Validación](./37_validation.md)
-6. [Troubleshooting](./39_troubleshooting.md)
+3. [Manual de usuario](./47_user_manual.md)
+4. [Referencia del menú](./33_menu_reference.md)
+5. [Manual técnico](./48_technical_manual.md)
+6. [Mapa de configuración y despliegue](./49_configuration_map.md)
+7. [Referencia de variables de configuración](./51_configuration_variables_reference.md)
+8. [Estructura de `vm-distributed`](./50_vm_distributed_framework_structure.md)
+9. [Deployers y topologías](./35_deployers_and_topologies.md)
+10. [Validación](./37_validation.md)
+11. [Troubleshooting](./39_troubleshooting.md)
 
-### Validación de Espacios de Datos
+### Validación de espacios de datos
 
 1. [Validación](./37_validation.md)
 2. [Colecciones Newman y Postman](./31_postman_newman_collections.md)
@@ -69,9 +83,12 @@ uso y auditoría.
 1. [Deployers y topologías](./35_deployers_and_topologies.md)
 2. [Preparación de conectores externos](./45_external_connector_readiness.md)
 3. [Guía operativa de vm-distributed](./46_vm_distributed_runbook.md)
-4. [Troubleshooting](./39_troubleshooting.md)
+4. [Mapa de configuración y despliegue](./49_configuration_map.md)
+5. [Referencia de variables de configuración](./51_configuration_variables_reference.md)
+6. [Estructura de `vm-distributed`](./50_vm_distributed_framework_structure.md)
+7. [Troubleshooting](./39_troubleshooting.md)
 
-### Desarrollo y Extensión
+### Desarrollo y extensión
 
 1. [Arquitectura](./34_architecture.md)
 2. [Adapters](./36_adapters.md)
@@ -79,7 +96,7 @@ uso y auditoría.
 4. [Guía de integración histórica](./03_integration_guide.md)
 5. [Componentes compartidos en EDC](./26_edc_shared_components_integration_plan.md)
 
-### Auditoría Técnica
+### Auditoría técnica
 
 1. [Guía de navegación para auditoría](./44_audit_navigation_guide.md)
 2. [Estado actual del framework](./30_framework_current_state.md)
@@ -90,7 +107,7 @@ uso y auditoría.
 7. [Visor de reportes](./40_report_viewer.md)
 8. [Resultados tabulares A5.2/E5.2](./E5.2_Resultados_Validacion_Componentes.xlsx)
 
-## Entrada Principal
+## Entrada principal
 
 Usa `main.py` para el trabajo diario:
 
@@ -98,21 +115,24 @@ Usa `main.py` para el trabajo diario:
 python3 main.py menu
 python3 main.py inesdata deploy --topology local
 python3 main.py inesdata validate --topology local
-python3 main.py edc validate --topology vm-distributed
-python3 main.py edc hosts --topology vm-distributed --dry-run
+python3 main.py edc validate --topology local
+python3 main.py edc hosts --topology vm-single --dry-run
 python3 main.py batch --plan .profiles/runs/full-validation.yaml --secrets .secrets/pionera.env
 ```
 
 El menú guiado es la entrada recomendada para uso interactivo. El CLI directo
 es la entrada recomendada para automatización y ejecuciones reproducibles.
-El modo `batch` ejecuta perfiles locales versionables de operación, pero los
-secretos asociados deben permanecer en ficheros ignorados por Git.
-Para EDC, la ruta oficial de cierre documentada es `vm-distributed`.
-Las topologías `local` y `vm-single` de EDC permanecen implementadas y son útiles
-para desarrollo o revalidación, pero no sustituyen la evidencia de cierre
-distribuida.
+El modo `batch` ejecuta planes YAML locales o versionados de forma explícita.
+Los perfiles `.env` y los secretos asociados deben permanecer en ficheros
+ignorados por Git salvo que se publique una plantilla sanitizada.
 
-## Documentación Vigente
+La evidencia de cierre disponible distingue soporte implementado y experimentos
+efectivamente conservados. INESData cuenta con evidencias en `local`,
+`vm-single` y `vm-distributed`; EDC cuenta con evidencias en `local`,
+`vm-single` y `vm-distributed`. En esta rama, la documentación se mantiene como
+referencia operativa para EDC en `vm-distributed`.
+
+## Documentación vigente
 
 | Documento | Propósito |
 | --- | --- |
@@ -133,8 +153,13 @@ distribuida.
 | [44 Guía de auditoría](./44_audit_navigation_guide.md) | Orden de lectura, alcance, evidencias y límites de seguridad |
 | [45 Conectores externos](./45_external_connector_readiness.md) | Checklist para conectores y entornos externos |
 | [46 vm-distributed](./46_vm_distributed_runbook.md) | Procedimiento operativo de topología distribuida |
+| [47 Manual de usuario](./47_user_manual.md) | Uso operativo desde el menú interactivo |
+| [48 Manual técnico](./48_technical_manual.md) | Uso por CLI y estructura principal del framework |
+| [49 Mapa de configuración](./49_configuration_map.md) | Fuentes de verdad, `.config`, `.profiles`, `W`, batch y criterios para VMs externas |
+| [50 Estructura `vm-distributed`](./50_vm_distributed_framework_structure.md) | Vista detallada de estructura, configuración, niveles, roles, validación y evidencias |
+| [51 Referencia de variables](./51_configuration_variables_reference.md) | Familias de variables modificables, ubicación recomendada, propósito y uso |
 
-## Trazabilidad Histórica
+## Trazabilidad histórica
 
 Los documentos `00` a `29` conservan decisiones, diseño, evolución técnica y
 planes previos. Se mantienen navegables para auditoría y mantenimiento, pero no
@@ -150,11 +175,13 @@ El flujo manual histórico de INESData se conserva en
 [legacy_inesdata_manual](./legacy_inesdata_manual/00_historical_inesdata_manual_flow.md)
 solo como referencia de trazabilidad.
 
-## Diagramas y Evidencias
+## Diagramas y evidencias
 
 - [Entorno local de validación](<./pionera_local_validation_environment.png>)
 - [Entorno distribuido de validación](<./pionera_distributed_validation_environment.png>)
 - [Arquitectura del entorno de pruebas](<./test_environment_architecture.png>)
+- [Vista simplificada de estructura `vm-distributed`](./vm_distributed_framework_structure_simplified.png)
+- [Estructura del framework para `vm-distributed`](./50_vm_distributed_framework_structure.md)
 - [Inventario del entorno de pruebas](./test_environment_inventory.pdf)
 - [Resultados de validación de componentes](./E5.2_Resultados_Validacion_Componentes.xlsx)
 - [Casos de prueba](./A5.2_Casos_Prueba_.xlsx)

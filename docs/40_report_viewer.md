@@ -1,5 +1,10 @@
 # Visor de reportes de experimentos
 
+## Propósito
+
+Explicar cómo abrir y revisar reportes locales de experimentos desde el visor
+del framework.
+
 El framework incluye un visor local para revisar resultados de validación sin
 buscar manualmente carpetas ni abrir JSON largos por consola.
 

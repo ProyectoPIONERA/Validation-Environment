@@ -1,4 +1,4 @@
-# 29. Validación de INESData Externo
+# 29. Validación de INESData externo
 
 ## Estado
 
@@ -7,7 +7,7 @@ productivo con `Level 6`. La implementación debe hacerse de forma incremental y
 sin cambiar el comportamiento actual de `local`, `vm-single` ni
 `vm-distributed`.
 
-## Cuándo Usar Este Modo
+## Cuándo usar este modo
 
 Usa un target externo cuando el entorno ya existe y el framework solo debe
 validarlo.
@@ -25,7 +25,7 @@ Topology = entorno que el framework despliega.
 Validation target = entorno externo que el framework solo valida.
 ```
 
-## Configuración del Target
+## Configuración del target
 
 La configuración recomendada para INESData externo debe vivir bajo:
 
@@ -115,7 +115,7 @@ project_suites:
 Si no quieres validar componentes como `ontology-hub` o `ai-model-hub`, basta
 con no declararlos o dejar `components: {}`.
 
-## Credenciales y Secretos
+## Credenciales y secretos
 
 El YAML del target debe declarar como encontrar cada secreto, no el valor del
 secreto.
@@ -144,7 +144,7 @@ Para CI o ejecuciones programadas, usa variables de entorno o el secret manager
 aprobado. En ese modo el framework no debe quedarse esperando entrada por
 consola.
 
-## Seguridad por Defecto
+## Seguridad por defecto
 
 Un target productivo debe ejecutarse en modo seguro:
 
@@ -158,7 +158,7 @@ Un target productivo debe ejecutarse en modo seguro:
 La primera versión de un target productivo debe ser `read-only`. Las pruebas
 que creen, editen o borren datos deben añadirse después como perfil opt-in.
 
-## Dónde Crear Pruebas Extendidas
+## Dónde crear pruebas extendidas
 
 Las pruebas solicitadas específicamente por INESData no deben modificar las
 suites base actuales. Deben añadirse como suites de proyecto:
@@ -208,7 +208,7 @@ Las pruebas base protegen el framework.
 Las pruebas de proyecto cubren necesidades particulares de INESData.
 ```
 
-## Cómo Crear una Prueba Playwright Extendida
+## Cómo crear una prueba Playwright extendida
 
 1. Crea una carpeta de dominio bajo `validation/projects/inesdata/`.
 2. Añade un `test_cases.yaml` con el identificador funcional, objetivo,
@@ -248,7 +248,7 @@ test('INESDATA-LING-01: linguistic catalog is visible', async ({ page }) => {
 Cuando se implemente el resolvedor de targets, estas variables deben provenir
 del YAML del target y no requerir configuración manual repetitiva.
 
-## Activación desde el Target
+## Activación desde el target
 
 Una suite extendida solo debe ejecutarse si aparece activada:
 
@@ -262,7 +262,7 @@ project_suites:
 
 Si la suite no aparece o `enabled` es `false`, `Level 6` debe omitirla.
 
-## Flujo de Uso Objetivo
+## Flujo de uso objetivo
 
 Flujo por menú:
 
@@ -307,7 +307,7 @@ Cleanup: disabled
 Writes: disabled
 ```
 
-## Criterios de Aceptación
+## Criterios de aceptación
 
 Este modo estará listo cuando:
 

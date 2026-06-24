@@ -1,9 +1,14 @@
-# 25. Issues de Validación y Limpieza de Datos
+# 25. Issues de validación y limpieza de datos
+
+## Propósito
+
+Documentar cómo registrar incidencias de validación y cómo preparar datos de
+prueba reproducibles.
 
 Las suites de validación deben arrancar con datos de prueba trazables y evitar
 fallos por saturación o residuos de ejecuciones anteriores.
 
-## Registro de Issues
+## Registro de issues
 
 Los issues de validación se documentan con este formato:
 
@@ -21,7 +26,7 @@ Los issues de validación se documentan con este formato:
 La documentación conserva el patron y las conclusiones técnicas. Los
 logs con secretos o rutas locales sensibles no deben publicarse.
 
-## Limpieza Antes de Validar
+## Limpieza antes de validar
 
 La limpieza se basa en dos ideas:
 
@@ -40,7 +45,7 @@ playwright-edc-contract-
 El core de validación también genera nombres unicos para assets y objetos de
 transferencia usando el experimento y el par provider/consumer.
 
-## MinIO y Storage
+## MinIO y storage
 
 La validación de storage no debe aprobar solo porque exista un objeto antiguo.
 Debe comprobar que el objeto esperado de la ejecución actual aparece como nuevo
@@ -53,7 +58,7 @@ El verificador de storage:
 - falla con `expected_object_name` si no aparece;
 - redacta credenciales antes de persistir evidencias.
 
-## Redaccion de Secretos
+## Redaccion de secretos
 
 Los artefactos de validación no deben contener:
 
@@ -72,7 +77,7 @@ La sincronización de hosts es idempotente. Si una entrada ya existe, se registr
 como omitida y no se duplica. Esto evita que pruebas repetidas ensucien
 `/etc/hosts` o el fichero de hosts configurado.
 
-## Criterio de Fallo
+## Criterio de fallo
 
 No se deben relajar aserciones para ocultar residuos. Si la suite no puede
 demostrar que el dato pertenece a la ejecución actual, el test debe fallar y

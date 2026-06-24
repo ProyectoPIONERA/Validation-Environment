@@ -1,4 +1,9 @@
-# 02. Arquitectura de Validación
+# 02. Arquitectura de validación
+
+## Propósito
+
+Describir la arquitectura de las suites de validación y el tipo de evidencias
+que generan.
 
 ## Qué valida hoy el sistema
 

@@ -1,4 +1,4 @@
-# Estado Actual del Framework
+# Estado actual del framework
 
 Este documento resume el estado operativo actual del Validation Environment
 según el código versionado en esta copia del repositorio. Está orientado a
@@ -6,7 +6,7 @@ revisión pública, auditoría técnica y onboarding de personas que necesitan
 entender qué está implementado, qué se valida y qué queda fuera del alcance de
 cierre.
 
-## Entrada Principal
+## Entrada principal
 
 La entrada canónica es:
 
@@ -19,8 +19,8 @@ También existen comandos directos para automatización:
 ```bash
 python3 main.py inesdata deploy --topology local
 python3 main.py inesdata validate --topology local
-python3 main.py edc deploy --topology vm-distributed
-python3 main.py edc validate --topology vm-distributed
+python3 main.py edc deploy --topology local
+python3 main.py edc validate --topology local
 ```
 
 El menú y los comandos comparten el mismo modelo de ejecución por niveles.
@@ -29,7 +29,7 @@ El menú y los comandos comparten el mismo modelo de ejecución por niveles.
 
 | Nivel | Función | Estado |
 | --- | --- | --- |
-| `1` | Preparar cluster Kubernetes | Operativo en `local` y `vm-single` |
+| `1` | Preparar o verificar cluster Kubernetes | Crea/prepara `local` y `vm-single`; en `vm-distributed` valida acceso a clústeres existentes |
 | `2` | Desplegar servicios comunes | Operativo |
 | `3` | Desplegar dataspace/control plane | Operativo |
 | `4` | Desplegar conectores | Operativo para `inesdata` y `edc` |
@@ -44,29 +44,29 @@ El menú y los comandos comparten el mismo modelo de ejecución por niveles.
 | `vm-single` | Ruta operativa sobre una VM con Kubernetes gestionado | Validación final en entorno tipo VM y smoke de integración |
 | `vm-distributed` | Ruta distribuida parametrizable con roles físicos separados | Validación de entornos con servicios comunes, conectores y componentes en VMs distintas |
 
-## Alcance de Cierre por Adapter y Topología
+## Alcance de cierre por adapter y topología
 
 El soporte de código y la evidencia oficial de cierre no son lo mismo. Para
 auditoría, la lectura vigente es:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Implementado y usado como ruta local de desarrollo/validación | Implementado y validado como entorno VM de referencia | Implementado y validado como entorno distribuido de referencia |
-| `edc` | Implementado; pasó validaciones antes de la conciliación reciente de topologías y debe revalidarse antes de usarse como evidencia vigente | Implementado; no validado oficialmente después de la conciliación reciente | Implementado y probado oficialmente como ruta de cierre para EDC |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
 
 La documentación de operación mantiene comandos y configuración para las rutas
-implementadas, pero las evidencias oficiales de `edc` deben generarse en
-`vm-distributed` hasta que se ejecute una revalidación explícita de `local` o
-`vm-single`.
+implementadas. Para cierre documental, un escenario solo debe citarse como
+validado cuando existe un experimento asociado con reporte, métricas, logs y
+artefactos reproducibles.
 
 ## Adapters
 
 | Adapter | Estado |
 | --- | --- |
 | `inesdata` | Despliegue y validación `Level 1-6` operativos |
-| `edc` | Despliegue y validación core implementados; evidencia oficial de cierre limitada a `vm-distributed` |
+| `edc` | Despliegue y validación core implementados; evidencia de cierre disponible en `local` y `vm-single`; `vm-distributed` pendiente de consolidación |
 
-## Namespaces Actuales
+## Namespaces actuales
 
 El framework usa un perfil `role-aligned` para INESData. Las topologías deben
 respetar estos nombres para evitar divergencias entre diagramas, despliegue y
@@ -128,7 +128,7 @@ no se despliega como servicio runtime en la baseline actual.
 Los artefactos se escriben bajo `experiments/`, que es salida generada y no debe
 versionarse.
 
-## AI Model Hub y Casos de Uso
+## AI Model Hub y casos de uso
 
 El estado actual del framework incluye automatización específica para preparar
 los casos de uso de AI Model Hub en `vm-distributed`. Esta automatización no
@@ -169,7 +169,7 @@ validation/core/collections/postman/
 La guía específica está en
 [31_postman_newman_collections.md](./31_postman_newman_collections.md).
 
-## Documentación Vigente
+## Documentación vigente
 
 Para entender el framework actual, la ruta recomendada es:
 

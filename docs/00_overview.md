@@ -1,4 +1,4 @@
-# 00. Visión General
+# 00. Visión general
 
 ## Qué hace este repositorio
 

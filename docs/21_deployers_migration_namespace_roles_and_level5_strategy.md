@@ -1,4 +1,9 @@
-# 21. Arquitectura `deployers/`, Roles y Level 5
+# 21. Arquitectura `deployers/`, roles y Level 5
+
+## Propósito
+
+Documentar la organización de `deployers/`, los roles de despliegue y la
+estrategia de `Level 5`.
 
 La arquitectura actual separa deployers especificos, artefactos compartidos e
 infraestructura Python del framework.
@@ -36,7 +41,7 @@ deployers/
 `deployers/shared/lib` se conserva como capa de compatibilidad, pero el código
 nuevo debe importar desde `deployers.infrastructure.lib`.
 
-## Roles de Namespace
+## Roles de namespace
 
 El framework no debe depender de nombres fijos. Usa roles:
 
@@ -70,7 +75,7 @@ conector registre las extensiones requeridas por los componentes configurados.
 Esto permite mantener la analogía con INESData sin asumir que todos los
 componentes usan exactamente el mismo conector.
 
-## Artefactos Generados
+## Artefactos generados
 
 Los charts fuente viven en `deployers/shared`; los values runtime y secretos se
 materializan por deployer:

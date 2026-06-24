@@ -1,24 +1,30 @@
 # 22. Entrada `main.py`
 
+## Propósito
+
+Conservar la estrategia de entrada CLI y menú como referencia histórica de la
+evolución de `main.py`.
+
 > Documento de trazabilidad histórica. Para el uso vigente consulta
 > [33 Referencia del menú](./33_menu_reference.md) y
 > [30 Estado actual](./30_framework_current_state.md). En el cierre del
-> repositorio, EDC queda documentado oficialmente sobre `vm-distributed`.
+> repositorio, EDC cuenta con evidencias en `local` y `vm-single`; la ruta
+> `vm-distributed` queda pendiente de consolidación.
 
 `main.py` es la entrada canónica del framework. Todas las operaciones de uso,
 despliegue, validación, métricas, hosts y topologías deben ejecutarse desde este
 punto.
 
-## Entrada Recomendada
+## Entrada recomendada
 
 ```bash
 python3 main.py menu
 python3 main.py inesdata deploy --topology local
 python3 main.py inesdata validate --topology local
-python3 main.py edc validate --topology vm-distributed
+python3 main.py edc validate --topology local
 ```
 
-## Por Qué `main.py`
+## Por qué `main.py`
 
 `main.py` es neutral respecto al adapter:
 
@@ -29,7 +35,7 @@ python3 main.py edc validate --topology vm-distributed
 - expone menú guiado para usuarios no técnicos;
 - mantiene una interfaz reproducible para automatización.
 
-## Menú Guiado
+## Menú guiado
 
 El menú de `main.py` conserva las acciones importantes del flujo histórico:
 
@@ -46,7 +52,7 @@ Las opciones legacy como bootstrap, doctor, recovery, cleanup, build de imagenes
 y suites UI siguen disponibles desde submenús para no romper el flujo de trabajo
 existente.
 
-## Organización Interna
+## Organización interna
 
 Las operaciones compartidas viven en:
 

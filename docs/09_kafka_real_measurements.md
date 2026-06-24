@@ -1,4 +1,4 @@
-# Medidas Reales de Kafka
+# Medidas reales de Kafka
 
 En la secuencia de evolución descrita desde [07_experiment_system.md](./07_experiment_system.md), la Fase 3 distingue dos capas complementarias:
 
@@ -49,7 +49,7 @@ topics, mensajes producidos y consumidos, latencias y throughput. El detalle de
 muestras de mensajes puede habilitarse con
 `PIONERA_KAFKA_TRANSFER_LOG_MESSAGES=true`.
 
-## Payload Completado
+## Payload completado
 
 Cuando un broker es alcanzable, el payload incluye:
 
@@ -65,7 +65,7 @@ Cuando un broker es alcanzable, el payload incluye:
 - `broker_source`
 - `bootstrap_servers`
 
-## Payload Omitido
+## Payload omitido
 
 Cuando Kafka no puede alcanzarse o arrancarse, el payload sigue existiendo e incluye:
 
@@ -74,7 +74,7 @@ Cuando Kafka no puede alcanzarse o arrancarse, el payload sigue existiendo e inc
 - `broker_source` cuando se conozca
 - `bootstrap_servers` cuando se conozcan
 
-## Resolución del Broker
+## Resolución del broker
 
 La resolución del broker sigue este orden:
 
@@ -116,7 +116,7 @@ Esa variante separa `controller` y `broker` dentro del namespace Kafka y sigue
 siendo opt-in. No sustituye automáticamente al provisionador `kubernetes`
 histórico.
 
-## Configuración del Broker
+## Configuración del broker
 
 El broker Kafka puede configurarse con:
 
@@ -244,7 +244,7 @@ El adapter `inesdata` reutiliza esos valores tanto para `main.py --kafka` como
 para `main.py menu` en `Level 6`. En EDC deben usarse solo cuando el runtime
 EDC desplegado exponga soporte Kafka equivalente.
 
-## Criterio de Éxito de Transferencia
+## Criterio de éxito de transferencia
 
 La suite funcional Kafka de `Level 6` produce un conjunto finito de mensajes por
 cada par proveedor-consumidor. El resultado solo se considera `passed` cuando el
@@ -253,7 +253,7 @@ se consumen menos mensajes de los producidos, por ejemplo `9/10`, el par queda
 como `failed`, se registra el error `KafkaTransferIncomplete` con los IDs
 faltantes y el framework realiza el reintento transitorio previsto para ese par.
 
-## Runtime del Conector
+## Runtime del conector
 
 El framework ya deja activada en el código fuente local del conector la dependencia `data-plane-kafka`, que es la pieza EDC necesaria para un escenario de transferencia Kafka real.
 
@@ -264,7 +264,7 @@ Eso significa:
 - el validador `EDC+Kafka` puede ya ejercer un flujo completo `asset -> catálogo -> negociación -> transfer Kafka-PUSH -> consumo del topic destino`
 - ese flujo se ejecuta como suite opt-in de `Level 6`, independiente del benchmark, para no mezclar latencia del broker con latencia del intercambio mediado por EDC
 
-## Broker Autoaprovisionado
+## Broker autoaprovisionado
 
 Cuando la suite `EDC+Kafka` no recibe un broker accesible y el framework lo autoaprovisiona, el broker se levanta dentro de Kubernetes con dos listeners anunciados:
 

@@ -1,10 +1,15 @@
-# 18. Portal EDC y Validación UI
+# 18. Portal EDC y validación UI
+
+## Propósito
+
+Describir el papel del portal EDC y la estrategia de validación UI asociada al
+adapter `edc`.
 
 El portal EDC se despliega como apoyo visual de cada conector EDC. Forma parte
 de `Level 4`, igual que la interfaz de conector en INESData, y no sustituye las
 validaciones Newman ni las comprobaciones API.
 
-## Ruta Publica
+## Ruta pública
 
 El dashboard EDC se publica bajo el host del conector:
 
@@ -19,7 +24,7 @@ Esta ruta evita colisiones con:
 - `/protocol`;
 - rutas internas del runtime del conector.
 
-## Configuración Runtime
+## Configuración runtime
 
 La configuración generada del dashboard queda bajo:
 
@@ -52,7 +57,7 @@ Ante un error de callback, el portal vuelve a `/edc-dashboard/` con un evento de
 error controlado. La suite Playwright detecta ese estado y falla con una causa
 visible en lugar de quedarse bloqueada.
 
-## Papel en Validación
+## Papel en validación
 
 El portal es una superficie visual para:
 

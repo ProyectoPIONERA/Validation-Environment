@@ -1,4 +1,9 @@
-# 12. Entorno Local de Validación
+# 12. Entorno local de validación
+
+## Propósito
+
+Documentar la topología local usada como baseline reproducible para desarrollo y
+validación.
 
 El entorno local concentra el dataspace en un único cluster `Minikube`. Sirve
 como baseline reproducible para desarrollo, validación API, validación UI,
@@ -17,7 +22,7 @@ componentes y experimentos.
 | Componentes | `ontology-hub`, `ai-model-hub` cuando están habilitados |
 | Validación | Newman, Playwright, validaciones de componentes, métricas |
 
-## Presupuesto de Recursos
+## Presupuesto de recursos
 
 El entorno local no debe dimensionarse solo por el consumo en reposo. `Level 6`
 mantiene desplegados servicios comunes, dataspace, conectores, componentes,
@@ -71,7 +76,7 @@ artefactos runtime bajo `deployers/<adapter>/deployments`, preservando
 `PIONERA_LOCAL_ADAPTER_SWITCH_CONFIRM` con el valor exacto que muestra el
 framework, por ejemplo `SWITCH TO EDC`.
 
-## Namespaces Locales
+## Namespaces locales
 
 | Rol | Namespace habitual |
 | --- | --- |
@@ -87,7 +92,7 @@ framework, por ejemplo `SWITCH TO EDC`.
 Los nombres reales se resuelven desde `deployers/<adapter>/deployer.config`,
 variables `PIONERA_*` y los defaults del deployer.
 
-## Servicios Comunes
+## Servicios comunes
 
 Los servicios comunes son compartidos por los adapters:
 
@@ -99,7 +104,7 @@ Los servicios comunes son compartidos por los adapters:
 Los charts fuente viven en `deployers/shared/common/`. Los ficheros runtime con
 secretos o valores generados no se versionan.
 
-## Dataspace y Conectores
+## Dataspace y conectores
 
 `Level 3` despliega el dataspace base. `Level 4` despliega los conectores del
 adapter activo:
@@ -127,7 +132,7 @@ El dashboard EDC usa:
 http://conn-<connector>-<dataspace>.dev.ds.dataspaceunit.upm/edc-dashboard/
 ```
 
-## Hosts Locales
+## Hosts locales
 
 El framework puede planificar y aplicar entradas en `/etc/hosts` o en el fichero
 indicado por `PIONERA_HOSTS_FILE`. La sincronización es idempotente: las entradas
@@ -145,7 +150,7 @@ Comando de aplicación:
 PIONERA_SYNC_HOSTS=true python3 main.py edc hosts --topology local
 ```
 
-## Hostnames, Ingress y Port-forwards
+## Hostnames, ingress y port-forwards
 
 En topología `local`, los accesos funcionales deben resolverse mediante
 hostnames locales e Ingress. Esto aplica a Keycloak, MinIO, registration
@@ -179,7 +184,7 @@ diagnosticos de desarrollo puede habilitarse explicitamente con:
 PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true
 ```
 
-## Artefactos Runtime
+## Artefactos runtime
 
 Cada deployer escribe sus artefactos generados bajo:
 
