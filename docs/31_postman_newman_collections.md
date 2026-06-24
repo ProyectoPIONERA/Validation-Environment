@@ -3,7 +3,7 @@
 Este documento describe qué colecciones mantiene el framework, cuáles ejecuta
 automáticamente `Level 6` y cuáles pueden importarse manualmente en Postman.
 
-## Colecciones Ejecutadas por el Framework
+## Colecciones ejecutadas por el framework
 
 `Level 6` ejecuta las colecciones de:
 
@@ -26,7 +26,7 @@ El framework genera un entorno temporal de Newman con las variables calculadas
 desde el adapter, el dataspace y los conectores desplegados. Las credenciales
 reales no están embebidas en las colecciones.
 
-## Colecciones Importables en Postman
+## Colecciones importables en Postman
 
 Los ficheros importables manualmente están en:
 
@@ -48,7 +48,7 @@ Newman a partir de los artefactos generados por el despliegue. No deben
 versionarse contraseñas reales, tokens, claves de API ni exports de entorno con
 credenciales.
 
-## Verificación de Importabilidad
+## Verificación de importabilidad
 
 Una comprobación mínima de sintaxis JSON puede ejecutarse con:
 
@@ -75,7 +75,7 @@ PY
 Esta verificación no ejecuta llamadas HTTP; solo comprueba que los ficheros sean
 JSON válidos y tengan forma de colección o entorno Postman.
 
-## Relación con Reportes
+## Relación con reportes
 
 Cuando `Level 6` ejecuta Newman, guarda reportes JSON por colección bajo:
 

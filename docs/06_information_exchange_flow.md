@@ -1,4 +1,4 @@
-# 06. Flujo de Intercambio de Información
+# 06. Flujo de intercambio de información
 
 ## Objetivo
 

@@ -1,4 +1,4 @@
-# Preparación de Conectores Externos
+# Preparación de conectores externos
 
 ## Objetivo
 
@@ -11,7 +11,7 @@ Para el procedimiento completo de operación, auditoría, ejecución por niveles
 alta aditiva de conectores, revisa también
 [Guía operativa de vm-distributed](./46_vm_distributed_runbook.md).
 
-## Alcance Implementado
+## Alcance implementado
 
 El framework ya permite preparar, inspeccionar y prevalidar la configuración
 local de `vm-distributed` desde el menú interactivo mediante la opción
@@ -46,7 +46,7 @@ el segundo caso, `K3S_KUBECONFIG_COMMON` opera servicios compartidos y
 dataspace, `K3S_KUBECONFIG_PROVIDER` opera los conectores provider y
 `K3S_KUBECONFIG_CONSUMER` opera los conectores consumer.
 
-## Límites Actuales
+## Límites actuales
 
 El nivel 4 separa el contexto Kubernetes por tipo de tarea: bootstrap y limpieza
 de servicios comunes se ejecutan con el kubeconfig `common`; Helm, ConfigMaps,
@@ -70,7 +70,7 @@ para trazabilidad del despliegue.
 transferencia. Si se usa `LocalStore`, debe tratarse como etiqueta visual, no
 como reemplazo del valor técnico usado por el backend.
 
-## Datos Necesarios Para un Despliegue
+## Datos necesarios para un despliegue
 
 Antes de preparar una topología `vm-distributed`, se debe recopilar:
 
@@ -116,7 +116,7 @@ valores reales de IP, hostnames internos, usuarios, rutas de kubeconfig, tokens,
 contraseñas o claves privadas deben quedar en ficheros `.config` locales
 ignorados por Git o en variables de entorno locales.
 
-## Operación Desde Windows y WSL
+## Operación desde windows y WSL
 
 Cuando `vm-distributed` se ejecuta desde WSL sobre Windows, la primera
 comprobación no es Kubernetes ni Helm. Primero se debe verificar que WSL ve la
@@ -185,7 +185,7 @@ desde WSL, el preflight HTTP directo puede fallar aunque el preflight SSH pase.
 En ese caso, valida por separado los endpoints públicos o ejecuta la parte HTTP
 desde una máquina que sí tenga ruta a la red privada.
 
-## Uso del Asistente
+## Uso del asistente
 
 Ejecuta:
 
@@ -218,7 +218,7 @@ Al finalizar, revisa el checklist impreso. Si el alcance de nivel 4 aparece como
 configurado un despliegue multi-cluster real y que el siguiente control debe ser
 la conectividad entre los clusters de conectores y los servicios comunes.
 
-## Conectores Adicionales
+## Conectores adicionales
 
 Para añadir conectores sin recrear los existentes, configura el inventario y el
 modo aditivo:
@@ -279,7 +279,7 @@ logos de proyecto, financiación y grupo en el pie, `Powered by:` como sección
 separada con el logo de INESData y `LocalStore` como etiqueta visual de la
 opción funcional cuyo valor técnico sigue siendo `InesDataStore`.
 
-## Checklist Antes de Ejecutar Niveles
+## Checklist antes de ejecutar niveles
 
 1. Ejecutar el asistente `W`.
 2. Revisar que el preflight no tenga valores faltantes.

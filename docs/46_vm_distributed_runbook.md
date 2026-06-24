@@ -1,4 +1,4 @@
-# Guía Operativa de vm-distributed
+# Guía operativa de vm-distributed
 
 ## Objetivo
 
@@ -10,7 +10,7 @@ La meta no es que la persona recuerde todos los detalles de red, SSH,
 kubeconfig, DNS, Ingress y validación. La meta es que el framework la lleve por
 un camino claro, verificable y con poca carga cognitiva.
 
-## Principios Operativos
+## Principios operativos
 
 | Principio | Regla práctica |
 | --- | --- |
@@ -44,7 +44,7 @@ Los namespaces canónicos se mantienen estables:
 | `consumer` | Conectores del grupo consumer |
 | `components` | Componentes compartidos |
 
-## Flujo Desde Cero
+## Flujo desde cero
 
 El flujo recomendado para un entorno nuevo es ejecutar los niveles en orden, con
 verificaciones entre ellos.
@@ -96,12 +96,13 @@ ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_<entorno> -p <puerto-bastion> <usuario
 ssh -o BatchMode=yes -i ~/.ssh/id_ed25519_<entorno> -J <usuario>@<bastion>:<puerto-bastion> <usuario>@<vm-common> hostname
 ```
 
-## Kubeconfig Dedicado
+## Kubeconfig dedicado
 
 Para no mezclar `local`, `vm-single` y `vm-distributed`, usa un kubeconfig
 dedicado para esta topología.
 
-Si la API de k3s solo es accesible desde la VM remota, abre un túnel SSH:
+Si la API de k3s solo es accesible desde la VM remota y la política de red lo
+permite, abre un túnel SSH:
 
 ```bash
 ssh -N -L 127.0.0.1:<puerto-local>:127.0.0.1:6443 -J <usuario>@<bastion>:<puerto-bastion> <usuario>@<vm-common>
@@ -120,7 +121,43 @@ kubectl --kubeconfig <ruta-kubeconfig-vm-distributed> get nodes
 kubectl --kubeconfig <ruta-kubeconfig-vm-distributed> get ns
 ```
 
-## Configuración con el Asistente
+## VM externa sin túneles
+
+Si las políticas de red de las organizaciones implicadas no autorizan túneles
+hacia VMs externas, el túnel SSH anterior no es una opción operativa y no debe
+documentarse como requisito para esa VM. La topología sigue siendo viable solo
+si existe otra ruta aprobada para operar o integrar el conector externo.
+
+Opciones válidas:
+
+| Opción | Uso |
+| --- | --- |
+| Acceso Kubernetes directo o por VPN aprobada | El kubeconfig apunta a un endpoint alcanzable sin túnel local. |
+| Ejecución desde un host autorizado | El framework se ejecuta en una máquina que sí puede llegar a todas las VMs. |
+| Despliegue delegado | La organización externa despliega su conector y comparte URLs públicas, credenciales de prueba y evidencias acordadas. |
+| Registry compartido | Las imágenes se publican en un registry accesible por el clúster externo; no se usa importación remota por SSH. |
+
+Para esta ruta, evita depender de:
+
+```ini
+VM_DISTRIBUTED_K3S_TUNNEL_MODE=auto
+VM_DISTRIBUTED_REMOTE_IMAGE_IMPORT=true
+```
+
+Y prefiere valores explícitos:
+
+```ini
+VM_DISTRIBUTED_REMOTE_IMAGE_IMPORT=false
+VM_PROVIDER_PUBLIC_URL=https://<url-publica-provider>
+VM_CONSUMER_PUBLIC_URL=https://<url-publica-consumer>
+```
+
+Si nadie con autorización puede ejecutar `kubectl` o `helm` contra la VM externa
+y tampoco existe un despliegue delegado, el framework no puede instalar ese
+conector por sí mismo. En ese escenario solo puede validar integración contra
+endpoints ya publicados.
+
+## Configuración con el asistente
 
 Abre el menú:
 
@@ -147,7 +184,7 @@ Usa:
 
 Si no sabes qué valor poner en un campo del asistente, escribe `?`.
 
-## Acceso Público
+## Acceso público
 
 El patrón recomendado es exponer cada VM mediante un dominio público o URL
 estable gestionada por la organización.
@@ -220,7 +257,7 @@ AI_MODEL_HUB_PUBLIC_URL=https://modelos.<dominio-componentes>
 SEMANTIC_VIRTUALIZATION_PUBLIC_URL=https://virtualizacion.<dominio-componentes>
 ```
 
-## TLS de Ingress y Truststores
+## TLS de ingress y truststores
 
 En topologías VM, el framework reconcilia TLS de Ingress para los hostnames
 públicos configurados. La reconciliación crea o actualiza el secreto TLS
@@ -248,7 +285,7 @@ La regla operativa es:
   durante DSP sobre HTTPS, se debe revisar primero la conciliación de Ingress
   TLS y el secreto `common-tls-cacerts`.
 
-## Acceso SSH e Idempotencia
+## Acceso SSH e idempotencia
 
 La topología distribuida debe usar una llave dedicada del entorno de validación,
 no una llave personal reutilizada. La clave privada permanece en el host que
@@ -360,7 +397,7 @@ VM_COMMON_REMOTE_WORKDIR=<ruta-remota-del-framework>
 En ese modo, la VM común actúa como host de ejecución y debe poder llegar por
 SSH a las VMs donde viven los conectores.
 
-## Ejecución de Niveles
+## Ejecución de niveles
 
 | Nivel | Qué valida o despliega | Punto de control |
 | --- | --- | --- |
@@ -379,7 +416,7 @@ LEVEL4_CONNECTOR_RECONCILIATION_MODE=full
 
 Para añadir conectores a un dataspace vivo, usa reconciliación aditiva.
 
-## Añadir Conectores a un Dataspace Existente
+## Añadir conectores a un dataspace existente
 
 Este es el flujo recomendado para cumplir el caso pedido por el supervisor:
 añadir conectores a espacios de datos que ya tienen conectores desplegados.
@@ -424,7 +461,7 @@ faltan.
 Para generar evidencia de instalación limpia, vuelve a usar `full` en un entorno
 controlado o en una reconstrucción completa.
 
-## Componentes y Desarrollo
+## Componentes y desarrollo
 
 `Level 5` despliega componentes compartidos. En `vm-distributed`, las imágenes
 de componentes deben llegar al runtime Kubernetes remoto. Hay dos estrategias
@@ -467,7 +504,7 @@ Para desarrollar componentes, el contrato deseado es:
 - pruebas de Level 6 registradas bajo `validation/components/`;
 - evidencias generadas bajo `experiments/`.
 
-## Experimentos con Cargas Grandes
+## Experimentos con cargas grandes
 
 Para experimentos con datasets o modelos grandes, se debe registrar antes:
 
@@ -486,7 +523,7 @@ docker system df
 kubectl --kubeconfig <kubeconfig> get pvc -A
 ```
 
-## Evidencia para Auditoría
+## Evidencia para auditoría
 
 Para una ejecución auditable, conserva:
 
@@ -504,14 +541,14 @@ Para una ejecución auditable, conserva:
 No guardar contraseñas, tokens, claves privadas, cookies ni kubeconfigs reales en
 documentación versionada.
 
-## Automatización Prioritaria
+## Automatización prioritaria
 
 Para reducir carga cognitiva, las siguientes mejoras deberían priorizarse:
 
 | Mejora | Beneficio |
 | --- | --- |
 | Generador guiado de llave SSH dedicada | Evita reutilizar llaves personales y reduce errores de permisos |
-| Gestor de túneles SSH para kubeconfig | Evita abrir terminales manuales para la API de k3s |
+| Gestor de túneles SSH para kubeconfig | Evita abrir terminales manuales para la API de k3s cuando la política de red permite túneles |
 | Asistente de kubeconfig dedicado | Separa `local`, `vm-single` y `vm-distributed` |
 | Preflight de disco y PVCs | Detecta falta de capacidad antes de Level 5 y Level 6 |
 | Flujo “añadir conector” | Cambia config, previsualiza y ejecuta Level 4 aditivo de forma guiada |
@@ -519,17 +556,19 @@ Para reducir carga cognitiva, las siguientes mejoras deberían priorizarse:
 | Validador de rutas públicas | Prueba Keycloak, MinIO, conectores y componentes desde la estación operadora |
 | Plantilla de componente | Facilita añadir charts, imágenes, configuración y pruebas |
 
-## Checklist Corta
+## Checklist corta
 
 Antes de desplegar:
 
 ```text
 [ ] WSL o estación operadora ve la VPN/red requerida
-[ ] SSH por bastión funciona con BatchMode=yes
-[ ] kubeconfig dedicado responde a kubectl get nodes
+[ ] SSH por bastión funciona con BatchMode=yes cuando esa ruta está permitida
+[ ] kubeconfig dedicado responde a kubectl get nodes o existe despliegue delegado para la VM externa
 [ ] W -> 2 no muestra valores faltantes
 [ ] W -> 3 muestra hosts y namespaces esperados
 [ ] W -> 4 pasa o documenta claramente qué comprobación HTTP no aplica
+[ ] Las VMs externas no dependen de túneles si la política de red no los autoriza
+[ ] La estrategia de imágenes está definida: registry accesible o importación remota permitida
 [ ] Hay capacidad de disco suficiente para componentes, datasets y modelos
 [ ] Level 4 usa full para instalación nueva o additive para añadir conectores
 [ ] Las URLs públicas esperadas están definidas en la topología

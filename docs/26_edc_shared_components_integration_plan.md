@@ -1,9 +1,14 @@
-# 26. Componentes Compartidos en EDC
+# 26. Componentes compartidos en EDC
+
+## Propósito
+
+Explicar cómo se integran los componentes compartidos cuando el adapter activo
+es `edc`.
 
 Los charts de componentes viven en `deployers/shared/components` para que no
 pertenezcan exclusivamente a INESData.
 
-## Estado Actual
+## Estado actual
 
 | Adapter | Level 5 componentes | Validación de componentes |
 | --- | --- | --- |
@@ -16,7 +21,7 @@ tenga registradas las extensiones que requiere cada componente configurado.
 Si falta alguna extensión, `Level 5` falla temprano con un mensaje explícito
 para evitar validaciones con un conector incompleto.
 
-## Componentes Compartidos Disponibles
+## Componentes compartidos disponibles
 
 ```text
 deployers/shared/components/ontology-hub/
@@ -31,7 +36,7 @@ valores generados deben escribirse por deployer:
 deployers/<adapter>/deployments/<ENV>/<dataspace>/components/<component>/
 ```
 
-## Extensiones Requeridas en EDC
+## Extensiones requeridas en EDC
 
 Cada componente puede requerir cambios propios en el conector mediante
 extensiones. La activación de `Level 5` para EDC considera esas dependencias:
@@ -47,7 +52,7 @@ el runtime empaquetado por defecto en `adapters/edc/scripts/build_image.sh`. Si
 se actualiza el conector, ese registro de extensiones debe mantenerse
 sincronizado antes de ejecutar `Level 4` y `Level 5`.
 
-## Condiciones Operativas
+## Condiciones operativas
 
 Para desplegar componentes en EDC, el framework debe asegurar:
 
@@ -67,7 +72,7 @@ se integran y validan como servicios independientes.
 Los componentes deben exponerse mediante URLs propias y validarse con suites
 separadas.
 
-## Límite Actual
+## Límite actual
 
 `Level 5` de EDC depende de que el conector usado por `Level 4` incluya las
 extensiones esperadas. Si el árbol local del conector no contiene esas

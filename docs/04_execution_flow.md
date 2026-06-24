@@ -1,4 +1,9 @@
-# 04. Flujo de Ejecución
+# 04. Flujo de ejecución
+
+## Propósito
+
+Resumir el recorrido normal de ejecución desde el menú y la relación entre los
+niveles del framework.
 
 ## Flujo general desde `main.py menu`
 

@@ -1,6 +1,11 @@
-# Deployers y Topologías
+# Deployers y topologías
 
-## Topologías Soportadas
+## Propósito
+
+Describir las topologías soportadas, sus deployers y las reglas operativas para
+no mezclar configuraciones.
+
+## Topologías soportadas
 
 El framework usa estos nombres canónicos:
 
@@ -18,7 +23,7 @@ vm1    una máquina virtual
 vm3    tres máquinas virtuales
 ```
 
-## Comportamiento Actual
+## Comportamiento actual
 
 `local` es la topología por defecto para desarrollo y validación en la máquina
 operadora.
@@ -37,20 +42,20 @@ Las tres topologías deben compartir namespaces funcionales, contratos de
 adapter y resolución de URLs por topología. Esta regla evita contaminar una
 topología con dominios, credenciales o artefactos generados por otra.
 
-## Alcance de Cierre por Adapter y Topología
+## Alcance de cierre por adapter y topología
 
 La matriz siguiente separa soporte implementado de evidencia oficial de cierre:
 
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
-| `inesdata` | Implementado y usado como ruta local de desarrollo/validación | Implementado y validado como entorno VM de referencia | Implementado y validado como entorno distribuido de referencia |
-| `edc` | Implementado; validado antes de la conciliación reciente de topologías y pendiente de revalidación para evidencia actual | Implementado; pendiente de validación oficial tras la conciliación reciente | Implementado y probado oficialmente como ruta de cierre |
+| `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
 
-Para evidencias auditables de `edc`, usa `vm-distributed`. Las demás rutas de
-EDC se conservan como capacidades del framework y deben revalidarse antes de
-presentarse como resultado de cierre.
+El soporte implementado no equivale automáticamente a evidencia de cierre. Un
+escenario solo debe citarse como validado cuando existe un experimento asociado
+con reporte, métricas, logs y artefactos reproducibles.
 
-## Convención de Nombres
+## Convención de nombres
 
 Para variables de entorno exportadas por el usuario, la convención pública del
 framework es `PIONERA_*`.
@@ -70,7 +75,7 @@ En cambio, `deployer.config` conserva claves internas sin prefijo, por ejemplo
 exportar esas variables legacy: el loader convierte automáticamente los
 overrides `PIONERA_*` a las claves internas de configuración.
 
-### Nombres Públicos y Recursos SQL
+### Nombres públicos y recursos SQL
 
 Los nombres públicos de dataspace, namespaces, hostnames y realms de Keycloak
 deben mantenerse en minúsculas. El framework acepta guiones cuando el recurso lo
@@ -91,7 +96,7 @@ pionera_edc_wpusr
 Estos nombres SQL deben derivarse de `DS_1_NAME`. No deben editarse
 manualmente en los artefactos generados de despliegue.
 
-## Capas de Configuración
+## Capas de configuración
 
 La configuración compartida de infraestructura se resuelve ahora por capas:
 
@@ -109,6 +114,9 @@ Regla práctica:
 - `deployers/infrastructure/topologies/*.config` debe contener solo overrides
   dependientes de la topología activa
 - las variables `PIONERA_*` siguen teniendo prioridad máxima
+- los perfiles `.profiles/*.env` son entradas locales que se aplican sobre los
+  `.config`; no son la configuración efectiva hasta que el asistente o batch los
+  escriben en las capas anteriores
 
 El bootstrap crea automáticamente los `.config` locales desde sus
 `.config.example` cuando aún no existen y no sobrescribe ficheros locales ya
@@ -125,7 +133,11 @@ Los `deployer.config` de los adapters (`inesdata`, `edc`) siguen siendo
 independientes de esta capa y conservan la identidad del dataspace, conectores,
 componentes y flags propias de cada adapter.
 
-## Namespaces Canónicos
+Para revisar de forma compacta qué fichero debe modificarse y qué valor efectivo
+se usará, consulta [Mapa de configuración y despliegue](./49_configuration_map.md)
+y usa `W -> C` en el asistente de `vm-distributed`.
+
+## Namespaces canónicos
 
 El estado actual del framework usa el perfil `role-aligned` para INESData. Todas las
 topologías deben resolver los mismos roles de namespace:
@@ -222,7 +234,7 @@ La topología distribuida debe cambiar placement, direcciones y routing, pero no
 debe cambiar estos nombres funcionales salvo que se introduzca una migración
 explícita y compatible en el resolvedor común de namespaces.
 
-## TLS en Topologías VM
+## TLS en topologías VM
 
 En `vm-single` y `vm-distributed`, el framework activa por defecto una
 reconciliación de TLS de Ingress para los hostnames públicos del entorno. La
@@ -235,7 +247,7 @@ en rutas internas o públicas rompa las llamadas DSP entre conectores. Si se
 desactiva la reconciliación, el operador debe garantizar manualmente que los
 certificados del Ingress y los truststores de los conectores son coherentes.
 
-## Arranque en Frío y Readiness
+## Arranque en frío y readiness
 
 En una instalación limpia o después de reiniciar el entorno, algunos servicios
 requieren más tiempo para estar operativos aunque sus recursos de Kubernetes ya
@@ -282,7 +294,7 @@ deployers/infrastructure/topologies/local.config
 
 Si esas claves están vacías, el framework mantiene el modo loopback canónico.
 
-### Dimensionamiento Local
+### Dimensionamiento local
 
 Para una máquina local con Docker Desktop y una pila completa de validación,
 declara también los recursos de Minikube en el overlay local:
@@ -384,7 +396,7 @@ reinicios de pods o eventos `NodeNotReady`.
 
 El diagrama local de referencia está disponible en [Inicio rápido](./32_getting_started.md#vista-local).
 
-## VM Single
+## VM single
 
 `vm-single` representa una máquina virtual respaldada por Kubernetes. Para que
 el quickstart sea reproducible, `Level 1` prepara por defecto el clúster
@@ -394,7 +406,7 @@ checks de acceso, ingress, storage y permisos.
 Estado actual del framework:
 
 - `inesdata`: `Level 1` a `Level 6` operativos, con `Level 5` compartido para componentes configurados
-- `edc`: ruta implementada, pendiente de validación oficial tras la conciliación reciente de topologías
+- `edc`: ruta implementada; evidencia de cierre disponible en `local` y `vm-single`; `vm-distributed` pendiente de consolidación
 
 La topología necesita una dirección externa, suministrada mediante una de estas variables:
 
@@ -441,7 +453,7 @@ Las claves persistidas de `vm-single` deben vivir en:
 deployers/infrastructure/topologies/vm-single.config
 ```
 
-## VM Distributed
+## VM distributed
 
 `vm-distributed` representa una topología distribuida de validación. El modelo
 de configuración actual permite preparar tanto un único cluster Kubernetes lógico
@@ -555,7 +567,16 @@ Para despliegues con conectores externos o infraestructura distribuida, revisa
 [Preparación de conectores externos](./45_external_connector_readiness.md)
 antes de ejecutar niveles de despliegue.
 
-### Alineamiento Operativo
+Si una VM externa no admite túneles desde la red de operación, el despliegue no
+debe depender de kubeconfigs basados en port-forwarding SSH ni de importación
+remota de imágenes por SSH. En ese caso, usa un endpoint Kubernetes alcanzable
+por una ruta aprobada, ejecuta el framework desde un host autorizado, publica
+imágenes en un registry accesible o delega el despliegue del conector a la
+organización externa. El framework puede validar integración contra endpoints
+públicos ya desplegados, pero no puede instalar recursos en una VM a la que
+ningún operador autorizado pueda llegar.
+
+### Alineamiento operativo
 
 Para operar `vm-distributed`, la configuración debe conservar el contrato común
 del framework:
@@ -586,7 +607,7 @@ Checklist mínimo antes de declarar válida una ejecución distribuida:
 8. `Level 6` ejecuta Newman, Kafka, Playwright y validaciones de componentes sin
    rutas especiales hardcodeadas para `vm-distributed`.
 
-## Interpretación del Diagrama VM3
+## Interpretación del diagrama VM3
 
 El diagrama `vm3` debe leerse como una vista conceptual.
 

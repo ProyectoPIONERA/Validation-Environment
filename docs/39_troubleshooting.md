@@ -1,6 +1,11 @@
 # Troubleshooting
 
-## Windows Llega al Bastion Pero WSL No
+## Propósito
+
+Reunir diagnósticos y soluciones para incidencias frecuentes de despliegue,
+routing, autenticación, validación y ejecución de pruebas.
+
+## Windows llega al bastion pero WSL no
 
 En topología `vm-distributed`, una terminal WSL puede no heredar correctamente
 la conectividad de Windows hacia la VPN, red corporativa o red de laboratorio.
@@ -42,7 +47,7 @@ Al abrir de nuevo WSL, repite `getent` y `nc` antes de probar SSH. Para
 personales ni llaves privadas compartidas. La guía completa está en
 [Preparación de conectores externos](./45_external_connector_readiness.md#operación-desde-windows-y-wsl).
 
-## Las Entradas de Hosts No Resuelven
+## Las entradas de hosts no resuelven
 
 Previsualiza las entradas esperadas:
 
@@ -60,7 +65,7 @@ python3 main.py edc hosts --topology local
 
 Si una entrada ya existe, el gestor de hosts la omite en lugar de duplicarla.
 
-## Los Servicios Minikube No Son Accesibles
+## Los servicios Minikube no son accesibles
 
 En despliegues locales, mantén esto abierto en otra terminal:
 
@@ -81,7 +86,7 @@ usa hostnames públicos por defecto. Un `port-forward` puntual puede servir para
 diagnóstico, pero no sustituye la necesidad de que Ingress, `hosts` y
 `minikube tunnel` estén realmente operativos.
 
-## Level 2 Muestra `failed post-install`
+## Level 2 muestra `failed post-install`
 
 En instalaciones locales limpias, Helm puede dejar `common-srvs` en estado
 `failed` si un hook tarda más que el timeout inicial, aunque los pods terminen
@@ -93,7 +98,7 @@ Helm con más margen para reconciliar el release a `deployed`. Si el release
 sigue fallando después de ese segundo intento, entonces el nivel falla porque el
 estado de Helm ya no es confiable para continuar con `Level 3`.
 
-## Los Conectores Solo Funcionan con Port-forward
+## Los conectores solo funcionan con port-forward
 
 En local, el resultado correcto es que los conectores sean accesibles por su
 hostname público de Ingress, por ejemplo:
@@ -126,7 +131,7 @@ no ocultar problemas reales de routing. Úsalo solo como diagnóstico temporal:
 PIONERA_ALLOW_CONNECTOR_PORT_FORWARD_FALLBACK=true
 ```
 
-## Falla la Autenticación Admin de Keycloak
+## Falla la autenticación admin de Keycloak
 
 Comprueba que:
 
@@ -136,7 +141,7 @@ Comprueba que:
 - el fichero `hosts` contiene las entradas de Keycloak;
 - el túnel local o ingress está disponible.
 
-## Level 3 Falla con PostgreSQL `password authentication failed`
+## Level 3 falla con PostgreSQL `password authentication failed`
 
 Si `Level 3` intenta ejecutar `psql` con una contraseña placeholder como
 `CHANGE_ME`, el fichero local `deployers/infrastructure/deployer.config` no está
@@ -155,7 +160,7 @@ lo recrea sobre `127.0.0.1:5432 -> common-srvs-postgresql:5432`. Si el ocupante
 es externo, el nivel falla con un diagnóstico para que el usuario libere el
 puerto manualmente.
 
-## Level 3 Falla con `Timeout waiting for dataspace pods`
+## Level 3 falla con `Timeout waiting for dataspace pods`
 
 Si el log muestra que `registration-service` está `Running`, pero el nivel falla
 porque existen conectores antiguos en `Init`, `CrashLoopBackOff` u otro estado
@@ -169,7 +174,7 @@ inestable, el problema no es el dataspace base. Esos conectores pertenecen a
 Después de un `Level 3` correcto, ejecuta `Level 4` para desplegar o actualizar
 los conectores del adapter activo.
 
-## Vault Indica Token Obsoleto
+## Vault indica token obsoleto
 
 Si nivel 2 o nivel 4 informa que el token de Vault no es válido para el Vault en
 ejecución, significa que el estado persistente de Vault y el artefacto local
@@ -208,7 +213,7 @@ despliegue. Si vuelve a pasar, revisa si se ejecutó el mismo cluster desde dos
 copias distintas del framework, si se conservaron PVCs antiguos o si se copió
 `init-keys-vault.json` desde otro entorno.
 
-## Level 4 Falla con Keycloak 415
+## Level 4 falla con Keycloak 415
 
 Si `Level 4` falla al crear conectores con un error `415` de Keycloak durante
 el mapeo de roles del service account, revisa que estás usando una versión del
@@ -224,7 +229,7 @@ Client certificate for <connector> synchronized
 La corrección forma parte del bootstrap de INESData y permite recrear conectores
 con certificados, scopes y roles de service account de forma reproducible.
 
-## Kafka Transfer Queda Omitido por Imagen INESData Antigua
+## Kafka transfer queda omitido por imagen INESData antigua
 
 Si `Level 6` muestra `SKIP Kafka transfer` con razón
 `kafka_dataaddress_not_supported`, Kafka no necesariamente ha fallado. Ese
@@ -253,7 +258,7 @@ Kafka se va a ejecutar en un cierre distribuido, configura
 publicada que incluya soporte `data-plane-kafka`, o activa explícitamente la
 importación remota de imágenes durante una sesión de desarrollo.
 
-## Level 4 Falla Preparando Imágenes INESData
+## Level 4 falla preparando imágenes INESData
 
 En topología `local`, `Level 4` recompila `inesdata-connector` e
 `inesdata-connector-interface` antes de crear los conectores. Si el log falla
@@ -274,7 +279,7 @@ puede sobreescribirse con:
 GRADLE_MAX_WORKERS=2 python3 main.py menu
 ```
 
-## EDC Rechaza la Imagen por Defecto
+## EDC rechaza la imagen por defecto
 
 En topología `local`, Level 4 prepara automáticamente la imagen local del
 conector EDC cuando no hay overrides explícitos. Para ello usa:
@@ -289,14 +294,14 @@ define overrides explícitos:
 ```bash
 PIONERA_EDC_CONNECTOR_IMAGE_NAME=validation-environment/edc-connector \
 PIONERA_EDC_CONNECTOR_IMAGE_TAG=<tag> \
-python3 main.py edc deploy --topology vm-distributed
+python3 main.py edc deploy --topology vm-single
 ```
 
 Esta protección evita desplegar una imagen por defecto no verificada. Si la
 preparación automática falla, revisa que Docker, Minikube y el repositorio bajo
 `adapters/edc/sources/connector` estén disponibles.
 
-## EDC Level 4 Falla con Credenciales Docker en WSL
+## EDC Level 4 falla con credenciales Docker en WSL
 
 En WSL con Docker Desktop, `~/.docker/config.json` puede contener
 `credsStore=desktop` o `credsStore=desktop.exe`. Si esa configuración no es
@@ -314,7 +319,7 @@ la configuración Docker de WSL antes de construir imágenes locales EDC y elimi
 automáticamente esos `credsStore` problemáticos, conservando el resto del
 fichero. Después, vuelve a ejecutar `Level 4` desde el mismo menú.
 
-## Playwright EDC Recibe 503 de NGINX
+## Playwright EDC recibe 503 de NGINX
 
 Si todas las pruebas UI de EDC fallan con un error de login y la captura muestra:
 
@@ -345,7 +350,7 @@ Level 6 comprueba la disponibilidad de esos endpoints antes de lanzar
 Playwright. Si no están listos, guarda el diagnóstico en
 `experiments/<experiment>/ui/edc/dashboard_readiness.json`.
 
-## Playwright INESData Falla Antes de Abrir el Portal
+## Playwright INESData falla antes de abrir el portal
 
 Si `Level 6` falla antes de lanzar Playwright para `inesdata`, o si el mensaje
 indica que el portal no está listo, el problema suele estar en la ruta pública
@@ -371,7 +376,7 @@ de lanzar Playwright. Si falla, guarda el diagnóstico en:
 experiments/<experiment>/ui/inesdata/portal_readiness.json
 ```
 
-## Una Topología VM Requiere Dirección
+## Una topología VM requiere dirección
 
 `vm-single` necesita una dirección de VM:
 
@@ -382,7 +387,7 @@ python3 main.py inesdata hosts --topology vm-single --dry-run
 
 Si no hay dirección configurada, el CLI falla con un error claro de topología.
 
-## Playwright Falla de Forma Intermitente
+## Playwright falla de forma intermitente
 
 Comprueba:
 
@@ -392,7 +397,7 @@ Comprueba:
 - que el modo de autenticación coincide con la suite esperada;
 - que el reporte en `experiments/` contiene screenshots, trazas o detalles de error.
 
-## Level 6 Completo Falla por Endpoints Públicos Inaccesibles
+## Level 6 completo falla por endpoints públicos inaccesibles
 
 Si `Level 6` falla antes de Newman, Playwright o Kafka con un mensaje sobre
 hostnames públicos inaccesibles, el framework está detectando correctamente que
@@ -419,7 +424,7 @@ En esta situación, no conviene intentar “forzar” un `Level 6` completo medi
 normal para validación completa en `local`, de forma coherente con un entorno
 más parecido a producción.
 
-## Kafka Autoaprovisionado No Queda Listo a Tiempo
+## Kafka autoaprovisionado no queda listo a tiempo
 
 Si `Level 6` falla en la parte Kafka con mensajes sobre `port-forward`,
 `bootstrap server` o `framework-kafka`, el problema suele venir de la
@@ -462,7 +467,7 @@ Ese fallback está pensado para la fase Kafka de `Level 6` en `local`. No debe
 interpretarse como sustituto del acceso público requerido por la validación
 completa del nivel.
 
-## Playwright INESData y Transferencias en STARTED
+## Playwright INESData y transferencias en STARTED
 
 Si el test E2E de transferencia crea el asset, completa la negociación e inicia
 la transferencia, `STARTED` es un estado aceptado para la validación UI de
@@ -483,7 +488,7 @@ No conviene resolver este caso sustituyendo el hostname por `port-forward`,
 porque eso puede validar una ruta distinta a la que usaría el entorno local
 publicado por Ingress.
 
-## Transferencia Falla con Assets Subidos en Folder
+## Transferencia falla con assets subidos en folder
 
 Si un asset creado desde la UI aparece en catálogo pero la transferencia no
 encuentra el objeto en MinIO/S3, comprueba si fue subido con un valor en el
@@ -500,7 +505,7 @@ El flujo E2E `adapters/inesdata/specs/05-e2e-transfer-flow.spec.ts` cubre este c
 asset con folder, lo publica, lo descubre desde el consumidor y ejecuta
 negociación y transferencia.
 
-## EDC+Kafka Queda en STARTED o No Consume Mensajes
+## EDC+Kafka queda en STARTED o no consume mensajes
 
 Cuando Kafka se activa con `PIONERA_LEVEL6_RUN_KAFKA=true`, `Level 6` ejecuta
 la validación funcional EDC+Kafka después de Newman si el adapter tiene soporte
@@ -561,7 +566,7 @@ alcanzable desde todas las VMs de conectores, por ejemplo un `NodePort` expuesto
 por la VM de servicios comunes o un endpoint equivalente acordado para ese
 entorno.
 
-## Se Acumulan Datos de Validación
+## Se acumulan datos de validación
 
 Habilita o ejecuta limpieza previa cuando las pruebas repetidas creen demasiados datos.
 

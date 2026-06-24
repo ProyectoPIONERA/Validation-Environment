@@ -1,9 +1,14 @@
-# 23. Contrato Comun de Deployer
+# 23. Contrato común de deployer
+
+## Propósito
+
+Describir el contrato compartido que permite orquestar distintos deployers desde
+la misma entrada del framework.
 
 Los deployers implementan un contrato comun para que `main.py` pueda orquestar
 adapters sin conocer detalles internos de cada runtime.
 
-## Clases Compartidas
+## Clases compartidas
 
 | Clase | Ruta | Uso |
 | --- | --- | --- |
@@ -13,7 +18,7 @@ adapters sin conocer detalles internos de cada runtime.
 | `ValidationProfile` | `deployers/infrastructure/lib/contracts.py` | configuración de validación |
 | `DeployerOrchestrator` | `deployers/infrastructure/lib/orchestrator.py` | ejecución comun |
 
-## Metodos del Deployer
+## Métodos del deployer
 
 | Metodo | Uso |
 | --- | --- |

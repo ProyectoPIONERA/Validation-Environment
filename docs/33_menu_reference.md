@@ -1,4 +1,8 @@
-# Referencia del Menú
+# Referencia del menú
+
+## Propósito
+
+Explicar las opciones del menú interactivo y cuándo conviene usar cada una.
 
 El menú guiado se abre con:
 
@@ -25,13 +29,13 @@ después en `[Operations]`. Esa entrada sirve para validar targets externos sin
 elegir una topología PIONERA. La topología por defecto aparece marcada como
 `current`; `Back` solo aparece en submenús a los que ya has entrado.
 
-## Full Deployment
+## Full deployment
 
 `0 - Run All Levels (1-6) sequentially`
 
 Usa esta opción para un despliegue completo desde cero o para reconstruir todo el entorno en orden. Ejecuta preparación de cluster, servicios comunes, dataspace, conectores, componentes y validación.
 
-## Individual Levels
+## Individual levels
 
 `1 - Level 1: Setup Cluster`
 
@@ -78,9 +82,13 @@ Ejecuta la validación integral del adapter activo. Según el perfil de validaci
 incluye limpieza previa, Newman, checks de almacenamiento, Playwright,
 componentes y métricas.
 
-Para evidencias de cierre, usa `vm-distributed` con el adapter `edc`. Las rutas
-`local` y `vm-single` de EDC están implementadas, pero deben revalidarse antes
-de presentarse como evidencia oficial actualizada.
+Para evidencias de cierre, consulta la matriz vigente de adapter y topología.
+En el estado documentado para A5.2, INESData cuenta con evidencia en `local`,
+`vm-single` y `vm-distributed`; EDC cuenta con evidencia en `local`,
+`vm-single` y `vm-distributed`. Las evidencias `vm-distributed` se conservan en
+ramas específicas por adapter.
+La existencia de una opción en el menú no basta por sí sola como evidencia:
+debe existir un experimento con reporte, métricas, logs y artefactos asociados.
 
 En topología `local`, esta opción espera que los hostnames publicados por
 Ingress estén accesibles. Mantén `minikube tunnel` abierto y responde la
@@ -112,6 +120,15 @@ Permite cambiar la topología activa para la sesión actual del menú. No escrib
 ningún valor en `deployer.config`: solo cambia el contexto interactivo entre
 `local`, `vm-single` y `vm-distributed` hasta que salgas del menú.
 
+`K - Select cluster runtime`
+
+Permite revisar o fijar el runtime de cluster asociado a la topología activa.
+En el estado actual del framework, la selección interactiva solo es configurable
+para `vm-single`; el submenú muestra `k3s` como runtime disponible y puede
+guardar la elección en `deployers/infrastructure/topologies/vm-single.config`.
+En `local` y `vm-distributed`, la opción informa el runtime activo y vuelve al
+menú sin modificar la configuración.
+
 `W - vm-distributed assistant`
 
 Si la topología activa todavía no es `vm-distributed`, conserva el atajo
@@ -135,6 +152,29 @@ sembrado, ejecuta el registro de datasets de benchmark (`Step 9`) y registra
 modelos FLARES/Mobility (`Step 10`). El flujo es adapter-aware: en `inesdata`
 usa las APIs propias del adapter, y en `edc` crea assets `HttpData`, políticas,
 contratos y negociaciones DSP entre los pares configurados.
+
+El submenú del asistente contiene estas acciones:
+
+- `P - Select local configuration profile`: selecciona un perfil local bajo
+  `.profiles/`.
+- `1 - Configure/update local vm-distributed .config files`: crea o actualiza
+  los `.config` locales ignorados por Git.
+- `2 - Show configured topology and static preflight`: muestra la topología
+  configurada y validaciones estáticas.
+- `3 - Preview deployment and hosts plan`: previsualiza despliegue y entradas
+  `hosts`.
+- `4 - Run non-destructive SSH/HTTP preflight`: ejecuta comprobaciones remotas
+  no destructivas.
+- `5 - Show manual check commands`: imprime comandos de comprobación manual.
+- `6 - Guided SSH access setup`: guía la preparación de acceso SSH.
+- `7 - Local SSH key self-test`: prueba la clave SSH local sin desplegar.
+- `8 - Prepare local k3s kubeconfigs`: prepara kubeconfigs locales para roles
+  distribuidos.
+- `9 - Show runtime artifact paths`: muestra rutas de artefactos de runtime.
+- `10 - AI Model Hub use-case demo preparation`: prepara y, si se confirma,
+  ejecuta el flujo de casos de uso de AI Model Hub.
+- `C - Show effective configuration values and sources`: muestra valores
+  efectivos y su origen.
 
 `P - Preview deployment plan`
 
@@ -184,6 +224,15 @@ En topología `vm-single`, la salida añade una sección `Local Browser Access`
 con los valores detectados automáticamente desde la VM: IP candidata de la VM,
 IP de Minikube, usuario SSH, comando de túnel SSH, entradas para el fichero
 `hosts` de la máquina local y URLs que puedes abrir en tu navegador local.
+
+`J - Add connector to existing dataspace`
+
+Añade un conector a un dataspace ya existente sin recrear los conectores sanos.
+El flujo pregunta el nombre corto del nuevo conector, su grupo de colocación
+(`provider`, `consumer`, `dataspace` o un valor personalizado) y, si procede,
+un par de validación que incluya el nuevo conector. Después muestra el plan,
+actualiza el inventario del adapter y ofrece ejecutar `Level 4` en modo
+aditivo.
 
 `G - Validate target`
 
@@ -330,6 +379,18 @@ desde INESData:
   `DS-UI-AMH-BROWSER-01`, `DS-UI-AMH-EXEC-01` y `DS-UI-AMH-BENCH-01`.
 - `Semantic Virtualization Integration with INESData`: ejecuta `DS-UI-SV-01`.
 
+`N - EDC UI Tests (Normal/Live/Debug)`
+
+Ejecuta validaciones UI del dashboard EDC de forma independiente del nivel 6
+completo. El submenú permite lanzar:
+
+- `Core`.
+- `Ontology Hub Integration with EDC`.
+- `AI Model Hub Integration with EDC`.
+- `Semantic Virtualization Integration with EDC`.
+- `AI Model Observer / Clearing House`.
+- `Full EDC UI suite`.
+
 `O - Ontology Hub UI Tests (Normal/Live/Debug)`
 
 Ejecuta validaciones UI propias de Ontology Hub, es decir, sobre la aplicación
@@ -373,6 +434,14 @@ nivel 6:
 
 Estas opciones reutilizan la misma lógica de validación que usa el nivel 6, pero
 permiten repetir solo la parte de interoperabilidad que interese revisar.
+
+`Y - Run Test by ID (Playwright/API)`
+
+Ejecuta un único caso automatizado a partir de su identificador de auditoría o
+de prueba. El framework resuelve si el identificador corresponde a una prueba UI
+Playwright o a una validación API de componente. Si un mismo identificador tiene
+ruta UI y API, el submenú pregunta si se quiere ejecutar una, la otra o ambas.
+Es útil para revalidar una corrección concreta sin repetir todo el nivel 6.
 
 ## Control
 

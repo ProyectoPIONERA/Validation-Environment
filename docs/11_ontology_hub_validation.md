@@ -5,7 +5,7 @@ validación. La referencia operativa detallada vive junto al código del
 componente, pero este documento centraliza las rutas, el despliegue, las suites
 y la trazabilidad PT5.
 
-## Rutas Principales
+## Rutas principales
 
 | Elemento | Ruta |
 | --- | --- |
@@ -35,7 +35,7 @@ El chart puede inyectar `hostAliases` para que el hostname público del
 componente sea resoluble también desde dentro del pod. Esto evita fallos de
 autoacceso del backend en operaciones como análisis de versiones.
 
-## Puntos de Entrada
+## Puntos de entrada
 
 | URL | Uso |
 | --- | --- |
@@ -54,7 +54,7 @@ La suite `integration/` aparece en consola y reportes como `Ontology Hub API
 integration`. Conserva pruebas técnicas y casos PT5 normalizados para comprobar
 endpoints, estado interno y compatibilidad técnica del componente.
 
-## Estado Funcional Reproducido
+## Estado funcional reproducido
 
 La ejecución local validada el `2026-04-29` reproduce `21` casos funcionales
 correctos y `6` fallos de `Ontology Hub`. Estos fallos no se tratan como
@@ -225,7 +225,7 @@ sin duplicar pasos automatizados.
 | `PT5-OH-15` | sí, cobertura compuesta UI+API |
 | `PT5-OH-16` | cubierta como integración INESData, no como funcional directa |
 
-## Integración Semántica con INESData
+## Integración semántica con INESData
 
 El framework integra la extensión semántica del conector INESData de forma
 selectiva:

@@ -1,4 +1,9 @@
-# 01. Arquitectura del Framework
+# 01. Arquitectura del framework
+
+## Propósito
+
+Explicar cómo se organiza internamente el framework y qué responsabilidades
+tienen sus capas principales.
 
 ## Vista simple
 

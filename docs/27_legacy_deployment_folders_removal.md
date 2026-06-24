@@ -1,9 +1,14 @@
-# 27. Carpetas Legacy de Despliegue
+# 27. Carpetas legacy de despliegue
+
+## Propósito
+
+Aclarar qué carpetas de despliegue son legado y cuál es la ubicación canónica
+actual.
 
 La arquitectura nueva usa `deployers/` como ubicacion canonica de artefactos de
 despliegue. Las carpetas raiz legacy dejaron de ser fuente activa del framework.
 
-## Carpetas Legacy
+## Carpetas legacy
 
 ```text
 inesdata-deployment/
@@ -13,7 +18,7 @@ edc-deployment/
 Estas carpetas no deben ser requeridas por `main.py` ni por los deployers
 actuales.
 
-## Ubicacion Actual
+## Ubicación actual
 
 | Tipo de artefacto | Ruta actual |
 | --- | --- |

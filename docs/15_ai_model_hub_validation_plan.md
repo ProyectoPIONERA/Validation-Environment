@@ -1,9 +1,14 @@
 # 15. Validación de AI Model Hub
 
+## Propósito
+
+Documentar cómo se integra, despliega y valida `AI Model Hub` dentro del
+Validation Environment.
+
 `AI Model Hub` se trata como componente opcional de `Level 5` y como objetivo
 de validación funcional en `Level 6` cuando está habilitado.
 
-## Rutas Principales
+## Rutas principales
 
 | Elemento | Ruta |
 | --- | --- |
@@ -41,9 +46,10 @@ En la ruta actual de `inesdata`, `Level 5` publica el componente con:
 En `edc`, `Level 5` reutiliza el chart compartido del componente y espera que
 los conectores desplegados expongan las capacidades requeridas para registrar
 assets, contratos y flujos de observabilidad. La ruta con evidencia operativa
-actual para EDC es `vm-distributed`.
+actual para EDC corresponde a `local` y `vm-single`; `vm-distributed` queda
+pendiente de consolidación.
 
-## Model-Server de Casos de Uso
+## Model-server de casos de uso
 
 El framework incluye soporte explícito para desplegar un `model-server`
 asociado a AI Model Hub, pero ese despliegue es opcional. `Level 5` solo crea o
@@ -81,7 +87,7 @@ perfil, mostrar comandos, ejecutar `Level 5` y sembrar los pasos operativos:
 Los valores concretos de imagen, commit, URLs, kubeconfigs y credenciales viven
 en perfiles locales o secretos de ejecución, no en `docs/`.
 
-## Validación Actual
+## Validación actual
 
 La validación automatizada comprueba:
 
@@ -110,7 +116,7 @@ contrato del `model-server` cuando el modo es `use-cases`, `combined` o
 `/datasets`; los endpoints de inferencia se prueban solo si se declaran en
 `AI_MODEL_HUB_MODEL_SERVER_VALIDATION_ENDPOINTS`.
 
-## Relación con el Dataspace
+## Relación con el dataspace
 
 `AI Model Hub` debe poder operar como componente del dataspace, pero no debe
 quedar acoplado a un portal concreto. En la arquitectura actual:

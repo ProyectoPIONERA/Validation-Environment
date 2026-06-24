@@ -1,8 +1,13 @@
 # Arquitectura
 
+## Propósito
+
+Presentar una vista general de la arquitectura vigente del Validation
+Environment.
+
 El framework despliega y valida entornos de dataspace mediante adapters, deployers y suites de validación.
 
-## Áreas Principales
+## Áreas principales
 
 ```text
 main.py                         CLI y menú guiado
@@ -16,12 +21,13 @@ experiments/                    salidas generadas por validación y métricas
 
 Los artefactos generados en tiempo de ejecución se mantienen fuera de Git siempre que sea posible.
 
-## Vistas de Referencia
+## Vistas de referencia
 
 - [Entorno local de validación](./32_getting_started.md#vista-local).
 - [Entorno VM distribuido de validación](./35_deployers_and_topologies.md#interpretación-del-diagrama-vm3).
+- [Estructura del framework para `vm-distributed`](./50_vm_distributed_framework_structure.md).
 
-## Modelo de Ejecución
+## Modelo de ejecución
 
 El framework usa un modelo de seis niveles:
 
@@ -36,7 +42,7 @@ Level 6  validación
 
 `main.py` es la entrada canónica. Soporta menú guiado y comandos directos.
 
-## Responsabilidad del Adapter
+## Responsabilidad del adapter
 
 Un adapter conoce cómo interactuar con una implementación concreta de dataspace.
 
@@ -47,7 +53,7 @@ Los adapters actuales son:
 
 Los adapters aportan comportamiento específico como URLs de conectores, credenciales, bootstrap, limpieza de datos y soporte de validación.
 
-## Responsabilidad del Deployer
+## Responsabilidad del deployer
 
 Un deployer expone el contrato común de despliegue para un adapter.
 
@@ -70,7 +76,7 @@ Los charts y artefactos compartidos viven en:
 deployers/shared/
 ```
 
-## Responsabilidad de Validación
+## Responsabilidad de validación
 
 La validación se centraliza en el nivel 6. Puede ejecutar:
 

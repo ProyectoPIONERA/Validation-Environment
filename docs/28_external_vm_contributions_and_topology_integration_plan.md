@@ -1,9 +1,9 @@
-# 28. Topologías VM y Contribuciones Técnicas
+# 28. Topologías VM y contribuciones técnicas
 
 Este documento resume como encajan las contribuciones técnicas relacionadas con
 VMs y routing en la arquitectura actual del framework.
 
-## Estado Implementado
+## Estado implementado
 
 El framework ya contiene una base comun para topologías:
 
@@ -25,7 +25,7 @@ PIONERA_VM_CONSUMER_IP=192.0.2.12 \
 python3 main.py edc hosts --topology vm-distributed --dry-run
 ```
 
-## Contribuciones Técnicas Usadas como Referencia
+## Contribuciones técnicas usadas como referencia
 
 Las ramas y repositorios externos revisados aportan ideas reutilizables:
 
@@ -42,7 +42,7 @@ No se incorporan ramas completas de forma directa si están basadas en la
 arquitectura anterior. Las piezas utiles deben migrarse de forma selectiva hacia
 `deployers/infrastructure/lib` y los deployers actuales.
 
-## Autoría y Trazabilidad
+## Autoría y trazabilidad
 
 Cuando se reutilice código externo concreto, la integración debe preservar
 autoria mediante PR, cherry-pick selectivo o commits con `Co-authored-by`.
@@ -78,7 +78,7 @@ El plan de hosts coloca cada hostname en la IP del rol correspondiente. El
 despliegue real de workloads sobre nodos VM debe activarse solo cuando existan
 labels, ingress, certificados y registry preparados.
 
-## Criterio de Integración
+## Criterio de integración
 
 La prioridad es conservar estable el modo `local` y añadir VM por capas:
 

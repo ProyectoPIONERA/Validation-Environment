@@ -1,5 +1,10 @@
 # Acceso externo a los conectores del entorno PIONERA
 
+## Propósito
+
+Conservar la guía técnica de acceso externo a conectores del entorno PIONERA
+como referencia operativa.
+
 **Documento técnico para el equipo**  
 Fecha: 2026-04-25
 
@@ -34,7 +39,7 @@ Son **dos cambios independientes**, uno técnico y uno administrativo.
 
 ---
 
-### Cambio 1 — Abrir el tráfico en la VM (técnico, ~5 minutos)
+### Cambio 1 — abrir el tráfico en la VM (técnico, ~5 minutos)
 
 La VM tiene IP forwarding activado (`ip_forward=1`) y tiene instalado el nginx ingress controller de Kubernetes. Solo falta una regla **iptables DNAT** que redirija el tráfico entrante del puerto 80 hacia Minikube:
 
@@ -70,7 +75,7 @@ sudo netfilter-persistent save
 
 ---
 
-### Cambio 2 — Registro DNS wildcard (administrativo)
+### Cambio 2 — registro DNS wildcard (administrativo)
 
 El DNS público del despliegue debe tener un registro raíz como este:
 

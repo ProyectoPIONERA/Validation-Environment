@@ -1,11 +1,16 @@
-# 16. Contexto Lingüístico FLARES
+# 16. Contexto lingüístico FLARES
+
+## Propósito
+
+Explicar el papel de `FLARES` como dominio lingüístico de prueba para los casos
+de uso de `AI Model Hub`.
 
 `FLARES` se usa como contexto funcional para validar escenarios lingüísticos en
 `AI Model Hub`. El objetivo dentro del framework es disponer de un dataset
 fuente trazable y sincronizado desde su repositorio, sin versionar copias
 reducidas dentro del árbol del framework.
 
-## Uso en el Framework
+## Uso en el framework
 
 `Level 5` sincroniza el repositorio público de FLARES en:
 
@@ -23,7 +28,7 @@ dataset reducido versionado. El dataset fuente debe servir para:
 - comprobar discovery, negociación y consumo;
 - validar una salida esperada de forma reproducible.
 
-## Contenido Esperado de la Fuente FLARES
+## Contenido esperado de la fuente FLARES
 
 | Fichero | Uso |
 | --- | --- |
@@ -34,7 +39,7 @@ La validación se centra en `Subtask 2`, porque permite construir el flujo de
 clasificación de fiabilidad 5W1H. Las salidas esperadas se calculan desde las
 etiquetas presentes en la fuente sincronizada.
 
-## Metadatos del Asset
+## Metadatos del asset
 
 | Campo | Valor sugerido |
 | --- | --- |
@@ -53,7 +58,7 @@ La evidencia debe conservar la relación:
 repositorio fuente -> commit sincronizado -> estructuras derivadas en runtime -> caso de prueba
 ```
 
-## Flujo End-to-End
+## Flujo end-to-end
 
 El flujo fiel al dataspace es:
 
