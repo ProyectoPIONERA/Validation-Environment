@@ -1,4 +1,4 @@
-# Paso Histórico 8 – Despliegue del Connector (infraestructura)
+# Paso histórico 8 – despliegue del connector (infraestructura)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

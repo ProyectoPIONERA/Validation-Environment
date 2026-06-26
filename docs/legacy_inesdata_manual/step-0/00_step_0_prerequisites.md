@@ -1,4 +1,4 @@
-# Paso Histórico 0 – Prerrequisitos del sistema (manual)
+# Paso histórico 0 – prerrequisitos del sistema (manual)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

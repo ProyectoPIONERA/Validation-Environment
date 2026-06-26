@@ -1,4 +1,4 @@
-# Paso Histórico 7 – Creación de Conector (lógico)
+# Paso histórico 7 – creación de conector (lógico)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

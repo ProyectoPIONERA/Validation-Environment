@@ -1,4 +1,4 @@
-# Paso Histórico 2 – Instalación base de INESData (servicios comunes)
+# Paso histórico 2 – instalación base de INESData (servicios comunes)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

@@ -1,4 +1,4 @@
-# Paso Histórico 1 – Creación del clúster Kubernetes local (Minikube)
+# Paso histórico 1 – creación del clúster Kubernetes local (Minikube)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

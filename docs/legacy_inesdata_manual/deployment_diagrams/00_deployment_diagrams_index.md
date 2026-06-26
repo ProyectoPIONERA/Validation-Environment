@@ -1,4 +1,4 @@
-# Diagramas Históricos de Despliegue Manual
+# Diagramas históricos de despliegue manual
 
 Estos diagramas documentan el flujo manual usado inicialmente para entender el
 despliegue de INESData. Se conservan como material de apoyo histórico dentro de
@@ -11,7 +11,7 @@ documentación operativa actual. Para revisar el flujo actual usa:
 2. [Deployers y topologías](../../35_deployers_and_topologies.md)
 3. [Validación](../../37_validation.md)
 
-## Diagramas Conservados
+## Diagramas conservados
 
 - [1 Instalar Minikube](./1_install_minikube.png)
 - [2 Crear clúster](./2_create_cluster.png)

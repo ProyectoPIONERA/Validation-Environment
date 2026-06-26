@@ -1,4 +1,4 @@
-# Flujo Manual Histórico de INESData
+# Flujo manual histórico de INESData
 
 Esta carpeta conserva documentación legacy del flujo manual de INESData del framework.
 Se mantiene por trazabilidad, pero no es la fuente principal para operar la
@@ -10,14 +10,14 @@ Para revisar el flujo vigente usa:
 2. [Deployers y topologías](../35_deployers_and_topologies.md)
 3. [Validación](../37_validation.md)
 
-## Diagramas Históricos
+## Diagramas históricos
 
 Los [diagramas de despliegue manual](./deployment_diagrams/00_deployment_diagrams_index.md)
 documentan el flujo usado inicialmente para entender el despliegue de INESData.
 Son material de apoyo histórico: no representan la arquitectura vigente ni
 sustituyen la documentación operativa actual del framework.
 
-## Documentos Conservados
+## Documentos conservados
 
 - [Paso histórico 0](./step-0/00_step_0_prerequisites.md)
 - [Paso histórico 1](./step-1/01_step_1_minikube.md)

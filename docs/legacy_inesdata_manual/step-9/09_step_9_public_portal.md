@@ -1,4 +1,4 @@
-# Paso Histórico 9 -- Despliegue del Portal Público (infraestructura)
+# Paso histórico 9 -- despliegue del portal público (infraestructura)
 
 > Nota: este documento forma parte del flujo manual histórico de INESData. No describe los niveles actuales del menú. Para
 > operar la versión actual usa [Referencia del menú](../../33_menu_reference.md)

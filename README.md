@@ -5,7 +5,7 @@ validación de espacios de datos PIONERA. Se utiliza para desplegar dataspaces,
 validar conectores, ejecutar pruebas funcionales, recoger métricas y generar
 evidencias experimentales de forma trazable.
 
-## Estado de la Versión 1.0
+## Estado de la versión 1.0
 
 El desarrollo objetivo comprometido para el Validation Environment en el
 proyecto PIONERA queda cerrado en esta versión. El repositorio se conserva como
@@ -21,7 +21,7 @@ El punto de entrada principal es `main.py`. El framework está organizado para
 trabajar con distintos adapters y topologías sin duplicar la lógica común de
 validación.
 
-## Entorno Recomendado de Operación
+## Entorno recomendado de operación
 
 La vía recomendada para usar el framework desde una estación de trabajo es
 Windows con WSL. En ese modo, WSL ejecuta el CLI, Docker Desktop aporta el motor
@@ -33,7 +33,7 @@ El framework también soporta ejecución directa dentro de una VM cuando el
 operador decide instalarlo allí, pero la ruta principal de operación y
 depuración documentada para estaciones de trabajo es WSL sobre Windows.
 
-## Estado Consolidado del Proyecto
+## Estado consolidado del proyecto
 
 El repositorio consolida el framework como herramienta de despliegue, validación
 y generación de evidencias. Incluye:
@@ -48,7 +48,7 @@ y generación de evidencias. Incluye:
 El estado detallado se mantiene en
 [docs/30_framework_current_state.md](./docs/30_framework_current_state.md).
 
-### Alcance de Cierre
+### Alcance de cierre
 
 El framework conserva soporte de código para los adapters y topologías
 documentados, pero la evidencia de cierre distingue entre capacidad
@@ -71,7 +71,7 @@ estable `refactoring-local-vm-single`; la evidencia INESData `vm-distributed`
 desde `refactoring-vm-distributed-inesdata-ai`; y la evidencia EDC
 `vm-distributed` desde `refactoring-vm-distributed-edc-ai`.
 
-### Referencias de Reproducibilidad
+### Referencias de reproducibilidad
 
 Las siguientes referencias pueden usarse como punto de restauración de cierre
 v1.0 si las ramas o repositorios externos cambian después de esta entrega. La
@@ -121,7 +121,7 @@ validación de la línea estable:
 | [Autores y contacto](#autores-y-contacto) | Contacto público del proyecto |
 | [Licencia](#licencia) | Licencia Apache 2.0 |
 
-## Funcionalidades Principales
+## Funcionalidades principales
 
 - desplegar un dataspace por niveles;
 - seleccionar el adapter de conectores: `inesdata` o `edc`;
@@ -182,7 +182,7 @@ El hecho de que una topología esté implementada no implica que todos los
 adapters tengan evidencia oficial de cierre en esa topología. Consulta la matriz
 de alcance antes de preparar una ejecución para auditoría.
 
-## Instalación y Compilación
+## Instalación y compilación
 
 1. Clona el repositorio:
 
@@ -309,7 +309,7 @@ PIONERA_DS_1_CONNECTORS=citycouncil,company \
 python3 main.py inesdata hosts --topology local --dry-run
 ```
 
-### Inicio Rápido Para `vm-single` En Una VM
+### Inicio rápido para `vm-single` en una VM
 
 Si vas a ejecutar el framework dentro de una VM Ubuntu y tu objetivo es
 `vm-single`, empieza ajustando la base común y el overlay de topología con una
@@ -378,7 +378,7 @@ kubectl get ingress -A
 python3 main.py menu --topology vm-single
 ```
 
-## Hosts Locales
+## Hosts locales
 
 El framework planifica o aplica entradas en el fichero `hosts` del sistema. Por
 defecto, la operación solo planifica.
@@ -467,7 +467,7 @@ asegúrate de que `hosts` resuelve correctamente Keycloak, MinIO,
 `port-forward` que el framework reserva para validaciones Kafka concretas no
 sustituyen ese requisito del flujo completo.
 
-## Coexistencia de Adapters
+## Coexistencia de adapters
 
 Los adapters comparten los servicios comunes desplegados en `common-srvs`
 (`Keycloak`, `MinIO`, `PostgreSQL`, `Vault`) cuando se ejecutan sobre el mismo
@@ -486,9 +486,9 @@ registration-service, bases de datos, usuarios y artefactos generados. Usa
 nombres similares para conectores solo cuando el dataspace resultante produce
 hostnames distintos.
 
-## Guía de Uso con Ejemplos
+## Guía de uso con ejemplos
 
-### Menú y Niveles
+### Menú y niveles
 
 El menú se abre con:
 
@@ -538,7 +538,7 @@ una operación de `Level 3` a `Level 6` lo necesite.
 La referencia completa está en
 [docs/33_menu_reference.md](./docs/33_menu_reference.md).
 
-## Validación Local y Acceso Público
+## Validación local y acceso público
 
 En topología `local`, el framework sigue un comportamiento coherente con un
 entorno más parecido a producción:
@@ -552,7 +552,7 @@ Esto significa que `Level 6` completo no debe considerarse correcto si solo
 funciona mediante `port-forward`. Primero deben estar operativos `hosts`,
 Ingress y `minikube tunnel`.
 
-## Requisitos Técnicos y Dependencias
+## Requisitos técnicos y dependencias
 
 Para ejecución local, el framework espera:
 
@@ -599,7 +599,7 @@ PIONERA_PYTHON_BIN=python3.11 bash scripts/bootstrap_framework.sh
 Si un entorno no permite instalar paquetes del sistema desde el bootstrap, usa
 `bash scripts/bootstrap_framework.sh --without-system-deps`.
 
-## Minikube Tunnel
+## Minikube tunnel
 
 En despliegues locales completos, mantén `minikube tunnel` abierto en otra
 terminal mientras ejecutas los niveles y la validación:
@@ -633,7 +633,7 @@ el mismo checkout que ejecutó `Level 4`, porque las credenciales locales
 generadas para Keycloak, MinIO y conectores viven bajo
 `deployers/<adapter>/deployments/`.
 
-## Acceso Externo (entorno VM/PIONERA)
+## Acceso externo (entorno VM/PIONERA)
 
 En entornos desplegados en VM, el acceso desde navegador se publica mediante el
 dominio o proxy externo configurado para la VM. El framework soporta
@@ -661,7 +661,7 @@ El script:
 La arquitectura y las URLs de referencia están documentadas en
 [docs/41_pionera_connector_external_access.md](./docs/41_pionera_connector_external_access.md).
 
-### CLI Principal
+### CLI principal
 
 Listar adapters:
 
@@ -815,7 +815,7 @@ endpoint del conector. Para INESData, usa una imagen de conector que incluya
 soporte `data-plane-kafka`, o activa de forma explícita el flujo de build e
 importación remota de imágenes cuando el despliegue sea de desarrollo.
 
-## Imágenes Locales
+## Imágenes locales
 
 Durante desarrollo, usa la opción `L - Build and Deploy Local Images` del menú
 para construir, cargar y redesplegar imágenes locales del adapter activo.
@@ -893,7 +893,7 @@ El framework fija por defecto el commit declarado en `EDC_DASHBOARD_REPO_REF`.
 Los overlays propios del framework se mantienen separados bajo
 `adapters/edc/overlays/dashboard`.
 
-## Limpieza y Doctor
+## Limpieza y doctor
 
 El menú incluye accesos directos de desarrollo:
 
@@ -913,7 +913,7 @@ bash scripts/clean_workspace.sh --apply
 bash scripts/clean_workspace.sh --apply --include-results
 ```
 
-## Experimentos y Reportes
+## Experimentos y reportes
 
 Un experimento es una ejecución reproducible del flujo de validación y medición.
 Incluye despliegue, validación API, validación UI, métricas, Kafka y artefactos
@@ -937,7 +937,7 @@ experiments/
 Los reportes Playwright quedan dentro del experimento correspondiente cuando se
 ejecutan desde `Level 6`.
 
-## Estructura del Repositorio
+## Estructura del repositorio
 
 | Ruta | Descripción |
 | --- | --- |
@@ -951,7 +951,7 @@ ejecutan desde `Level 6`.
 | `tests/` | Pruebas unitarias del framework. |
 | `docs/` | Documentación estable del framework. |
 
-## Pruebas y Cómo Ejecutarlas
+## Pruebas y cómo ejecutarlas
 
 Pruebas focalizadas de topologías, contratos, hosts y CLI:
 
@@ -996,7 +996,7 @@ Orden recomendado:
 - [Referencia de variables de configuración](./docs/51_configuration_variables_reference.md)
 - [Resultados tabulares E5.2](./docs/E5.2_Resultados_Validacion_Componentes.xlsx)
 
-## Imágenes, Diagramas y Vídeos Explicativos
+## Imágenes, diagramas y vídeos explicativos
 
 Diagramas disponibles:
 
@@ -1014,7 +1014,7 @@ publicados. La estructura recomendada es:
 2. despliegue básico y topologías;
 3. validación de componentes y evidencias.
 
-## Cómo Contribuir
+## Cómo contribuir
 
 El flujo recomendado para contribuciones es:
 
@@ -1028,7 +1028,7 @@ No incluyas credenciales, tokens, claves privadas, kubeconfigs reales, logs con
 secretos ni datos personales en commits, issues o pull requests. Usa
 placeholders y ficheros locales ignorados por Git para configuración de entorno.
 
-## Referencias Técnicas
+## Referencias técnicas
 
 - [INESData local environment](https://github.com/INESData/inesdata-local-env)
 - [INESData connector management API collection](https://github.com/INESData/inesdata-local-env/blob/master/resources/operations/InesData_Connector_Management_API.postman_collection.json)
@@ -1036,7 +1036,7 @@ placeholders y ficheros locales ignorados por Git para configuración de entorno
 - [Eclipse EDC Kafka sample](https://github.com/eclipse-edc/Samples/tree/main/transfer/transfer-06-kafka-broker)
 - [DataSpaceUnit local deployment](https://github.com/DataSpaceUnit/ds-local-deployment)
 
-## Agradecimientos y Fuentes de Financiación
+## Agradecimientos y fuentes de financiación
 
 Este trabajo ha recibido financiación del **proyecto PIONERA** (Enhancing
 interoperability in data spaces through artificial intelligence), financiado en
@@ -1051,7 +1051,7 @@ Pública, dentro del marco del PRTR financiado por la Unión Europea
 
 ---
 
-## Autores y Contacto
+## Autores y contacto
 
 Este repositorio forma parte del trabajo software del proyecto PIONERA. Para
 consultas, incidencias o propuestas de cambio, usa los issues y pull requests

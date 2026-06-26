@@ -1,4 +1,4 @@
-# Model Clearing House for INESData
+# Model clearing house for INESData
 
 ## Purpose
 
@@ -57,7 +57,7 @@ The important design consequence is this:
 
 This matches InesData better than trying to recreate a literal IDS Clearing House product.
 
-## Local findings in InesData
+## Local findings in INESData
 
 ### `inesdata-connector`
 

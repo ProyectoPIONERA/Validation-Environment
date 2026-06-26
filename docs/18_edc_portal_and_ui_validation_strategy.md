@@ -76,7 +76,7 @@ El baseline oficial sigue siendo:
 3. transferencia validada contra MinIO;
 4. dashboard disponible como apoyo visual y superficie Playwright.
 
-## Relacion con Playwright
+## Relación con Playwright
 
 La suite EDC vive separada de INESData:
 
