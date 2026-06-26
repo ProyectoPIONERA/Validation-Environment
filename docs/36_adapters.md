@@ -116,11 +116,12 @@ En la versión de cierre del repositorio, EDC debe describirse así:
 | --- | --- |
 | `local` | Evidencia obtenida en `refactoring-local-vm-single`. |
 | `vm-single` | Evidencia obtenida en `refactoring-local-vm-single`. |
-| `vm-distributed` | Pendiente de consolidación; se publicará en `refactoring-vm-distributed-edc-ai`. |
+| `vm-distributed` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai`. |
 
 Esta distinción evita confundir soporte de código con evidencia auditada. Si se
-necesita cerrar EDC en `vm-distributed`, ejecuta una validación completa desde
-los niveles `1-6` en la rama especializada y conserva el experimento resultante.
+necesita reproducir o ampliar EDC en `vm-distributed`, ejecuta una validación
+completa desde los niveles `1-6` en la rama especializada y conserva el
+experimento resultante.
 
 Configuración relevante:
 

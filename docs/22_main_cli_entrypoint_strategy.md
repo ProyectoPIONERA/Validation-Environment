@@ -8,8 +8,8 @@ evolución de `main.py`.
 > Documento de trazabilidad histórica. Para el uso vigente consulta
 > [33 Referencia del menú](./33_menu_reference.md) y
 > [30 Estado actual](./30_framework_current_state.md). En el cierre del
-> repositorio, EDC cuenta con evidencias en `local` y `vm-single`; la ruta
-> `vm-distributed` queda pendiente de consolidación.
+> repositorio, EDC cuenta con evidencias en `local`, `vm-single` y
+> `vm-distributed`.
 
 `main.py` es la entrada canónica del framework. Todas las operaciones de uso,
 despliegue, validación, métricas, hosts y topologías deben ejecutarse desde este

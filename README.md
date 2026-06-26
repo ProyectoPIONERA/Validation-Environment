@@ -5,6 +5,14 @@ validación de espacios de datos PIONERA. Se utiliza para desplegar dataspaces,
 validar conectores, ejecutar pruebas funcionales, recoger métricas y generar
 evidencias experimentales de forma trazable.
 
+## Estado de la Versión 1.0
+
+El desarrollo objetivo comprometido para el Validation Environment en el
+proyecto PIONERA queda cerrado en esta versión. El repositorio se conserva como
+línea base reproducible para despliegue, validación y auditoría de los
+componentes evaluados. Futuras adaptaciones, extensiones o generalizaciones
+deben tratarse como evolución posterior al cierre PIONERA.
+
 ![PIONERA local validation environment](./docs/pionera_local_validation_environment.png)
 
 _Referencia inicial de la topología `local` del framework._
@@ -73,8 +81,8 @@ esta nota documental; la línea funcional estable que consolida `local` y
 | Alcance | Referencia | Commit |
 | --- | --- | --- |
 | Línea estable `local` y `vm-single` para INESData y EDC | `refactoring-local-vm-single` | `532926e16a9f8845f65d328a8c6107d86f576c7d` |
-| INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `f2f2cdc1f115a6f02ab05cdfbd2d08f5738e6e51` |
-| EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | `7c13b0d903425bc428fe18db9426c7e36fa67e46` |
+| INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `309c1436f5406d0d5573779a19ad4ad691a9f194` |
+| EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | `1adf68bbd7dee3cd49b5377c3cab0527d1a43d4d` |
 
 Cuando sea necesario reconstruir el entorno frente a cambios posteriores en los
 repositorios fuente, estos commits locales sirvieron como referencia durante la

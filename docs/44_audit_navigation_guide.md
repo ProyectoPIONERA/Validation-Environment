@@ -23,11 +23,11 @@ Para cierre, el alcance validado por adapter y topología es:
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
 | `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
-| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai` |
 
-Cuando se revise EDC, las evidencias de cierre disponibles corresponden a
-`local` y `vm-single`. La topología `vm-distributed` no debe declararse cerrada
-para EDC hasta que exista un experimento final asociado a esa ruta.
+Cuando se revise EDC, las evidencias de cierre deben leerse asociadas a la rama
+correspondiente: `refactoring-local-vm-single` para `local` y `vm-single`, y
+`refactoring-vm-distributed-edc-ai` para `vm-distributed`.
 
 ## Fuera de alcance
 

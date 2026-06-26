@@ -46,8 +46,8 @@ En la ruta actual de `inesdata`, `Level 5` publica el componente con:
 En `edc`, `Level 5` reutiliza el chart compartido del componente y espera que
 los conectores desplegados expongan las capacidades requeridas para registrar
 assets, contratos y flujos de observabilidad. La ruta con evidencia operativa
-actual para EDC corresponde a `local` y `vm-single`; `vm-distributed` queda
-pendiente de consolidación.
+actual para EDC corresponde a `local`, `vm-single` y `vm-distributed`, con la
+evidencia distribuida conservada en `refactoring-vm-distributed-edc-ai`.
 
 ## Model-server de casos de uso
 
