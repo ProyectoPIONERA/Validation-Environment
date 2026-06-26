@@ -41,12 +41,12 @@ su deployer y topología.
 | --- | --- | --- | --- |
 | `local` | habilitado | habilitado según adapter | habilitada |
 | `vm-single` | habilitado por perfil VM | habilitado según adapter y nivel | habilitada según adapter |
-| `vm-distributed` | planificado por perfil VM | habilitado con preflight y configuración de VMs | INESData con evidencia; EDC pendiente de consolidación |
+| `vm-distributed` | planificado por perfil VM | habilitado con preflight y configuración de VMs | INESData y EDC con evidencia en ramas especializadas |
 
 El soporte implementado no equivale automáticamente a evidencia oficial. En la
 versión de cierre, INESData cuenta con evidencia en `local`, `vm-single` y
-`vm-distributed`; EDC cuenta con evidencia en `local` y `vm-single`. La ruta EDC
-en `vm-distributed` queda pendiente de consolidación.
+`vm-distributed`; EDC cuenta con evidencia en `local`, `vm-single` y
+`vm-distributed`.
 
 ## INESData
 
@@ -63,7 +63,7 @@ en `vm-distributed` queda pendiente de consolidación.
 | `1` a `3` | reutiliza infraestructura y servicios compartidos |
 | `4` | conectores EDC y dashboard EDC implementados |
 | `5` | componentes compartidos operativos cuando están configurados y el conector registra sus extensiones requeridas |
-| `6` | Newman, Playwright EDC, storage, componentes y reportes; evidencia de cierre disponible en `local` y `vm-single`, con `vm-distributed` pendiente |
+| `6` | Newman, Playwright EDC, storage, componentes y reportes; evidencia de cierre disponible en `local`, `vm-single` y `vm-distributed` |
 
 ## Recreate dataspace
 

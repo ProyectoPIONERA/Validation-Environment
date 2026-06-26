@@ -24,7 +24,7 @@ por niveles del framework.
 | --- | --- | --- |
 | `local` | local | despliegue real habilitado |
 | `vm-single` | vm1 | despliegue real habilitado |
-| `vm-distributed` | vm3 | despliegue real habilitado mediante perfil de VMs; evidencia INESData disponible y EDC pendiente de consolidación |
+| `vm-distributed` | vm3 | despliegue real habilitado mediante perfil de VMs; evidencia INESData y EDC disponible en ramas especializadas |
 
 El alcance vigente de cierre debe interpretarse siempre con la matriz de
 adapter y topología de la documentación actual.

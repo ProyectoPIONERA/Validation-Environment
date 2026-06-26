@@ -39,12 +39,12 @@ Si el objetivo es generar evidencia de cierre, usa esta lectura:
 | Adapter | Ruta recomendada |
 | --- | --- |
 | `inesdata` | `local`, `vm-single` o `vm-distributed`, según el entorno que se quiera evidenciar |
-| `edc` | `local` o `vm-single`; `vm-distributed` queda pendiente de consolidación |
+| `edc` | `local`, `vm-single` o `vm-distributed`, según el entorno que se quiera evidenciar |
 
 La evidencia de cierre de INESData en `vm-distributed` se mantiene en la rama
 especializada `refactoring-vm-distributed-inesdata-ai`. La evidencia equivalente
-de EDC en `vm-distributed` debe generarse en `refactoring-vm-distributed-edc-ai`
-cuando esa rama quede consolidada.
+de EDC en `vm-distributed` se mantiene en
+`refactoring-vm-distributed-edc-ai`.
 
 ## Vista local
 

@@ -53,7 +53,7 @@ adapter y topología:
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
 | `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
-| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai` |
 
 El repositorio contiene suites de `Level 6` para más combinaciones que las usadas
 como evidencia oficial. Antes de usar un resultado como evidencia de cierre,

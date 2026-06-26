@@ -49,7 +49,7 @@ La matriz siguiente separa soporte implementado de evidencia oficial de cierre:
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
 | `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
-| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai` |
 
 El soporte implementado no equivale automáticamente a evidencia de cierre. Un
 escenario solo debe citarse como validado cuando existe un experimento asociado
@@ -406,7 +406,7 @@ checks de acceso, ingress, storage y permisos.
 Estado actual del framework:
 
 - `inesdata`: `Level 1` a `Level 6` operativos, con `Level 5` compartido para componentes configurados
-- `edc`: ruta implementada; evidencia de cierre disponible en `local` y `vm-single`; `vm-distributed` pendiente de consolidación
+- `edc`: ruta implementada; evidencia de cierre disponible en `local`, `vm-single` y `vm-distributed`
 
 La topología necesita una dirección externa, suministrada mediante una de estas variables:
 

@@ -6,9 +6,9 @@ Conservar el diseño y las decisiones de integración del adapter EDC como
 trazabilidad técnica.
 
 > Documento de trazabilidad histórica. El adapter EDC existe en el framework,
-> y la evidencia de cierre disponible corresponde a `local` y `vm-single`. La
-> consolidación equivalente de EDC en `vm-distributed` queda pendiente en una
-> rama especializada.
+> y la evidencia de cierre disponible corresponde a `local`, `vm-single` y
+> `vm-distributed`. La evidencia distribuida se conserva en la rama
+> especializada `refactoring-vm-distributed-edc-ai`.
 
 El adapter `edc` permite ejecutar el framework con conectores EDC genéricos sin
 reutilizar el runtime de conectores INESData. Mantiene la misma estructura de
