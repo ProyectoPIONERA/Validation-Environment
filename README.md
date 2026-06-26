@@ -73,16 +73,17 @@ desde `refactoring-vm-distributed-inesdata-ai`; y la evidencia EDC
 
 ### Referencias de Reproducibilidad
 
-Las siguientes referencias pueden usarse como punto de restauración si las ramas
-o repositorios externos cambian después de esta entrega. La rama `main` incluye
-esta nota documental; la línea funcional estable que consolida `local` y
-`vm-single` para INESData y EDC corresponde a `refactoring-local-vm-single`.
+Las siguientes referencias pueden usarse como punto de restauración de cierre
+v1.0 si las ramas o repositorios externos cambian después de esta entrega. La
+rama `main` incluye esta nota documental; la línea funcional estable que
+consolida `local` y `vm-single` para INESData y EDC corresponde a
+`refactoring-local-vm-single`.
 
 | Alcance | Referencia | Commit |
 | --- | --- | --- |
 | Línea estable `local` y `vm-single` para INESData y EDC | `refactoring-local-vm-single` | `532926e16a9f8845f65d328a8c6107d86f576c7d` |
-| INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `309c1436f5406d0d5573779a19ad4ad691a9f194` |
-| EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | `1adf68bbd7dee3cd49b5377c3cab0527d1a43d4d` |
+| INESData `vm-distributed` | `refactoring-vm-distributed-inesdata-ai` | `a178910806ff8aaa5d0042d915ec24c48d7052fe` |
+| EDC `vm-distributed` | `refactoring-vm-distributed-edc-ai` | `a8c7e3e580cd2f62650e4466cdab99d0ac43f95b` |
 
 Cuando sea necesario reconstruir el entorno frente a cambios posteriores en los
 repositorios fuente, estos commits locales sirvieron como referencia durante la
