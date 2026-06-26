@@ -52,7 +52,7 @@ auditoría, la lectura vigente es:
 | Adapter | `local` | `vm-single` | `vm-distributed` |
 | --- | --- | --- | --- |
 | `inesdata` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-inesdata-ai` |
-| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Pendiente; se publicará en `refactoring-vm-distributed-edc-ai` |
+| `edc` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-local-vm-single` | Evidencia obtenida en `refactoring-vm-distributed-edc-ai` |
 
 La documentación de operación mantiene comandos y configuración para las rutas
 implementadas. Para cierre documental, un escenario solo debe citarse como
@@ -64,7 +64,7 @@ artefactos reproducibles.
 | Adapter | Estado |
 | --- | --- |
 | `inesdata` | Despliegue y validación `Level 1-6` operativos |
-| `edc` | Despliegue y validación core implementados; evidencia de cierre disponible en `local` y `vm-single`; `vm-distributed` pendiente de consolidación |
+| `edc` | Despliegue y validación core implementados; evidencia de cierre disponible en `local`, `vm-single` y `vm-distributed` |
 
 ## Namespaces actuales
 
